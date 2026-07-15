@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  forkSession as forkClaudeSession,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -218,6 +219,10 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime;
+  readonly forkSession?: (
+    sessionId: string,
+    options?: { readonly dir?: string },
+  ) => Promise<{ readonly sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -1365,6 +1370,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         prompt: input.prompt,
         options: input.options,
       }) as ClaudeQueryRuntime);
+  const forkPersistedSession = options?.forkSession ?? forkClaudeSession;
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
@@ -3638,6 +3644,37 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  const forkSession: NonNullable<ClaudeAdapterShape["forkSession"]> = Effect.fn(
+    "ClaudeAdapter.forkSession",
+  )(function* (input) {
+    const resumeState = readClaudeResumeState(input.sourceResumeCursor);
+    if (!resumeState?.resume) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "forkSession",
+        issue: "The source thread does not have a valid Claude session id.",
+      });
+    }
+    const sourceSessionId = resumeState.resume;
+    const forked = yield* Effect.tryPromise({
+      try: () => forkPersistedSession(sourceSessionId, input.cwd ? { dir: input.cwd } : undefined),
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "session/fork",
+          detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+          cause,
+        }),
+    });
+    return {
+      resumeCursor: {
+        threadId: input.destinationThreadId,
+        resume: forked.sessionId,
+        turnCount: resumeState.turnCount ?? 0,
+      },
+    };
+  });
+
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
     const modelSelection =
@@ -3852,6 +3889,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       sessionModelSwitch: "in-session",
     },
     startSession,
+    forkSession,
     sendTurn,
     interruptTurn,
     readThread,

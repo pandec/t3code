@@ -110,6 +110,11 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       return session;
     }),
   );
+  const forkSession = vi.fn((input: { readonly destinationThreadId: ThreadId }) =>
+    Effect.succeed({
+      resumeCursor: { opaque: `fork-${String(input.destinationThreadId)}` },
+    }),
+  );
 
   const sendTurn = vi.fn(
     (
@@ -205,6 +210,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       sessionModelSwitch: "in-session",
     },
     startSession,
+    ...(provider === CODEX_DRIVER || provider === CLAUDE_AGENT_DRIVER ? { forkSession } : {}),
     sendTurn,
     interruptTurn,
     respondToRequest,
@@ -240,6 +246,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     emit,
     updateSession,
     startSession,
+    forkSession,
     sendTurn,
     interruptTurn,
     respondToRequest,
@@ -841,6 +848,36 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("forks into a distinct stopped binding without mutating the source", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const sourceThreadId = asThreadId("fork-source");
+      const destinationThreadId = asThreadId("fork-destination");
+      const sourceCursor = { opaque: "source-cursor" };
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: sourceThreadId,
+        cwd: "/tmp/project",
+        modelSelection: createModelSelection(codexInstanceId, "gpt-5-codex"),
+        resumeCursor: sourceCursor,
+        runtimeMode: "full-access",
+      });
+      yield* provider.forkConversation({ sourceThreadId, destinationThreadId });
+
+      const source = Option.getOrThrow(yield* directory.getBinding(sourceThreadId));
+      const destination = Option.getOrThrow(yield* directory.getBinding(destinationThreadId));
+      assert.deepEqual(source.resumeCursor, sourceCursor);
+      assert.deepEqual(destination.resumeCursor, { opaque: "fork-fork-destination" });
+      assert.equal(destination.status, "stopped");
+      assert.equal(destination.providerInstanceId, source.providerInstanceId);
+      assert.equal(routing.codex.forkSession.mock.calls.length, 1);
+      yield* provider.stopSession({ threadId: sourceThreadId });
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

@@ -43,14 +43,15 @@ approvals, plans, checkpoints, diffs, terminals, and attachment files are intent
    has an existing projected provider session, and the destination ID is unused.
 3. In one orchestration transaction it emits, in order:
    - `thread.created` for the destination, copying source metadata;
-   - `thread.fork-requested` with source and destination IDs;
    - `thread.session-set` for the destination with status `starting` and the source provider identity.
+   - `thread.fork-requested` with source and destination IDs.
 4. The projection pipeline handles `thread.fork-requested` by copying only source user/assistant message
    rows into the destination. It remaps message IDs deterministically, preserves text/order/timestamps and
    nullable turn IDs, forces `isStreaming=false`, and stores no attachments. Because command processing and
    projection writes are transactional and serialized, this captures the source at the accepted fork point
    and remains reproducible during projection replay.
-5. A focused fork reactor consumes `thread.fork-requested`, calls `ProviderService.forkConversation`, and
+5. The existing provider command reactor consumes `thread.fork-requested`, calls
+   `ProviderService.forkConversation`, and
    then dispatches `thread.session.set`:
    - success: destination status `stopped` with the same provider instance and no active turn; its persisted
      provider binding contains the new native resume cursor, so the first prompt resumes the fork;
@@ -171,8 +172,8 @@ provider runtime statuses with orchestration's `stopped` status.
 
 ### 5. React to fork requests and expose failure state
 
-- Add a small `ConversationForkReactor` service/layer beside `CheckpointReactor`, following its
-  request-event -> provider side effect -> internal command pattern.
+- Extend the existing `ProviderCommandReactor` request-event -> provider side effect -> internal command
+  path with the fork request, avoiding a new service and startup layer for one private-build operation.
 - On success, dispatch `thread.session.set` with status `stopped`; on failure, dispatch it with status
   `error` and the provider error message. Do not append tool/activity history or schedule retries.
 - Wire the layer into the existing `OrchestrationReactor` startup and scoped-finalization lifecycle. Expose

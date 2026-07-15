@@ -145,6 +145,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
+    readonly forkConversation?: ProviderServiceShape["forkConversation"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -294,8 +295,12 @@ describe("ProviderCommandReactor", () => {
     ];
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const forkConversation = vi.fn<ProviderServiceShape["forkConversation"]>(
+      input?.forkConversation ?? (() => Effect.succeed({ resumeCursor: { forked: true } })),
+    );
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
+      forkConversation,
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
@@ -412,6 +417,7 @@ describe("ProviderCommandReactor", () => {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
+      forkConversation,
       sendTurn,
       interruptTurn,
       respondToRequest,
@@ -426,6 +432,53 @@ describe("ProviderCommandReactor", () => {
       drain,
     };
   }
+
+  it("forks the provider session and marks only the destination stopped", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const sourceThreadId = ThreadId.make("thread-1");
+    const destinationThreadId = ThreadId.make("thread-fork");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-source-session"),
+        threadId: sourceThreadId,
+        session: {
+          threadId: sourceThreadId,
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("cmd-fork"),
+        sourceThreadId,
+        threadId: destinationThreadId,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.forkConversation.mock.calls.length === 1);
+    await harness.drain;
+    const readModel = await harness.readModel();
+    const source = readModel.threads.find((thread) => thread.id === sourceThreadId);
+    const destination = readModel.threads.find((thread) => thread.id === destinationThreadId);
+    expect(harness.forkConversation.mock.calls[0]?.[0]).toEqual({
+      sourceThreadId,
+      destinationThreadId,
+    });
+    expect(source?.session?.status).toBe("stopped");
+    expect(destination?.session?.status).toBe("stopped");
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
@@ -2057,6 +2110,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2076,6 +2130,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.stop",

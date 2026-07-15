@@ -142,6 +142,56 @@ export function requireThreadAbsent(input: {
   );
 }
 
+export function requireThreadForkable(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
+  return requireThread(input).pipe(
+    Effect.flatMap((thread) => {
+      if (thread.deletedAt !== null || thread.archivedAt !== null) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' is not available to fork.`,
+          ),
+        );
+      }
+      const session = thread.session;
+      if (!session || !session.providerInstanceId) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' has no persisted provider session to fork.`,
+          ),
+        );
+      }
+      if (session.providerName !== "codex" && session.providerName !== "claudeAgent") {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Provider '${session.providerName ?? "unknown"}' does not support conversation forks.`,
+          ),
+        );
+      }
+      if (
+        session.status === "starting" ||
+        session.status === "running" ||
+        session.activeTurnId !== null ||
+        thread.latestTurn?.state === "running"
+      ) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' cannot be forked while a turn is active.`,
+          ),
+        );
+      }
+      return Effect.succeed(thread);
+    }),
+  );
+}
+
 export function requireNonNegativeInteger(input: {
   readonly commandType: OrchestrationCommand["type"];
   readonly field: string;
