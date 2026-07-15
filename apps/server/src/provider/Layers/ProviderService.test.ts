@@ -1573,9 +1573,16 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       );
       assert.isDefined(pending);
       assert.notEqual(pending.lastSeenAt, before.lastSeenAt);
+      assert.equal(pending.status, before.status);
+      assert.deepEqual(pending.resumeCursor, before.resumeCursor);
+      assert.equal(pending.runtimeMode, before.runtimeMode);
       assert.equal(
         (pending.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
         true,
+      );
+      assert.equal(
+        (pending.runtimePayload as { readonly activeTurnId?: string | null } | null)?.activeTurnId,
+        (before.runtimePayload as { readonly activeTurnId?: string | null } | null)?.activeTurnId,
       );
 
       yield* advanceTestClock(1_000);

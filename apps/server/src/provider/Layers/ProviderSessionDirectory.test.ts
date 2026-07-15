@@ -4,9 +4,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
-import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -45,12 +44,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       const provider = yield* directory.getProvider(initialThreadId);
       assert.equal(provider, "codex");
       const resolvedBinding = yield* directory.getBinding(initialThreadId);
-      assertSome(resolvedBinding, {
-        threadId: initialThreadId,
-        provider: ProviderDriverKind.make("codex"),
-      });
+      assert.equal(Option.isSome(resolvedBinding), true);
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
+        assert.equal(resolvedBinding.value.provider, "codex");
       }
 
       const nextThreadId = ThreadId.make("thread-2");
@@ -118,6 +115,52 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           cwd: "/tmp/project",
           model: "gpt-5-codex",
           activeTurnId: "turn-1",
+        });
+      }
+    }));
+
+  it("atomically rejects stale refreshes and resets payload when ownership changes", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-refresh-owner-change");
+      const claudeInstanceId = ProviderInstanceId.make("claude-primary");
+      const codexInstanceId = ProviderInstanceId.make("codex-primary");
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claudeInstanceId,
+        threadId,
+        runtimePayload: {
+          cwd: "/tmp/claude-project",
+          hasPendingWork: true,
+        },
+      });
+      const staleBinding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(staleBinding), true);
+      if (Option.isNone(staleBinding)) return;
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimePayload: {
+          cwd: "/tmp/codex-project",
+        },
+      });
+
+      const refreshed = yield* directory.refreshIfUnchanged({
+        binding: staleBinding.value,
+        runtimePayloadPatch: { hasPendingWork: false },
+      });
+      assert.equal(refreshed, false);
+
+      const currentBinding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(currentBinding), true);
+      if (Option.isSome(currentBinding)) {
+        assert.equal(currentBinding.value.provider, "codex");
+        assert.equal(currentBinding.value.providerInstanceId, codexInstanceId);
+        assert.deepEqual(currentBinding.value.runtimePayload, {
+          cwd: "/tmp/codex-project",
         });
       }
     }));
@@ -250,12 +293,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(provider, "codex");
 
         const resolvedBinding = yield* directory.getBinding(threadId);
-        assertSome(resolvedBinding, {
-          threadId,
-          provider: ProviderDriverKind.make("codex"),
-        });
+        assert.equal(Option.isSome(resolvedBinding), true);
         if (Option.isSome(resolvedBinding)) {
           assert.equal(resolvedBinding.value.threadId, threadId);
+          assert.equal(resolvedBinding.value.provider, "codex");
         }
 
         const legacyTableRows = yield* sql<{ readonly name: string }>`

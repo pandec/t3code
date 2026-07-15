@@ -9,8 +9,8 @@ import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntim
 import { ProviderSessionDirectoryPersistenceError, ProviderValidationError } from "../Errors.ts";
 import {
   ProviderSessionDirectory,
-  type ProviderRuntimeBinding,
   type ProviderRuntimeBindingWithMetadata,
+  type RefreshProviderRuntimeBindingInput,
   type ProviderSessionDirectoryShape,
 } from "../Services/ProviderSessionDirectory.ts";
 const decodeProviderDriverKindValue = Schema.decodeUnknownEffect(ProviderDriverKind);
@@ -91,7 +91,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       Effect.mapError(toPersistenceError("ProviderSessionDirectory.getBinding:getByThreadId")),
       Effect.flatMap((runtime) =>
         Option.match(runtime, {
-          onNone: () => Effect.succeed(Option.none<ProviderRuntimeBinding>()),
+          onNone: () => Effect.succeed(Option.none<ProviderRuntimeBindingWithMetadata>()),
           onSome: (value) =>
             toRuntimeBinding(value, "ProviderSessionDirectory.getBinding").pipe(
               Effect.map((binding) => Option.some(binding)),
@@ -125,6 +125,15 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         issue: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
+    const existingProviderInstanceId =
+      existingRuntime?.providerInstanceId ??
+      (existingRuntime?.providerName === binding.provider
+        ? defaultInstanceIdForDriver(binding.provider)
+        : undefined);
+    const ownerChanged =
+      existingRuntime !== undefined &&
+      (providerChanged || existingProviderInstanceId !== providerInstanceId);
+
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
@@ -141,11 +150,36 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
             ? binding.resumeCursor
             : (existingRuntime?.resumeCursor ?? null),
         runtimePayload: mergeRuntimePayload(
-          existingRuntime?.runtimePayload ?? null,
+          ownerChanged ? null : (existingRuntime?.runtimePayload ?? null),
           binding.runtimePayload,
         ),
       })
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
+  });
+
+  const refreshIfUnchanged: ProviderSessionDirectoryShape["refreshIfUnchanged"] = Effect.fn(
+    "ProviderSessionDirectory.refreshIfUnchanged",
+  )(function* (input: RefreshProviderRuntimeBindingInput) {
+    const providerInstanceId = input.binding.providerInstanceId;
+    if (providerInstanceId === undefined) {
+      return yield* new ProviderValidationError({
+        operation: "ProviderSessionDirectory.refreshIfUnchanged",
+        issue: "providerInstanceId is required for provider session runtime bindings.",
+      });
+    }
+
+    return yield* repository
+      .refreshIfUnchanged({
+        threadId: input.binding.threadId,
+        providerName: input.binding.provider,
+        providerInstanceId,
+        expectedLastSeenAt: input.binding.lastSeenAt,
+        lastSeenAt: DateTime.formatIso(yield* DateTime.now),
+        ...(input.runtimePayloadPatch !== undefined
+          ? { runtimePayloadPatch: input.runtimePayloadPatch }
+          : {}),
+      })
+      .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.refreshIfUnchanged")));
   });
 
   const getProvider: ProviderSessionDirectoryShape["getProvider"] = (threadId) =>
@@ -184,6 +218,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
 
   return {
     upsert,
+    refreshIfUnchanged,
     getProvider,
     getBinding,
     listThreadIds,

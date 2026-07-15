@@ -100,12 +100,40 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const hasPendingWork = bindingHasPendingWork(binding.runtimePayload);
-        if (hasPendingWork && idleDurationMs < maxPendingExtensionMs) {
+        // The projection lookup yields, so a turn completion or replacement may
+        // have refreshed the binding after the sweep snapshot was captured.
+        // Re-read before stopping and evaluate only the same current owner.
+        const currentBinding = Option.getOrUndefined(yield* directory.getBinding(binding.threadId));
+        if (
+          !currentBinding ||
+          currentBinding.status === "stopped" ||
+          currentBinding.provider !== binding.provider ||
+          currentBinding.providerInstanceId !== binding.providerInstanceId
+        ) {
+          continue;
+        }
+
+        const currentLastSeenMs = Date.parse(currentBinding.lastSeenAt);
+        if (Number.isNaN(currentLastSeenMs)) {
+          yield* Effect.logWarning("provider.session.reaper.invalid-last-seen", {
+            threadId: currentBinding.threadId,
+            provider: currentBinding.provider,
+            lastSeenAt: currentBinding.lastSeenAt,
+          });
+          continue;
+        }
+
+        const currentIdleDurationMs = now - currentLastSeenMs;
+        if (currentIdleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
+
+        const hasPendingWork = bindingHasPendingWork(currentBinding.runtimePayload);
+        if (hasPendingWork && currentIdleDurationMs < maxPendingExtensionMs) {
           yield* Effect.logDebug("provider.session.reaper.skipped-pending-work", {
-            threadId: binding.threadId,
-            provider: binding.provider,
-            idleDurationMs,
+            threadId: currentBinding.threadId,
+            provider: currentBinding.provider,
+            idleDurationMs: currentIdleDurationMs,
             maxPendingExtensionMs,
           });
           continue;
@@ -113,25 +141,27 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const reason = hasPendingWork ? "pending_work_expired" : "inactivity_threshold";
 
-        const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
-          Effect.tap(() =>
-            Effect.logInfo("provider.session.reaped", {
-              threadId: binding.threadId,
-              provider: binding.provider,
-              idleDurationMs,
-              reason,
-            }),
-          ),
-          Effect.as(true),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider.session.reaper.stop-failed", {
-              threadId: binding.threadId,
-              provider: binding.provider,
-              idleDurationMs,
-              cause,
-            }).pipe(Effect.as(false)),
-          ),
-        );
+        const reaped = yield* providerService
+          .stopSession({ threadId: currentBinding.threadId })
+          .pipe(
+            Effect.tap(() =>
+              Effect.logInfo("provider.session.reaped", {
+                threadId: currentBinding.threadId,
+                provider: currentBinding.provider,
+                idleDurationMs: currentIdleDurationMs,
+                reason,
+              }),
+            ),
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.session.reaper.stop-failed", {
+                threadId: currentBinding.threadId,
+                provider: currentBinding.provider,
+                idleDurationMs: currentIdleDurationMs,
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          );
 
         if (reaped) {
           reapedCount += 1;

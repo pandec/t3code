@@ -53,6 +53,16 @@ export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
 export const GetProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInput.Type;
 
+export const RefreshProviderSessionRuntimeInput = Schema.Struct({
+  threadId: ThreadId,
+  providerName: Schema.String,
+  providerInstanceId: ProviderInstanceId,
+  expectedLastSeenAt: IsoDateTime,
+  lastSeenAt: IsoDateTime,
+  runtimePayloadPatch: Schema.optional(Schema.Unknown),
+});
+export type RefreshProviderSessionRuntimeInput = typeof RefreshProviderSessionRuntimeInput.Type;
+
 export const DeleteProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type DeleteProviderSessionRuntimeInput = typeof DeleteProviderSessionRuntimeInput.Type;
 
@@ -70,6 +80,15 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
     readonly upsert: (
       runtime: ProviderSessionRuntime,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
+
+    /**
+     * Atomically refresh a binding only when its owner and observed version
+     * still match. The optional payload patch is merged without rewriting
+     * routing, status, resume, or other runtime metadata.
+     */
+    readonly refreshIfUnchanged: (
+      input: RefreshProviderSessionRuntimeInput,
+    ) => Effect.Effect<boolean, ProviderSessionRuntimeRepositoryError>;
 
     /**
      * Read provider runtime state by canonical thread id.
@@ -104,6 +123,12 @@ const ProviderSessionRuntimeDbRowSchema = ProviderSessionRuntime.mapFields(
   Struct.assign({
     resumeCursor: Schema.NullOr(Schema.fromJsonString(Schema.Unknown)),
     runtimePayload: Schema.NullOr(Schema.fromJsonString(Schema.Unknown)),
+  }),
+);
+
+const RefreshProviderSessionRuntimeDbInput = RefreshProviderSessionRuntimeInput.mapFields(
+  Struct.assign({
+    runtimePayloadPatch: Schema.optional(Schema.fromJsonString(Schema.Unknown)),
   }),
 );
 
@@ -184,6 +209,45 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const refreshRuntimeRowIfUnchanged = SqlSchema.findOneOption({
+    Request: RefreshProviderSessionRuntimeDbInput,
+    Result: Schema.Struct({ threadId: ThreadId }),
+    execute: (input) => {
+      const ownershipAndVersionPredicate = sql`
+        thread_id = ${input.threadId}
+        AND provider_name = ${input.providerName}
+        AND provider_instance_id = ${input.providerInstanceId}
+        AND last_seen_at = ${input.expectedLastSeenAt}
+      `;
+
+      if (input.runtimePayloadPatch === undefined) {
+        return sql`
+          UPDATE provider_session_runtime
+          SET last_seen_at = ${input.lastSeenAt}
+          WHERE ${ownershipAndVersionPredicate}
+          RETURNING thread_id AS "threadId"
+        `;
+      }
+
+      return sql`
+        UPDATE provider_session_runtime
+        SET
+          last_seen_at = ${input.lastSeenAt},
+          runtime_payload_json = json_patch(
+            CASE
+              WHEN runtime_payload_json IS NULL THEN '{}'
+              WHEN json_valid(runtime_payload_json) = 0 THEN '{}'
+              WHEN json_type(runtime_payload_json) = 'object' THEN runtime_payload_json
+              ELSE '{}'
+            END,
+            ${input.runtimePayloadPatch}
+          )
+        WHERE ${ownershipAndVersionPredicate}
+        RETURNING thread_id AS "threadId"
+      `;
+    },
+  });
+
   const getRuntimeRowByThreadId = SqlSchema.findOneOption({
     Request: GetRuntimeRequestSchema,
     Result: ProviderSessionRuntimeRawDbRowSchema,
@@ -242,6 +306,20 @@ export const make = Effect.gen(function* () {
           { threadId: runtime.threadId },
         ),
       ),
+    );
+
+  const refreshIfUnchanged: ProviderSessionRuntimeRepository["Service"]["refreshIfUnchanged"] = (
+    input,
+  ) =>
+    refreshRuntimeRowIfUnchanged(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProviderSessionRuntimeRepository.refreshIfUnchanged:query",
+          "ProviderSessionRuntimeRepository.refreshIfUnchanged:encodeRequest",
+          { threadId: input.threadId },
+        ),
+      ),
+      Effect.map(Option.isSome),
     );
 
   const getByThreadId: ProviderSessionRuntimeRepository["Service"]["getByThreadId"] = (input) =>
@@ -310,6 +388,7 @@ export const make = Effect.gen(function* () {
 
   return {
     upsert,
+    refreshIfUnchanged,
     getByThreadId,
     list,
     deleteByThreadId,

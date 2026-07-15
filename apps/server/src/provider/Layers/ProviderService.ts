@@ -267,16 +267,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
 
     const hasPendingWork = event.payload?.hasPendingWork;
-    yield* directory.upsert({
-      threadId: event.threadId,
-      provider: binding.provider,
-      providerInstanceId: source.instanceId,
-      ...(hasPendingWork !== undefined
-        ? {
-            runtimePayload: { hasPendingWork },
-          }
-        : {}),
+    const refreshed = yield* directory.refreshIfUnchanged({
+      binding,
+      ...(hasPendingWork !== undefined ? { runtimePayloadPatch: { hasPendingWork } } : {}),
     });
+    if (!refreshed) {
+      yield* Effect.logDebug("provider.session.turn-completion-binding-changed", {
+        threadId: event.threadId,
+        eventProvider: source.provider,
+        eventProviderInstanceId: source.instanceId,
+        expectedLastSeenAt: binding.lastSeenAt,
+      });
+    }
   });
 
   const requireBindingInstanceId = (

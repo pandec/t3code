@@ -390,6 +390,83 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("omits pending work when a new turn completes without a Stop hook observation", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const firstCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "schedule background work",
+        attachments: [],
+      });
+
+      const stopHook = harness.getLastCreateQueryInput()?.options.hooks?.Stop?.[0]?.hooks[0];
+      assert.isDefined(stopHook);
+      if (!stopHook) return;
+      yield* Effect.promise(() =>
+        stopHook(
+          {
+            session_id: "sdk-session-pending-reset",
+            transcript_path: "/tmp/transcript.jsonl",
+            cwd: "/tmp",
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+            background_tasks: [
+              {
+                id: "background-1",
+                type: "subagent",
+                status: "running",
+                description: "Background task",
+              },
+            ],
+            session_crons: [],
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-pending-reset",
+        uuid: "result-pending-reset",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(firstCompletionFiber);
+
+      const secondCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "start a new turn",
+        attachments: [],
+      });
+      harness.query.finish();
+
+      const secondCompletion = yield* Fiber.join(secondCompletionFiber);
+      assert.equal(secondCompletion._tag, "Some");
+      if (secondCompletion._tag !== "Some" || secondCompletion.value.type !== "turn.completed") {
+        return;
+      }
+      assert.equal("hasPendingWork" in secondCompletion.value.payload, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
