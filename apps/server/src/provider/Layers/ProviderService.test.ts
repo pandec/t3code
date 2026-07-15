@@ -1612,6 +1612,67 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     }),
   );
 
+  it.effect("clears persisted pending work when the session stops or restarts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-pending-clear");
+      const readPendingWork = Effect.gen(function* () {
+        const binding = (yield* directory.listBindings()).find(
+          (entry) => entry.threadId === threadId,
+        );
+        assert.isDefined(binding);
+        return (binding.runtimePayload as { readonly hasPendingWork?: boolean } | null)
+          ?.hasPendingWork;
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* advanceTestClock(1_000);
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-pending-clear"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId: asTurnId("turn-pending-clear"),
+        payload: {
+          state: "completed",
+          hasPendingWork: true,
+        },
+      });
+      yield* advanceTestClock(50);
+      assert.equal(yield* readPendingWork, true);
+
+      // Stopping kills the provider subprocess, so armed wakeups die with it.
+      yield* provider.stopSession({ threadId });
+      assert.equal(yield* readPendingWork, false);
+
+      // A stale flag (e.g. after a crash that skipped the stop path) must not
+      // survive a fresh session start either.
+      yield* directory.upsert({
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+        status: "stopped",
+        runtimePayload: { hasPendingWork: true },
+      });
+      assert.equal(yield* readPendingWork, true);
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(yield* readPendingWork, false);
+    }),
+  );
+
   it.effect("fans out canonical runtime events in emission order", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

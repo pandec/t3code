@@ -125,6 +125,7 @@ function toRuntimePayloadFromSession(
     readonly modelSelection?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
+    readonly clearHasPendingWork?: boolean;
   },
 ): Record<string, unknown> {
   return {
@@ -132,6 +133,7 @@ function toRuntimePayloadFromSession(
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
+    ...(extra?.clearHasPendingWork === true ? { hasPendingWork: false } : {}),
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
@@ -306,6 +308,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly modelSelection?: unknown;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
+      readonly clearHasPendingWork?: boolean;
     },
   ) =>
     Effect.gen(function* () {
@@ -334,6 +337,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
       Effect.flatMap((canonicalEvent) =>
         refreshBindingFromTurnCompletion(source, canonicalEvent).pipe(
+          // Persistence errors are retried: the refresh is a compare-and-set
+          // keyed on the observed binding, so replays are idempotent and a
+          // concurrent binding change resolves as a non-error "not refreshed".
+          Effect.retry({ times: 2 }),
           Effect.catchCause((cause) =>
             Effect.logWarning("provider.session.turn-completion-refresh-failed", {
               threadId: canonicalEvent.threadId,
@@ -476,6 +483,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* upsertSessionBinding(
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
+        // A resumed session runs in a fresh provider subprocess: any wakeups
+        // or background tasks armed by the previous process are gone.
+        { clearHasPendingWork: true },
       );
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
@@ -674,6 +684,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
+          clearHasPendingWork: true,
         });
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
@@ -913,6 +924,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            // Stopping kills the provider subprocess, so any armed wakeups or
+            // background tasks die with it — the binding must not keep the
+            // pending-work reaper extension.
+            hasPendingWork: false,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -1102,6 +1117,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            hasPendingWork: false,
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: yield* nowIso,
           },
