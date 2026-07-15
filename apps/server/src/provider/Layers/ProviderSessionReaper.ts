@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
+import { ServerConfig } from "../../config.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
@@ -15,10 +16,35 @@ import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_PENDING_EXTENSION_MS = 24 * 60 * 60 * 1000;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
+  readonly maxPendingExtensionMs?: number;
+}
+
+export const providerSessionReaperOptionsFromConfig = (
+  config: Pick<
+    ServerConfig["Service"],
+    | "providerSessionReaperInactivityThresholdMs"
+    | "providerSessionReaperSweepIntervalMs"
+    | "providerSessionReaperMaxPendingExtensionMs"
+  >,
+): ProviderSessionReaperLiveOptions => ({
+  inactivityThresholdMs: config.providerSessionReaperInactivityThresholdMs,
+  sweepIntervalMs: config.providerSessionReaperSweepIntervalMs,
+  maxPendingExtensionMs: config.providerSessionReaperMaxPendingExtensionMs,
+});
+
+function bindingHasPendingWork(runtimePayload: unknown | null | undefined): boolean {
+  return (
+    runtimePayload !== null &&
+    typeof runtimePayload === "object" &&
+    !Array.isArray(runtimePayload) &&
+    "hasPendingWork" in runtimePayload &&
+    runtimePayload.hasPendingWork === true
+  );
 }
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
@@ -32,6 +58,10 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    const maxPendingExtensionMs = Math.max(
+      1,
+      options?.maxPendingExtensionMs ?? DEFAULT_MAX_PENDING_EXTENSION_MS,
+    );
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
@@ -70,21 +100,67 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
-          Effect.tap(() =>
-            Effect.logInfo("provider.session.reaped", {
-              threadId: binding.threadId,
-              provider: binding.provider,
-              idleDurationMs,
-              reason: "inactivity_threshold",
-            }),
+        // The projection lookup yields, so a turn completion or replacement may
+        // have refreshed the binding after the sweep snapshot was captured.
+        // Re-read before stopping and evaluate only the same current owner.
+        const currentBinding = Option.getOrUndefined(yield* directory.getBinding(binding.threadId));
+        if (
+          !currentBinding ||
+          currentBinding.status === "stopped" ||
+          currentBinding.provider !== binding.provider ||
+          currentBinding.providerInstanceId !== binding.providerInstanceId
+        ) {
+          continue;
+        }
+
+        const currentLastSeenMs = Date.parse(currentBinding.lastSeenAt);
+        if (Number.isNaN(currentLastSeenMs)) {
+          yield* Effect.logWarning("provider.session.reaper.invalid-last-seen", {
+            threadId: currentBinding.threadId,
+            provider: currentBinding.provider,
+            lastSeenAt: currentBinding.lastSeenAt,
+          });
+          continue;
+        }
+
+        const currentIdleDurationMs = now - currentLastSeenMs;
+        if (currentIdleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
+
+        const hasPendingWork = bindingHasPendingWork(currentBinding.runtimePayload);
+        if (hasPendingWork && currentIdleDurationMs < maxPendingExtensionMs) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-pending-work", {
+            threadId: currentBinding.threadId,
+            provider: currentBinding.provider,
+            idleDurationMs: currentIdleDurationMs,
+            maxPendingExtensionMs,
+          });
+          continue;
+        }
+
+        const reason = hasPendingWork ? "pending_work_expired" : "inactivity_threshold";
+
+        const reaped = yield* providerService.stopSessionIfUnchanged(currentBinding).pipe(
+          Effect.tap((didStop) =>
+            didStop
+              ? Effect.logInfo("provider.session.reaped", {
+                  threadId: currentBinding.threadId,
+                  provider: currentBinding.provider,
+                  idleDurationMs: currentIdleDurationMs,
+                  reason,
+                })
+              : Effect.logDebug("provider.session.reaper.binding-changed-before-stop", {
+                  threadId: currentBinding.threadId,
+                  provider: currentBinding.provider,
+                  revision: currentBinding.revision,
+                }),
           ),
-          Effect.as(true),
           Effect.catchCause((cause) =>
             Effect.logWarning("provider.session.reaper.stop-failed", {
-              threadId: binding.threadId,
-              provider: binding.provider,
-              idleDurationMs,
+              threadId: currentBinding.threadId,
+              provider: currentBinding.provider,
+              idleDurationMs: currentIdleDurationMs,
               cause,
             }).pipe(Effect.as(false)),
           ),
@@ -124,6 +200,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         yield* Effect.logInfo("provider.session.reaper.started", {
           inactivityThresholdMs,
           sweepIntervalMs,
+          maxPendingExtensionMs,
         });
       });
 
@@ -135,4 +212,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 export const makeProviderSessionReaperLive = (options?: ProviderSessionReaperLiveOptions) =>
   Layer.effect(ProviderSessionReaper, makeProviderSessionReaper(options));
 
-export const ProviderSessionReaperLive = makeProviderSessionReaperLive();
+export const ProviderSessionReaperLive = Layer.unwrap(
+  Effect.map(ServerConfig, (config) =>
+    makeProviderSessionReaperLive(providerSessionReaperOptionsFromConfig(config)),
+  ),
+);

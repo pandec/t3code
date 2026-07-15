@@ -120,6 +120,15 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  providerSessionReaperInactivityThresholdMs: Config.int(
+    "T3CODE_PROVIDER_SESSION_REAPER_INACTIVITY_THRESHOLD_MS",
+  ).pipe(Config.withDefault(30 * 60 * 1000)),
+  providerSessionReaperSweepIntervalMs: Config.int(
+    "T3CODE_PROVIDER_SESSION_REAPER_SWEEP_INTERVAL_MS",
+  ).pipe(Config.withDefault(5 * 60 * 1000)),
+  providerSessionReaperMaxPendingExtensionMs: Config.int(
+    "T3CODE_PROVIDER_SESSION_REAPER_MAX_PENDING_EXTENSION_MS",
+  ).pipe(Config.withDefault(24 * 60 * 60 * 1000)),
   tailscaleServeEnabled: Config.boolean("T3CODE_TAILSCALE_SERVE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -364,6 +373,9 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      providerSessionReaperInactivityThresholdMs: env.providerSessionReaperInactivityThresholdMs,
+      providerSessionReaperSweepIntervalMs: env.providerSessionReaperSweepIntervalMs,
+      providerSessionReaperMaxPendingExtensionMs: env.providerSessionReaperMaxPendingExtensionMs,
       tailscaleServeEnabled,
       tailscaleServePort,
     };

@@ -82,6 +82,9 @@ const makeCliTestServerConfig = (baseDir: string) =>
       desktopBootstrapToken: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
+      providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
+      providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
+      providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
     } satisfies ServerConfig.ServerConfig["Service"];

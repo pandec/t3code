@@ -32,6 +32,15 @@ export interface ProviderRuntimeBinding {
 
 export interface ProviderRuntimeBindingWithMetadata extends ProviderRuntimeBinding {
   readonly lastSeenAt: string;
+  readonly revision: number;
+  readonly providerInstanceIdWasLegacyNull: boolean;
+}
+
+export interface RefreshProviderRuntimeBindingInput {
+  readonly binding: ProviderRuntimeBindingWithMetadata;
+  readonly runtimePayloadPatch?: unknown;
+  readonly status?: ProviderSessionRuntimeStatus;
+  readonly touchLastSeenAt?: boolean;
 }
 
 export type ProviderSessionDirectoryReadError = ProviderSessionDirectoryPersistenceError;
@@ -51,7 +60,14 @@ export interface ProviderSessionDirectoryShape {
 
   readonly getBinding: (
     threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<ProviderRuntimeBinding>, ProviderSessionDirectoryReadError>;
+  ) => Effect.Effect<
+    Option.Option<ProviderRuntimeBindingWithMetadata>,
+    ProviderSessionDirectoryReadError
+  >;
+
+  readonly refreshIfUnchanged: (
+    input: RefreshProviderRuntimeBindingInput,
+  ) => Effect.Effect<boolean, ProviderSessionDirectoryWriteError>;
 
   readonly listThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,

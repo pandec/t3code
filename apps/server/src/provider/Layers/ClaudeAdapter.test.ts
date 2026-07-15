@@ -37,7 +37,11 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  hasPendingClaudeWork,
+  makeClaudeAdapter,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -270,6 +274,201 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it("derives pending work from background tasks and session crons", () => {
+    assert.equal(hasPendingClaudeWork({}), false);
+    assert.equal(hasPendingClaudeWork({ background_tasks: [] }), false);
+    assert.equal(hasPendingClaudeWork({ session_crons: [] }), false);
+    assert.equal(hasPendingClaudeWork({ background_tasks: [{}] }), true);
+    assert.equal(hasPendingClaudeWork({ session_crons: [{}] }), true);
+  });
+
+  it.effect("reports the latest Stop hook pending-work state on turn completion", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const firstCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "schedule a wakeup",
+        attachments: [],
+      });
+
+      const stopHook = harness.getLastCreateQueryInput()?.options.hooks?.Stop?.[0]?.hooks[0];
+      assert.isDefined(stopHook);
+      if (!stopHook) {
+        return;
+      }
+      const hookOutput = yield* Effect.promise(() =>
+        stopHook(
+          {
+            session_id: "sdk-session-pending",
+            transcript_path: "/tmp/transcript.jsonl",
+            cwd: "/tmp",
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+            background_tasks: [],
+            session_crons: [
+              {
+                id: "cron-1",
+                schedule: "0 12 16 7 *",
+                recurring: false,
+                prompt: "wake up",
+              },
+            ],
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      assert.deepEqual(hookOutput, {});
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-pending",
+        uuid: "result-pending",
+      } as unknown as SDKMessage);
+
+      const firstCompletion = yield* Fiber.join(firstCompletionFiber);
+      assert.equal(firstCompletion._tag, "Some");
+      if (firstCompletion._tag !== "Some" || firstCompletion.value.type !== "turn.completed") {
+        return;
+      }
+      assert.equal(firstCompletion.value.payload.hasPendingWork, true);
+
+      const secondCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "wakeup fired",
+        attachments: [],
+      });
+      yield* Effect.promise(() =>
+        stopHook(
+          {
+            session_id: "sdk-session-pending",
+            transcript_path: "/tmp/transcript.jsonl",
+            cwd: "/tmp",
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+            background_tasks: [],
+            session_crons: [],
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-pending",
+        uuid: "result-cleared",
+      } as unknown as SDKMessage);
+
+      const secondCompletion = yield* Fiber.join(secondCompletionFiber);
+      assert.equal(secondCompletion._tag, "Some");
+      if (secondCompletion._tag !== "Some" || secondCompletion.value.type !== "turn.completed") {
+        return;
+      }
+      assert.equal(secondCompletion.value.payload.hasPendingWork, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("omits pending work when a new turn completes without a Stop hook observation", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const firstCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "schedule background work",
+        attachments: [],
+      });
+
+      const stopHook = harness.getLastCreateQueryInput()?.options.hooks?.Stop?.[0]?.hooks[0];
+      assert.isDefined(stopHook);
+      if (!stopHook) return;
+      yield* Effect.promise(() =>
+        stopHook(
+          {
+            session_id: "sdk-session-pending-reset",
+            transcript_path: "/tmp/transcript.jsonl",
+            cwd: "/tmp",
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+            background_tasks: [
+              {
+                id: "background-1",
+                type: "subagent",
+                status: "running",
+                description: "Background task",
+              },
+            ],
+            session_crons: [],
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-pending-reset",
+        uuid: "result-pending-reset",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(firstCompletionFiber);
+
+      const secondCompletionFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "start a new turn",
+        attachments: [],
+      });
+      harness.query.finish();
+
+      const secondCompletion = yield* Fiber.join(secondCompletionFiber);
+      assert.equal(secondCompletion._tag, "Some");
+      if (secondCompletion._tag !== "Some" || secondCompletion.value.type !== "turn.completed") {
+        return;
+      }
+      assert.equal("hasPendingWork" in secondCompletion.value.payload, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("forks a persisted Claude session without starting a live query", () => {
     const forkCalls: Array<
       readonly [string, { readonly dir?: string } | undefined, NodeJS.ProcessEnv | undefined]

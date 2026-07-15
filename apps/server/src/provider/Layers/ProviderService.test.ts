@@ -87,6 +87,7 @@ type LegacyProviderRuntimeEvent = {
 function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  let sessionGeneration = 0;
 
   const startSession = vi.fn((input: ProviderSessionStartInput) =>
     Effect.sync(() => {
@@ -99,6 +100,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
         status: "ready",
         runtimeMode: input.runtimeMode,
         threadId: input.threadId,
+        sessionGenerationId: `${provider}:${input.threadId}:${++sessionGeneration}`,
         resumeCursor: input.resumeCursor ?? {
           opaque: `resume-${String(input.threadId)}`,
         },
@@ -994,6 +996,111 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("conditionally stops only the exact observed binding revision", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-conditional-stop");
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stale = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(stale);
+
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "running",
+        runtimePayload: { lastRuntimeEvent: "test.refresh" },
+      });
+      routing.codex.stopSession.mockClear();
+
+      assert.equal(yield* provider.stopSessionIfUnchanged(stale), false);
+      assert.equal(routing.codex.stopSession.mock.calls.length, 0);
+
+      const current = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(current);
+      assert.equal(yield* provider.stopSessionIfUnchanged(current), true);
+      assert.equal(routing.codex.stopSession.mock.calls.length, 1);
+
+      const stopped = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(stopped);
+      assert.equal(stopped.status, "stopped");
+      assert.equal(
+        (stopped.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        false,
+      );
+    }),
+  );
+
+  it.effect("preserves pending work on adopt-existing and clears it on resume", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-recovery-pending-work");
+      const initial = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimePayload: { hasPendingWork: true },
+      });
+
+      // Simulate the session appearing between resolveRoutableSession's first
+      // probe and recoverSessionForThread's second probe.
+      routing.claude.hasSession.mockReturnValueOnce(Effect.succeed(false));
+      routing.claude.startSession.mockClear();
+      yield* provider.sendTurn({ threadId, input: "adopt", attachments: [] });
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+      const adopted = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(adopted);
+      assert.equal(
+        (adopted.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        true,
+      );
+      assert.equal(
+        (adopted.runtimePayload as { readonly sessionGenerationId?: string } | null)
+          ?.sessionGenerationId,
+        initial.sessionGenerationId,
+      );
+
+      // Recovery after subprocess death starts a new generation and clears the
+      // old process's pending-work observation.
+      yield* routing.claude.stopSession(threadId);
+      yield* directory.upsert({
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimePayload: { hasPendingWork: true },
+      });
+      routing.claude.startSession.mockClear();
+      yield* provider.sendTurn({ threadId, input: "resume", attachments: [] });
+      assert.equal(routing.claude.startSession.mock.calls.length, 1);
+      const resumed = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(resumed);
+      assert.equal(
+        (resumed.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        false,
+      );
+      assert.notEqual(
+        (resumed.runtimePayload as { readonly sessionGenerationId?: string } | null)
+          ?.sessionGenerationId,
+        initial.sessionGenerationId,
+      );
+      routing.claude.startSession.mockClear();
+    }),
+  );
+
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -1599,6 +1706,215 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
             entry.type === "turn.completed" && entry.providerInstanceId === codexInstanceId,
         ),
         true,
+      );
+    }),
+  );
+
+  it.effect("refreshes the session binding and persists pending work on turn completion", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-completion-refresh");
+      const session = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const before = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.isDefined(before);
+
+      yield* advanceTestClock(1_000);
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-completion-refresh-pending"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId: asTurnId("turn-completion-refresh-pending"),
+        payload: {
+          state: "completed",
+          hasPendingWork: true,
+          sessionGenerationId: session.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const pending = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.isDefined(pending);
+      assert.notEqual(pending.lastSeenAt, before.lastSeenAt);
+      assert.equal(pending.status, before.status);
+      assert.deepEqual(pending.resumeCursor, before.resumeCursor);
+      assert.equal(pending.runtimeMode, before.runtimeMode);
+      assert.equal(
+        (pending.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        true,
+      );
+      assert.equal(
+        (pending.runtimePayload as { readonly activeTurnId?: string | null } | null)?.activeTurnId,
+        (before.runtimePayload as { readonly activeTurnId?: string | null } | null)?.activeTurnId,
+      );
+
+      yield* advanceTestClock(1_000);
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-completion-refresh-cleared"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId,
+        turnId: asTurnId("turn-completion-refresh-cleared"),
+        payload: {
+          state: "completed",
+          hasPendingWork: false,
+          sessionGenerationId: session.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const cleared = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.isDefined(cleared);
+      assert.notEqual(cleared.lastSeenAt, pending.lastSeenAt);
+      assert.equal(
+        (cleared.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        false,
+      );
+    }),
+  );
+
+  it.effect("clears persisted pending work when the session stops or restarts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-pending-clear");
+      const readPendingWork = Effect.gen(function* () {
+        const binding = (yield* directory.listBindings()).find(
+          (entry) => entry.threadId === threadId,
+        );
+        assert.isDefined(binding);
+        return (binding.runtimePayload as { readonly hasPendingWork?: boolean } | null)
+          ?.hasPendingWork;
+      });
+
+      const initialSession = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* advanceTestClock(1_000);
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-pending-clear"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId: asTurnId("turn-pending-clear"),
+        payload: {
+          state: "completed",
+          hasPendingWork: true,
+          sessionGenerationId: initialSession.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+      assert.equal(yield* readPendingWork, true);
+
+      // Stopping kills the provider subprocess, so armed wakeups die with it.
+      yield* provider.stopSession({ threadId });
+      assert.equal(yield* readPendingWork, false);
+
+      // A stale flag (e.g. after a crash that skipped the stop path) must not
+      // survive a fresh session start either.
+      yield* directory.upsert({
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+        status: "stopped",
+        runtimePayload: { hasPendingWork: true },
+      });
+      assert.equal(yield* readPendingWork, true);
+      const replacementSession = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(yield* readPendingWork, false);
+
+      // A completion queued by the replaced subprocess must not re-arm the
+      // pending flag on the new same-instance generation.
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-pending-clear-stale-generation"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId,
+        turnId: asTurnId("turn-pending-clear-stale-generation"),
+        payload: {
+          state: "completed",
+          hasPendingWork: true,
+          sessionGenerationId: initialSession.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+      assert.notEqual(replacementSession.sessionGenerationId, initialSession.sessionGenerationId);
+      assert.equal(yield* readPendingWork, false);
+    }),
+  );
+
+  it.effect("clears pending work when the matching provider generation exits", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-pending-exit");
+      const session = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      fanout.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-pending-exit-completion"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        payload: {
+          state: "completed",
+          hasPendingWork: true,
+          sessionGenerationId: session.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+
+      fanout.claude.emit({
+        type: "session.exited",
+        eventId: asEventId("evt-pending-exit"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId,
+        payload: {
+          reason: "process exited",
+          exitKind: "error",
+          sessionGenerationId: session.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(binding);
+      assert.equal(binding.status, "stopped");
+      assert.equal(
+        (binding.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        false,
       );
     }),
   );

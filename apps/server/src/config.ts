@@ -73,6 +73,9 @@ export class ServerConfig extends Context.Service<
     readonly desktopBootstrapToken: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
+    readonly providerSessionReaperInactivityThresholdMs: number;
+    readonly providerSessionReaperSweepIntervalMs: number;
+    readonly providerSessionReaperMaxPendingExtensionMs: number;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
   }
@@ -172,6 +175,9 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
+    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
+    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
+    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
     port: 0,

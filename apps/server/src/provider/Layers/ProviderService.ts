@@ -33,6 +33,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import {
@@ -125,6 +126,7 @@ function toRuntimePayloadFromSession(
     readonly modelSelection?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
+    readonly clearHasPendingWork?: boolean;
   },
 ): Record<string, unknown> {
   return {
@@ -132,12 +134,24 @@ function toRuntimePayloadFromSession(
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
+    ...(session.sessionGenerationId !== undefined
+      ? { sessionGenerationId: session.sessionGenerationId }
+      : {}),
+    ...(extra?.clearHasPendingWork === true ? { hasPendingWork: false } : {}),
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
   };
+}
+
+function readSessionGenerationId(runtimePayload: unknown | null | undefined): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const value = "sessionGenerationId" in runtimePayload ? runtimePayload.sessionGenerationId : null;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readPersistedModelSelection(
@@ -213,6 +227,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const threadLocksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
+  const getThreadLock = Effect.fn("ProviderService.getThreadLock")(function* (threadId: ThreadId) {
+    const existing = (yield* Ref.get(threadLocksRef)).get(threadId);
+    if (existing) return existing;
+    const created = yield* Semaphore.make(1);
+    return yield* Ref.modify(threadLocksRef, (locks) => {
+      const current = locks.get(threadId);
+      if (current) return [current, locks] as const;
+      const next = new Map(locks);
+      next.set(threadId, created);
+      return [created, next] as const;
+    });
+  });
+  const withThreadLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+    Effect.flatMap(getThreadLock(threadId), (lock) => lock.withPermit(effect));
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
@@ -237,6 +266,68 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.flatMap((canonicalEvent) => PubSub.publish(runtimeEventPubSub, canonicalEvent)),
       Effect.asVoid,
     );
+
+  const refreshBindingFromRuntimeEvent = Effect.fn(
+    "ProviderService.refreshBindingFromRuntimeEvent",
+  )(function* (
+    source: {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+    },
+    event: ProviderRuntimeEvent,
+  ) {
+    if (event.type !== "turn.completed" && event.type !== "session.exited") {
+      return;
+    }
+
+    const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+    if (!binding) {
+      return;
+    }
+    const eventGenerationId = event.payload.sessionGenerationId;
+    const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
+    if (
+      binding.provider !== source.provider ||
+      binding.providerInstanceId !== source.instanceId ||
+      bindingGenerationId !== eventGenerationId
+    ) {
+      yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
+        threadId: event.threadId,
+        eventProvider: source.provider,
+        eventProviderInstanceId: source.instanceId,
+        bindingProvider: binding.provider,
+        bindingProviderInstanceId: binding.providerInstanceId,
+        bindingGenerationId,
+        eventGenerationId,
+      });
+      return;
+    }
+
+    if (binding.status === "stopped") return;
+
+    const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
+    const runtimePayloadPatch =
+      event.type === "session.exited"
+        ? { hasPendingWork: false, activeTurnId: null }
+        : hasPendingWork !== undefined
+          ? { hasPendingWork }
+          : undefined;
+    const refreshed = yield* directory
+      .refreshIfUnchanged({
+        binding,
+        ...(event.type === "session.exited" ? { status: "stopped" as const } : {}),
+        ...(runtimePayloadPatch !== undefined ? { runtimePayloadPatch } : {}),
+      })
+      .pipe(Effect.retry({ times: 2 }));
+    if (!refreshed) {
+      yield* Effect.logDebug("provider.session.runtime-event-binding-changed", {
+        threadId: event.threadId,
+        eventProvider: source.provider,
+        eventProviderInstanceId: source.instanceId,
+        expectedLastSeenAt: binding.lastSeenAt,
+      });
+    }
+  });
 
   const requireBindingInstanceId = (
     operation: string,
@@ -263,6 +354,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly modelSelection?: unknown;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
+      readonly clearHasPendingWork?: boolean;
     },
   ) =>
     Effect.gen(function* () {
@@ -290,10 +382,23 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   ): Effect.Effect<void> =>
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
       Effect.flatMap((canonicalEvent) =>
-        increment(providerRuntimeEventsTotal, {
-          provider: canonicalEvent.provider,
-          eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        refreshBindingFromRuntimeEvent(source, canonicalEvent).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.session.runtime-event-refresh-failed", {
+              threadId: canonicalEvent.threadId,
+              provider: canonicalEvent.provider,
+              providerInstanceId: source.instanceId,
+              cause,
+            }),
+          ),
+          Effect.andThen(
+            increment(providerRuntimeEventsTotal, {
+              provider: canonicalEvent.provider,
+              eventType: canonicalEvent.type,
+            }),
+          ),
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+        ),
       ),
     );
 
@@ -420,6 +525,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* upsertSessionBinding(
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
+        // A resumed session runs in a fresh provider subprocess: any wakeups
+        // or background tasks armed by the previous process are gone.
+        { clearHasPendingWork: true },
       );
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
@@ -618,6 +726,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
+          clearHasPendingWork: true,
         });
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
@@ -925,6 +1034,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            // Stopping kills the provider subprocess, so any armed wakeups or
+            // background tasks die with it — the binding must not keep the
+            // pending-work reaper extension.
+            hasPendingWork: false,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -941,6 +1054,80 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     },
   );
+
+  const stopSessionIfUnchanged: ProviderServiceMethod<"stopSessionIfUnchanged"> = (observed) =>
+    withThreadLock(
+      observed.threadId,
+      Effect.gen(function* () {
+        const current = Option.getOrUndefined(yield* directory.getBinding(observed.threadId));
+        if (
+          !current ||
+          current.revision !== observed.revision ||
+          current.provider !== observed.provider ||
+          current.providerInstanceId !== observed.providerInstanceId ||
+          current.status === "stopped"
+        ) {
+          return false;
+        }
+
+        const runtimePayload =
+          current.runtimePayload &&
+          typeof current.runtimePayload === "object" &&
+          !Array.isArray(current.runtimePayload)
+            ? current.runtimePayload
+            : {};
+        const originalHasPendingWork =
+          "hasPendingWork" in runtimePayload && typeof runtimePayload.hasPendingWork === "boolean"
+            ? runtimePayload.hasPendingWork
+            : null;
+        const originalActiveTurnId =
+          "activeTurnId" in runtimePayload ? (runtimePayload.activeTurnId ?? null) : null;
+
+        const claimed = yield* directory
+          .refreshIfUnchanged({
+            binding: current,
+            status: "stopped",
+            touchLastSeenAt: false,
+            runtimePayloadPatch: { hasPendingWork: false, activeTurnId: null },
+          })
+          .pipe(Effect.retry({ times: 2 }));
+        if (!claimed) return false;
+
+        const rollbackClaim = Effect.gen(function* () {
+          const claimedBinding = Option.getOrUndefined(
+            yield* directory.getBinding(observed.threadId),
+          );
+          if (!claimedBinding || claimedBinding.status !== "stopped") return;
+          yield* directory.refreshIfUnchanged({
+            binding: claimedBinding,
+            status: current.status ?? "running",
+            touchLastSeenAt: false,
+            runtimePayloadPatch: {
+              hasPendingWork: originalHasPendingWork,
+              activeTurnId: originalActiveTurnId,
+            },
+          });
+        }).pipe(Effect.ignore);
+
+        return yield* Effect.gen(function* () {
+          yield* Effect.gen(function* () {
+            const providerInstanceId = yield* requireBindingInstanceId(
+              "ProviderService.stopSessionIfUnchanged",
+              current,
+            );
+            const adapter = yield* registry.getByInstance(providerInstanceId);
+            if (yield* adapter.hasSession(current.threadId)) {
+              yield* adapter.stopSession(current.threadId);
+            }
+          }).pipe(Effect.tapCause(() => rollbackClaim));
+          yield* clearMcpSession(current.threadId);
+          yield* analytics.record("provider.session.stopped", {
+            provider: current.provider,
+          });
+          return true;
+        });
+      }),
+    );
 
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
@@ -1114,6 +1301,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            hasPendingWork: false,
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: yield* nowIso,
           },
@@ -1137,17 +1325,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   return {
-    startSession,
-    forkConversation,
-    sendTurn,
-    interruptTurn,
-    respondToRequest,
-    respondToUserInput,
-    stopSession,
+    startSession: (threadId, input) => withThreadLock(threadId, startSession(threadId, input)),
+    // Forks read the source binding's resume cursor; lock the source thread so
+    // a concurrent stop/start cannot swap the session out mid-fork.
+    forkConversation: (input) => withThreadLock(input.sourceThreadId, forkConversation(input)),
+    sendTurn: (input) => withThreadLock(input.threadId, sendTurn(input)),
+    interruptTurn: (input) => withThreadLock(input.threadId, interruptTurn(input)),
+    respondToRequest: (input) => withThreadLock(input.threadId, respondToRequest(input)),
+    respondToUserInput: (input) => withThreadLock(input.threadId, respondToUserInput(input)),
+    stopSession: (input) => withThreadLock(input.threadId, stopSession(input)),
+    stopSessionIfUnchanged,
     listSessions,
     getCapabilities,
     getInstanceInfo,
-    rollbackConversation,
+    rollbackConversation: (input) => withThreadLock(input.threadId, rollbackConversation(input)),
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

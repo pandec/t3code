@@ -4,9 +4,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
-import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -45,12 +44,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       const provider = yield* directory.getProvider(initialThreadId);
       assert.equal(provider, "codex");
       const resolvedBinding = yield* directory.getBinding(initialThreadId);
-      assertSome(resolvedBinding, {
-        threadId: initialThreadId,
-        provider: ProviderDriverKind.make("codex"),
-      });
+      assert.equal(Option.isSome(resolvedBinding), true);
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
+        assert.equal(resolvedBinding.value.provider, "codex");
       }
 
       const nextThreadId = ThreadId.make("thread-2");
@@ -122,6 +119,96 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("atomically rejects stale refreshes and resets payload when ownership changes", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-refresh-owner-change");
+      const claudeInstanceId = ProviderInstanceId.make("claude-primary");
+      const codexInstanceId = ProviderInstanceId.make("codex-primary");
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claudeInstanceId,
+        threadId,
+        resumeCursor: { claudeSessionId: "old-owner-session" },
+        runtimePayload: {
+          cwd: "/tmp/claude-project",
+          hasPendingWork: true,
+        },
+      });
+      const staleBinding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(staleBinding), true);
+      if (Option.isNone(staleBinding)) return;
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimePayload: {
+          cwd: "/tmp/codex-project",
+        },
+      });
+
+      const refreshed = yield* directory.refreshIfUnchanged({
+        binding: staleBinding.value,
+        runtimePayloadPatch: { hasPendingWork: false },
+      });
+      assert.equal(refreshed, false);
+
+      const currentBinding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(currentBinding), true);
+      if (Option.isSome(currentBinding)) {
+        assert.equal(currentBinding.value.provider, "codex");
+        assert.equal(currentBinding.value.providerInstanceId, codexInstanceId);
+        assert.equal(currentBinding.value.resumeCursor, null);
+        assert.deepEqual(currentBinding.value.runtimePayload, {
+          cwd: "/tmp/codex-project",
+        });
+      }
+    }));
+
+  it("refreshes legacy null-instance rows and rejects same-timestamp stale revisions", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.make("thread-legacy-refresh-revision");
+
+      yield* repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: { hasPendingWork: false },
+      });
+      const legacy = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(legacy);
+      assert.equal(legacy.providerInstanceIdWasLegacyNull, true);
+
+      assert.equal(
+        yield* directory.refreshIfUnchanged({
+          binding: legacy,
+          runtimePayloadPatch: { hasPendingWork: true },
+        }),
+        true,
+      );
+
+      const refreshed = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(refreshed);
+      assert.equal(refreshed.revision, legacy.revision + 1);
+      assert.equal(
+        (refreshed.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        true,
+      );
+
+      // The test clock has not advanced, so lastSeenAt may repeat. Revision,
+      // rather than wall time, must still reject the stale snapshot.
+      assert.equal(yield* directory.refreshIfUnchanged({ binding: legacy }), false);
+    }));
+
   it("lists persisted bindings with metadata in oldest-first order", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
@@ -172,6 +259,8 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           runtimeMode: "approval-required",
           status: "starting",
           lastSeenAt: "2026-04-14T12:00:00.000Z",
+          revision: 0,
+          providerInstanceIdWasLegacyNull: true,
           resumeCursor: {
             opaque: "resume-older",
           },
@@ -186,6 +275,8 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           runtimeMode: "full-access",
           status: "running",
           lastSeenAt: "2026-04-14T12:05:00.000Z",
+          revision: 0,
+          providerInstanceIdWasLegacyNull: true,
           resumeCursor: {
             opaque: "resume-newer",
           },
@@ -250,12 +341,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(provider, "codex");
 
         const resolvedBinding = yield* directory.getBinding(threadId);
-        assertSome(resolvedBinding, {
-          threadId,
-          provider: ProviderDriverKind.make("codex"),
-        });
+        assert.equal(Option.isSome(resolvedBinding), true);
         if (Option.isSome(resolvedBinding)) {
           assert.equal(resolvedBinding.value.threadId, threadId);
+          assert.equal(resolvedBinding.value.provider, "codex");
         }
 
         const legacyTableRows = yield* sql<{ readonly name: string }>`

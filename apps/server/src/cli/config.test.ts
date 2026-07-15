@@ -45,6 +45,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
+    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
+    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -92,6 +95,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
                   T3CODE_LOG_WS_EVENTS: "true",
+                  T3CODE_PROVIDER_SESSION_REAPER_INACTIVITY_THRESHOLD_MS: "1200",
+                  T3CODE_PROVIDER_SESSION_REAPER_SWEEP_INTERVAL_MS: "300",
+                  T3CODE_PROVIDER_SESSION_REAPER_MAX_PENDING_EXTENSION_MS: "7200",
                 },
               }),
             ),
@@ -116,6 +122,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         desktopBootstrapToken: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
+        providerSessionReaperInactivityThresholdMs: 1200,
+        providerSessionReaperSweepIntervalMs: 300,
+        providerSessionReaperMaxPendingExtensionMs: 7200,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
