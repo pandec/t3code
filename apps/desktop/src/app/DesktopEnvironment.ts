@@ -20,6 +20,7 @@ export interface MakeDesktopEnvironmentInput {
   readonly homeDirectory: string;
   readonly platform: NodeJS.Platform;
   readonly processArch: string;
+  readonly buildFlavor?: "release" | "dev";
   readonly appVersion: string;
   readonly appPath: string;
   readonly isPackaged: boolean;
@@ -36,6 +37,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly processArch: string;
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
+    readonly usesDevelopmentIdentity: boolean;
     readonly appVersion: string;
     readonly appPath: string;
     readonly resourcesPath: string;
@@ -79,10 +81,10 @@ export class DesktopEnvironment extends Context.Service<
 const APP_BASE_NAME = "T3 Code";
 
 function resolveDesktopAppStageLabel(input: {
-  readonly isDevelopment: boolean;
+  readonly usesDevelopmentIdentity: boolean;
   readonly appVersion: string;
 }): DesktopAppStageLabel {
-  if (input.isDevelopment) {
+  if (input.usesDevelopmentIdentity) {
     return "Dev";
   }
 
@@ -90,7 +92,7 @@ function resolveDesktopAppStageLabel(input: {
 }
 
 function resolveDesktopAppBranding(input: {
-  readonly isDevelopment: boolean;
+  readonly usesDevelopmentIdentity: boolean;
   readonly appVersion: string;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
@@ -139,6 +141,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const isPackagedDevBuild = input.isPackaged && input.buildFlavor === "dev";
+  const usesDevelopmentIdentity = isDevelopment || isPackagedDevBuild;
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -151,13 +155,24 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const branding = resolveDesktopAppBranding({
-    isDevelopment,
+    usesDevelopmentIdentity,
     appVersion: input.appVersion,
   });
   const displayName = branding.displayName;
-  const stateDir = path.join(baseDir, isDevelopment ? "dev" : "userdata");
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const stateDir = path.join(
+    baseDir,
+    isPackagedDevBuild ? "dev-packaged" : isDevelopment ? "dev" : "userdata",
+  );
+  const userDataDirName = isPackagedDevBuild
+    ? "t3code-dev-packaged"
+    : isDevelopment
+      ? "t3code-dev"
+      : "t3code";
+  const legacyUserDataDirName = isPackagedDevBuild
+    ? "T3 Code (Dev Packaged)"
+    : isDevelopment
+      ? "T3 Code (Dev)"
+      : "T3 Code (Alpha)";
   const resourcesPath = input.resourcesPath;
 
   return DesktopEnvironment.of({
@@ -167,6 +182,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     processArch: input.processArch,
     isPackaged: input.isPackaged,
     isDevelopment,
+    usesDevelopmentIdentity,
     appVersion: input.appVersion,
     appPath: input.appPath,
     resourcesPath,
@@ -197,10 +213,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      usesDevelopmentIdentity ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: usesDevelopmentIdentity ? "t3code-dev.desktop" : "t3code.desktop",
+    linuxWmClass: usesDevelopmentIdentity ? "t3code-dev" : "t3code",
     userDataDirName,
     legacyUserDataDirName,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),

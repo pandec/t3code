@@ -51,6 +51,7 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.usesDevelopmentIdentity, true);
       assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
       assert.equal(environment.baseDir, "/tmp/t3");
       assert.equal(environment.stateDir, "/tmp/t3/dev");
@@ -88,10 +89,32 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.usesDevelopmentIdentity, false);
       assert.equal(environment.stateDir, "/tmp/t3/userdata");
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
       assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
+    }),
+  );
+
+  it.effect("keeps a packaged dev build separate from both live dev and release data", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {
+          isPackaged: true,
+          buildFlavor: "dev",
+        },
+        {
+          T3CODE_HOME: "/tmp/t3",
+        },
+      );
+
+      assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.usesDevelopmentIdentity, true);
+      assert.equal(environment.displayName, "T3 Code (Dev)");
+      assert.equal(environment.stateDir, "/tmp/t3/dev-packaged");
+      assert.equal(environment.userDataDirName, "t3code-dev-packaged");
+      assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev");
     }),
   );
 

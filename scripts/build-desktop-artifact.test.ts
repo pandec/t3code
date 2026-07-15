@@ -86,6 +86,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17", "dev"), "T3 Code (Dev)");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -100,7 +101,34 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
       windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     });
+    assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17", "dev"), {
+      macIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.developmentWindowsIconIco,
+    });
   });
+
+  it.effect("creates an isolated macOS dev package identity without an update feed", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "dev",
+      );
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(config.appId, "com.t3tools.t3code.dev");
+      assert.equal(config.productName, "T3 Code (Dev)");
+      assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
+      assert.notProperty(config, "publish");
+      assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code Dev", schemes: ["t3code-dev"] }]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
 
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
     Effect.gen(function* () {

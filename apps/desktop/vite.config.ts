@@ -4,10 +4,12 @@ import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoEnv = loadRepoEnv();
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
+const desktopBuildFlavor = process.env.T3CODE_DESKTOP_BUILD_FLAVOR === "dev" ? "dev" : "release";
 const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
+  __T3CODE_BUILD_DESKTOP_FLAVOR__: JSON.stringify(desktopBuildFlavor),
 };
 
 export default defineConfig({

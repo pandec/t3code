@@ -53,6 +53,14 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 
+declare const __T3CODE_BUILD_DESKTOP_FLAVOR__: string | undefined;
+
+const desktopBuildFlavor =
+  typeof __T3CODE_BUILD_DESKTOP_FLAVOR__ !== "undefined" &&
+  __T3CODE_BUILD_DESKTOP_FLAVOR__ === "dev"
+    ? "dev"
+    : "release";
+
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
     const metadata = yield* Effect.service(ElectronApp.ElectronApp).pipe(
@@ -65,6 +73,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       homeDirectory: NodeOS.homedir(),
       platform,
       processArch,
+      buildFlavor: desktopBuildFlavor,
       ...metadata,
     });
   }),
