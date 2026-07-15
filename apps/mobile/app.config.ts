@@ -267,6 +267,10 @@ const config: ExpoConfig = {
       {
         ios: {
           deploymentTarget: "18.0",
+          // The precompiled Expo module frameworks link against a dynamic
+          // React.framework that is not embedded by local Personal Team builds.
+          // Build those modules from source so the device binary is self-contained.
+          usePrecompiledModules: !isIosPersonalTeamBuild,
           // AppCheckCore 11.3+ includes Swift and needs module maps for these Objective-C dependencies.
           extraPods: [
             { name: "GoogleUtilities", modular_headers: true },
