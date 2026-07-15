@@ -10,9 +10,12 @@ Object.assign(process.env, repoEnv);
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 const personalIosAppleTeamId = repoEnv.T3CODE_IOS_PERSONAL_TEAM_ID?.trim();
+const customIosAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase();
+const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
 
 if (
   isIosPersonalTeamBuild &&
@@ -21,6 +24,18 @@ if (
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
+  );
+}
+
+if (
+  !isIosPersonalTeamBuild &&
+  ((customIosAppleTeamId === undefined) !== (customIosBundleIdentifier === undefined) ||
+    (customIosAppleTeamId !== undefined && !APPLE_TEAM_ID_PATTERN.test(customIosAppleTeamId)) ||
+    (customIosBundleIdentifier !== undefined &&
+      !IOS_BUNDLE_IDENTIFIER_PATTERN.test(customIosBundleIdentifier)))
+) {
+  throw new Error(
+    "T3CODE_APPLE_TEAM_ID and T3CODE_IOS_BUNDLE_ID must be provided together with a valid Apple Team ID and reverse-DNS bundle identifier.",
   );
 }
 
@@ -87,7 +102,8 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 const variant = VARIANT_CONFIG[APP_VARIANT];
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+  : (customIosBundleIdentifier ?? variant.iosBundleIdentifier);
+const isCustomIosTeamBuild = !isIosPersonalTeamBuild && customIosAppleTeamId !== undefined;
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -136,7 +152,7 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: !isIosPersonalTeamBuild,
+    enabled: !isIosPersonalTeamBuild && !isCustomIosTeamBuild,
     url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
@@ -153,7 +169,7 @@ const config: ExpoConfig = {
         ? { appleTeamId: personalIosAppleTeamId }
         : {}
       : {
-          appleTeamId: "ARK85ZXQ4Z",
+          appleTeamId: customIosAppleTeamId ?? "ARK85ZXQ4Z",
           associatedDomains: [
             `applinks:${variant.relyingParty}`,
             `webcredentials:${variant.relyingParty}`,

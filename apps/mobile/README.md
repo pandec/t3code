@@ -50,6 +50,17 @@ Build and install a self-contained Release app that does not need Metro:
 vp run ios:release
 ```
 
+This private fork also has stable commands for Bartosz's paid Apple Developer team. Both use
+`com.pandec.tools.t3code`, install directly on a connected iPhone, and replace each other:
+
+```bash
+# Development build with Metro
+vp run ios:local
+
+# Self-contained Release build
+vp run ios:local:release
+```
+
 The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
