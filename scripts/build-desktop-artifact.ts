@@ -1335,16 +1335,8 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 
 export function resolveDesktopBuildIconAssets(
   version: string,
-  flavor: typeof DesktopBuildFlavor.Type = "release",
+  _flavor: typeof DesktopBuildFlavor.Type = "release",
 ): DesktopBuildIconAssets {
-  if (flavor === "dev") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.developmentWindowsIconIco,
-    };
-  }
-
   if (resolveDesktopUpdateChannel(version) === "nightly") {
     return {
       macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,

@@ -102,9 +102,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     });
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17", "dev"), {
-      macIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.developmentWindowsIconIco,
+      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
     });
   });
 
