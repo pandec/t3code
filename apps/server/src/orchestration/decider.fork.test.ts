@@ -126,33 +126,34 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
     }),
   );
 
-  it.effect("rejects a fork immediately after accepting a source turn", () =>
+  it.effect("rejects a fork while the source provider session is running", () =>
     Effect.gen(function* () {
       let readModel = yield* seedReadModel;
-      const decidedTurn = yield* decideOrchestrationCommand({
-        readModel,
-        command: {
-          type: "thread.turn.start",
-          commandId: CommandId.make("command-turn"),
+      readModel = yield* projectEvent(readModel, {
+        sequence: 4,
+        eventId: EventId.make("event-session-running"),
+        aggregateKind: "thread",
+        aggregateId: sourceThreadId,
+        type: "thread.session-set",
+        occurredAt: now,
+        commandId: CommandId.make("command-session-running"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-session-running"),
+        metadata: {},
+        payload: {
           threadId: sourceThreadId,
-          message: {
-            messageId: MessageId.make("message-turn"),
-            role: "user",
-            text: "continue",
-            attachments: [],
+          session: {
+            threadId: sourceThreadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex-instance"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
           },
-          runtimeMode: "full-access",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
         },
       });
-      const turnEvents = Array.isArray(decidedTurn) ? decidedTurn : [decidedTurn];
-      for (const event of turnEvents) {
-        readModel = yield* projectEvent(readModel, {
-          ...event,
-          sequence: readModel.snapshotSequence + 1,
-        });
-      }
 
       const error = yield* decideOrchestrationCommand({
         readModel,
@@ -165,6 +166,68 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
         },
       }).pipe(Effect.flip);
       expect(error.message).toContain("cannot be forked while a turn is active");
+    }),
+  );
+
+  it.effect("rejects turns and repeat forks from an incomplete fork", () =>
+    Effect.gen(function* () {
+      let readModel = yield* seedReadModel;
+      readModel = yield* projectEvent(readModel, {
+        sequence: 4,
+        eventId: EventId.make("event-session-fork-failed"),
+        aggregateKind: "thread",
+        aggregateId: sourceThreadId,
+        type: "thread.session-set",
+        occurredAt: now,
+        commandId: CommandId.make("command-session-fork-failed"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-session-fork-failed"),
+        metadata: {},
+        payload: {
+          threadId: sourceThreadId,
+          session: {
+            threadId: sourceThreadId,
+            status: "error",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex-instance"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: "Conversation fork failed: provider rejected the request",
+            updatedAt: now,
+          },
+        },
+      });
+
+      const turnError = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("command-failed-fork-turn"),
+          threadId: sourceThreadId,
+          message: {
+            messageId: MessageId.make("message-failed-fork-turn"),
+            role: "user",
+            text: "continue",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      }).pipe(Effect.flip);
+      expect(turnError.message).toContain("provider fork is not usable");
+
+      const forkError = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-repeat-failed-fork"),
+          sourceThreadId,
+          threadId: ThreadId.make("destination-repeat-failed"),
+          createdAt: now,
+        },
+      }).pipe(Effect.flip);
+      expect(forkError.message).toContain("incomplete conversation fork");
     }),
   );
 });

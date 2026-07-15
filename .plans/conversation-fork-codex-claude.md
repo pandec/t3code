@@ -24,7 +24,8 @@ approvals, plans, checkpoints, diffs, terminals, and attachment files are intent
   generate deterministic destination-specific message IDs, and drop attachments.
 - Do not copy T3 activities, proposed plans, checkpoints, diffs, terminal state, unread state, or drafts.
 - No automatic retry/outbox/saga. A failed provider fork leaves a visible destination thread in `error`
-  state; the UI shows the error, and the user may delete it and fork the source again. A native provider
+  state and cannot accept turns or be forked again; the UI shows the error, and the user may delete it and
+  fork the source again. A native provider
   fork or provider binding left orphaned by a later persistence failure is accepted for this private build.
 - If the server exits after committing the request but before the transient reactor runs, the destination
   may remain `starting` indefinitely. It must remain deletable; restarting/replaying incomplete fork work is
@@ -57,7 +58,8 @@ approvals, plans, checkpoints, diffs, terminals, and attachment files are intent
      provider binding contains the new native resume cursor, so the first prompt resumes the fork;
    - failure: destination status `error` with a concise provider error. No retry is attempted.
 6. Web and iOS navigate to the known destination ID after the initial command succeeds. Existing session
-   status UI disables sending while `starting` and displays the normal error banner if it becomes `error`.
+   status UI disables sending while `starting`; web displays the normal error banner, and iOS shows an alert
+   if the asynchronous provider fork fails.
 
 ### Provider API
 
@@ -83,7 +85,9 @@ recovering or mutating the source session, routes to the same provider instance,
 upserts a destination binding with the returned cursor plus copied source runtime payload (cwd/model
 selection), explicitly setting the provider-directory binding status to `stopped` rather than relying on
 its new-binding default. It rejects missing resume state and adapters without the optional `forkSession`
-operation. A dedicated result avoids pretending that the one-shot fork is an active `ProviderSession` and avoids mixing
+operation. Immediately before the native fork, it also rejects a source adapter session whose live status
+is anything other than idle/`ready`, narrowing the turn-start race without changing normal turn projection.
+A dedicated result avoids pretending that the one-shot fork is an active `ProviderSession` and avoids mixing
 provider runtime statuses with orchestration's `stopped` status.
 
 - **Codex:** extend `CodexSessionRuntimeOptions` with a mutually exclusive fork source cursor. After
@@ -92,8 +96,9 @@ provider runtime statuses with orchestration's `stopped` status.
   the adapter session map and never starts its normal event fiber, so `hasSession(destinationThreadId)` stays
   false. Return `{ resumeCursor: { threadId: newNativeThreadId } }`. This works even when the source T3
   session is inactive and does not touch the source runtime.
-- **Claude:** import the SDK's `forkSession(sourceSessionId, { dir: cwd })`, using the UUID from the source
-  resume cursor. Return a fork result whose cursor resumes the returned session ID. Do not use plain
+- **Claude:** run the SDK's `forkSession(sourceSessionId, { dir: cwd })` in a short-lived Node process with
+  the selected Claude instance's configured environment, including custom `HOME`, using the UUID from the
+  source resume cursor. Return a fork result whose cursor resumes the returned session ID. Do not use plain
   `resume`, which would continue the source conversation.
 
 ### Client surfaces
@@ -129,12 +134,9 @@ provider runtime statuses with orchestration's `stopped` status.
 - Update `apps/server/src/orchestration/decider.ts` to emit the destination creation, fork request, and
   starting session events atomically. Add a guard to `thread.turn.start` that rejects destinations whose
   session is `starting`, preventing an accidental fresh provider session before the fork finishes.
-- Update `apps/server/src/orchestration/projector.ts` to recognize the fork event and, critically, mark a
-  source session as `starting` in the command read model as soon as `thread.turn-start-requested` is
-  projected. Patch the existing session object so provider identity, instance, runtime mode, and other fields
-  are preserved; a thread without an existing session is not eligible to fork. This is a command-invariant
-  marker only; it closes the gap before provider runtime events arrive without adding a new persisted event.
-  The destination itself is still created by ordinary `thread.created`.
+- Keep normal `thread.turn-start-requested` projection unchanged. Revalidate the source adapter's live
+  session state in `ProviderService.forkConversation` immediately before the native fork so a race does not
+  create a durable `starting` marker that could strand ordinary turns after a server restart.
 - Add a narrow `copyTextMessagesForFork` repository operation to
   `apps/server/src/persistence/Services/ProjectionThreadMessages.ts` and
   `apps/server/src/persistence/Layers/ProjectionThreadMessages.ts`. Implement it as one `INSERT ... SELECT`
@@ -142,8 +144,8 @@ provider runtime statuses with orchestration's `stopped` status.
 - Invoke that operation from `apps/server/src/orchestration/Layers/ProjectionPipeline.ts` when projecting
   `thread.fork-requested`, then refresh the destination shell summary.
 - Add one projection/decider test covering metadata inheritance, text-message copying, dropped activities
-  and attachments, rejection of a running source, and rejection when `thread.fork` immediately follows an
-  accepted `thread.turn.start` before provider runtime events arrive.
+  and attachments, rejection of a projected running source, and provider-side rejection when the live
+  adapter reports a running source.
 
 ### 3. Add provider-neutral fork routing
 
@@ -175,7 +177,8 @@ provider runtime statuses with orchestration's `stopped` status.
 - Extend the existing `ProviderCommandReactor` request-event -> provider side effect -> internal command
   path with the fork request, avoiding a new service and startup layer for one private-build operation.
 - On success, dispatch `thread.session.set` with status `stopped`; on failure, dispatch it with status
-  `error` and the provider error message. Do not append tool/activity history or schedule retries.
+  `error` and a fork-specific provider error marker. Reject turns and repeat forks from that incomplete
+  destination. Do not append tool/activity history or schedule retries.
 - Wire the layer into the existing `OrchestrationReactor` startup and scoped-finalization lifecycle. Expose
   `drain` only if useful to the focused reactor test; do not add a new shutdown-drain path.
 - Add one reactor test with a success and failure case. The success assertion must verify that no operation
@@ -206,9 +209,8 @@ Manual smoke checks:
 1. Fork an idle Codex thread from web; confirm copied user/assistant text, same metadata, new provider cursor,
    successful independent follow-up prompts, and unchanged source history/cursor.
 2. Repeat with Claude.
-3. Confirm a running conversation cannot be forked.
-   Also dispatch fork immediately after a turn-start acknowledgement and confirm it is rejected before any
-   provider runtime event arrives.
+3. Confirm a running conversation cannot be forked, including when the live adapter reports a running turn
+   before the orchestration projection catches up.
 4. Force a provider fork failure; confirm the destination remains visible with an error and the source still
    works.
 5. Repeat the happy path from iOS and confirm navigation to the destination.
@@ -218,10 +220,9 @@ Manual smoke checks:
 
 ## Known private-build limitations
 
-- A second client could start a source turn after the fork request is accepted but before the provider side
-  effect runs. Immediate turn-start-before-fork is rejected by the command read-model marker, but the source
-  is not locked after fork acceptance. If this becomes noticeable, add an explicit source-side fork lock in
-  a later iteration rather than broadening the first patch.
+- A second client could still start a source turn in the very small interval between the provider service's
+  live-state recheck and the native fork call. If this becomes noticeable, add an explicit source-side fork
+  lock in a later iteration rather than changing global turn projection.
 - Native provider artifacts or destination bindings may remain orphaned after partial failure. They are not
   visible unless the T3 destination was created, and cleanup/retry machinery is intentionally out of scope.
 - Historical attachments are not shown in the destination T3 transcript, though the native provider fork

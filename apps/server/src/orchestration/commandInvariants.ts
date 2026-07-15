@@ -10,6 +10,12 @@ import * as Effect from "effect/Effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
+export const THREAD_FORK_FAILURE_PREFIX = "Conversation fork failed: ";
+
+export function isThreadForkFailure(lastError: string | null | undefined): boolean {
+  return lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX) ?? false;
+}
+
 function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
   return new OrchestrationCommandInvariantError({
     commandType,
@@ -184,6 +190,14 @@ export function requireThreadForkable(input: {
           invariantError(
             input.command.type,
             `Thread '${input.threadId}' cannot be forked while a turn is active.`,
+          ),
+        );
+      }
+      if (isThreadForkFailure(session.lastError)) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' is an incomplete conversation fork. Delete it and fork the source conversation again.`,
           ),
         );
       }

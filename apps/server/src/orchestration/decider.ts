@@ -11,6 +11,7 @@ import type * as PlatformError from "effect/PlatformError";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  isThreadForkFailure,
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
@@ -473,10 +474,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (targetThread.session?.status === "starting") {
+      if (
+        targetThread.session?.status === "starting" ||
+        isThreadForkFailure(targetThread.session?.lastError)
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' cannot start a turn while its provider session is starting.`,
+          detail: `Thread '${command.threadId}' cannot start a turn because its provider fork is not usable. Delete it and fork the source conversation again.`,
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;

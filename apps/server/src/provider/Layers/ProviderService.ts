@@ -668,6 +668,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         );
       }
 
+      if (yield* adapter.hasSession(input.sourceThreadId)) {
+        const sourceSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === input.sourceThreadId,
+        );
+        if (sourceSession && sourceSession.status !== "ready") {
+          return yield* toValidationError(
+            operation,
+            `Cannot fork thread '${input.sourceThreadId}' while its provider session is ${sourceSession.status}.`,
+          );
+        }
+      }
+
       const modelSelection = readPersistedModelSelection(binding.runtimePayload);
       const cwd = readPersistedCwd(binding.runtimePayload);
       const result = yield* adapter.forkSession({

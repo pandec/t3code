@@ -28,7 +28,6 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
-  ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -467,31 +466,6 @@ export function projectEvent(
           }),
         };
       });
-
-    case "thread.turn-start-requested":
-      return decodeForEvent(
-        ThreadTurnStartRequestedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread?.session) return nextBase;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              session: {
-                ...thread.session,
-                status: "starting",
-                activeTurnId: null,
-                lastError: null,
-                updatedAt: payload.createdAt,
-              },
-            }),
-          };
-        }),
-      );
 
     case "thread.session-set":
       return Effect.gen(function* () {

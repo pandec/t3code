@@ -77,6 +77,8 @@ interface ThreadInspectorSelection {
   readonly mode: ThreadInspectorMode;
 }
 
+const THREAD_FORK_FAILURE_PREFIX = "Conversation fork failed: ";
+
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
 function InspectorPaneRoleActivation() {
@@ -485,7 +487,17 @@ function ThreadRouteContent(
     selectedThread.session.status !== "starting" &&
     selectedThread.session.status !== "running" &&
     selectedThread.session.activeTurnId === null &&
-    selectedThread.latestTurn?.state !== "running";
+    selectedThread.latestTurn?.state !== "running" &&
+    !selectedThread.session.lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX);
+  const shownForkFailureRef = useRef<string | null>(null);
+  useEffect(() => {
+    const lastError = selectedThread?.session?.lastError;
+    if (!selectedThread || !lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX)) return;
+    const failureKey = `${selectedThread.id}:${lastError}`;
+    if (shownForkFailureRef.current === failureKey) return;
+    shownForkFailureRef.current = failureKey;
+    Alert.alert("Unable to fork conversation", lastError);
+  }, [selectedThread?.id, selectedThread?.session?.lastError]);
   const handleForkThread = useCallback(async () => {
     if (!selectedThread || !canForkThread) return;
     const result = await forkThread({

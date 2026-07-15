@@ -878,6 +878,36 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("rejects a fork when the provider reports an active source turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const sourceThreadId = asThreadId("fork-running-source");
+      const forkCallsBefore = routing.codex.forkSession.mock.calls.length;
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: sourceThreadId,
+        resumeCursor: { opaque: "running-source" },
+        runtimeMode: "full-access",
+      });
+      routing.codex.updateSession(sourceThreadId, (session) => ({
+        ...session,
+        status: "running",
+      }));
+
+      const error = yield* provider
+        .forkConversation({
+          sourceThreadId,
+          destinationThreadId: asThreadId("fork-running-destination"),
+        })
+        .pipe(Effect.flip);
+      assert.match(error.message, /while its provider session is running/);
+      assert.equal(routing.codex.forkSession.mock.calls.length, forkCallsBefore);
+      yield* provider.stopSession({ threadId: sourceThreadId });
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

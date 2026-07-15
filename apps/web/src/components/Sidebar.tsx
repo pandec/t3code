@@ -2138,7 +2138,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           thread.session.status !== "starting" &&
           thread.session.status !== "running" &&
           thread.session.activeTurnId === null &&
-          thread.latestTurn?.state !== "running"
+          thread.latestTurn?.state !== "running" &&
+          !thread.session.lastError?.startsWith("Conversation fork failed: ")
             ? [{ id: "fork", label: "Fork conversation" }]
             : []),
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },

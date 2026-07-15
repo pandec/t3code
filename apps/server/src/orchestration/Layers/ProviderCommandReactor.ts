@@ -42,6 +42,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { THREAD_FORK_FAILURE_PREFIX } from "../commandInvariants.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -1018,7 +1019,9 @@ const make = Effect.gen(function* () {
         destinationThreadId: event.payload.threadId,
       }),
     );
-    const failure = Exit.isFailure(result) ? formatFailureDetail(result.cause) : null;
+    const failure = Exit.isFailure(result)
+      ? `${THREAD_FORK_FAILURE_PREFIX}${formatFailureDetail(result.cause)}`
+      : null;
     yield* setThreadSession({
       threadId: event.payload.threadId,
       session: {
