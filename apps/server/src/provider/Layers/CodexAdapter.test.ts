@@ -62,17 +62,18 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
 
-  public readonly startImpl = vi.fn(() =>
-    Promise.resolve({
-      provider: ProviderDriverKind.make("codex"),
-      status: "ready" as const,
-      runtimeMode: this.options.runtimeMode,
-      threadId: this.options.threadId,
-      cwd: this.options.cwd,
-      ...(this.options.model ? { model: this.options.model } : {}),
-      createdAt: this.now,
-      updatedAt: this.now,
-    } satisfies ProviderSession),
+  public readonly startImpl = vi.fn(
+    (): Promise<ProviderSession> =>
+      Promise.resolve({
+        provider: ProviderDriverKind.make("codex"),
+        status: "ready" as const,
+        runtimeMode: this.options.runtimeMode,
+        threadId: this.options.threadId,
+        cwd: this.options.cwd,
+        ...(this.options.model ? { model: this.options.model } : {}),
+        createdAt: this.now,
+        updatedAt: this.now,
+      } satisfies ProviderSession),
   );
 
   public readonly sendTurnImpl = vi.fn(
@@ -240,6 +241,42 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("forks with an unregistered short-lived Codex runtime", () =>
+    Effect.gen(function* () {
+      let forkRuntime: FakeCodexRuntime | undefined;
+      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
+        const runtime = new FakeCodexRuntime(options);
+        runtime.startImpl.mockResolvedValue({
+          provider: ProviderDriverKind.make("codex"),
+          status: "ready",
+          runtimeMode: options.runtimeMode,
+          threadId: options.threadId,
+          cwd: options.cwd,
+          resumeCursor: { threadId: "forked-provider-thread" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        });
+        forkRuntime = runtime;
+        return Effect.succeed(runtime);
+      });
+      const adapter = yield* CodexAdapter;
+      const destinationThreadId = asThreadId("fork-destination");
+      const result = yield* adapter.forkSession!({
+        sourceThreadId: asThreadId("fork-source"),
+        destinationThreadId,
+        sourceResumeCursor: { threadId: "source-provider-thread" },
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(result.resumeCursor, { threadId: "forked-provider-thread" });
+      NodeAssert.equal(forkRuntime?.options.forkResumeCursor?.threadId, "source-provider-thread");
+      NodeAssert.equal(forkRuntime?.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(destinationThreadId), false);
+      validationRuntimeFactory.factory.mockClear();
+    }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

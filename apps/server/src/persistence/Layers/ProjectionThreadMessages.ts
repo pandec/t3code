@@ -10,6 +10,7 @@ import { ChatAttachment } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   GetProjectionThreadMessageInput,
+  CopyProjectionThreadMessagesForForkInput,
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
@@ -146,6 +147,39 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const copyProjectionThreadMessageRowsForFork = SqlSchema.void({
+    Request: CopyProjectionThreadMessagesForForkInput,
+    execute: ({ sourceThreadId, destinationThreadId }) =>
+      sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          attachments_json,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        SELECT
+          'fork:' || ${destinationThreadId} || ':' || message_id,
+          ${destinationThreadId},
+          turn_id,
+          role,
+          text,
+          NULL,
+          0,
+          created_at,
+          updated_at
+        FROM projection_thread_messages
+        WHERE thread_id = ${sourceThreadId}
+          AND role IN ('user', 'assistant')
+          AND is_streaming = 0
+        ON CONFLICT (message_id) DO NOTHING
+      `,
+  });
+
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadMessageRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
@@ -174,11 +208,20 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const copyTextMessagesForFork: ProjectionThreadMessageRepositoryShape["copyTextMessagesForFork"] =
+    (input) =>
+      copyProjectionThreadMessageRowsForFork(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionThreadMessageRepository.copyTextMessagesForFork:query"),
+        ),
+      );
+
   return {
     upsert,
     getByMessageId,
     listByThreadId,
     deleteByThreadId,
+    copyTextMessagesForFork,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });
 

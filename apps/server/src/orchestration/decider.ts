@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type * as PlatformError from "effect/PlatformError";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
@@ -17,6 +18,7 @@ import {
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
+  requireThreadForkable,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
@@ -245,6 +247,80 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.fork": {
+      const source = yield* requireThreadForkable({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const sourceSession = source.session!;
+      const createdEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: source.projectId,
+          title: `${source.title} (fork)`,
+          modelSelection: source.modelSelection,
+          runtimeMode: source.runtimeMode,
+          interactionMode: source.interactionMode,
+          branch: source.branch,
+          worktreePath: source.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const sessionEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: createdEvent.eventId,
+        type: "thread.session-set",
+        payload: {
+          threadId: command.threadId,
+          session: {
+            threadId: command.threadId,
+            status: "starting",
+            providerName: sourceSession.providerName,
+            providerInstanceId: sourceSession.providerInstanceId,
+            runtimeMode: sourceSession.runtimeMode,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+      const requestedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: sessionEvent.eventId,
+        type: "thread.fork-requested",
+        payload: {
+          threadId: command.threadId,
+          sourceThreadId: command.sourceThreadId,
+          createdAt: command.createdAt,
+        },
+      };
+      return [createdEvent, sessionEvent, requestedEvent];
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,
@@ -398,6 +474,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        targetThread.session?.status === "starting" ||
+        isThreadForkFailure(targetThread.session?.lastError)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' cannot start a turn because its provider fork is not usable. Delete it and fork the source conversation again.`,
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

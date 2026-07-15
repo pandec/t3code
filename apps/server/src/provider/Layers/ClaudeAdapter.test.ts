@@ -160,6 +160,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -175,6 +176,7 @@ function makeHarness(config?: {
       createInput = input;
       return query;
     },
+    ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
     ...(config?.nativeEventLogger
       ? {
           nativeEventLogger: config.nativeEventLogger,
@@ -465,6 +467,48 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  it.effect("forks a persisted Claude session without starting a live query", () => {
+    const forkCalls: Array<
+      readonly [string, { readonly dir?: string } | undefined, NodeJS.ProcessEnv | undefined]
+    > = [];
+    const forkSession: NonNullable<ClaudeAdapterLiveOptions["forkSession"]> = async (
+      sessionId,
+      options,
+      environment,
+    ) => {
+      forkCalls.push([sessionId, options, environment]);
+      return { sessionId: "22222222-2222-4222-8222-222222222222" };
+    };
+    const harness = makeHarness({
+      forkSession,
+      claudeConfig: { homePath: "~/.claude-fork-work" },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkSession!({
+        sourceThreadId: ThreadId.make("source-thread"),
+        destinationThreadId: ThreadId.make("destination-thread"),
+        sourceResumeCursor: {
+          threadId: "source-thread",
+          resume: "11111111-1111-4111-8111-111111111111",
+          turnCount: 3,
+        },
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(forkCalls[0]?.[0], "11111111-1111-4111-8111-111111111111");
+      assert.deepEqual(forkCalls[0]?.[1], { dir: "/tmp/project" });
+      assert.equal(forkCalls[0]?.[2]?.HOME, NodePath.join(NodeOS.homedir(), ".claude-fork-work"));
+      assert.deepEqual(result.resumeCursor, {
+        threadId: "destination-thread",
+        resume: "22222222-2222-4222-8222-222222222222",
+        turnCount: 3,
+      });
+      assert.equal(harness.getLastCreateQueryInput(), undefined);
+    }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("returns validation error for non-claude provider on startSession", () => {

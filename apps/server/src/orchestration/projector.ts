@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  MessageId,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -17,6 +18,7 @@ import {
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
+  ThreadForkRequestedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -303,6 +305,30 @@ export function projectEvent(
             : [...nextBase.threads, thread],
         };
       });
+
+    case "thread.fork-requested":
+      return decodeForEvent(ThreadForkRequestedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const source = nextBase.threads.find((entry) => entry.id === payload.sourceThreadId);
+          const destination = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!source || !destination) return nextBase;
+          const messages = source.messages
+            .filter(
+              (message) =>
+                (message.role === "user" || message.role === "assistant") && !message.streaming,
+            )
+            .map((message) => ({
+              ...message,
+              id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
+              attachments: [],
+              streaming: false,
+            }));
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, { messages }),
+          };
+        }),
+      );
 
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(

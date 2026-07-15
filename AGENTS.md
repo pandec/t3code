@@ -24,6 +24,15 @@ If a tradeoff is required, choose correctness and robustness over short-term con
 
 Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
 
+## Private Fork Change Policy
+
+This checkout is a private development build that should remain easy to synchronize with the upstream
+repository. Prefer narrow, localized changes that reuse existing extension points and avoid unrelated
+refactors, broad formatting churn, generated-file edits, or architectural rewrites that would make future
+upstream merges harder. Add only the most important focused tests for private customizations; do not build
+out production-grade test matrices unless the change is unusually risky. The task completion checks above
+still apply.
+
 ## Package Roles
 
 - `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.

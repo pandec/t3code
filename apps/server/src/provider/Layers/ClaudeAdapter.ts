@@ -67,11 +67,13 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -222,6 +224,11 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime;
+  readonly forkSession?: (
+    sessionId: string,
+    options?: { readonly dir?: string },
+    environment?: NodeJS.ProcessEnv,
+  ) => Promise<{ readonly sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -1355,6 +1362,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
   );
@@ -1376,6 +1384,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         prompt: input.prompt,
         options: input.options,
       }) as ClaudeQueryRuntime);
+  const forkPersistedSession = options?.forkSession;
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
@@ -3690,6 +3699,55 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  const forkSession: NonNullable<ClaudeAdapterShape["forkSession"]> = Effect.fn(
+    "ClaudeAdapter.forkSession",
+  )(function* (input) {
+    const resumeState = readClaudeResumeState(input.sourceResumeCursor);
+    if (!resumeState?.resume) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "forkSession",
+        issue: "The source thread does not have a valid Claude session id.",
+      });
+    }
+    const sourceSessionId = resumeState.resume;
+    const forkOptions = input.cwd ? { dir: input.cwd } : undefined;
+    const forked = forkPersistedSession
+      ? yield* Effect.tryPromise({
+          try: () => forkPersistedSession(sourceSessionId, forkOptions, claudeEnvironment),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/fork",
+              detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+              cause,
+            }),
+        })
+      : yield* forkClaudePersistedSession({
+          sessionId: sourceSessionId,
+          ...(forkOptions?.dir ? { dir: forkOptions.dir } : {}),
+          environment: claudeEnvironment,
+          spawner: childProcessSpawner,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/fork",
+                detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+                cause,
+              }),
+          ),
+        );
+    return {
+      resumeCursor: {
+        threadId: input.destinationThreadId,
+        resume: forked.sessionId,
+        turnCount: resumeState.turnCount ?? 0,
+      },
+    };
+  });
+
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
     const modelSelection =
@@ -3905,6 +3963,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       sessionModelSwitch: "in-session",
     },
     startSession,
+    forkSession,
     sendTurn,
     interruptTurn,
     readThread,

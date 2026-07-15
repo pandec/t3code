@@ -13,6 +13,8 @@ import type {
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
+  ModelSelection,
+  RuntimeMode,
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
@@ -42,6 +44,19 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+export interface ProviderForkSessionInput {
+  readonly sourceThreadId: ThreadId;
+  readonly destinationThreadId: ThreadId;
+  readonly sourceResumeCursor: unknown;
+  readonly cwd?: string;
+  readonly modelSelection?: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+}
+
+export interface ProviderForkSessionResult {
+  readonly resumeCursor: unknown;
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -55,6 +70,11 @@ export interface ProviderAdapterShape<TError> {
   readonly startSession: (
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
+
+  /** Fork persisted provider history without registering an active session. */
+  readonly forkSession?: (
+    input: ProviderForkSessionInput,
+  ) => Effect.Effect<ProviderForkSessionResult, TError>;
 
   /**
    * Send a turn to an active provider session.

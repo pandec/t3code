@@ -751,6 +751,74 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const forkConversation: ProviderServiceMethod<"forkConversation"> = Effect.fn("forkConversation")(
+    function* (input) {
+      const operation = "ProviderService.forkConversation";
+      const binding = Option.getOrUndefined(yield* directory.getBinding(input.sourceThreadId));
+      if (!binding) {
+        return yield* toValidationError(
+          operation,
+          `Cannot fork thread '${input.sourceThreadId}' because no persisted provider binding exists.`,
+        );
+      }
+      if (binding.resumeCursor === null || binding.resumeCursor === undefined) {
+        return yield* toValidationError(
+          operation,
+          `Cannot fork thread '${input.sourceThreadId}' because no provider resume state is persisted.`,
+        );
+      }
+
+      const providerInstanceId = yield* requireBindingInstanceId(operation, binding);
+      const adapter = yield* registry.getByInstance(providerInstanceId);
+      if (!adapter.forkSession) {
+        return yield* toValidationError(
+          operation,
+          `Provider '${adapter.provider}' does not support conversation forks.`,
+        );
+      }
+
+      if (yield* adapter.hasSession(input.sourceThreadId)) {
+        const sourceSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === input.sourceThreadId,
+        );
+        if (sourceSession && sourceSession.status !== "ready") {
+          return yield* toValidationError(
+            operation,
+            `Cannot fork thread '${input.sourceThreadId}' while its provider session is ${sourceSession.status}.`,
+          );
+        }
+      }
+
+      const modelSelection = readPersistedModelSelection(binding.runtimePayload);
+      const cwd = readPersistedCwd(binding.runtimePayload);
+      const result = yield* adapter.forkSession({
+        sourceThreadId: input.sourceThreadId,
+        destinationThreadId: input.destinationThreadId,
+        sourceResumeCursor: binding.resumeCursor,
+        ...(cwd ? { cwd } : {}),
+        ...(modelSelection ? { modelSelection } : {}),
+        runtimeMode: binding.runtimeMode ?? "full-access",
+      });
+
+      yield* directory.upsert({
+        threadId: input.destinationThreadId,
+        provider: binding.provider,
+        providerInstanceId,
+        runtimeMode: binding.runtimeMode ?? "full-access",
+        status: "stopped",
+        resumeCursor: result.resumeCursor,
+        runtimePayload: {
+          ...(cwd ? { cwd } : {}),
+          ...(modelSelection ? { modelSelection } : {}),
+          activeTurnId: null,
+          lastRuntimeEvent: "provider.forkConversation",
+          lastRuntimeEventAt: yield* nowIso,
+        },
+      });
+      return result;
+    },
+  );
+
   const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(function* (rawInput) {
     const parsed = yield* decodeInputOrValidationError({
       operation: "ProviderService.sendTurn",
@@ -1258,6 +1326,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession: (threadId, input) => withThreadLock(threadId, startSession(threadId, input)),
+    // Forks read the source binding's resume cursor; lock the source thread so
+    // a concurrent stop/start cannot swap the session out mid-fork.
+    forkConversation: (input) => withThreadLock(input.sourceThreadId, forkConversation(input)),
     sendTurn: (input) => withThreadLock(input.threadId, sendTurn(input)),
     interruptTurn: (input) => withThreadLock(input.threadId, interruptTurn(input)),
     respondToRequest: (input) => withThreadLock(input.threadId, respondToRequest(input)),

@@ -179,6 +179,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./conversationFork": {
+      "types": "./src/conversationFork.ts",
+      "import": "./src/conversationFork.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

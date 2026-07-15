@@ -714,6 +714,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent":
+        case "thread.fork-requested":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -847,6 +848,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
+
+        case "thread.fork-requested":
+          yield* projectionThreadMessageRepository.copyTextMessagesForFork({
+            sourceThreadId: event.payload.sourceThreadId,
+            destinationThreadId: event.payload.threadId,
+          });
+          return;
 
         case "thread.reverted": {
           const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
@@ -992,9 +1000,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadSessionsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadSessionsProjection",
     )(function* (event, _attachmentSideEffects) {
-      if (event.type !== "thread.session-set") {
-        return;
-      }
+      if (event.type !== "thread.session-set") return;
       yield* projectionThreadSessionRepository.upsert({
         threadId: event.payload.threadId,
         status: event.payload.session.status,

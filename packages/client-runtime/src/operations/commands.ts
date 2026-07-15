@@ -1,5 +1,6 @@
 import {
   CommandId,
+  ThreadId,
   ORCHESTRATION_WS_METHODS,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
@@ -32,6 +33,13 @@ export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
 export type CreateThreadInput = CommandInput<"thread.create">;
+export type ForkThreadInput = Omit<CommandInput<"thread.fork">, "threadId"> & {
+  readonly threadId?: ThreadId;
+};
+export interface ForkThreadResult {
+  readonly threadId: ThreadId;
+  readonly receipt: EnvironmentRpcSuccess<DispatchTag>;
+}
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
@@ -121,6 +129,23 @@ export const createThread: (input: CreateThreadInput) => CommandEffect = Effect.
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });
+});
+
+export const forkThread = Effect.fn("EnvironmentCommands.forkThread")(function* (
+  input: ForkThreadInput,
+) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  const crypto = yield* Crypto.Crypto;
+  const threadId =
+    input.threadId ?? (yield* crypto.randomUUIDv4.pipe(Effect.orDie, Effect.map(ThreadId.make)));
+  const receipt = yield* dispatch({
+    ...input,
+    threadId,
+    type: "thread.fork",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+  return { threadId, receipt } satisfies ForkThreadResult;
 });
 
 export const deleteThread: (input: DeleteThreadInput) => CommandEffect = Effect.fn(
