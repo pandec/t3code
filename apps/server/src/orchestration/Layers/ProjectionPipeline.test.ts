@@ -52,6 +52,86 @@ const exists = (filePath: string) =>
 
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork-copy-")))(
+  "OrchestrationProjectionPipeline fork copy",
+  (it) => {
+    it.effect("copies only text messages into a fork and drops attachments", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const sourceThreadId = ThreadId.make("copy-source");
+        const destinationThreadId = ThreadId.make("copy-destination");
+
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("copy-message-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-message-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-message-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            messageId: MessageId.make("source-message"),
+            role: "user",
+            text: "keep this text",
+            attachments: [
+              {
+                type: "image",
+                id: "source-image",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 42,
+              },
+            ],
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.fork-requested",
+          eventId: EventId.make("copy-fork-event"),
+          aggregateKind: "thread",
+          aggregateId: destinationThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-fork-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-fork-command"),
+          metadata: {},
+          payload: {
+            threadId: destinationThreadId,
+            sourceThreadId,
+            createdAt: now,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+        const rows = yield* sql<{
+          readonly threadId: string;
+          readonly text: string;
+          readonly attachmentsJson: string | null;
+        }>`
+        SELECT
+          thread_id AS "threadId",
+          text,
+          attachments_json AS "attachmentsJson"
+        FROM projection_thread_messages
+        WHERE thread_id = ${destinationThreadId}
+      `;
+        assert.deepEqual(rows, [
+          { threadId: destinationThreadId, text: "keep this text", attachmentsJson: null },
+        ]);
+      }),
+    );
+  },
+);
+
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   it.effect("bootstraps all projection states and writes projection rows", () =>
     Effect.gen(function* () {

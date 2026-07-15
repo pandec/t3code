@@ -30,6 +30,7 @@ import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type { ProviderForkSessionResult } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -43,6 +44,11 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  readonly forkConversation: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly destinationThreadId: ThreadId;
+  }) => Effect.Effect<ProviderForkSessionResult, ProviderServiceError>;
 
   /**
    * Send a provider turn.

@@ -13,11 +13,13 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { THREAD_FORK_FAILURE_PREFIX } from "@t3tools/shared/conversationFork";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -49,6 +51,7 @@ type ProviderIntentEvent = Extract<
   {
     type:
       | "thread.runtime-mode-set"
+      | "thread.fork-requested"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
@@ -213,6 +216,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const pendingTurnStartThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -855,9 +859,16 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    pendingTurnStartThreadIds.add(event.payload.threadId);
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingTurnStartThreadIds.delete(event.payload.threadId);
+        }),
+      ),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1002,6 +1013,41 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processForkRequested = Effect.fn("processForkRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.fork-requested" }>,
+  ) {
+    const destination = yield* resolveThread(event.payload.threadId);
+    if (!destination?.session) {
+      return;
+    }
+    const session = destination.session;
+    const failure = pendingTurnStartThreadIds.has(event.payload.sourceThreadId)
+      ? `${THREAD_FORK_FAILURE_PREFIX}The source conversation is starting a turn.`
+      : yield* Effect.exit(
+          providerService.forkConversation({
+            sourceThreadId: event.payload.sourceThreadId,
+            destinationThreadId: event.payload.threadId,
+          }),
+        ).pipe(
+          Effect.map((result) =>
+            Exit.isFailure(result)
+              ? `${THREAD_FORK_FAILURE_PREFIX}${formatFailureDetail(result.cause)}`
+              : null,
+          ),
+        );
+    yield* setThreadSession({
+      threadId: event.payload.threadId,
+      session: {
+        ...session,
+        status: failure === null ? "stopped" : "error",
+        activeTurnId: null,
+        lastError: failure,
+        updatedAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -1014,6 +1060,9 @@ const make = Effect.gen(function* () {
       eventType: event.type,
     });
     switch (event.type) {
+      case "thread.fork-requested":
+        yield* processForkRequested(event);
+        return;
       case "thread.runtime-mode-set": {
         const thread = yield* resolveThread(event.payload.threadId);
         if (!thread?.session || thread.session.status === "stopped") {
@@ -1064,6 +1113,7 @@ const make = Effect.gen(function* () {
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
         event.type === "thread.runtime-mode-set" ||
+        event.type === "thread.fork-requested" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||

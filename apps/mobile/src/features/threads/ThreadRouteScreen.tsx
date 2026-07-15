@@ -8,8 +8,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { Platform, ScrollView, View } from "react-native";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
+import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentQuery } from "../../state/query";
@@ -195,6 +197,7 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const forkThread = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -477,6 +480,43 @@ function ThreadRouteContent(
       },
     });
   }, [interruptThreadTurn, selectedThread]);
+  const canForkThread =
+    (selectedThread?.session?.providerName === "codex" ||
+      selectedThread?.session?.providerName === "claudeAgent") &&
+    selectedThread.session.status !== "starting" &&
+    selectedThread.session.status !== "running" &&
+    selectedThread.session.status !== "error" &&
+    selectedThread.session.activeTurnId === null &&
+    selectedThread.latestTurn?.state !== "running" &&
+    !isThreadForkFailure(selectedThread.session.lastError);
+  const shownForkFailureRef = useRef<string | null>(null);
+  useEffect(() => {
+    const lastError = selectedThread?.session?.lastError;
+    if (!selectedThread || !isThreadForkFailure(lastError)) return;
+    const failureKey = `${selectedThread.id}:${lastError}`;
+    if (shownForkFailureRef.current === failureKey) return;
+    shownForkFailureRef.current = failureKey;
+    Alert.alert("Unable to fork conversation", lastError ?? "The fork could not be created.");
+  }, [selectedThread?.id, selectedThread?.session?.lastError]);
+  const handleForkThread = useCallback(async () => {
+    if (!selectedThread || !canForkThread) return;
+    const result = await forkThread({
+      environmentId: selectedThread.environmentId,
+      input: { sourceThreadId: selectedThread.id },
+    });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Unable to fork conversation",
+        error instanceof Error ? error.message : "The fork could not be created.",
+      );
+      return;
+    }
+    navigation.navigate("Thread", {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(result.value.threadId),
+    });
+  }, [canForkThread, forkThread, navigation, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -618,6 +658,21 @@ function ThreadRouteContent(
   };
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const forkHeaderItems = useMemo<NativeHeaderItems>(
+    () =>
+      canForkThread
+        ? [
+            withNativeGlassHeaderItem({
+              accessibilityLabel: "Fork conversation",
+              icon: { name: "arrow.triangle.branch", type: "sfSymbol" as const },
+              identifier: "thread-right-fork",
+              onPress: handleForkThread,
+              type: "button" as const,
+            }),
+          ]
+        : [],
+    [canForkThread, handleForkThread],
+  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -696,6 +751,13 @@ function ThreadRouteContent(
         onPress: handleToggleInspector,
       });
     }
+    if (canForkThread) {
+      actions.push({
+        accessibilityLabel: "Fork conversation",
+        icon: "arrow.triangle.branch",
+        onPress: handleForkThread,
+      });
+    }
     return actions;
   }, [
     fileInspector.supported,
@@ -703,6 +765,8 @@ function ThreadRouteContent(
     handleOpenTerminal,
     handleOpenGitInspector,
     handleToggleInspector,
+    canForkThread,
+    handleForkThread,
     props.onReturnToThread,
     selectedThreadCwd,
     selectedThreadProject?.workspaceRoot,
@@ -826,7 +890,10 @@ function ThreadRouteContent(
           // reserved for future breadcrumbs/status).
           unstable_headerRightItems:
             Platform.OS === "ios"
-              ? () => (layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems)
+              ? () => [
+                  ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
+                  ...forkHeaderItems,
+                ]
               : undefined,
           unstable_headerSubtitle: usesNativeHeaderGlass ? headerSubtitle : undefined,
         }}

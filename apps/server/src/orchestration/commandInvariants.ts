@@ -7,6 +7,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
@@ -139,6 +140,65 @@ export function requireThreadAbsent(input: {
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
     ),
+  );
+}
+
+export function requireThreadForkable(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
+  return requireThread(input).pipe(
+    Effect.flatMap((thread) => {
+      if (thread.deletedAt !== null || thread.archivedAt !== null) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' is not available to fork.`,
+          ),
+        );
+      }
+      const session = thread.session;
+      if (!session || !session.providerInstanceId) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' has no persisted provider session to fork.`,
+          ),
+        );
+      }
+      if (session.providerName !== "codex" && session.providerName !== "claudeAgent") {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Provider '${session.providerName ?? "unknown"}' does not support conversation forks.`,
+          ),
+        );
+      }
+      if (isThreadForkFailure(session.lastError)) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' is an incomplete conversation fork. Delete it and fork the source conversation again.`,
+          ),
+        );
+      }
+      if (
+        session.status === "starting" ||
+        session.status === "running" ||
+        session.status === "error" ||
+        session.activeTurnId !== null ||
+        thread.latestTurn?.state === "running"
+      ) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' cannot be forked while a turn is active.`,
+          ),
+        );
+      }
+      return Effect.succeed(thread);
+    }),
   );
 }
 

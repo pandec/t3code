@@ -1487,6 +1487,73 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }),
     );
 
+  const forkSession: NonNullable<CodexAdapterShape["forkSession"]> = Effect.fn(
+    "CodexAdapter.forkSession",
+  )(function* (input) {
+    if (!isCodexResumeCursorSchema(input.sourceResumeCursor)) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "forkSession",
+        issue: "The source thread does not have a valid Codex resume cursor.",
+      });
+    }
+    const serviceTier =
+      input.modelSelection?.instanceId === boundInstanceId
+        ? getCodexServiceTierOptionValue(input.modelSelection)
+        : undefined;
+    const sessionScope = yield* Scope.make("sequential");
+    const createRuntime = options?.makeRuntime ?? makeCodexSessionRuntime;
+    const runtime = yield* createRuntime({
+      threadId: input.destinationThreadId,
+      providerInstanceId: boundInstanceId,
+      cwd: input.cwd ?? process.cwd(),
+      binaryPath: codexConfig.binaryPath,
+      ...(options?.environment ? { environment: options.environment } : {}),
+      ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+      forkResumeCursor: input.sourceResumeCursor,
+      runtimeMode: input.runtimeMode,
+      ...(input.modelSelection?.instanceId === boundInstanceId
+        ? { model: input.modelSelection.model }
+        : {}),
+      ...(serviceTier ? { serviceTier } : {}),
+    }).pipe(
+      Effect.provideService(Scope.Scope, sessionScope),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.destinationThreadId,
+            detail: cause.message,
+            cause,
+          }),
+      ),
+      Effect.onError(() => Scope.close(sessionScope, Exit.void)),
+    );
+    const started = yield* runtime.start().pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.destinationThreadId,
+            detail: cause.message,
+            cause,
+          }),
+      ),
+      Effect.ensuring(runtime.close),
+      Effect.ensuring(Scope.close(sessionScope, Exit.void)),
+    );
+    if (started.resumeCursor === undefined) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "forkSession",
+        issue: "Codex fork completed without a resumable thread id.",
+      });
+    }
+    return { resumeCursor: started.resumeCursor };
+  });
+
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     input: ProviderSendTurnInput,
     attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
@@ -1696,6 +1763,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       sessionModelSwitch: "in-session",
     },
     startSession,
+    forkSession,
     sendTurn,
     interruptTurn,
     readThread,

@@ -50,6 +50,9 @@ export function useThreadActions() {
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
+  const forkThreadMutation = useAtomCommand(threadEnvironment.fork, {
+    reportFailure: false,
+  });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
@@ -145,6 +148,28 @@ export function useThreadActions() {
       return result;
     },
     [unarchiveThreadMutation],
+  );
+
+  const forkThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const result = await forkThreadMutation({
+        environmentId: target.environmentId,
+        input: { sourceThreadId: target.threadId },
+      });
+      if (result._tag === "Failure") {
+        return result;
+      }
+      const navigationResult = await settlePromise(() =>
+        router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(target.environmentId, result.value.threadId),
+          ),
+        }),
+      );
+      return navigationResult._tag === "Failure" ? navigationResult : result;
+    },
+    [forkThreadMutation, router],
   );
 
   const deleteThread = useCallback(
@@ -376,10 +401,11 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
+      forkThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
     }),
-    [archiveThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
+    [archiveThread, confirmAndDeleteThread, deleteThread, forkThread, unarchiveThread],
   );
 }
