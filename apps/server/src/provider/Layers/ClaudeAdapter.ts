@@ -6,9 +6,6 @@
  *
  * @module ClaudeAdapterLive
  */
-import * as NodeModule from "node:module";
-import * as NodeURL from "node:url";
-
 import {
   type CanUseTool,
   query,
@@ -69,13 +66,13 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -231,78 +228,6 @@ export interface ClaudeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
-
-const decodeClaudeForkProcessResult = Schema.decodeEffect(
-  Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
-);
-
-function forkClaudeSessionInEnvironment(
-  sessionId: string,
-  options: { readonly dir?: string } | undefined,
-  environment: NodeJS.ProcessEnv,
-  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
-): Effect.Effect<{ readonly sessionId: string }, ProviderAdapterRequestError> {
-  const script = `
-const { forkSession } = await import(process.argv[1]);
-const result = await forkSession(process.argv[2], process.argv[3] ? { dir: process.argv[3] } : undefined);
-process.stdout.write(JSON.stringify(result));
-`;
-  return Effect.gen(function* () {
-    const sdkModuleUrl = yield* Effect.try({
-      try: () =>
-        NodeURL.pathToFileURL(
-          NodeModule.createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
-        ).href,
-      catch: () =>
-        new ClaudeForkProcessError({
-          detail: "Unable to resolve the installed Claude Agent SDK module.",
-        }),
-    });
-    const child = yield* spawner.spawn(
-      ChildProcess.make(
-        process.execPath,
-        ["--input-type=module", "--eval", script, sdkModuleUrl, sessionId, options?.dir ?? ""],
-        { env: environment, extendEnv: false },
-      ),
-    );
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectUint8StreamText({ stream: child.stdout }),
-        collectUint8StreamText({ stream: child.stderr }),
-        child.exitCode,
-      ],
-      { concurrency: "unbounded" },
-    );
-    if (exitCode !== 0) {
-      return yield* new ClaudeForkProcessError({
-        detail: stderr.text.trim() || `Claude SDK fork process exited with code ${exitCode}.`,
-      });
-    }
-    const result = yield* decodeClaudeForkProcessResult(stdout.text);
-    if (result.sessionId.length === 0) {
-      return yield* new ClaudeForkProcessError({
-        detail: "Claude SDK returned an empty forked session id.",
-      });
-    }
-    return result;
-  }).pipe(
-    Effect.scoped,
-    Effect.mapError(
-      (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "session/fork",
-          detail: `Failed to fork Claude session '${sessionId}'.`,
-          cause,
-        }),
-    ),
-  );
-}
-
-class ClaudeForkProcessError extends Schema.TaggedErrorClass<ClaudeForkProcessError>()(
-  "ClaudeForkProcessError",
-  { detail: Schema.String },
-) {}
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -3746,11 +3671,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               cause,
             }),
         })
-      : yield* forkClaudeSessionInEnvironment(
-          sourceSessionId,
-          forkOptions,
-          claudeEnvironment,
-          childProcessSpawner,
+      : yield* forkClaudePersistedSession({
+          sessionId: sourceSessionId,
+          ...(forkOptions?.dir ? { dir: forkOptions.dir } : {}),
+          environment: claudeEnvironment,
+          spawner: childProcessSpawner,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/fork",
+                detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+                cause,
+              }),
+          ),
         );
     return {
       resumeCursor: {

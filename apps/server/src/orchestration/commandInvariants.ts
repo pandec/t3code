@@ -7,14 +7,9 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
-
-export const THREAD_FORK_FAILURE_PREFIX = "Conversation fork failed: ";
-
-export function isThreadForkFailure(lastError: string | null | undefined): boolean {
-  return lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX) ?? false;
-}
 
 function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
   return new OrchestrationCommandInvariantError({
@@ -180,9 +175,18 @@ export function requireThreadForkable(input: {
           ),
         );
       }
+      if (isThreadForkFailure(session.lastError)) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' is an incomplete conversation fork. Delete it and fork the source conversation again.`,
+          ),
+        );
+      }
       if (
         session.status === "starting" ||
         session.status === "running" ||
+        session.status === "error" ||
         session.activeTurnId !== null ||
         thread.latestTurn?.state === "running"
       ) {
@@ -190,14 +194,6 @@ export function requireThreadForkable(input: {
           invariantError(
             input.command.type,
             `Thread '${input.threadId}' cannot be forked while a turn is active.`,
-          ),
-        );
-      }
-      if (isThreadForkFailure(session.lastError)) {
-        return Effect.fail(
-          invariantError(
-            input.command.type,
-            `Thread '${input.threadId}' is an incomplete conversation fork. Delete it and fork the source conversation again.`,
           ),
         );
       }

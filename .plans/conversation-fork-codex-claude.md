@@ -15,8 +15,8 @@ approvals, plans, checkpoints, diffs, terminals, and attachment files are intent
 - Support only Codex and Claude Agent provider instances.
 - Fork only the latest state; there is no per-message fork picker.
 - Reject the action while the source session is `starting` or `running`, has an active turn, or its latest
-  turn is still running. A destination in `starting` state cannot accept a turn until provider forking
-  succeeds or fails.
+  turn is still running. Conservatively reject source sessions in `error` as well. A destination in
+  `starting` state cannot accept a turn until provider forking succeeds or fails.
 - Use the same project, environment/machine, provider instance, model selection, runtime mode,
   interaction mode, branch, worktree path, and effective cwd.
 - The destination title is `<source title> (fork)`; normal rename remains available.
@@ -57,6 +57,8 @@ approvals, plans, checkpoints, diffs, terminals, and attachment files are intent
    - success: destination status `stopped` with the same provider instance and no active turn; its persisted
      provider binding contains the new native resume cursor, so the first prompt resumes the fork;
    - failure: destination status `error` with a concise provider error. No retry is attempted.
+   The reactor also keeps an in-memory source marker while a newly accepted provider turn is being
+   established, closing the scheduling gap before the adapter reports `running`.
 6. Web and iOS navigate to the known destination ID after the initial command succeeds. Existing session
    status UI disables sending while `starting`; web displays the normal error banner, and iOS shows an alert
    if the asynchronous provider fork fails.
@@ -96,7 +98,8 @@ provider runtime statuses with orchestration's `stopped` status.
   the adapter session map and never starts its normal event fiber, so `hasSession(destinationThreadId)` stays
   false. Return `{ resumeCursor: { threadId: newNativeThreadId } }`. This works even when the source T3
   session is inactive and does not touch the source runtime.
-- **Claude:** run the SDK's `forkSession(sourceSessionId, { dir: cwd })` in a short-lived Node process with
+- **Claude:** use the focused Claude session-fork driver helper to run the SDK's
+  `forkSession(sourceSessionId, { dir: cwd })` in a short-lived Node process with
   the selected Claude instance's configured environment, including custom `HOME`, using the UUID from the
   source resume cursor. Return a fork result whose cursor resumes the returned session ID. Do not use plain
   `resume`, which would continue the source conversation.
@@ -167,7 +170,8 @@ provider runtime statuses with orchestration's `stopped` status.
   unregistered destination runtime, then close its full scope while retaining its new resume cursor. Do not
   add it to `sessions` or launch the normal adapter event fiber.
 - Implement adapter `forkSession` in `apps/server/src/provider/Layers/ClaudeAdapter.ts` using the installed
-  Claude Agent SDK `forkSession` function and source UUID cursor.
+  Claude Agent SDK helper and source UUID cursor. Keep subprocess/module-resolution details in a focused
+  driver module rather than the main adapter.
 - Leave other adapters unchanged; `ProviderService` reports the missing optional operation as unsupported.
 - Add one focused native-call test per supported adapter. Avoid expanding the full provider test matrix.
   The Codex test must also assert `hasSession(destinationThreadId) === false` after scope closure.

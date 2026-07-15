@@ -8,10 +8,10 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type * as PlatformError from "effect/PlatformError";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
-  isThreadForkFailure,
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,

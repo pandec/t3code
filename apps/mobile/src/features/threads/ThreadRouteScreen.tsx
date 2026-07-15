@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
@@ -76,8 +77,6 @@ interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
   readonly mode: ThreadInspectorMode;
 }
-
-const THREAD_FORK_FAILURE_PREFIX = "Conversation fork failed: ";
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
@@ -486,17 +485,18 @@ function ThreadRouteContent(
       selectedThread?.session?.providerName === "claudeAgent") &&
     selectedThread.session.status !== "starting" &&
     selectedThread.session.status !== "running" &&
+    selectedThread.session.status !== "error" &&
     selectedThread.session.activeTurnId === null &&
     selectedThread.latestTurn?.state !== "running" &&
-    !selectedThread.session.lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX);
+    !isThreadForkFailure(selectedThread.session.lastError);
   const shownForkFailureRef = useRef<string | null>(null);
   useEffect(() => {
     const lastError = selectedThread?.session?.lastError;
-    if (!selectedThread || !lastError?.startsWith(THREAD_FORK_FAILURE_PREFIX)) return;
+    if (!selectedThread || !isThreadForkFailure(lastError)) return;
     const failureKey = `${selectedThread.id}:${lastError}`;
     if (shownForkFailureRef.current === failureKey) return;
     shownForkFailureRef.current = failureKey;
-    Alert.alert("Unable to fork conversation", lastError);
+    Alert.alert("Unable to fork conversation", lastError ?? "The fork could not be created.");
   }, [selectedThread?.id, selectedThread?.session?.lastError]);
   const handleForkThread = useCallback(async () => {
     if (!selectedThread || !canForkThread) return;

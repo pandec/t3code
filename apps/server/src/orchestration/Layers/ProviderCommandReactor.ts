@@ -13,6 +13,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { THREAD_FORK_FAILURE_PREFIX } from "@t3tools/shared/conversationFork";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -42,7 +43,6 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { THREAD_FORK_FAILURE_PREFIX } from "../commandInvariants.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -216,6 +216,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const pendingTurnStartThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -858,9 +859,16 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    pendingTurnStartThreadIds.add(event.payload.threadId);
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingTurnStartThreadIds.delete(event.payload.threadId);
+        }),
+      ),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1013,15 +1021,20 @@ const make = Effect.gen(function* () {
       return;
     }
     const session = destination.session;
-    const result = yield* Effect.exit(
-      providerService.forkConversation({
-        sourceThreadId: event.payload.sourceThreadId,
-        destinationThreadId: event.payload.threadId,
-      }),
-    );
-    const failure = Exit.isFailure(result)
-      ? `${THREAD_FORK_FAILURE_PREFIX}${formatFailureDetail(result.cause)}`
-      : null;
+    const failure = pendingTurnStartThreadIds.has(event.payload.sourceThreadId)
+      ? `${THREAD_FORK_FAILURE_PREFIX}The source conversation is starting a turn.`
+      : yield* Effect.exit(
+          providerService.forkConversation({
+            sourceThreadId: event.payload.sourceThreadId,
+            destinationThreadId: event.payload.threadId,
+          }),
+        ).pipe(
+          Effect.map((result) =>
+            Exit.isFailure(result)
+              ? `${THREAD_FORK_FAILURE_PREFIX}${formatFailureDetail(result.cause)}`
+              : null,
+          ),
+        );
     yield* setThreadSession({
       threadId: event.payload.threadId,
       session: {

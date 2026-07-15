@@ -58,6 +58,7 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -2137,9 +2138,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             thread.session?.providerName === "claudeAgent") &&
           thread.session.status !== "starting" &&
           thread.session.status !== "running" &&
+          thread.session.status !== "error" &&
           thread.session.activeTurnId === null &&
           thread.latestTurn?.state !== "running" &&
-          !thread.session.lastError?.startsWith("Conversation fork failed: ")
+          !isThreadForkFailure(thread.session.lastError)
             ? [{ id: "fork", label: "Fork conversation" }]
             : []),
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },

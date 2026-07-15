@@ -2149,4 +2149,69 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
   });
+
+  effectIt("rejects a fork while a source turn start is still being established", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+      const sourceThreadId = ThreadId.make("thread-1");
+      const destinationThreadId = ThreadId.make("thread-fork-during-start");
+      harness.sendTurn.mockImplementation(() => Effect.never);
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-before-pending-turn"),
+        threadId: sourceThreadId,
+        session: {
+          threadId: sourceThreadId,
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-pending-turn"),
+        threadId: sourceThreadId,
+        message: {
+          messageId: asMessageId("pending-turn-message"),
+          role: "user",
+          text: "start a turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("cmd-fork-during-pending-turn"),
+        sourceThreadId,
+        threadId: destinationThreadId,
+        createdAt: now,
+      });
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads.find((thread) => thread.id === destinationThreadId)?.session
+              ?.status === "error"
+          );
+        }),
+      );
+
+      expect(harness.forkConversation).not.toHaveBeenCalled();
+      const destination = (yield* Effect.promise(harness.readModel)).threads.find(
+        (thread) => thread.id === destinationThreadId,
+      );
+      expect(destination?.session?.lastError).toContain("source conversation is starting a turn");
+    }),
+  );
 });
