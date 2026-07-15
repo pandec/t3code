@@ -33,6 +33,14 @@ upstream merges harder. Add only the most important focused tests for private cu
 out production-grade test matrices unless the change is unusually risky. The task completion checks above
 still apply.
 
+Use `dev` as the fork's primary integration and build branch. Commit private fork work to `dev`, base
+fork-specific feature branches and worktrees on `dev`, and merge completed work back into `dev`. Keep `main`
+as a clean mirror of `upstream/main` for synchronization only: do not develop, build fork releases, or commit
+private changes directly on `main`. To incorporate upstream changes, first fast-forward `main` from
+`upstream/main`, then merge or rebase that synchronized state into `dev` and resolve conflicts there. Before
+editing, committing, or producing a fork build, verify that the active branch is `dev` or a branch based on
+`dev`.
+
 ## Package Roles
 
 - `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.
