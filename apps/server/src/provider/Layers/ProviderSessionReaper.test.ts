@@ -155,6 +155,8 @@ describe("ProviderSessionReaper", () => {
               stoppedThreadIds.add(request.threadId);
             })) as ReturnType<ProviderServiceShape["stopSession"]>,
     );
+    const stopSessionIfUnchanged: ProviderServiceShape["stopSessionIfUnchanged"] = (binding) =>
+      stopSession({ threadId: binding.threadId }).pipe(Effect.as(true));
 
     const providerService: ProviderServiceShape = {
       startSession: () => unsupported(),
@@ -163,6 +165,7 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
+      stopSessionIfUnchanged,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       getInstanceInfo: (instanceId) => {

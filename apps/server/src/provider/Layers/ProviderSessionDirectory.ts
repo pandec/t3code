@@ -78,6 +78,8 @@ function toRuntimeBinding(
           resumeCursor: runtime.resumeCursor,
           runtimePayload: runtime.runtimePayload,
           lastSeenAt: runtime.lastSeenAt,
+          revision: runtime.revision,
+          providerInstanceIdWasLegacyNull: runtime.providerInstanceId === null,
         }) satisfies ProviderRuntimeBindingWithMetadata,
     ),
   );
@@ -148,7 +150,9 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         resumeCursor:
           binding.resumeCursor !== undefined
             ? binding.resumeCursor
-            : (existingRuntime?.resumeCursor ?? null),
+            : ownerChanged
+              ? null
+              : (existingRuntime?.resumeCursor ?? null),
         runtimePayload: mergeRuntimePayload(
           ownerChanged ? null : (existingRuntime?.runtimePayload ?? null),
           binding.runtimePayload,
@@ -168,13 +172,17 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       });
     }
 
+    const lastSeenAt =
+      input.touchLastSeenAt === false ? null : DateTime.formatIso(yield* DateTime.now);
     return yield* repository
       .refreshIfUnchanged({
         threadId: input.binding.threadId,
         providerName: input.binding.provider,
         providerInstanceId,
-        expectedLastSeenAt: input.binding.lastSeenAt,
-        lastSeenAt: DateTime.formatIso(yield* DateTime.now),
+        allowLegacyNullProviderInstanceId: input.binding.providerInstanceIdWasLegacyNull,
+        expectedRevision: input.binding.revision,
+        lastSeenAt,
+        status: input.status ?? null,
         ...(input.runtimePayloadPatch !== undefined
           ? { runtimePayloadPatch: input.runtimePayloadPatch }
           : {}),

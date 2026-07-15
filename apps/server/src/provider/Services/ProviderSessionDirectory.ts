@@ -32,11 +32,15 @@ export interface ProviderRuntimeBinding {
 
 export interface ProviderRuntimeBindingWithMetadata extends ProviderRuntimeBinding {
   readonly lastSeenAt: string;
+  readonly revision: number;
+  readonly providerInstanceIdWasLegacyNull: boolean;
 }
 
 export interface RefreshProviderRuntimeBindingInput {
   readonly binding: ProviderRuntimeBindingWithMetadata;
   readonly runtimePayloadPatch?: unknown;
+  readonly status?: ProviderSessionRuntimeStatus;
+  readonly touchLastSeenAt?: boolean;
 }
 
 export type ProviderSessionDirectoryReadError = ProviderSessionDirectoryPersistenceError;

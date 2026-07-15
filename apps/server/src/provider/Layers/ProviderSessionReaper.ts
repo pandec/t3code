@@ -141,27 +141,30 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const reason = hasPendingWork ? "pending_work_expired" : "inactivity_threshold";
 
-        const reaped = yield* providerService
-          .stopSession({ threadId: currentBinding.threadId })
-          .pipe(
-            Effect.tap(() =>
-              Effect.logInfo("provider.session.reaped", {
-                threadId: currentBinding.threadId,
-                provider: currentBinding.provider,
-                idleDurationMs: currentIdleDurationMs,
-                reason,
-              }),
-            ),
-            Effect.as(true),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("provider.session.reaper.stop-failed", {
-                threadId: currentBinding.threadId,
-                provider: currentBinding.provider,
-                idleDurationMs: currentIdleDurationMs,
-                cause,
-              }).pipe(Effect.as(false)),
-            ),
-          );
+        const reaped = yield* providerService.stopSessionIfUnchanged(currentBinding).pipe(
+          Effect.tap((didStop) =>
+            didStop
+              ? Effect.logInfo("provider.session.reaped", {
+                  threadId: currentBinding.threadId,
+                  provider: currentBinding.provider,
+                  idleDurationMs: currentIdleDurationMs,
+                  reason,
+                })
+              : Effect.logDebug("provider.session.reaper.binding-changed-before-stop", {
+                  threadId: currentBinding.threadId,
+                  provider: currentBinding.provider,
+                  revision: currentBinding.revision,
+                }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.session.reaper.stop-failed", {
+              threadId: currentBinding.threadId,
+              provider: currentBinding.provider,
+              idleDurationMs: currentIdleDurationMs,
+              cause,
+            }).pipe(Effect.as(false)),
+          ),
+        );
 
         if (reaped) {
           reapedCount += 1;

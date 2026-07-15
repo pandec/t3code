@@ -284,6 +284,7 @@ const SessionExitedPayload = Schema.Struct({
   reason: Schema.optional(TrimmedNonEmptyStringSchema),
   recoverable: Schema.optional(Schema.Boolean),
   exitKind: Schema.optional(RuntimeSessionExitKind),
+  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type SessionExitedPayload = typeof SessionExitedPayload.Type;
 
@@ -362,6 +363,7 @@ export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
   hasPendingWork: Schema.optional(Schema.Boolean),
+  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),

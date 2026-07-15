@@ -1982,6 +1982,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...(context.pendingWorkState.hasPendingWork !== undefined
             ? { hasPendingWork: context.pendingWorkState.hasPendingWork }
             : {}),
+          ...(context.session.sessionGenerationId !== undefined
+            ? { sessionGenerationId: context.session.sessionGenerationId }
+            : {}),
           ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
           ...(result?.usage ? { usage: result.usage } : {}),
           ...(result?.modelUsage ? { modelUsage: result.modelUsage } : {}),
@@ -2059,6 +2062,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         state: status,
         ...(context.pendingWorkState.hasPendingWork !== undefined
           ? { hasPendingWork: context.pendingWorkState.hasPendingWork }
+          : {}),
+        ...(context.session.sessionGenerationId !== undefined
+          ? { sessionGenerationId: context.session.sessionGenerationId }
           : {}),
         ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
         ...(result?.usage ? { usage: result.usage } : {}),
@@ -3043,6 +3049,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         payload: {
           reason: "Session stopped",
           exitKind: "graceful",
+          ...(context.session.sessionGenerationId !== undefined
+            ? { sessionGenerationId: context.session.sessionGenerationId }
+            : {}),
         },
         providerRefs: {},
       });
@@ -3106,6 +3115,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       const startedAt = yield* nowIso;
+      const sessionGenerationId = yield* randomUUIDv4;
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
@@ -3577,6 +3587,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
         createdAt: startedAt,
         updatedAt: startedAt,
+        sessionGenerationId,
       };
 
       const context: ClaudeSessionContext = {

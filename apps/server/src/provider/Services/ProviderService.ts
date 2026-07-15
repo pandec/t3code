@@ -31,6 +31,7 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+import type { ProviderRuntimeBindingWithMetadata } from "./ProviderSessionDirectory.ts";
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -78,6 +79,11 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /** Stop only when the persisted binding is still the exact revision observed by the caller. */
+  readonly stopSessionIfUnchanged: (
+    binding: ProviderRuntimeBindingWithMetadata,
+  ) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * List active provider sessions.

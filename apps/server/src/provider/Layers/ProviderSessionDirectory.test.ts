@@ -130,6 +130,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         provider: ProviderDriverKind.make("claudeAgent"),
         providerInstanceId: claudeInstanceId,
         threadId,
+        resumeCursor: { claudeSessionId: "old-owner-session" },
         runtimePayload: {
           cwd: "/tmp/claude-project",
           hasPendingWork: true,
@@ -159,10 +160,53 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       if (Option.isSome(currentBinding)) {
         assert.equal(currentBinding.value.provider, "codex");
         assert.equal(currentBinding.value.providerInstanceId, codexInstanceId);
+        assert.equal(currentBinding.value.resumeCursor, null);
         assert.deepEqual(currentBinding.value.runtimePayload, {
           cwd: "/tmp/codex-project",
         });
       }
+    }));
+
+  it("refreshes legacy null-instance rows and rejects same-timestamp stale revisions", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.make("thread-legacy-refresh-revision");
+
+      yield* repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: { hasPendingWork: false },
+      });
+      const legacy = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(legacy);
+      assert.equal(legacy.providerInstanceIdWasLegacyNull, true);
+
+      assert.equal(
+        yield* directory.refreshIfUnchanged({
+          binding: legacy,
+          runtimePayloadPatch: { hasPendingWork: true },
+        }),
+        true,
+      );
+
+      const refreshed = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.isDefined(refreshed);
+      assert.equal(refreshed.revision, legacy.revision + 1);
+      assert.equal(
+        (refreshed.runtimePayload as { readonly hasPendingWork?: boolean } | null)?.hasPendingWork,
+        true,
+      );
+
+      // The test clock has not advanced, so lastSeenAt may repeat. Revision,
+      // rather than wall time, must still reject the stale snapshot.
+      assert.equal(yield* directory.refreshIfUnchanged({ binding: legacy }), false);
     }));
 
   it("lists persisted bindings with metadata in oldest-first order", () =>
@@ -215,6 +259,8 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           runtimeMode: "approval-required",
           status: "starting",
           lastSeenAt: "2026-04-14T12:00:00.000Z",
+          revision: 0,
+          providerInstanceIdWasLegacyNull: true,
           resumeCursor: {
             opaque: "resume-older",
           },
@@ -229,6 +275,8 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           runtimeMode: "full-access",
           status: "running",
           lastSeenAt: "2026-04-14T12:05:00.000Z",
+          revision: 0,
+          providerInstanceIdWasLegacyNull: true,
           resumeCursor: {
             opaque: "resume-newer",
           },
