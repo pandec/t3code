@@ -1457,12 +1457,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: isDevFlavor ? "t3code-dev" : "t3code",
       icon: "icons",
       category: "Development",
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: isDevFlavor ? "t3code-dev" : "t3code",
         },
       },
     };

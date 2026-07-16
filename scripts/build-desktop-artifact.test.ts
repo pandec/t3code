@@ -130,6 +130,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("creates an isolated Linux dev executable and desktop identity", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "dev",
+      );
+
+      const linux = config.linux as {
+        readonly executableName: string;
+        readonly desktop: { readonly entry: { readonly StartupWMClass: string } };
+      };
+      assert.equal(config.appId, "com.t3tools.t3code.dev");
+      assert.equal(config.productName, "T3 Code (Dev)");
+      assert.equal(linux.executableName, "t3code-dev");
+      assert.equal(linux.desktop.entry.StartupWMClass, "t3code-dev");
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
     Effect.gen(function* () {
       const latestConfig = yield* resolveGitHubPublishConfig("latest").pipe(
