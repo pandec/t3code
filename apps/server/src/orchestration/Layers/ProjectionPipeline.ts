@@ -715,6 +715,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
         case "thread.message-sent":
         case "thread.fork-requested":
+        case "thread.history-imported":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -854,6 +855,24 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             sourceThreadId: event.payload.sourceThreadId,
             destinationThreadId: event.payload.threadId,
           });
+          return;
+
+        case "thread.history-imported":
+          yield* Effect.forEach(
+            event.payload.messages,
+            (message) =>
+              projectionThreadMessageRepository.upsert({
+                messageId: message.messageId,
+                threadId: event.payload.threadId,
+                turnId: null,
+                role: message.role,
+                text: message.text,
+                isStreaming: false,
+                createdAt: message.createdAt,
+                updatedAt: message.createdAt,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
           return;
 
         case "thread.reverted": {

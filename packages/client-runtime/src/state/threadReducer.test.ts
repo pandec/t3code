@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -334,6 +335,71 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.latestTurn?.state).toBe("running");
         expect(result.thread.latestTurn?.completedAt).toBeNull();
+      }
+    });
+  });
+
+  describe("thread.history-imported", () => {
+    it("applies imported messages idempotently before later thread messages", () => {
+      const importedMessageId = MessageId.make("imported-1");
+      const laterMessageId = MessageId.make("later-1");
+      const thread = {
+        ...baseThread,
+        messages: [
+          {
+            id: laterMessageId,
+            role: "assistant" as const,
+            text: "later continuation",
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T14:00:00.000Z",
+            updatedAt: "2026-04-01T14:00:00.000Z",
+          },
+        ],
+      };
+      const event = {
+        ...baseEventFields,
+        sequence: 16,
+        occurredAt: "2026-04-01T13:00:00.000Z",
+        aggregateKind: "thread" as const,
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.history-imported" as const,
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          source: {
+            provider: ProviderDriverKind.make("codex"),
+            nativeSessionId: "native-1",
+            nativeCwd: "/tmp/project",
+          },
+          messages: [
+            {
+              messageId: importedMessageId,
+              role: "user" as const,
+              text: "imported question",
+              createdAt: "2026-04-01T12:00:00.000Z",
+            },
+          ],
+          createdAt: "2026-04-01T13:00:00.000Z",
+        },
+      };
+
+      const first = applyThreadDetailEvent(thread, event);
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+      expect(first.thread.messages.map((message) => message.id)).toEqual([
+        importedMessageId,
+        laterMessageId,
+      ]);
+      expect(first.thread.messages[0]?.turnId).toBeNull();
+
+      const second = applyThreadDetailEvent(first.thread, event);
+      expect(second.kind).toBe("updated");
+      if (second.kind === "updated") {
+        expect(second.thread.messages.map((message) => message.id)).toEqual([
+          importedMessageId,
+          laterMessageId,
+        ]);
       }
     });
   });

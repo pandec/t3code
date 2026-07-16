@@ -14,6 +14,7 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   buildTurnStartParams,
+  buildCodexResumeCursor,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -34,6 +35,18 @@ describe("CodexSessionRuntimeIdentifierGenerationError", () => {
       error.message,
       "Failed to generate Codex App Server identifier for provider-event.",
     );
+  });
+});
+
+describe("buildCodexResumeCursor", () => {
+  it("preserves strict resume across runtime cursor updates", () => {
+    NodeAssert.deepStrictEqual(buildCodexResumeCursor("provider-thread", true), {
+      threadId: "provider-thread",
+      strictResume: true,
+    });
+    NodeAssert.deepStrictEqual(buildCodexResumeCursor("provider-thread", undefined), {
+      threadId: "provider-thread",
+    });
   });
 });
 
@@ -346,6 +359,51 @@ describe("openCodexThread", () => {
       NodeAssert.deepStrictEqual(
         calls.map((call) => call.method),
         ["thread/resume", "thread/start"],
+      );
+    }),
+  );
+
+  it.effect("does not fall back to thread/start when strictResume is set", () =>
+    Effect.gen(function* () {
+      const calls: Array<"thread/start" | "thread/resume" | "thread/fork"> = [];
+      const payloads: Array<unknown> = [];
+      const started = makeThreadOpenResponse("fresh-thread");
+      const client = {
+        request: <M extends "thread/start" | "thread/resume" | "thread/fork">(
+          method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          calls.push(method);
+          payloads.push(payload);
+          if (method === "thread/resume") {
+            return Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32603,
+                errorMessage: "thread not found",
+              }),
+            );
+          }
+          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);
+        },
+      };
+
+      const error = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("imported-thread"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "external-thread",
+        strictResume: true,
+      }).pipe(Effect.flip);
+
+      NodeAssert.equal(error._tag, "CodexAppServerRequestError");
+      NodeAssert.deepStrictEqual(calls, ["thread/resume"]);
+      NodeAssert.equal(
+        "model" in (payloads[0] as Record<string, unknown>),
+        false,
+        "strict resume must not override the recorded session model",
       );
     }),
   );

@@ -72,7 +72,11 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
+import {
+  listClaudeSessionTranscripts,
+  readClaudeSessionTranscript,
+} from "../Drivers/ClaudeSessionImport.ts";
 import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import {
   getClaudeModelCapabilities,
@@ -3957,6 +3961,106 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     ),
   );
 
+  const canonicalizeImportCwd = Effect.fn("canonicalizeImportCwd")(function* (
+    cwd: string,
+    operation: "listImportableSessions" | "readImportableSession",
+  ) {
+    return yield* fileSystem.realPath(cwd).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation,
+            issue: `Workspace root '${cwd}' cannot be resolved: ${String(cause)}`,
+          }),
+      ),
+    );
+  });
+
+  const importDriverContext = <A, E>(
+    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
+
+  const listImportableSessions: NonNullable<ClaudeAdapterShape["listImportableSessions"]> =
+    Effect.fn("ClaudeAdapter.listImportableSessions")(function* (input) {
+      const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
+        Effect.provideService(Path.Path, path),
+      );
+      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listImportableSessions");
+      const summaries = yield* importDriverContext(
+        listClaudeSessionTranscripts({ homePath, canonicalCwd }),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/import-list",
+              detail:
+                cause._tag === "ClaudeTranscriptParseError"
+                  ? `Claude session '${cause.sessionId}' line ${cause.line}: ${cause.detail}`
+                  : cause.detail,
+            }),
+        ),
+      );
+      return summaries.map((summary) => ({
+        nativeSessionId: summary.sessionId,
+        preview: summary.preview,
+        messageCount: summary.messageCount,
+        updatedAt: summary.updatedAt,
+      }));
+    });
+
+  const readImportableSession: NonNullable<ClaudeAdapterShape["readImportableSession"]> = Effect.fn(
+    "ClaudeAdapter.readImportableSession",
+  )(function* (input) {
+    const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
+      Effect.provideService(Path.Path, path),
+    );
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "readImportableSession");
+    const transcript = yield* importDriverContext(
+      readClaudeSessionTranscript({
+        homePath,
+        canonicalCwd,
+        sessionId: input.nativeSessionId,
+      }),
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/import-read",
+            detail:
+              cause._tag === "ClaudeTranscriptParseError"
+                ? `Claude session '${cause.sessionId}' line ${cause.line}: ${cause.detail}`
+                : cause.detail,
+          }),
+      ),
+    );
+    if (transcript.messages.length === 0) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "readImportableSession",
+        issue: `Claude session '${input.nativeSessionId}' contains no importable messages.`,
+      });
+    }
+    const turnCount = transcript.messages.filter((message) => message.role === "user").length;
+    return {
+      nativeSessionId: input.nativeSessionId,
+      nativeCwd: canonicalCwd,
+      messages: transcript.messages,
+      model: transcript.model,
+      resumeCursor: {
+        threadId: input.destinationThreadId,
+        resume: input.nativeSessionId,
+        turnCount,
+      },
+    };
+  });
+
   return {
     provider: PROVIDER,
     capabilities: {
@@ -3964,6 +4068,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
     startSession,
     forkSession,
+    listImportableSessions,
+    readImportableSession,
     sendTurn,
     interruptTurn,
     readThread,

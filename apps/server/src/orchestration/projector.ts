@@ -19,6 +19,7 @@ import {
   ThreadArchivedPayload,
   ThreadCreatedPayload,
   ThreadForkRequestedPayload,
+  ThreadHistoryImportedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -305,6 +306,35 @@ export function projectEvent(
             : [...nextBase.threads, thread],
         };
       });
+
+    case "thread.history-imported":
+      return decodeForEvent(
+        ThreadHistoryImportedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const destination = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!destination) return nextBase;
+          const messages = payload.messages
+            .map((message) => ({
+              id: message.messageId,
+              role: message.role,
+              text: message.text,
+              attachments: [],
+              turnId: null,
+              streaming: false,
+              createdAt: message.createdAt,
+              updatedAt: message.createdAt,
+            }))
+            .slice(-MAX_THREAD_MESSAGES);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, { messages }),
+          };
+        }),
+      );
 
     case "thread.fork-requested":
       return decodeForEvent(ThreadForkRequestedPayload, event.payload, event.type, "payload").pipe(

@@ -20,7 +20,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -535,6 +535,43 @@ const ThreadForkCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const THREAD_IMPORT_MAX_MESSAGES = 5_000;
+
+export const ThreadImportSource = Schema.Struct({
+  provider: ProviderDriverKind,
+  nativeSessionId: TrimmedNonEmptyString,
+  nativeCwd: TrimmedNonEmptyString,
+});
+export type ThreadImportSource = typeof ThreadImportSource.Type;
+
+export const ThreadImportMessage = Schema.Struct({
+  messageId: MessageId,
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type ThreadImportMessage = typeof ThreadImportMessage.Type;
+
+const ThreadImportMessages = Schema.Array(ThreadImportMessage).check(
+  Schema.isMaxLength(THREAD_IMPORT_MAX_MESSAGES),
+);
+
+const ThreadImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  source: ThreadImportSource,
+  messages: ThreadImportMessages,
+  createdAt: IsoDateTime,
+});
+
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
@@ -796,6 +833,7 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadImportCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -818,6 +856,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "thread.created",
   "thread.fork-requested",
+  "thread.history-imported",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
@@ -887,6 +926,13 @@ export const ThreadCreatedPayload = Schema.Struct({
 export const ThreadForkRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   sourceThreadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadHistoryImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  source: ThreadImportSource,
+  messages: ThreadImportMessages,
   createdAt: IsoDateTime,
 });
 
@@ -1062,6 +1108,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.fork-requested"),
     payload: ThreadForkRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.history-imported"),
+    payload: ThreadHistoryImportedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
