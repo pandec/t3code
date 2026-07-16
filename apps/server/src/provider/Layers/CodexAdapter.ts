@@ -1821,7 +1821,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       nativeCwd: imported.cwd,
       messages: imported.messages,
       model: null,
-      resumeCursor: { threadId: imported.threadId },
+      resumeCursor: { threadId: imported.threadId, strictResume: true },
     };
   });
 

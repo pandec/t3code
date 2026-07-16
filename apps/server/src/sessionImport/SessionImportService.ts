@@ -26,6 +26,7 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -333,9 +334,10 @@ export const makeSessionImportService = Effect.gen(function* () {
         messages,
         createdAt,
       })
-      .pipe(Effect.result);
+      // `exit` (not `result`) so defects also trigger binding compensation.
+      .pipe(Effect.exit);
 
-    if (dispatchResult._tag === "Failure") {
+    if (Exit.isFailure(dispatchResult)) {
       // Compensation: remove the binding so the candidate reappears.
       yield* runtimeRepository.deleteByThreadId({ threadId }).pipe(
         Effect.catch((cause) =>
@@ -348,7 +350,7 @@ export const makeSessionImportService = Effect.gen(function* () {
       return yield* new SessionImportError({
         reason: "import-failed",
         detail: `Importing session '${input.nativeSessionId}' failed while persisting the thread.`,
-        cause: dispatchResult.failure,
+        cause: dispatchResult.cause,
       });
     }
 
