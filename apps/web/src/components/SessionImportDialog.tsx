@@ -1,4 +1,4 @@
-import type { SessionImportCandidate, ThreadId } from "@t3tools/contracts";
+import type { SessionImportCandidate } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -86,7 +86,7 @@ export function SessionImportDialog(props: {
       if (result._tag === "Success") {
         // The thread route redirects to "/" when the thread is not yet in
         // client state; wait briefly for the shell push to land first.
-        const threadRef = scopeThreadRef(member.environmentId, result.value.threadId as ThreadId);
+        const threadRef = scopeThreadRef(member.environmentId, result.value.threadId);
         for (let attempt = 0; attempt < 40 && readThreadShell(threadRef) === null; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }

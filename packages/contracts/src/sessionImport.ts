@@ -22,7 +22,11 @@ export class SessionImportError extends Schema.TaggedErrorClass<SessionImportErr
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
 
 export const SessionImportCandidate = Schema.Struct({
   instanceId: ProviderInstanceId,

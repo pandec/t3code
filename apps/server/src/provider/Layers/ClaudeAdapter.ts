@@ -3961,13 +3961,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     ),
   );
 
-  const canonicalizeImportCwd = Effect.fn("canonicalizeImportCwd")(function* (cwd: string) {
+  const canonicalizeImportCwd = Effect.fn("canonicalizeImportCwd")(function* (
+    cwd: string,
+    operation: "listImportableSessions" | "readImportableSession",
+  ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
         (cause) =>
           new ProviderAdapterValidationError({
             provider: PROVIDER,
-            operation: "listImportableSessions",
+            operation,
             issue: `Workspace root '${cwd}' cannot be resolved: ${String(cause)}`,
           }),
       ),
@@ -3987,7 +3990,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
         Effect.provideService(Path.Path, path),
       );
-      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
+      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listImportableSessions");
       const summaries = yield* importDriverContext(
         listClaudeSessionTranscripts({ homePath, canonicalCwd }),
       ).pipe(
@@ -4017,7 +4020,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
       Effect.provideService(Path.Path, path),
     );
-    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "readImportableSession");
     const transcript = yield* importDriverContext(
       readClaudeSessionTranscript({
         homePath,

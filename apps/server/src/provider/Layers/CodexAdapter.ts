@@ -1770,13 +1770,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const canonicalizeImportCwd = Effect.fn("CodexAdapter.canonicalizeImportCwd")(function* (
     cwd: string,
+    operation: "listImportableSessions" | "readImportableSession",
   ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
         (cause) =>
           new ProviderAdapterValidationError({
             provider: PROVIDER,
-            operation: "readImportableSession",
+            operation,
             issue: `Workspace root '${cwd}' cannot be resolved: ${String(cause)}`,
           }),
       ),
@@ -1804,7 +1805,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const listImportableSessions: NonNullable<CodexAdapterShape["listImportableSessions"]> =
     Effect.fn("CodexAdapter.listImportableSessions")(function* (input) {
-      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
+      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listImportableSessions");
       const summaries = yield* importReaderContext(
         listCodexImportableSessions(importReaderOptions(canonicalCwd)),
       );
@@ -1819,14 +1820,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const readImportableSession: NonNullable<CodexAdapterShape["readImportableSession"]> = Effect.fn(
     "CodexAdapter.readImportableSession",
   )(function* (input) {
-    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "readImportableSession");
     const imported = yield* importReaderContext(
       readCodexImportableThread({
         ...importReaderOptions(canonicalCwd),
         threadId: input.nativeSessionId,
       }),
     );
-    const nativeCwd = yield* canonicalizeImportCwd(imported.cwd);
+    // A native cwd that no longer resolves (deleted/moved directory) must be
+    // reported as a workspace mismatch below, not as an unresolvable root.
+    const nativeCwd = yield* fileSystem
+      .realPath(imported.cwd)
+      .pipe(Effect.orElseSucceed(() => imported.cwd));
     if (nativeCwd !== canonicalCwd) {
       return yield* new ProviderAdapterValidationError({
         provider: PROVIDER,
