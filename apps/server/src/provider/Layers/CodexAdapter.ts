@@ -61,6 +61,10 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  listCodexImportableSessions,
+  readCodexImportableThread,
+} from "../Drivers/CodexImportReader.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1757,6 +1761,70 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     ),
   );
 
+  const importReaderOptions = (cwd: string) => ({
+    binaryPath: codexConfig.binaryPath,
+    ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+    ...(options?.environment ? { environment: options.environment } : {}),
+    cwd,
+  });
+
+  const importReaderContext = <A, E>(
+    effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/import",
+            detail:
+              typeof cause === "object" && cause !== null && "detail" in cause
+                ? String((cause as { detail: unknown }).detail)
+                : String(cause),
+            cause,
+          }),
+      ),
+    );
+
+  const listImportableSessions: NonNullable<CodexAdapterShape["listImportableSessions"]> =
+    Effect.fn("CodexAdapter.listImportableSessions")(function* (input) {
+      const summaries = yield* importReaderContext(
+        listCodexImportableSessions(importReaderOptions(input.cwd)),
+      );
+      return summaries.map((summary) => ({
+        nativeSessionId: summary.threadId,
+        preview: summary.preview,
+        messageCount: null,
+        updatedAt: summary.updatedAt,
+      }));
+    });
+
+  const readImportableSession: NonNullable<CodexAdapterShape["readImportableSession"]> = Effect.fn(
+    "CodexAdapter.readImportableSession",
+  )(function* (input) {
+    const imported = yield* importReaderContext(
+      readCodexImportableThread({
+        ...importReaderOptions(input.cwd),
+        threadId: input.nativeSessionId,
+      }),
+    );
+    if (imported.messages.length === 0) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "readImportableSession",
+        issue: `Codex thread '${input.nativeSessionId}' contains no importable messages.`,
+      });
+    }
+    return {
+      nativeSessionId: imported.threadId,
+      nativeCwd: imported.cwd,
+      messages: imported.messages,
+      model: null,
+      resumeCursor: { threadId: imported.threadId },
+    };
+  });
+
   return {
     provider: PROVIDER,
     capabilities: {
@@ -1764,6 +1832,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     },
     startSession,
     forkSession,
+    listImportableSessions,
+    readImportableSession,
     sendTurn,
     interruptTurn,
     readThread,

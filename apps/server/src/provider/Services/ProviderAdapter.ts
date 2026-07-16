@@ -57,6 +57,38 @@ export interface ProviderForkSessionResult {
   readonly resumeCursor: unknown;
 }
 
+export interface ProviderImportableSession {
+  readonly nativeSessionId: string;
+  readonly preview: string;
+  readonly messageCount: number | null;
+  readonly updatedAt: string;
+}
+
+export interface ProviderImportSessionMessage {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAt: string;
+}
+
+export interface ProviderImportSessionHistory {
+  readonly nativeSessionId: string;
+  readonly nativeCwd: string;
+  readonly messages: ReadonlyArray<ProviderImportSessionMessage>;
+  readonly model: string | null;
+  /** Resume cursor to persist so the imported thread continues the native session. */
+  readonly resumeCursor: unknown;
+}
+
+export interface ProviderListImportableSessionsInput {
+  readonly cwd: string;
+}
+
+export interface ProviderReadImportableSessionInput {
+  readonly nativeSessionId: string;
+  readonly cwd: string;
+  readonly destinationThreadId: ThreadId;
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -75,6 +107,16 @@ export interface ProviderAdapterShape<TError> {
   readonly forkSession?: (
     input: ProviderForkSessionInput,
   ) => Effect.Effect<ProviderForkSessionResult, TError>;
+
+  /** List provider-native persisted sessions importable for a workspace root. */
+  readonly listImportableSessions?: (
+    input: ProviderListImportableSessionsInput,
+  ) => Effect.Effect<ReadonlyArray<ProviderImportableSession>, TError>;
+
+  /** Read one provider-native persisted session's message history for import. */
+  readonly readImportableSession?: (
+    input: ProviderReadImportableSessionInput,
+  ) => Effect.Effect<ProviderImportSessionHistory, TError>;
 
   /**
    * Send a turn to an active provider session.

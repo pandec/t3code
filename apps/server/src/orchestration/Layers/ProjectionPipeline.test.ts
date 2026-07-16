@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -157,7 +158,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
           payload: {
             threadId,
             source: {
-              provider: "claudeAgent",
+              provider: ProviderDriverKind.make("claudeAgent"),
               nativeSessionId: "9fc85367-4ed9-4dc7-a44e-bee92408ff84",
               nativeCwd: "/tmp/project",
             },
