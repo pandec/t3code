@@ -69,6 +69,7 @@ import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
+  parseComposerRenameCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -3932,14 +3933,55 @@ function ChatViewContent(props: ChatViewProps) {
       });
       return;
     }
-    const standaloneSlashCommand =
+    const hasStandaloneCommandContext =
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
+      composerReviewComments.length === 0;
+    const renameCommand = hasStandaloneCommandContext ? parseComposerRenameCommand(trimmed) : null;
+    if (renameCommand) {
+      if (renameCommand.title === null) {
+        toastManager.add({
+          type: "error",
+          title: "Usage: /t3-rename <new title>",
+        });
+        return;
+      }
+      if (!isServerThread) {
+        toastManager.add({
+          type: "error",
+          title: "No thread to rename yet",
+        });
+        return;
+      }
+      if (renameCommand.title !== activeThread.title) {
+        const result = await updateThreadMetadata({
+          environmentId,
+          input: {
+            threadId: activeThread.id,
+            title: renameCommand.title,
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to rename thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
+    const standaloneSlashCommand = hasStandaloneCommandContext
+      ? parseStandaloneComposerSlashCommand(trimmed)
+      : null;
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
