@@ -59,6 +59,10 @@
       "types": "./src/state/filesystem.ts",
       "default": "./src/state/filesystem.ts"
     },
+    "./state/sessionImport": {
+      "types": "./src/state/sessionImport.ts",
+      "default": "./src/state/sessionImport.ts"
+    },
     "./state/git": {
       "types": "./src/state/git.ts",
       "default": "./src/state/git.ts"

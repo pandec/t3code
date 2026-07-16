@@ -142,6 +142,14 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import {
+  SESSION_IMPORT_WS_METHODS,
+  SessionImportError,
+  SessionImportListCandidatesPayload,
+  SessionImportListCandidatesResult,
+  SessionImportPayload,
+  SessionImportResult,
+} from "./sessionImport.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -232,6 +240,10 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
+
+  // Session import methods
+  sessionImportListCandidates: SESSION_IMPORT_WS_METHODS.listCandidates,
+  sessionImportImport: SESSION_IMPORT_WS_METHODS.importSession,
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -288,6 +300,18 @@ export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscov
   payload: Schema.Struct({}),
   success: SourceControlDiscoveryResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsSessionImportListCandidatesRpc = Rpc.make(WS_METHODS.sessionImportListCandidates, {
+  payload: SessionImportListCandidatesPayload,
+  success: SessionImportListCandidatesResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
+});
+
+export const WsSessionImportImportRpc = Rpc.make(WS_METHODS.sessionImportImport, {
+  payload: SessionImportPayload,
+  success: SessionImportResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
@@ -750,4 +774,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  WsSessionImportListCandidatesRpc,
+  WsSessionImportImportRpc,
 );

@@ -17,6 +17,8 @@ import {
   type ModelSelection,
   type ProjectId,
   type ProviderInstanceId,
+  type SessionImportCandidate,
+  SessionImportError,
   ThreadId,
   type ThreadImportMessage,
   THREAD_IMPORT_MAX_MESSAGES,
@@ -36,32 +38,6 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
-
-export class SessionImportError extends Schema.TaggedErrorClass<SessionImportError>()(
-  "SessionImportError",
-  {
-    reason: Schema.Literals([
-      "project-not-found",
-      "instance-not-found",
-      "provider-read-failed",
-      "nothing-to-import",
-      "already-imported",
-      "import-failed",
-    ]),
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-
-export interface SessionImportCandidate {
-  readonly instanceId: ProviderInstanceId;
-  readonly provider: string;
-  readonly providerDisplayName: string;
-  readonly nativeSessionId: string;
-  readonly preview: string;
-  readonly messageCount: number | null;
-  readonly updatedAt: string;
-}
 
 export interface SessionImportResult {
   readonly threadId: ThreadId;

@@ -100,6 +100,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
+import { SessionImportService } from "./sessionImport/SessionImportService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
@@ -292,6 +293,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
   [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
+  [WS_METHODS.sessionImportListCandidates, AuthOrchestrationReadScope],
+  [WS_METHODS.sessionImportImport, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
@@ -421,6 +424,7 @@ const makeWsRpcLayer = (
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+      const sessionImport = yield* SessionImportService;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map((settings) => settings.automaticGitFetchInterval),
         Effect.catch((cause) =>
@@ -1303,6 +1307,24 @@ const makeWsRpcLayer = (
             sourceControlDiscovery.discover,
             {
               "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.sessionImportListCandidates]: ({ projectId }) =>
+          observeRpcEffect(
+            WS_METHODS.sessionImportListCandidates,
+            sessionImport
+              .listCandidates({ projectId })
+              .pipe(Effect.map((candidates) => ({ candidates }))),
+            {
+              "rpc.aggregate": "sessionImport",
+            },
+          ),
+        [WS_METHODS.sessionImportImport]: ({ projectId, instanceId, nativeSessionId }) =>
+          observeRpcEffect(
+            WS_METHODS.sessionImportImport,
+            sessionImport.importSession({ projectId, instanceId, nativeSessionId }),
+            {
+              "rpc.aggregate": "sessionImport",
             },
           ),
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
