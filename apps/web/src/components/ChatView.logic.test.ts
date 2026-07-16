@@ -10,6 +10,7 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
+  hasStandaloneComposerCommandContext,
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
@@ -163,6 +164,20 @@ describe("deriveComposerSendState", () => {
         terminalContexts: [],
         elementContextCount: 0,
       }).hasSendableContent,
+    ).toBe(false);
+  });
+});
+
+describe("hasStandaloneComposerCommandContext", () => {
+  it("rejects an expired terminal context even though it is not sendable", () => {
+    expect(
+      hasStandaloneComposerCommandContext({
+        imageCount: 0,
+        terminalContextCount: 1,
+        elementContextCount: 0,
+        previewAnnotationCount: 0,
+        reviewCommentCount: 0,
+      }),
     ).toBe(false);
   });
 });

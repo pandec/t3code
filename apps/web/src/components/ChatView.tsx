@@ -89,6 +89,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
+  clearPendingUserInputCustomAnswerIfUnchanged,
   derivePendingUserInputProgress,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -221,6 +222,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  hasStandaloneComposerCommandContext,
   hasServerAcknowledgedLocalDispatch,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -3922,12 +3924,13 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
-    const hasStandaloneCommandContext =
-      composerImages.length === 0 &&
-      sendableComposerTerminalContexts.length === 0 &&
-      composerElementContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0;
+    const hasStandaloneCommandContext = hasStandaloneComposerCommandContext({
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      elementContextCount: composerElementContexts.length,
+      previewAnnotationCount: composerPreviewAnnotations.length,
+      reviewCommentCount: composerReviewComments.length,
+    });
     const renameCommand = hasStandaloneCommandContext ? parseComposerRenameCommand(trimmed) : null;
     if (renameCommand) {
       if (renameCommand.title === null) {
@@ -3944,6 +3947,13 @@ function ChatViewContent(props: ChatViewProps) {
         });
         return;
       }
+      const pendingAnswerTarget =
+        activePendingUserInput && activePendingProgress?.activeQuestion
+          ? {
+              requestId: activePendingUserInput.requestId,
+              questionId: activePendingProgress.activeQuestion.id,
+            }
+          : null;
       if (renameCommand.title !== activeThread.title) {
         sendInFlightRef.current = true;
         try {
@@ -3984,7 +3994,28 @@ function ChatViewContent(props: ChatViewProps) {
         hasSameItems(currentSendCtx.reviewComments, composerReviewComments)
       ) {
         promptRef.current = "";
-        clearComposerDraftContent(composerDraftTarget);
+        if (pendingAnswerTarget) {
+          setPendingUserInputAnswersByRequestId((existing) => {
+            const requestAnswers = existing[pendingAnswerTarget.requestId];
+            const currentAnswer = requestAnswers?.[pendingAnswerTarget.questionId];
+            const nextAnswer = clearPendingUserInputCustomAnswerIfUnchanged(
+              currentAnswer,
+              promptForSend,
+            );
+            if (nextAnswer === undefined || nextAnswer === currentAnswer) {
+              return existing;
+            }
+            return {
+              ...existing,
+              [pendingAnswerTarget.requestId]: {
+                ...requestAnswers,
+                [pendingAnswerTarget.questionId]: nextAnswer,
+              },
+            };
+          });
+        } else {
+          clearComposerDraftContent(composerDraftTarget);
+        }
         composerRef.current?.resetCursorState();
       }
       return;

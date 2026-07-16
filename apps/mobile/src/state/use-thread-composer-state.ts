@@ -32,7 +32,6 @@ import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
-  clearComposerDraftContent,
   clearComposerDraftContentIfUnchanged,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
@@ -144,72 +143,76 @@ export function useThreadComposerState() {
     !!selectedThread &&
     (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
 
-  const onSendMessage = useCallback(async () => {
-    if (!selectedThreadShell) {
-      return null;
-    }
-
-    const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
-    const draft = getComposerDraftSnapshot(threadKey);
-    const thread = selectedThreadDetail ?? selectedThreadShell;
-    const text = draft.text.trim();
-    const attachments = draft.attachments;
-    if (text.length === 0 && attachments.length === 0) {
-      return null;
-    }
-
-    const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
-    if (renameCommand) {
-      if (renameCommand.title === null) {
-        Alert.alert("Unable to rename thread", "Usage: /t3-rename <new title>");
+  const onSendMessage = useCallback(
+    async (onWillEnqueueAgentMessage?: () => void) => {
+      if (!selectedThreadShell) {
         return null;
       }
 
-      if (renameCommand.title !== selectedThreadShell.title) {
-        const result = await updateThreadMetadata({
-          environmentId: selectedThreadShell.environmentId,
-          input: {
-            threadId: selectedThreadShell.id,
-            title: renameCommand.title,
-          },
-        });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          Alert.alert(
-            "Unable to rename thread",
-            error instanceof Error ? error.message : "The thread could not be renamed.",
-          );
-        }
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const draft = getComposerDraftSnapshot(threadKey);
+      const thread = selectedThreadDetail ?? selectedThreadShell;
+      const text = draft.text.trim();
+      const attachments = draft.attachments;
+      if (text.length === 0 && attachments.length === 0) {
+        return null;
       }
 
-      clearComposerDraftContentIfUnchanged(threadKey, draft);
-      return null;
-    }
+      const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
+      if (renameCommand) {
+        if (renameCommand.title === null) {
+          Alert.alert("Unable to rename thread", "Usage: /t3-rename <new title>");
+          return null;
+        }
 
-    const metadata = makeQueuedMessageMetadata();
-    const messageId = MessageId.make(metadata.messageId);
-    try {
-      await enqueueThreadOutboxMessage({
-        environmentId: selectedThreadShell.environmentId,
-        threadId: selectedThreadShell.id,
-        messageId,
-        commandId: CommandId.make(metadata.commandId),
-        text,
-        attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
-        createdAt: metadata.createdAt,
-      });
-      clearComposerDraftContent(threadKey);
-      return messageId;
-    } catch (error) {
-      setPendingConnectionError(
-        error instanceof Error ? error.message : "Failed to save the queued message.",
-      );
-      return null;
-    }
-  }, [selectedThreadDetail, selectedThreadShell, updateThreadMetadata]);
+        if (renameCommand.title !== selectedThreadShell.title) {
+          const result = await updateThreadMetadata({
+            environmentId: selectedThreadShell.environmentId,
+            input: {
+              threadId: selectedThreadShell.id,
+              title: renameCommand.title,
+            },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            Alert.alert(
+              "Unable to rename thread",
+              error instanceof Error ? error.message : "The thread could not be renamed.",
+            );
+          }
+        }
+
+        clearComposerDraftContentIfUnchanged(threadKey, draft);
+        return null;
+      }
+
+      const metadata = makeQueuedMessageMetadata();
+      const messageId = MessageId.make(metadata.messageId);
+      try {
+        onWillEnqueueAgentMessage?.();
+        await enqueueThreadOutboxMessage({
+          environmentId: selectedThreadShell.environmentId,
+          threadId: selectedThreadShell.id,
+          messageId,
+          commandId: CommandId.make(metadata.commandId),
+          text,
+          attachments,
+          modelSelection: draft.modelSelection ?? thread.modelSelection,
+          runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+          interactionMode: draft.interactionMode ?? thread.interactionMode,
+          createdAt: metadata.createdAt,
+        });
+        clearComposerDraftContentIfUnchanged(threadKey, draft);
+        return messageId;
+      } catch (error) {
+        setPendingConnectionError(
+          error instanceof Error ? error.message : "Failed to save the queued message.",
+        );
+        return null;
+      }
+    },
+    [selectedThreadDetail, selectedThreadShell, updateThreadMetadata],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {

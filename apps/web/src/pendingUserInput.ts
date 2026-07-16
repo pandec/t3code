@@ -77,6 +77,16 @@ export function setPendingUserInputCustomAnswer(
   };
 }
 
+export function clearPendingUserInputCustomAnswerIfUnchanged(
+  draft: PendingUserInputDraftAnswer | undefined,
+  expectedCustomAnswer: string,
+): PendingUserInputDraftAnswer | undefined {
+  if ((draft?.customAnswer ?? "") !== expectedCustomAnswer) {
+    return draft;
+  }
+  return setPendingUserInputCustomAnswer(draft, "");
+}
+
 export function togglePendingUserInputOptionSelection(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,

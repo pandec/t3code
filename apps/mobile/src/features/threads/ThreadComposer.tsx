@@ -103,7 +103,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSendMessage: (onWillEnqueueAgentMessage?: () => void) => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -515,15 +515,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
     try {
-      const messageId = await onSendMessage();
-      if (messageId !== null) {
-        // Only a queued agent message should arm the lock-screen card. Local
-        // composer commands and validation failures return without agent work.
+      await onSendMessage(() => {
+        // Classification happens in the state hook first, so local composer
+        // commands never arm while real sends keep the foreground timing window.
         armAgentAwarenessLiveActivityForLocalWork({
           threadTitle: props.selectedThread.title,
           projectTitle: props.environmentLabel ?? "T3 Code",
         });
-      }
+      });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);
     }
