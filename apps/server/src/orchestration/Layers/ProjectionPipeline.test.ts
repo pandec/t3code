@@ -132,6 +132,101 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-history-import-")))(
+  "OrchestrationProjectionPipeline history import",
+  (it) => {
+    it.effect("materializes imported history messages via bootstrap replay", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const later = "2026-01-01T00:00:01.000Z";
+        const threadId = ThreadId.make("imported-thread");
+
+        yield* eventStore.append({
+          type: "thread.history-imported",
+          eventId: EventId.make("import-history-event"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("import-history-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("import-history-command"),
+          metadata: {},
+          payload: {
+            threadId,
+            source: {
+              provider: "claudeAgent",
+              nativeSessionId: "9fc85367-4ed9-4dc7-a44e-bee92408ff84",
+              nativeCwd: "/tmp/project",
+            },
+            messages: [
+              {
+                messageId: MessageId.make("import:imported-thread:00000"),
+                role: "user",
+                text: "Remember the codeword PINEAPPLE-42.",
+                createdAt: now,
+              },
+              {
+                messageId: MessageId.make("import:imported-thread:00001"),
+                role: "assistant",
+                text: "OK",
+                createdAt: later,
+              },
+            ],
+            createdAt: now,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+        const readRows = () =>
+          sql<{
+            readonly messageId: string;
+            readonly role: string;
+            readonly text: string;
+            readonly turnId: string | null;
+            readonly isStreaming: number;
+          }>`
+            SELECT
+              message_id AS "messageId",
+              role,
+              text,
+              turn_id AS "turnId",
+              is_streaming AS "isStreaming"
+            FROM projection_thread_messages
+            WHERE thread_id = ${threadId}
+            ORDER BY created_at, message_id
+          `;
+        const rows = yield* readRows();
+        assert.deepEqual(rows, [
+          {
+            messageId: "import:imported-thread:00000",
+            role: "user",
+            text: "Remember the codeword PINEAPPLE-42.",
+            turnId: null,
+            isStreaming: 0,
+          },
+          {
+            messageId: "import:imported-thread:00001",
+            role: "assistant",
+            text: "OK",
+            turnId: null,
+            isStreaming: 0,
+          },
+        ]);
+
+        // Replay determinism: wiping projector cursors and re-bootstrapping from the
+        // journal must produce identical rows (mirrors a server restart rebuild).
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`DELETE FROM projection_state`;
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRows(), rows);
+      }),
+    );
+  },
+);
+
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   it.effect("bootstraps all projection states and writes projection rows", () =>
     Effect.gen(function* () {

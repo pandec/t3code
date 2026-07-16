@@ -321,6 +321,57 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [createdEvent, sessionEvent, requestedEvent];
     }
 
+    case "thread.import": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const importCreatedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const historyImportedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: importCreatedEvent.eventId,
+        type: "thread.history-imported",
+        payload: {
+          threadId: command.threadId,
+          source: command.source,
+          messages: command.messages,
+          createdAt: command.createdAt,
+        },
+      };
+      return [importCreatedEvent, historyImportedEvent];
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,
