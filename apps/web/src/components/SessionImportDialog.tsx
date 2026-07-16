@@ -1,9 +1,12 @@
-import type { SessionImportCandidate } from "@t3tools/contracts";
+import type { SessionImportCandidate, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
+import { readThreadShell } from "../state/entities";
 import { sessionImportEnvironment } from "../state/sessionImport";
+import { buildThreadRouteParams } from "../threadRoutes";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -82,12 +85,15 @@ export function SessionImportDialog(props: {
       });
       if (result._tag === "Success") {
         onClose();
+        // The thread route redirects to "/" when the thread is not yet in
+        // client state; wait briefly for the shell push to land first.
+        const threadRef = scopeThreadRef(member.environmentId, result.value.threadId as ThreadId);
+        for (let attempt = 0; attempt < 40 && readThreadShell(threadRef) === null; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
         await navigate({
           to: "/$environmentId/$threadId",
-          params: {
-            environmentId: member.environmentId,
-            threadId: result.value.threadId,
-          },
+          params: buildThreadRouteParams(threadRef),
         });
         return;
       }

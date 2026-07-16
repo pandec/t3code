@@ -482,13 +482,20 @@ export const openCodexThread = (input: {
     return input.client.request("thread/start", startParams);
   }
 
+  if (input.strictResume === true) {
+    // Imported external session: no fresh-start fallback, and no model
+    // override — the thread keeps the model it was recorded with (a model
+    // switch on resume triggers codex warnings/compaction behavior).
+    const { model: _model, ...strictParams } = startParams;
+    return input.client.request("thread/resume", {
+      threadId: resumeThreadId,
+      ...strictParams,
+    });
+  }
   const resumeRequest = input.client.request("thread/resume", {
     threadId: resumeThreadId,
     ...startParams,
   });
-  if (input.strictResume === true) {
-    return resumeRequest;
-  }
   return resumeRequest.pipe(
     Effect.catchIf(isRecoverableThreadResumeError, (error) =>
       Effect.logWarning("codex app-server thread resume fell back to fresh start", {

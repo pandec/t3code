@@ -353,13 +353,15 @@ describe("openCodexThread", () => {
   it.effect("does not fall back to thread/start when strictResume is set", () =>
     Effect.gen(function* () {
       const calls: Array<"thread/start" | "thread/resume" | "thread/fork"> = [];
+      const payloads: Array<unknown> = [];
       const started = makeThreadOpenResponse("fresh-thread");
       const client = {
         request: <M extends "thread/start" | "thread/resume" | "thread/fork">(
           method: M,
-          _payload: CodexRpc.ClientRequestParamsByMethod[M],
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
         ) => {
           calls.push(method);
+          payloads.push(payload);
           if (method === "thread/resume") {
             return Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
@@ -385,6 +387,11 @@ describe("openCodexThread", () => {
 
       NodeAssert.equal(error._tag, "CodexAppServerRequestError");
       NodeAssert.deepStrictEqual(calls, ["thread/resume"]);
+      NodeAssert.equal(
+        "model" in (payloads[0] as Record<string, unknown>),
+        false,
+        "strict resume must not override the recorded session model",
+      );
     }),
   );
 
