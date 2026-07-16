@@ -248,6 +248,36 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     }),
   );
 
+  it.effect("allows the same native session id from a different provider instance", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const existingBinding = state.bindings.get(existing.threadId);
+      expect(existingBinding).toBeDefined();
+      state.bindings.set(existing.threadId, {
+        ...existingBinding!,
+        providerInstanceId: ProviderInstanceId.make("claude-secondary"),
+      });
+
+      const candidates = yield* service.listCandidates({ projectId });
+      expect(candidates).toHaveLength(1);
+
+      const imported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      expect(imported.threadId).not.toBe(existing.threadId);
+      expect(state.bindings.size).toBe(2);
+    }),
+  );
+
   it.effect("serializes concurrent imports of the same native session", () =>
     Effect.gen(function* () {
       const { state, layer } = makeHarness({ yieldBeforeRead: true });
@@ -313,6 +343,20 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
       const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
       expect(command.modelSelection.model).toBe("claude-opus-4-8");
+    }),
+  );
+
+  it.effect("prefers the advertised provider default over an earlier advertised model", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({
+        importedModel: "claude-legacy-model",
+        models: [{ slug: "claude-fable-5" }, { slug: "claude-sonnet-5" }],
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+      const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
+      expect(command.modelSelection.model).toBe("claude-sonnet-5");
     }),
   );
 

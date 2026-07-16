@@ -123,7 +123,7 @@ export const makeSessionImportService = Effect.gen(function* () {
     return { project: project.value, workspaceRoot };
   });
 
-  const listBoundNativeIds = Effect.fn("listBoundNativeIds")(function* () {
+  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* () {
     const bindings = yield* runtimeRepository.list().pipe(
       Effect.mapError(
         (cause) =>
@@ -134,26 +134,34 @@ export const makeSessionImportService = Effect.gen(function* () {
           }),
       ),
     );
-    const ids = new Set<string>();
+    const idsByInstance = new Map<string, Set<string>>();
     for (const binding of bindings) {
+      // Legacy rows without an explicit instance id belong to the default
+      // instance, whose id is the provider/driver name.
+      const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
+      const ids = idsByInstance.get(ownerInstanceId) ?? new Set<string>();
       for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
         ids.add(id);
       }
+      if (ids.size > 0) {
+        idsByInstance.set(ownerInstanceId, ids);
+      }
     }
-    return ids;
+    return idsByInstance;
   });
 
   const listCandidates: SessionImportServiceShape["listCandidates"] = Effect.fn(
     "SessionImportService.listCandidates",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIds = yield* listBoundNativeIds();
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
     const instances = yield* instanceRegistry.listInstances;
     const candidates: Array<SessionImportCandidate> = [];
     for (const instance of instances) {
       if (!instance.enabled) continue;
       const listImportable = instance.adapter.listImportableSessions;
       if (listImportable === undefined) continue;
+      const boundNativeIds = boundNativeIdsByInstance.get(instance.instanceId);
       const sessions = yield* listImportable({ cwd: workspaceRoot }).pipe(
         Effect.mapError(
           (cause) =>
@@ -169,7 +177,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         ),
       );
       for (const session of sessions) {
-        if (boundNativeIds.has(session.nativeSessionId)) continue;
+        if (boundNativeIds?.has(session.nativeSessionId) === true) continue;
         candidates.push({
           instanceId: instance.instanceId,
           provider: instance.driverKind,
@@ -191,10 +199,14 @@ export const makeSessionImportService = Effect.gen(function* () {
   }) {
     const snapshot = yield* input.instance.snapshot.getSnapshot;
     const knownSlugs = new Set(snapshot.models.map((model) => model.slug));
+    const providerDefault = DEFAULT_MODEL_BY_PROVIDER[input.instance.driverKind];
     const fallback =
+      (providerDefault !== undefined && knownSlugs.has(providerDefault)
+        ? providerDefault
+        : undefined) ??
       snapshot.models.find((model) => model.isCustom !== true)?.slug ??
       snapshot.models[0]?.slug ??
-      DEFAULT_MODEL_BY_PROVIDER[input.instance.driverKind];
+      providerDefault;
     const model =
       input.importedModel !== null && knownSlugs.has(input.importedModel)
         ? input.importedModel
@@ -212,8 +224,8 @@ export const makeSessionImportService = Effect.gen(function* () {
     "SessionImportService.importSessionUnlocked",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIds = yield* listBoundNativeIds();
-    if (boundNativeIds.has(input.nativeSessionId)) {
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
+    if (boundNativeIdsByInstance.get(input.instanceId)?.has(input.nativeSessionId) === true) {
       return yield* new SessionImportError({
         reason: "already-imported",
         detail: `Session '${input.nativeSessionId}' is already attached to a t3 thread.`,
