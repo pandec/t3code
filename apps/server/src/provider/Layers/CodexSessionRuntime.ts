@@ -272,6 +272,16 @@ function readResumeCursorStrictResume(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.strictResume : undefined;
 }
 
+export function buildCodexResumeCursor(
+  threadId: string,
+  strictResume: boolean | undefined,
+): CodexResumeCursor {
+  return {
+    threadId,
+    ...(strictResume === true ? { strictResume: true } : {}),
+  };
+}
+
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
@@ -810,6 +820,7 @@ export const makeCodexSessionRuntime = (
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
+    const strictResume = readResumeCursorStrictResume(options.resumeCursor);
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
     const emitEvent = (event: Omit<ProviderEvent, "id" | "provider" | "createdAt">) =>
@@ -924,7 +935,7 @@ export const makeCodexSessionRuntime = (
             return Effect.void;
           }
           return updateSession(sessionRef, {
-            resumeCursor: { threadId: payload.thread.id },
+            resumeCursor: buildCodexResumeCursor(payload.thread.id, strictResume),
           });
         }),
       ),
@@ -1243,7 +1254,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
-        strictResume: readResumeCursorStrictResume(options.resumeCursor),
+        strictResume,
         forkThreadId: readResumeCursorThreadId(options.forkResumeCursor),
       });
 
@@ -1253,7 +1264,7 @@ export const makeCodexSessionRuntime = (
         status: "ready",
         cwd: opened.cwd,
         model: opened.model,
-        resumeCursor: { threadId: providerThreadId },
+        resumeCursor: buildCodexResumeCursor(providerThreadId, strictResume),
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
@@ -1341,7 +1352,9 @@ export const makeCodexSessionRuntime = (
             threadId: options.threadId,
             turnId,
             ...(resumedProviderThreadId
-              ? { resumeCursor: { threadId: resumedProviderThreadId } }
+              ? {
+                  resumeCursor: buildCodexResumeCursor(resumedProviderThreadId, strictResume),
+                }
               : {}),
           } satisfies ProviderTurnStartResult;
         }),

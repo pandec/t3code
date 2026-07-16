@@ -22,6 +22,9 @@ const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 interface HarnessOptions {
   readonly dispatchFails?: boolean;
   readonly importedModel?: string | null;
+  readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
+  readonly replaceInstanceDuringRead?: boolean;
+  readonly yieldBeforeRead?: boolean;
 }
 
 interface HarnessState {
@@ -37,6 +40,7 @@ const makeHarness = (options?: HarnessOptions) => {
     callOrder: [],
   };
 
+  let currentInstance: ProviderInstance;
   const instance = {
     instanceId,
     driverKind: ProviderDriverKind.make("claudeAgent"),
@@ -44,7 +48,7 @@ const makeHarness = (options?: HarnessOptions) => {
     enabled: true,
     snapshot: {
       getSnapshot: Effect.succeed({
-        models: [{ slug: "claude-sonnet-5" }, { slug: "claude-opus-4-8" }],
+        models: options?.models ?? [{ slug: "claude-sonnet-5" }, { slug: "claude-opus-4-8" }],
       }),
     },
     adapter: {
@@ -58,30 +62,39 @@ const makeHarness = (options?: HarnessOptions) => {
           },
         ]),
       readImportableSession: (input: { destinationThreadId: ThreadId }) =>
-        Effect.succeed({
-          nativeSessionId: NATIVE_SESSION_ID,
-          nativeCwd: "/private/tmp",
-          messages: [
-            {
-              role: "user" as const,
-              text: "Remember the codeword PINEAPPLE-42.",
-              createdAt: "2026-07-16T10:00:00.000Z",
+        Effect.gen(function* () {
+          if (options?.yieldBeforeRead === true) {
+            yield* Effect.yieldNow;
+          }
+          if (options?.replaceInstanceDuringRead === true) {
+            currentInstance = { ...instance, enabled: false } as unknown as ProviderInstance;
+          }
+          return {
+            nativeSessionId: NATIVE_SESSION_ID,
+            nativeCwd: "/private/tmp",
+            messages: [
+              {
+                role: "user" as const,
+                text: "Remember the codeword PINEAPPLE-42.",
+                createdAt: "2026-07-16T10:00:00.000Z",
+              },
+              { role: "assistant" as const, text: "OK", createdAt: "2026-07-16T10:00:01.000Z" },
+            ],
+            model: options?.importedModel === undefined ? "claude-sonnet-5" : options.importedModel,
+            resumeCursor: {
+              threadId: input.destinationThreadId,
+              resume: NATIVE_SESSION_ID,
+              turnCount: 1,
             },
-            { role: "assistant" as const, text: "OK", createdAt: "2026-07-16T10:00:01.000Z" },
-          ],
-          model: options?.importedModel === undefined ? "claude-sonnet-5" : options.importedModel,
-          resumeCursor: {
-            threadId: input.destinationThreadId,
-            resume: NATIVE_SESSION_ID,
-            turnCount: 1,
-          },
+          };
         }),
     },
   } as unknown as ProviderInstance;
+  currentInstance = instance;
 
   const registryLayer = Layer.mock(ProviderInstanceRegistry)({
-    getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
-    listInstances: Effect.succeed([instance]),
+    getInstance: (id) => Effect.succeed(id === instanceId ? currentInstance : undefined),
+    listInstances: Effect.sync(() => [currentInstance]),
     listUnavailable: Effect.succeed([]),
     streamChanges: Stream.empty,
   });
@@ -182,6 +195,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       const command = state.dispatched[0];
       expect(command).toMatchObject({
         type: "thread.import",
+        commandId: `import:${result.threadId}`,
         projectId,
         title: "Remember the codeword PINEAPPLE-42.",
         source: {
@@ -234,9 +248,77 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     }),
   );
 
+  it.effect("serializes concurrent imports of the same native session", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ yieldBeforeRead: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const results = yield* Effect.all(
+        [
+          service
+            .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+            .pipe(Effect.result),
+          service
+            .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+            .pipe(Effect.result),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      expect(results.filter((result) => result._tag === "Success")).toHaveLength(1);
+      const failure = results.find((result) => result._tag === "Failure");
+      expect(failure?._tag).toBe("Failure");
+      if (failure?._tag === "Failure") {
+        expect(failure.failure.reason).toBe("already-imported");
+      }
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
+    }),
+  );
+
+  it.effect("rejects the import when the provider instance changes during the native read", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ replaceInstanceDuringRead: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+
+      expect(error.reason).toBe("instance-not-found");
+      expect(state.bindings.size).toBe(0);
+      expect(state.dispatched).toHaveLength(0);
+    }),
+  );
+
   it.effect("falls back to the instance default model when the imported model is unknown", () =>
     Effect.gen(function* () {
       const { state, layer } = makeHarness({ importedModel: "claude-legacy-model" });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+      const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
+      expect(command.modelSelection.model).toBe("claude-sonnet-5");
+    }),
+  );
+
+  it.effect("prefers an advertised instance model over the driver-wide default", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({
+        importedModel: "claude-legacy-model",
+        models: [{ slug: "claude-opus-4-8" }],
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+      const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
+      expect(command.modelSelection.model).toBe("claude-opus-4-8");
+    }),
+  );
+
+  it.effect("uses the driver default when the enabled instance snapshot has no models", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ importedModel: null, models: [] });
       const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
 
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });

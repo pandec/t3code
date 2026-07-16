@@ -14,6 +14,7 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   buildTurnStartParams,
+  buildCodexResumeCursor,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -34,6 +35,18 @@ describe("CodexSessionRuntimeIdentifierGenerationError", () => {
       error.message,
       "Failed to generate Codex App Server identifier for provider-event.",
     );
+  });
+});
+
+describe("buildCodexResumeCursor", () => {
+  it("preserves strict resume across runtime cursor updates", () => {
+    NodeAssert.deepStrictEqual(buildCodexResumeCursor("provider-thread", true), {
+      threadId: "provider-thread",
+      strictResume: true,
+    });
+    NodeAssert.deepStrictEqual(buildCodexResumeCursor("provider-thread", undefined), {
+      threadId: "provider-thread",
+    });
   });
 });
 

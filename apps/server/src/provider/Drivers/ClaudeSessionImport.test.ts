@@ -1,8 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 
-import { claudeProjectDirectoryName, parseClaudeTranscript } from "./ClaudeSessionImport.ts";
+import {
+  claudeProjectDirectoryName,
+  parseClaudeTranscript,
+  readClaudeSessionTranscript,
+} from "./ClaudeSessionImport.ts";
 
 const SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
@@ -206,6 +211,31 @@ describe("parseClaudeTranscript", () => {
     }),
   );
 
+  it.effect("keeps the last real model when a synthetic assistant record follows it", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "question" }),
+        entry({
+          uuid: "a1",
+          parentUuid: "u1",
+          type: "assistant",
+          content: "real answer",
+          model: "claude-opus-4-8",
+        }),
+        entry({
+          uuid: "a2",
+          parentUuid: "a1",
+          type: "assistant",
+          content: "synthetic notice",
+          model: "<synthetic>",
+        }),
+      ]);
+
+      expect(result.model).toBe("claude-opus-4-8");
+      expect(result.messages.at(-1)?.text).toBe("synthetic notice");
+    }),
+  );
+
   it.effect("fails loudly on an unrecognized record type", () =>
     Effect.gen(function* () {
       const error = yield* run([
@@ -239,4 +269,19 @@ describe("claudeProjectDirectoryName", () => {
     );
     expect(claudeProjectDirectoryName("/Users/user/.dotfiles")).toBe("-Users-user--dotfiles");
   });
+});
+
+describe("readClaudeSessionTranscript", () => {
+  it.effect("rejects a non-UUID session id before resolving a transcript path", () =>
+    Effect.gen(function* () {
+      const error = yield* readClaudeSessionTranscript({
+        homePath: "/tmp/home",
+        canonicalCwd: "/tmp/project",
+        sessionId: "../other-project/session",
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("ClaudeSessionImportIoError");
+      expect(error.detail).toContain("not a valid persisted session UUID");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

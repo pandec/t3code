@@ -31,6 +31,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Crypto from "effect/Crypto";
+import * as Semaphore from "effect/Semaphore";
 
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
@@ -93,6 +94,7 @@ export const makeSessionImportService = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
+  const importSemaphore = yield* Semaphore.make(1);
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -190,7 +192,9 @@ export const makeSessionImportService = Effect.gen(function* () {
     const snapshot = yield* input.instance.snapshot.getSnapshot;
     const knownSlugs = new Set(snapshot.models.map((model) => model.slug));
     const fallback =
-      DEFAULT_MODEL_BY_PROVIDER[input.instance.driverKind] ?? snapshot.models[0]?.slug;
+      snapshot.models.find((model) => model.isCustom !== true)?.slug ??
+      snapshot.models[0]?.slug ??
+      DEFAULT_MODEL_BY_PROVIDER[input.instance.driverKind];
     const model =
       input.importedModel !== null && knownSlugs.has(input.importedModel)
         ? input.importedModel
@@ -204,8 +208,8 @@ export const makeSessionImportService = Effect.gen(function* () {
     return { instanceId: input.instance.instanceId, model } satisfies ModelSelection;
   });
 
-  const importSession: SessionImportServiceShape["importSession"] = Effect.fn(
-    "SessionImportService.importSession",
+  const importSessionUnlocked: SessionImportServiceShape["importSession"] = Effect.fn(
+    "SessionImportService.importSessionUnlocked",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
     const boundNativeIds = yield* listBoundNativeIds();
@@ -278,6 +282,13 @@ export const makeSessionImportService = Effect.gen(function* () {
       instance,
       importedModel: history.model,
     });
+    const currentInstance = yield* instanceRegistry.getInstance(input.instanceId);
+    if (currentInstance !== instance || !currentInstance.enabled) {
+      return yield* new SessionImportError({
+        reason: "instance-not-found",
+        detail: `Provider instance '${input.instanceId}' changed while the session was being read. Retry the import with the current provider configuration.`,
+      });
+    }
     const messages: ReadonlyArray<ThreadImportMessage> = history.messages.map((message, index) => ({
       messageId: importMessageId(threadId, index),
       role: message.role,
@@ -318,7 +329,9 @@ export const makeSessionImportService = Effect.gen(function* () {
     const dispatchResult = yield* orchestrationEngine
       .dispatch({
         type: "thread.import",
-        commandId: CommandId.make(`import:${instance.driverKind}:${input.nativeSessionId}`),
+        // A compensated failed import must be retryable even when the
+        // orchestration engine persisted a rejected command receipt.
+        commandId: CommandId.make(`import:${threadId}`),
         threadId,
         projectId: input.projectId,
         title: titleFromMessages(history.messages),
@@ -355,6 +368,13 @@ export const makeSessionImportService = Effect.gen(function* () {
 
     return { threadId };
   });
+
+  // The provider-runtime table is keyed by destination thread id, so checking
+  // whether a native session is already bound cannot be made atomic there.
+  // Serialize this rare operation to keep duplicate RPCs from creating two
+  // bindings (or sharing one orchestration command receipt).
+  const importSession: SessionImportServiceShape["importSession"] = (input) =>
+    importSemaphore.withPermits(1)(importSessionUnlocked(input));
 
   return {
     listCandidates,

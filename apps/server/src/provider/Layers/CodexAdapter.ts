@@ -1768,6 +1768,21 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     cwd,
   });
 
+  const canonicalizeImportCwd = Effect.fn("CodexAdapter.canonicalizeImportCwd")(function* (
+    cwd: string,
+  ) {
+    return yield* fileSystem.realPath(cwd).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "readImportableSession",
+            issue: `Workspace root '${cwd}' cannot be resolved: ${String(cause)}`,
+          }),
+      ),
+    );
+  });
+
   const importReaderContext = <A, E>(
     effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
   ) =>
@@ -1789,8 +1804,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const listImportableSessions: NonNullable<CodexAdapterShape["listImportableSessions"]> =
     Effect.fn("CodexAdapter.listImportableSessions")(function* (input) {
+      const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
       const summaries = yield* importReaderContext(
-        listCodexImportableSessions(importReaderOptions(input.cwd)),
+        listCodexImportableSessions(importReaderOptions(canonicalCwd)),
       );
       return summaries.map((summary) => ({
         nativeSessionId: summary.threadId,
@@ -1803,12 +1819,21 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const readImportableSession: NonNullable<CodexAdapterShape["readImportableSession"]> = Effect.fn(
     "CodexAdapter.readImportableSession",
   )(function* (input) {
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd);
     const imported = yield* importReaderContext(
       readCodexImportableThread({
-        ...importReaderOptions(input.cwd),
+        ...importReaderOptions(canonicalCwd),
         threadId: input.nativeSessionId,
       }),
     );
+    const nativeCwd = yield* canonicalizeImportCwd(imported.cwd);
+    if (nativeCwd !== canonicalCwd) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "readImportableSession",
+        issue: `Codex thread '${input.nativeSessionId}' belongs to '${nativeCwd}', not the selected workspace '${canonicalCwd}'.`,
+      });
+    }
     if (imported.messages.length === 0) {
       return yield* new ProviderAdapterValidationError({
         provider: PROVIDER,
@@ -1818,7 +1843,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
     return {
       nativeSessionId: imported.threadId,
-      nativeCwd: imported.cwd,
+      nativeCwd,
       messages: imported.messages,
       model: null,
       resumeCursor: { threadId: imported.threadId, strictResume: true },

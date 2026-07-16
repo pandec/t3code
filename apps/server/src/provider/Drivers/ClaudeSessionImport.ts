@@ -49,6 +49,7 @@ const BENIGN_RECORD_TYPES = new Set([
   "fork-context-ref",
   "frame-link",
 ]);
+const SYNTHETIC_MODEL_SENTINEL = "<synthetic>";
 
 export interface ClaudeTranscriptMessage {
   readonly role: "user" | "assistant";
@@ -240,7 +241,11 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
   let model: string | null = null;
   const messages: Array<ClaudeTranscriptMessage> = [];
   for (const entry of chain) {
-    if (entry.role === "assistant" && entry.model !== null) {
+    if (
+      entry.role === "assistant" &&
+      entry.model !== null &&
+      entry.model !== SYNTHETIC_MODEL_SENTINEL
+    ) {
       model = entry.model;
     }
     // Entries whose content is exclusively tool_use/tool_result blocks carry
@@ -279,8 +284,9 @@ export class ClaudeSessionImportIoError extends Schema.TaggedErrorClass<ClaudeSe
   },
 ) {}
 
-const SESSION_FILE_PATTERN =
-  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+const SESSION_ID_PATTERN_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_PATTERN_SOURCE}$`);
+const SESSION_FILE_PATTERN = new RegExp(`^(${SESSION_ID_PATTERN_SOURCE})\\.jsonl$`);
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
 const PREVIEW_MAX_CHARS = 120;
 
@@ -335,6 +341,11 @@ export const readClaudeSessionTranscript = Effect.fn("readClaudeSessionTranscrip
     readonly canonicalCwd: string;
     readonly sessionId: string;
   }) {
+    if (!SESSION_ID_PATTERN.test(input.sessionId)) {
+      return yield* new ClaudeSessionImportIoError({
+        detail: `Claude session id '${input.sessionId}' is not a valid persisted session UUID.`,
+      });
+    }
     const path = yield* Path.Path;
     const filePath = path.join(
       sessionsDirectory(path, input.homePath, input.canonicalCwd),

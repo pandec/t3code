@@ -84,17 +84,27 @@ export function SessionImportDialog(props: {
         },
       });
       if (result._tag === "Success") {
-        onClose();
         // The thread route redirects to "/" when the thread is not yet in
         // client state; wait briefly for the shell push to land first.
         const threadRef = scopeThreadRef(member.environmentId, result.value.threadId as ThreadId);
         for (let attempt = 0; attempt < 40 && readThreadShell(threadRef) === null; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
+        if (readThreadShell(threadRef) === null) {
+          toastManager.add({
+            type: "warning",
+            title: "Session imported",
+            description:
+              "The imported conversation is still syncing. It will appear in the project shortly.",
+          });
+          onClose();
+          return;
+        }
         await navigate({
           to: "/$environmentId/$threadId",
           params: buildThreadRouteParams(threadRef),
         });
+        onClose();
         return;
       }
       if (!isAtomCommandInterrupted(result)) {
@@ -120,7 +130,7 @@ export function SessionImportDialog(props: {
     <Dialog
       open={member !== null}
       onOpenChange={(open) => {
-        if (!open) {
+        if (!open && importingSessionId === null) {
           onClose();
         }
       }}
@@ -178,7 +188,7 @@ export function SessionImportDialog(props: {
           )}
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" disabled={importingSessionId !== null} onClick={onClose}>
             Close
           </Button>
         </DialogFooter>

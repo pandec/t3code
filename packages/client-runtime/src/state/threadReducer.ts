@@ -177,6 +177,31 @@ export function applyThreadDetailEvent(
     }
 
     // ── Messages ────────────────────────────────────────────────────
+    case "thread.history-imported": {
+      const importedMessages: OrchestrationMessage[] = event.payload.messages.map((message) => ({
+        id: message.messageId,
+        role: message.role,
+        text: message.text,
+        attachments: [],
+        turnId: null,
+        streaming: false,
+        createdAt: message.createdAt,
+        updatedAt: message.createdAt,
+      }));
+      const importedIds = new Set(importedMessages.map((message) => message.id));
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: [
+            ...importedMessages,
+            ...thread.messages.filter((message) => !importedIds.has(message.id)),
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     case "thread.message-sent": {
       const message: OrchestrationMessage = {
         id: event.payload.messageId,
