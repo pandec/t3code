@@ -994,6 +994,8 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -3886,12 +3888,13 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current
     )
       return;
-    if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
+    const sendCtx = composerRef.current?.getSendContext();
+    if (!sendCtx) {
+      if (activePendingProgress) {
+        onAdvanceActivePendingUserInput();
+      }
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (!sendCtx) return;
     const {
       images: composerImages,
       terminalContexts: composerTerminalContexts,
@@ -3919,20 +3922,6 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
-    if (showPlanFollowUpPrompt && activeProposedPlan) {
-      const followUp = resolvePlanFollowUpSubmission({
-        draftText: trimmed,
-        planMarkdown: activeProposedPlan.planMarkdown,
-      });
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-      await onSubmitPlanFollowUp({
-        text: followUp.text,
-        interactionMode: followUp.interactionMode,
-      });
-      return;
-    }
     const hasStandaloneCommandContext =
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
@@ -3956,27 +3945,66 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       if (renameCommand.title !== activeThread.title) {
-        const result = await updateThreadMetadata({
-          environmentId,
-          input: {
-            threadId: activeThread.id,
-            title: renameCommand.title,
-          },
-        });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to rename thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
+        sendInFlightRef.current = true;
+        try {
+          const result = await updateThreadMetadata({
+            environmentId,
+            input: {
+              threadId: activeThread.id,
+              title: renameCommand.title,
+            },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to rename thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+        } finally {
+          sendInFlightRef.current = false;
         }
       }
+
+      const currentSendCtx = composerRef.current?.getSendContext();
+      const hasSameItems = (current: readonly unknown[], submitted: readonly unknown[]) =>
+        current.length === submitted.length &&
+        current.every((item, index) => item === submitted[index]);
+      if (
+        routeThreadKeyRef.current === routeThreadKey &&
+        promptRef.current === promptForSend &&
+        currentSendCtx &&
+        hasSameItems(currentSendCtx.images, composerImages) &&
+        hasSameItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
+        hasSameItems(currentSendCtx.elementContexts, composerElementContexts) &&
+        hasSameItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
+        hasSameItems(currentSendCtx.reviewComments, composerReviewComments)
+      ) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+      }
+      return;
+    }
+    if (activePendingProgress) {
+      onAdvanceActivePendingUserInput();
+      return;
+    }
+    if (showPlanFollowUpPrompt && activeProposedPlan) {
+      const followUp = resolvePlanFollowUpSubmission({
+        draftText: trimmed,
+        planMarkdown: activeProposedPlan.planMarkdown,
+      });
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      await onSubmitPlanFollowUp({
+        text: followUp.text,
+        interactionMode: followUp.interactionMode,
+      });
       return;
     }
     const standaloneSlashCommand = hasStandaloneCommandContext

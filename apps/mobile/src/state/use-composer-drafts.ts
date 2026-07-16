@@ -382,8 +382,33 @@ export function clearComposerDraftContentState(
   };
 }
 
+export function clearComposerDraftContentIfUnchangedState(
+  current: Record<string, ComposerDraft>,
+  draftKey: string,
+  expected: Pick<ComposerDraft, "text" | "attachments">,
+): Record<string, ComposerDraft> {
+  const existing = current[draftKey];
+  if (
+    !existing ||
+    existing.text !== expected.text ||
+    existing.attachments !== expected.attachments
+  ) {
+    return current;
+  }
+  return clearComposerDraftContentState(current, draftKey);
+}
+
 export function clearComposerDraftContent(draftKey: string): void {
   updateComposerDrafts((current) => clearComposerDraftContentState(current, draftKey));
+}
+
+export function clearComposerDraftContentIfUnchanged(
+  draftKey: string,
+  expected: Pick<ComposerDraft, "text" | "attachments">,
+): void {
+  updateComposerDrafts((current) =>
+    clearComposerDraftContentIfUnchangedState(current, draftKey, expected),
+  );
 }
 
 export function clearComposerDraft(draftKey: string): void {

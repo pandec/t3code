@@ -3,6 +3,7 @@ import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
 import { appAtomRegistry } from "./atom-registry";
 import {
+  clearComposerDraftContentIfUnchangedState,
   clearComposerDraftContentState,
   composerDraftsAtom,
   decodePersistedComposerDrafts,
@@ -113,6 +114,19 @@ describe("mobile composer drafts", () => {
         attachments: [],
       },
     });
+  });
+
+  it("clears content only while it still matches the submitted snapshot", () => {
+    const draftKey = "environment-1:thread-1";
+    const submitted: ComposerDraft = { text: "/t3-rename New title", attachments: [] };
+    const newer: ComposerDraft = { ...submitted, text: "A newer message" };
+
+    expect(
+      clearComposerDraftContentIfUnchangedState({ [draftKey]: submitted }, draftKey, submitted),
+    ).toEqual({});
+    expect(
+      clearComposerDraftContentIfUnchangedState({ [draftKey]: newer }, draftKey, submitted),
+    ).toEqual({ [draftKey]: newer });
   });
 
   it("reads the latest selector state synchronously for send", () => {

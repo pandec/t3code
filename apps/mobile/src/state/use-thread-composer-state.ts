@@ -33,6 +33,7 @@ import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
   clearComposerDraftContent,
+  clearComposerDraftContentIfUnchanged,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
@@ -181,7 +182,7 @@ export function useThreadComposerState() {
         }
       }
 
-      clearComposerDraftContent(threadKey);
+      clearComposerDraftContentIfUnchanged(threadKey, draft);
       return null;
     }
 
