@@ -69,6 +69,7 @@ import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
+  parseComposerRenameCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -88,6 +89,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
+  clearPendingUserInputCustomAnswerIfUnchanged,
   derivePendingUserInputProgress,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -220,6 +222,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  hasStandaloneComposerCommandContext,
   hasServerAcknowledgedLocalDispatch,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -993,6 +996,8 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -3885,12 +3890,13 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current
     )
       return;
-    if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
+    const sendCtx = composerRef.current?.getSendContext();
+    if (!sendCtx) {
+      if (activePendingProgress) {
+        onAdvanceActivePendingUserInput();
+      }
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (!sendCtx) return;
     const {
       images: composerImages,
       terminalContexts: composerTerminalContexts,
@@ -3918,6 +3924,107 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    const hasStandaloneCommandContext = hasStandaloneComposerCommandContext({
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      elementContextCount: composerElementContexts.length,
+      previewAnnotationCount: composerPreviewAnnotations.length,
+      reviewCommentCount: composerReviewComments.length,
+    });
+    const renameCommand = hasStandaloneCommandContext ? parseComposerRenameCommand(trimmed) : null;
+    if (renameCommand) {
+      if (renameCommand.title === null) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to rename thread",
+          description: "Usage: /t3-rename <new title>",
+        });
+        return;
+      }
+      if (!isServerThread) {
+        toastManager.add({
+          type: "error",
+          title: "No thread to rename yet",
+        });
+        return;
+      }
+      const pendingAnswerTarget =
+        activePendingUserInput && activePendingProgress?.activeQuestion
+          ? {
+              requestId: activePendingUserInput.requestId,
+              questionId: activePendingProgress.activeQuestion.id,
+            }
+          : null;
+      if (renameCommand.title !== activeThread.title) {
+        sendInFlightRef.current = true;
+        try {
+          const result = await updateThreadMetadata({
+            environmentId,
+            input: {
+              threadId: activeThread.id,
+              title: renameCommand.title,
+            },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to rename thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+        } finally {
+          sendInFlightRef.current = false;
+        }
+      }
+
+      const currentSendCtx = composerRef.current?.getSendContext();
+      const hasSameItems = (current: readonly unknown[], submitted: readonly unknown[]) =>
+        current.length === submitted.length &&
+        current.every((item, index) => item === submitted[index]);
+      if (
+        routeThreadKeyRef.current === routeThreadKey &&
+        promptRef.current === promptForSend &&
+        currentSendCtx &&
+        hasSameItems(currentSendCtx.images, composerImages) &&
+        hasSameItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
+        hasSameItems(currentSendCtx.elementContexts, composerElementContexts) &&
+        hasSameItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
+        hasSameItems(currentSendCtx.reviewComments, composerReviewComments)
+      ) {
+        promptRef.current = "";
+        if (pendingAnswerTarget) {
+          setPendingUserInputAnswersByRequestId((existing) => {
+            const requestAnswers = existing[pendingAnswerTarget.requestId];
+            const currentAnswer = requestAnswers?.[pendingAnswerTarget.questionId];
+            const nextAnswer = clearPendingUserInputCustomAnswerIfUnchanged(
+              currentAnswer,
+              promptForSend,
+            );
+            if (nextAnswer === undefined || nextAnswer === currentAnswer) {
+              return existing;
+            }
+            return {
+              ...existing,
+              [pendingAnswerTarget.requestId]: {
+                ...requestAnswers,
+                [pendingAnswerTarget.questionId]: nextAnswer,
+              },
+            };
+          });
+        } else {
+          clearComposerDraftContent(composerDraftTarget);
+        }
+        composerRef.current?.resetCursorState();
+      }
+      return;
+    }
+    if (activePendingProgress) {
+      onAdvanceActivePendingUserInput();
+      return;
+    }
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
@@ -3932,14 +4039,9 @@ function ChatViewContent(props: ChatViewProps) {
       });
       return;
     }
-    const standaloneSlashCommand =
-      composerImages.length === 0 &&
-      sendableComposerTerminalContexts.length === 0 &&
-      composerElementContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
+    const standaloneSlashCommand = hasStandaloneCommandContext
+      ? parseStandaloneComposerSlashCommand(trimmed)
+      : null;
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";

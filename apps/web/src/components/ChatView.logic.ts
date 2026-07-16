@@ -242,6 +242,22 @@ export function deriveComposerSendState(options: {
   };
 }
 
+export function hasStandaloneComposerCommandContext(input: {
+  imageCount: number;
+  terminalContextCount: number;
+  elementContextCount: number;
+  previewAnnotationCount: number;
+  reviewCommentCount: number;
+}): boolean {
+  return (
+    input.imageCount === 0 &&
+    input.terminalContextCount === 0 &&
+    input.elementContextCount === 0 &&
+    input.previewAnnotationCount === 0 &&
+    input.reviewCommentCount === 0
+  );
+}
+
 export function buildExpiredTerminalContextToastCopy(
   expiredTerminalContextCount: number,
   variant: "omitted" | "empty",

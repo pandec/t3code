@@ -136,6 +136,15 @@ export function parseStandaloneComposerSlashCommand(
   return "default";
 }
 
+export function parseComposerRenameCommand(text: string): { title: string | null } | null {
+  const match = /^\/t3-rename(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  if (!match) {
+    return null;
+  }
+  const title = match[1]?.trim() ?? "";
+  return { title: title.length > 0 ? title : null };
+}
+
 export function replaceTextRange(
   text: string,
   rangeStart: number,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildPendingUserInputAnswers,
+  clearPendingUserInputCustomAnswerIfUnchanged,
   countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
   findFirstUnansweredPendingUserInputQuestionIndex,
@@ -77,6 +78,16 @@ describe("resolvePendingUserInputAnswer", () => {
     ).toEqual({
       customAnswer: "doesn't matter",
     });
+  });
+
+  it("clears only the matching submitted custom answer", () => {
+    const submitted = { customAnswer: "/t3-rename New title" };
+    const newer = { customAnswer: "Keep this newer answer" };
+
+    expect(clearPendingUserInputCustomAnswerIfUnchanged(submitted, submitted.customAnswer)).toEqual(
+      { customAnswer: "" },
+    );
+    expect(clearPendingUserInputCustomAnswerIfUnchanged(newer, submitted.customAnswer)).toBe(newer);
   });
 });
 

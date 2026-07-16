@@ -6,6 +6,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  parseComposerRenameCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -346,5 +347,47 @@ describe("parseStandaloneComposerSlashCommand", () => {
 
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
+  });
+});
+
+describe("parseComposerRenameCommand", () => {
+  it("parses a thread title", () => {
+    expect(parseComposerRenameCommand("/t3-rename My new thread")).toEqual({
+      title: "My new thread",
+    });
+  });
+
+  it("parses an emoji title", () => {
+    expect(parseComposerRenameCommand("/t3-rename ❓ Can I rename T3 Chats?")).toEqual({
+      title: "❓ Can I rename T3 Chats?",
+    });
+  });
+
+  it("recognizes a bare command with no title", () => {
+    expect(parseComposerRenameCommand("/t3-rename")).toEqual({ title: null });
+  });
+
+  it("trims surrounding whitespace and the title", () => {
+    expect(parseComposerRenameCommand("  /t3-rename   Padded title   ")).toEqual({
+      title: "Padded title",
+    });
+  });
+
+  it("matches the command case-insensitively", () => {
+    expect(parseComposerRenameCommand("/T3-ReNaMe Mixed case command")).toEqual({
+      title: "Mixed case command",
+    });
+  });
+
+  it("ignores non-matching messages and slash commands", () => {
+    expect(parseComposerRenameCommand("rename this thread")).toBeNull();
+    expect(parseComposerRenameCommand("/t3-renamex Almost a command")).toBeNull();
+    expect(parseComposerRenameCommand("/plan")).toBeNull();
+  });
+
+  it("accepts multiline titles when the whole message is the rename command", () => {
+    expect(parseComposerRenameCommand("/t3-rename First line\nSecond line")).toEqual({
+      title: "First line\nSecond line",
+    });
   });
 });

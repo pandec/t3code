@@ -103,7 +103,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSendMessage: (onWillEnqueueAgentMessage?: () => void) => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -382,6 +382,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           label: "/default",
           description: "Switch to default mode",
         },
+        {
+          id: "cmd:t3-rename",
+          type: "slash-command" as const,
+          command: "t3-rename",
+          label: "/t3-rename",
+          description: "Rename this thread",
+        },
       ];
       const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
 
@@ -507,14 +514,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
-    // Sending a prompt starts agent work: arm the lock-screen card now, while
-    // the app is foregrounded and the activity token can be registered.
-    armAgentAwarenessLiveActivityForLocalWork({
-      threadTitle: props.selectedThread.title,
-      projectTitle: props.environmentLabel ?? "T3 Code",
-    });
     try {
-      await onSendMessage();
+      await onSendMessage(() => {
+        // Classification happens in the state hook first, so local composer
+        // commands never arm while real sends keep the foreground timing window.
+        armAgentAwarenessLiveActivityForLocalWork({
+          threadTitle: props.selectedThread.title,
+          projectTitle: props.environmentLabel ?? "T3 Code",
+        });
+      });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);
     }
