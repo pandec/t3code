@@ -1,6 +1,6 @@
 import type { SessionImportCandidate } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
 import { sessionImportEnvironment } from "../state/sessionImport";
@@ -56,39 +56,57 @@ export function SessionImportDialog(props: {
       : null,
   );
   const candidates = candidatesQuery.data?.candidates;
+  const refreshCandidates = candidatesQuery.refresh;
+
+  // The candidates query atom is cached per project; refresh on every dialog
+  // open so freshly imported/bound sessions disappear from the list.
+  useEffect(() => {
+    if (member !== null) {
+      refreshCandidates();
+    }
+  }, [member, refreshCandidates]);
 
   const handleImport = async (candidate: SessionImportCandidate) => {
     if (member === null || importingSessionId !== null) {
       return;
     }
     setImportingSessionId(candidate.nativeSessionId);
-    const result = await importSession({
-      environmentId: member.environmentId,
-      input: {
-        projectId: member.id,
-        instanceId: candidate.instanceId,
-        nativeSessionId: candidate.nativeSessionId,
-      },
-    });
-    setImportingSessionId(null);
-    if (result._tag === "Success") {
-      onClose();
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId: member.environmentId,
-          threadId: result.value.threadId,
+    try {
+      const result = await importSession({
+        environmentId: member.environmentId,
+        input: {
+          projectId: member.id,
+          instanceId: candidate.instanceId,
+          nativeSessionId: candidate.nativeSessionId,
         },
       });
-      return;
-    }
-    if (!isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
+      if (result._tag === "Success") {
+        onClose();
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: member.environmentId,
+            threadId: result.value.threadId,
+          },
+        });
+        return;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Failed to import session",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+    } catch (error) {
       toastManager.add({
         type: "error",
         title: "Failed to import session",
-        description: error instanceof Error ? error.message : "An error occurred.",
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
       });
+    } finally {
+      setImportingSessionId(null);
     }
   };
 
