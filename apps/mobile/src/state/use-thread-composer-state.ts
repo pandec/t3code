@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo } from "react";
+import { Alert } from "react-native";
 
 import {
   CommandId,
@@ -11,6 +12,11 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { parseComposerRenameCommand } from "@t3tools/shared/composerTrigger";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
@@ -39,6 +45,8 @@ import { setPendingConnectionError } from "../state/use-remote-environment-regis
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { threadEnvironment } from "./threads";
+import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 export function appendReviewCommentToDraft(input: {
@@ -73,6 +81,9 @@ export function useThreadDraftForThread(input: {
 }
 
 export function useThreadComposerState() {
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const { selectedThread: selectedThreadShell } = useThreadSelection();
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
@@ -146,6 +157,34 @@ export function useThreadComposerState() {
       return null;
     }
 
+    const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
+    if (renameCommand) {
+      if (renameCommand.title === null) {
+        Alert.alert("Unable to rename thread", "Usage: /t3-rename <new title>");
+        return null;
+      }
+
+      if (renameCommand.title !== selectedThreadShell.title) {
+        const result = await updateThreadMetadata({
+          environmentId: selectedThreadShell.environmentId,
+          input: {
+            threadId: selectedThreadShell.id,
+            title: renameCommand.title,
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          Alert.alert(
+            "Unable to rename thread",
+            error instanceof Error ? error.message : "The thread could not be renamed.",
+          );
+        }
+      }
+
+      clearComposerDraftContent(threadKey);
+      return null;
+    }
+
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
     try {
@@ -169,7 +208,7 @@ export function useThreadComposerState() {
       );
       return null;
     }
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [selectedThreadDetail, selectedThreadShell, updateThreadMetadata]);
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {

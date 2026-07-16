@@ -382,6 +382,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           label: "/default",
           description: "Switch to default mode",
         },
+        {
+          id: "cmd:t3-rename",
+          type: "slash-command" as const,
+          command: "t3-rename",
+          label: "/t3-rename",
+          description: "Rename this thread",
+        },
       ];
       const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
 
