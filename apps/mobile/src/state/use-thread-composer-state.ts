@@ -158,6 +158,9 @@ export function useThreadComposerState() {
         return null;
       }
 
+      // Unlike web, no isServerThread guard is needed: this composer only
+      // renders for an existing server-backed thread (new drafts use
+      // NewTaskDraftScreen, which has no slash commands).
       const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
       if (renameCommand) {
         if (renameCommand.title === null) {

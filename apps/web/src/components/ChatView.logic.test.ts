@@ -169,6 +169,18 @@ describe("deriveComposerSendState", () => {
 });
 
 describe("hasStandaloneComposerCommandContext", () => {
+  it("accepts a bare standalone command with no attachments or contexts", () => {
+    expect(
+      hasStandaloneComposerCommandContext({
+        imageCount: 0,
+        terminalContextCount: 0,
+        elementContextCount: 0,
+        previewAnnotationCount: 0,
+        reviewCommentCount: 0,
+      }),
+    ).toBe(true);
+  });
+
   it("rejects an expired terminal context even though it is not sendable", () => {
     expect(
       hasStandaloneComposerCommandContext({
