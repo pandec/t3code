@@ -41,6 +41,19 @@ private changes directly on `main`. To incorporate upstream changes, first fast-
 editing, committing, or producing a fork build, verify that the active branch is `dev` or a branch based on
 `dev`.
 
+## Private Build Helpers
+
+Personal shell helpers from `~/.dotfiles` operate on this checkout at
+`~/SynologyDrive/AIMac/repos/t3code`. Run them from a shell with the dotfiles loaded; `qh` shows the current
+platform-specific list.
+
+- `t3-build`: build the packaged Dev desktop artifact (DMG on macOS, AppImage on Ubuntu).
+- `t3-install-desktop`: build and replace the installed T3 Code Dev desktop app, preserving its existing
+  application data.
+- `t3-dev` (macOS): run the Electron desktop app directly from source for development checks.
+- `t3-run` / `qt3`: launch or restart the installed packaged Dev desktop app.
+- `t3-install-ios` (macOS): build and install the self-contained iOS release on a connected iPhone.
+
 ## Package Roles
 
 - `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.
