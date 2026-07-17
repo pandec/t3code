@@ -33,3 +33,8 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Local review/planning artifacts (kept out of the repo)
+.nexus/
+docs/codex-results/
+rev/
