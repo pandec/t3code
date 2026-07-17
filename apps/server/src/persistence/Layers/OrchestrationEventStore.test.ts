@@ -124,6 +124,7 @@ layer("OrchestrationEventStore", (it) => {
   it.effect("filters replay rows by aggregate before decoding", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
       const now = "2026-01-01T00:00:00.000Z";
       const threadA = ThreadId.make("thread-filter-a");
       const threadB = ThreadId.make("thread-filter-b");
@@ -146,6 +147,14 @@ layer("OrchestrationEventStore", (it) => {
           threadASequences.push(appended.sequence);
         }
       }
+
+      // If aggregate filtering happened after row decoding, this unrelated
+      // corrupt event would fail the target thread's replay.
+      yield* sql`
+        UPDATE orchestration_events
+        SET payload_json = ${"{"}
+        WHERE stream_id = ${threadB}
+      `;
 
       let appendedDuringReplay = false;
       const replayed = yield* eventStore
