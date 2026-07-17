@@ -389,6 +389,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           label: "/t3-rename",
           description: "Rename this thread",
         },
+        {
+          id: "cmd:t3-status",
+          type: "slash-command" as const,
+          command: "t3-status",
+          label: "/t3-status",
+          description: "Set this thread's status emoji",
+        },
       ];
       const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
 

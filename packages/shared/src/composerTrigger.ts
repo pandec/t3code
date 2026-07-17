@@ -145,6 +145,31 @@ export function parseComposerRenameCommand(text: string): { title: string | null
   return { title: title.length > 0 ? title : null };
 }
 
+// One emoji grapheme: a flag (regional-indicator pair), a keycap, or a
+// pictographic base with optional variation selector / skin tone, optionally
+// chained into a ZWJ sequence (e.g. 👨‍👩‍👧). Kept as a `u`-flag pattern because
+// Hermes lacks the `v` flag and Intl.Segmenter.
+const EMOJI_GRAPHEME_PATTERN =
+  "(?:\\p{Regional_Indicator}{2}|[0-9#*]\\uFE0F?\\u20E3|\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*)*)";
+const SINGLE_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}$`, "u");
+const LEADING_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}[ \\t]*`, "u");
+
+export function parseComposerStatusCommand(text: string): { emoji: string | null } | null {
+  const match = /^\/t3-status(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  if (!match) {
+    return null;
+  }
+  const value = match[1]?.trim() ?? "";
+  return { emoji: SINGLE_EMOJI_REGEX.test(value) ? value : null };
+}
+
+export function applyThreadStatusEmoji(title: string, emoji: string): string {
+  const trimmed = title.trim();
+  const leadingEmoji = LEADING_EMOJI_REGEX.exec(trimmed);
+  const rest = leadingEmoji ? trimmed.slice(leadingEmoji[0].length) : trimmed;
+  return rest.length > 0 ? `${emoji} ${rest}` : emoji;
+}
+
 export function replaceTextRange(
   text: string,
   rangeStart: number,

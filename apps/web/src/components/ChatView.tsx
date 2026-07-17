@@ -68,8 +68,10 @@ import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
+  applyThreadStatusEmoji,
   collapseExpandedComposerCursor,
   parseComposerRenameCommand,
+  parseComposerStatusCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -3932,12 +3934,22 @@ function ChatViewContent(props: ChatViewProps) {
       reviewCommentCount: composerReviewComments.length,
     });
     const renameCommand = hasStandaloneCommandContext ? parseComposerRenameCommand(trimmed) : null;
-    if (renameCommand) {
-      if (renameCommand.title === null) {
+    const statusCommand =
+      hasStandaloneCommandContext && !renameCommand ? parseComposerStatusCommand(trimmed) : null;
+    if (renameCommand || statusCommand) {
+      if (renameCommand && renameCommand.title === null) {
         toastManager.add({
           type: "error",
           title: "Unable to rename thread",
           description: "Usage: /t3-rename <new title>",
+        });
+        return;
+      }
+      if (statusCommand && statusCommand.emoji === null) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to set thread status",
+          description: "Usage: /t3-status <emoji>",
         });
         return;
       }
@@ -3955,14 +3967,17 @@ function ChatViewContent(props: ChatViewProps) {
               questionId: activePendingProgress.activeQuestion.id,
             }
           : null;
-      if (renameCommand.title !== activeThread.title) {
+      const nextTitle = statusCommand?.emoji
+        ? applyThreadStatusEmoji(activeThread.title, statusCommand.emoji)
+        : (renameCommand?.title ?? activeThread.title);
+      if (nextTitle !== activeThread.title) {
         sendInFlightRef.current = true;
         try {
           const result = await updateThreadMetadata({
             environmentId,
             input: {
               threadId: activeThread.id,
-              title: renameCommand.title,
+              title: nextTitle,
             },
           });
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
