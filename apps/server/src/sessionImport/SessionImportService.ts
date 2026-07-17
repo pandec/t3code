@@ -183,6 +183,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           provider: instance.driverKind,
           providerDisplayName: instance.displayName ?? instance.driverKind,
           nativeSessionId: session.nativeSessionId,
+          name: session.name !== null ? session.name.slice(0, PREVIEW_MAX_CHARS) : null,
           preview: session.preview.slice(0, PREVIEW_MAX_CHARS),
           messageCount: session.messageCount,
           updatedAt: session.updatedAt,

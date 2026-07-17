@@ -33,6 +33,8 @@ export const SessionImportCandidate = Schema.Struct({
   provider: ProviderDriverKind,
   providerDisplayName: TrimmedNonEmptyString,
   nativeSessionId: TrimmedNonEmptyString,
+  /** User-assigned session name (e.g. `/rename` in the provider CLI). */
+  name: Schema.NullOr(Schema.String),
   preview: Schema.String,
   messageCount: Schema.NullOr(Schema.Number),
   updatedAt: IsoDateTime,

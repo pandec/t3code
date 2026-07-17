@@ -38,7 +38,6 @@ const BENIGN_RECORD_TYPES = new Set([
   "mode",
   "bridge-session",
   "permission-mode",
-  "custom-title",
   "agent-name",
   "ai-title",
   "pr-link",
@@ -62,6 +61,8 @@ export interface ClaudeParsedTranscript {
   readonly messages: ReadonlyArray<ClaudeTranscriptMessage>;
   readonly model: string | null;
   readonly lastTimestamp: string | null;
+  /** User-assigned session title (`/rename` in the CLI), latest record wins. */
+  readonly name: string | null;
 }
 
 const decodeJsonLine = Schema.decodeEffect(Schema.UnknownFromJsonString);
@@ -168,6 +169,7 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
   const parentByUuid = new Map<string, string | null>();
   const messagesByUuid = new Map<string, ChainEntry>();
   let activeLeaf: ChainEntry | undefined;
+  let name: string | null = null;
 
   for (let index = 0; index < input.lines.length; index += 1) {
     const raw = input.lines[index]?.trim();
@@ -210,6 +212,13 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
       if (parsed !== undefined) {
         messagesByUuid.set(parsed.uuid, parsed);
         activeLeaf = parsed;
+      }
+      continue;
+    }
+    if (type === "custom-title") {
+      const customTitle = objectRecord.customTitle;
+      if (typeof customTitle === "string" && customTitle.trim().length > 0) {
+        name = customTitle.trim();
       }
       continue;
     }
@@ -265,6 +274,7 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
     messages,
     model,
     lastTimestamp: activeLeaf?.timestamp ?? null,
+    name,
   } satisfies ClaudeParsedTranscript;
 });
 
@@ -292,6 +302,7 @@ const PREVIEW_MAX_CHARS = 120;
 
 export interface ClaudeImportableSessionSummary {
   readonly sessionId: string;
+  readonly name: string | null;
   readonly preview: string;
   readonly messageCount: number;
   readonly updatedAt: string;
@@ -401,6 +412,7 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
       const firstUserText = transcript.messages.find((message) => message.role === "user")?.text;
       summaries.push({
         sessionId,
+        name: transcript.name,
         preview: (firstUserText ?? transcript.messages[0]!.text).slice(0, PREVIEW_MAX_CHARS),
         messageCount: transcript.messages.length,
         updatedAt: transcript.lastTimestamp ?? transcript.messages.at(-1)!.createdAt,

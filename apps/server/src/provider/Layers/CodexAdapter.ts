@@ -1811,6 +1811,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       );
       return summaries.map((summary) => ({
         nativeSessionId: summary.threadId,
+        name: summary.name,
         preview: summary.preview,
         messageCount: null,
         updatedAt: summary.updatedAt,

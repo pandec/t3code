@@ -179,8 +179,14 @@ export function SessionImportDialog(props: {
                     <span className="mt-1 block truncate text-sm">
                       {importingSessionId === candidate.nativeSessionId
                         ? "Importing…"
-                        : candidate.preview}
+                        : (candidate.name ?? candidate.preview)}
                     </span>
+                    {candidate.name !== null &&
+                      importingSessionId !== candidate.nativeSessionId && (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {candidate.preview}
+                        </span>
+                      )}
                   </button>
                 </li>
               ))}

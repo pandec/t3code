@@ -4008,6 +4008,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       );
       return summaries.map((summary) => ({
         nativeSessionId: summary.sessionId,
+        name: summary.name,
         preview: summary.preview,
         messageCount: summary.messageCount,
         updatedAt: summary.updatedAt,

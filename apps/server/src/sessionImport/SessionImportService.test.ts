@@ -56,6 +56,7 @@ const makeHarness = (options?: HarnessOptions) => {
         Effect.succeed([
           {
             nativeSessionId: NATIVE_SESSION_ID,
+            name: null,
             preview: "Remember the codeword PINEAPPLE-42.",
             messageCount: 2,
             updatedAt: "2026-07-16T10:00:01.000Z",
