@@ -9,12 +9,22 @@
  *
  * @module OrchestrationEventStore
  */
-import { OrchestrationEvent } from "@t3tools/contracts";
+import {
+  type OrchestrationAggregateKind,
+  OrchestrationEvent,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
+
+export interface OrchestrationEventStreamFilter {
+  readonly aggregateKind: OrchestrationAggregateKind;
+  readonly aggregateId: ProjectId | ThreadId;
+}
 
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
@@ -37,13 +47,19 @@ export interface OrchestrationEventStoreShape {
    *
    * @param sequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to emit.
+   * @param filter - Optional aggregate filter applied by storage before rows
+   *   are decoded.
    * @returns Stream containing ordered events.
    *
-   * Reads in fixed-size pages and normalizes non-integer/negative limits.
+   * Captures the current persisted high-water sequence before reading, then
+   * reads up to that boundary in fixed-size pages. Events appended after replay
+   * begins are left for the live stream. Non-integer/negative limits are
+   * normalized.
    */
   readonly readFromSequence: (
     sequenceExclusive: number,
     limit?: number,
+    filter?: OrchestrationEventStreamFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**

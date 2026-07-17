@@ -1,4 +1,4 @@
-import { CommandId, EventId, ProjectId } from "@t3tools/contracts";
+import { CommandId, EventId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -118,6 +118,84 @@ layer("OrchestrationEventStore", (it) => {
           ),
         );
       }
+    }),
+  );
+
+  it.effect("filters replay rows by aggregate before decoding", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadA = ThreadId.make("thread-filter-a");
+      const threadB = ThreadId.make("thread-filter-b");
+      const threadASequences: number[] = [];
+
+      for (const [index, threadId] of [threadA, threadB, threadA].entries()) {
+        const appended = yield* eventStore.append({
+          type: "thread.session-stop-requested",
+          eventId: EventId.make(`evt-thread-filter-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make(`cmd-thread-filter-${index}`),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: { threadId, createdAt: now },
+        });
+        if (threadId === threadA) {
+          threadASequences.push(appended.sequence);
+        }
+      }
+
+      // If aggregate filtering happened after row decoding, this unrelated
+      // corrupt event would fail the target thread's replay.
+      yield* sql`
+        UPDATE orchestration_events
+        SET payload_json = ${"{"}
+        WHERE stream_id = ${threadB}
+      `;
+
+      let appendedDuringReplay = false;
+      const replayed = yield* eventStore
+        .readFromSequence(0, 10, {
+          aggregateKind: "thread",
+          aggregateId: threadA,
+        })
+        .pipe(
+          Stream.mapEffect((event) =>
+            appendedDuringReplay
+              ? Effect.succeed(event)
+              : eventStore
+                  .append({
+                    type: "thread.session-stop-requested",
+                    eventId: EventId.make("evt-thread-filter-during-replay"),
+                    aggregateKind: "thread",
+                    aggregateId: threadA,
+                    occurredAt: now,
+                    commandId: CommandId.make("cmd-thread-filter-during-replay"),
+                    causationEventId: null,
+                    correlationId: null,
+                    metadata: {},
+                    payload: { threadId: threadA, createdAt: now },
+                  })
+                  .pipe(
+                    Effect.tap(() => Effect.sync(() => (appendedDuringReplay = true))),
+                    Effect.as(event),
+                  ),
+          ),
+          Stream.runCollect,
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+
+      assert.deepEqual(
+        replayed.map((event) => event.aggregateId),
+        [threadA, threadA],
+      );
+      assert.deepEqual(
+        replayed.map((event) => event.sequence),
+        threadASequences,
+      );
     }),
   );
 });

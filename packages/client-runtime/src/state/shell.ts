@@ -151,16 +151,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* Effect.forkScoped(
     Effect.gen(function* () {
-      // Establish the base shell snapshot to resume from, minimizing bytes over
-      // the wire:
-      // - Warm cache: reuse the cached snapshot (zero network) and resume via
-      //   `afterSequence` so we only receive shell events since the cached
-      //   sequence.
-      // - Cold cache: load the full shell snapshot over HTTP (gzip-compressible,
-      //   and off the socket), then resume via `afterSequence`.
-      // If no base can be established we fall back to the socket-embedded
-      // snapshot so the shell still synchronizes. Overlapping/replayed events are
-      // deduped by sequence in applyItem.
+      // Establish a base shell snapshot to resume from. A matching cursor lets
+      // the server omit an identical snapshot; a stale cursor receives one
+      // current replacement rather than replaying the historical domain log.
+      // If no base can be established, the socket snapshot initializes the
+      // shell. Overlapping live events are deduped by sequence in applyItem.
       const base = Option.isSome(cachedSnapshot)
         ? cachedSnapshot
         : yield* Effect.gen(function* () {

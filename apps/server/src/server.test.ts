@@ -28,6 +28,7 @@ import {
   ResolvedKeybindingRule,
   SessionImportError,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -47,6 +48,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -5621,6 +5623,227 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertTrue(result.failure.cause instanceof Error);
       assert.include(result.failure.cause.message, projectionError.message);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refreshes a cached shell without replaying historical events", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const readEvents = vi.fn(() => Stream.empty);
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: { readEvents },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 42,
+                projects: [],
+                threads: [],
+                updatedAt: now,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({ afterSequence: 1 }).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
+      );
+
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.kind, "snapshot");
+      if (items[0]?.kind === "snapshot") {
+        assert.equal(items[0].snapshot.snapshotSequence, 42);
+      }
+      assert.equal(readEvents.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not resend a shell snapshot for an exactly current cursor", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-current-shell");
+      const threadShell = makeDefaultOrchestrationThreadShell({
+        id: threadId,
+        title: "Current Thread",
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.make({
+              sequence: 43,
+              eventId: EventId.make("event-current-shell-live"),
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: now,
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              type: "thread.meta-updated",
+              payload: { threadId, title: "Current Thread", updatedAt: now },
+            } satisfies Extract<OrchestrationEvent, { type: "thread.meta-updated" }>),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 42,
+                projects: [],
+                threads: [threadShell],
+                updatedAt: now,
+              }),
+            getThreadShellById: () => Effect.succeed(Option.some(threadShell)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({ afterSequence: 42 }).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
+      );
+
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.kind, "thread-upserted");
+      if (items[0]?.kind === "thread-upserted") {
+        assert.equal(items[0].sequence, 43);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("buffers shell events published while the current snapshot loads", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-shell-buffered");
+      const snapshotStarted = yield* Deferred.make<void>();
+      const releaseSnapshot = yield* Deferred.make<void>();
+      const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
+      const threadShell = makeDefaultOrchestrationThreadShell({
+        id: threadId,
+        title: "Buffered Thread",
+      });
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.fromPubSub(liveEvents),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Deferred.succeed(snapshotStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSnapshot)),
+                Effect.as({
+                  snapshotSequence: 1,
+                  projects: [],
+                  threads: [],
+                  updatedAt: now,
+                }),
+              ),
+            getThreadShellById: () => Effect.succeed(Option.some(threadShell)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const itemsFiber = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({ afterSequence: 0 }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      ).pipe(Effect.forkScoped);
+
+      yield* Deferred.await(snapshotStarted);
+      yield* PubSub.publish(liveEvents, {
+        sequence: 2,
+        eventId: EventId.make("event-shell-buffered"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.meta-updated",
+        payload: { threadId, title: "Buffered Thread", updatedAt: now },
+      });
+      yield* Deferred.succeed(releaseSnapshot, undefined);
+
+      const items = yield* Fiber.join(itemsFiber);
+      assert.equal(items.length, 2);
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.equal(items[1]?.kind, "thread-upserted");
+      if (items[1]?.kind === "thread-upserted") {
+        assert.equal(items[1].sequence, 2);
+        assert.equal(items[1].thread.id, threadId);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("filters thread catch-up in storage before decoding events", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-filtered-catch-up");
+      const readEvents = vi.fn(
+        (
+          _fromSequenceExclusive: number,
+          _limit?: number,
+          _filter?: Parameters<OrchestrationEngine.OrchestrationEngineShape["readEvents"]>[2],
+        ) =>
+          Stream.make({
+            sequence: 8,
+            eventId: EventId.make("event-filtered-catch-up"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: now,
+            commandId: null,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            type: "thread.message-sent",
+            payload: {
+              threadId,
+              messageId: MessageId.make("message-filtered-catch-up"),
+              role: "assistant",
+              text: "caught up",
+              turnId: TurnId.make("turn-filtered-catch-up"),
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>),
+      );
+      yield* buildAppUnderTest({
+        layers: { orchestrationEngine: { readEvents } },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId,
+            afterSequence: 3,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.kind, "event");
+      assert.deepEqual(readEvents.mock.calls[0], [
+        3,
+        Number.MAX_SAFE_INTEGER,
+        { aggregateKind: "thread", aggregateId: threadId },
+      ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

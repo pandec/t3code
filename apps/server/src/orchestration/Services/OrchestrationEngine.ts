@@ -17,6 +17,7 @@ import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type { OrchestrationEventStreamFilter } from "../../persistence/Services/OrchestrationEventStore.ts";
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -27,14 +28,16 @@ export interface OrchestrationEngineShape {
    *
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to read. Defaults to the event
-   *   store's page-bounded default; pass a higher value when the caller must
-   *   read every event after the cursor (e.g. per-thread catch-up that filters
-   *   a small subset out of a potentially larger global range).
+   *   store's page-bounded default.
+   * @param filter - Optional aggregate filter applied by storage before event
+   *   decoding. Use this for per-thread catch-up so unrelated activity is not
+   *   read from the global event stream.
    * @returns Stream containing ordered events.
    */
   readonly readEvents: (
     fromSequenceExclusive: number,
     limit?: number,
+    filter?: OrchestrationEventStreamFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /**
