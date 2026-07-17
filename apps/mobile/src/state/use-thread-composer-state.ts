@@ -16,7 +16,11 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { parseComposerRenameCommand } from "@t3tools/shared/composerTrigger";
+import {
+  applyThreadStatusEmoji,
+  parseComposerRenameCommand,
+  parseComposerStatusCommand,
+} from "@t3tools/shared/composerTrigger";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
@@ -162,25 +166,37 @@ export function useThreadComposerState() {
       // renders for an existing server-backed thread (new drafts use
       // NewTaskDraftScreen, which has no slash commands).
       const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
-      if (renameCommand) {
-        if (renameCommand.title === null) {
+      const statusCommand =
+        attachments.length === 0 && !renameCommand ? parseComposerStatusCommand(text) : null;
+      if (renameCommand || statusCommand) {
+        if (renameCommand && renameCommand.title === null) {
           Alert.alert("Unable to rename thread", "Usage: /t3-rename <new title>");
           return null;
         }
+        if (statusCommand && statusCommand.emoji === null) {
+          Alert.alert("Unable to set thread status", "Usage: /t3-status <emoji>");
+          return null;
+        }
 
-        if (renameCommand.title !== selectedThreadShell.title) {
+        const nextTitle = statusCommand?.emoji
+          ? applyThreadStatusEmoji(selectedThreadShell.title, statusCommand.emoji)
+          : (renameCommand?.title ?? selectedThreadShell.title);
+        if (nextTitle !== selectedThreadShell.title) {
           const result = await updateThreadMetadata({
             environmentId: selectedThreadShell.environmentId,
             input: {
               threadId: selectedThreadShell.id,
-              title: renameCommand.title,
+              title: nextTitle,
             },
           });
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             const error = squashAtomCommandFailure(result);
+            const fallbackMessage = statusCommand
+              ? "The thread status could not be updated."
+              : "The thread could not be renamed.";
             Alert.alert(
-              "Unable to rename thread",
-              error instanceof Error ? error.message : "The thread could not be renamed.",
+              statusCommand ? "Unable to set thread status" : "Unable to rename thread",
+              error instanceof Error ? error.message : fallbackMessage,
             );
           }
         }

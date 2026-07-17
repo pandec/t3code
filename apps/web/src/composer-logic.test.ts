@@ -6,7 +6,9 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  applyThreadStatusEmoji,
   parseComposerRenameCommand,
+  parseComposerStatusCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -389,5 +391,75 @@ describe("parseComposerRenameCommand", () => {
     expect(parseComposerRenameCommand("/t3-rename First line\nSecond line")).toEqual({
       title: "First line\nSecond line",
     });
+  });
+});
+
+describe("parseComposerStatusCommand", () => {
+  it("parses a single emoji", () => {
+    expect(parseComposerStatusCommand("/t3-status 💡")).toEqual({ emoji: "💡" });
+  });
+
+  it("parses composed emoji graphemes", () => {
+    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+
+    expect(parseComposerStatusCommand("/t3-status 👍🏽")).toEqual({ emoji: "👍🏽" });
+    expect(parseComposerStatusCommand("/t3-status 👨‍👩‍👧")).toEqual({ emoji: "👨‍👩‍👧" });
+    expect(parseComposerStatusCommand("/t3-status 🇵🇱")).toEqual({ emoji: "🇵🇱" });
+    expect(parseComposerStatusCommand(`/t3-status ${englandFlag}`)).toEqual({
+      emoji: englandFlag,
+    });
+    expect(parseComposerStatusCommand("/t3-status 1️⃣")).toEqual({ emoji: "1️⃣" });
+    expect(parseComposerStatusCommand("/t3-status ❤️")).toEqual({ emoji: "❤️" });
+    expect(parseComposerStatusCommand("/t3-status ❤")).toEqual({ emoji: "❤" });
+  });
+
+  it("matches the command case-insensitively and trims whitespace", () => {
+    expect(parseComposerStatusCommand("  /T3-StAtUs   ✅  ")).toEqual({ emoji: "✅" });
+  });
+
+  it("rejects missing or invalid values", () => {
+    expect(parseComposerStatusCommand("/t3-status")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status done")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 💡💡")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 💡 done")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status x💡")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 1")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 🇵")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 💡🏽")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 👍🏽🏾")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status ❤\uFE0F\uFE0F")).toEqual({ emoji: null });
+  });
+
+  it("ignores non-matching messages and slash commands", () => {
+    expect(parseComposerStatusCommand("set status 💡")).toBeNull();
+    expect(parseComposerStatusCommand("/t3-statusx 💡")).toBeNull();
+    expect(parseComposerStatusCommand("/t3-rename 💡")).toBeNull();
+  });
+});
+
+describe("applyThreadStatusEmoji", () => {
+  it("prepends the emoji when the title has none", () => {
+    expect(applyThreadStatusEmoji("Status setup test", "💡")).toBe("💡 Status setup test");
+  });
+
+  it("replaces an existing leading emoji", () => {
+    expect(applyThreadStatusEmoji("💡 Status setup test", "👍")).toBe("👍 Status setup test");
+  });
+
+  it("replaces composed leading emoji graphemes", () => {
+    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+
+    expect(applyThreadStatusEmoji("👍🏽 Skin tone", "💡")).toBe("💡 Skin tone");
+    expect(applyThreadStatusEmoji("👨‍👩‍👧 Family", "💡")).toBe("💡 Family");
+    expect(applyThreadStatusEmoji(`${englandFlag} England`, "💡")).toBe("💡 England");
+    expect(applyThreadStatusEmoji("🔱 Forked thread", "💡")).toBe("💡 Forked thread");
+  });
+
+  it("keeps non-emoji leading characters", () => {
+    expect(applyThreadStatusEmoji("1. Numbered title", "💡")).toBe("💡 1. Numbered title");
+  });
+
+  it("handles emoji-only titles", () => {
+    expect(applyThreadStatusEmoji("💡", "👍")).toBe("👍");
   });
 });

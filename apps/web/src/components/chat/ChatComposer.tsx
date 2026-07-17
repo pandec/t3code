@@ -980,6 +980,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 label: "/t3-rename",
                 description: "Rename this thread",
               },
+              {
+                id: "slash:t3-status",
+                type: "slash-command" as const,
+                command: "t3-status" as const,
+                label: "/t3-status",
+                description: "Set this thread's status emoji",
+              },
             ]
           : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
@@ -1590,8 +1597,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
-        if (item.command === "t3-rename") {
-          const replacement = "/t3-rename ";
+        if (item.command === "t3-rename" || item.command === "t3-status") {
+          const currentTitle = activeThread?.title?.trim();
+          const replacement =
+            item.command === "t3-rename" && currentTitle
+              ? `/t3-rename ${currentTitle}`
+              : `/${item.command} `;
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,
@@ -1665,7 +1676,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
     },
-    [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+    [
+      activeThread?.title,
+      applyPromptReplacement,
+      handleInteractionModeChange,
+      resolveActiveComposerTrigger,
+    ],
   );
 
   const onComposerMenuItemHighlighted = useCallback(

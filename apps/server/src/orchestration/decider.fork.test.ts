@@ -117,11 +117,49 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
       expect(created?.type).toBe("thread.created");
       if (created?.type === "thread.created") {
         expect(created.payload).toMatchObject({
-          title: "Source (fork)",
+          title: "🔱 Source",
           branch: "dev",
           worktreePath: "/tmp/project",
           runtimeMode: "full-access",
         });
+      }
+    }),
+  );
+
+  it.effect("does not stack the fork prefix on an already prefixed title", () =>
+    Effect.gen(function* () {
+      const readModel = yield* projectEvent(yield* seedReadModel, {
+        sequence: 4,
+        eventId: EventId.make("event-thread-prefixed"),
+        aggregateKind: "thread",
+        aggregateId: sourceThreadId,
+        type: "thread.meta-updated",
+        occurredAt: now,
+        commandId: CommandId.make("command-thread-prefixed"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-thread-prefixed"),
+        metadata: {},
+        payload: {
+          threadId: sourceThreadId,
+          title: "🔱 Source",
+          updatedAt: now,
+        },
+      });
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-fork-prefixed"),
+          sourceThreadId,
+          threadId: ThreadId.make("destination-prefixed"),
+          createdAt: now,
+        },
+      });
+      const events = Array.isArray(result) ? result : [result];
+      const created = events[0];
+      expect(created?.type).toBe("thread.created");
+      if (created?.type === "thread.created") {
+        expect(created.payload.title).toBe("🔱 Source");
       }
     }),
   );
