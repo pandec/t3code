@@ -145,12 +145,17 @@ export function parseComposerRenameCommand(text: string): { title: string | null
   return { title: title.length > 0 ? title : null };
 }
 
-// One emoji grapheme: a flag (regional-indicator pair), a keycap, or a
-// pictographic base with optional variation selector / skin tone, optionally
-// chained into a ZWJ sequence (e.g. 👨‍👩‍👧). Kept as a `u`-flag pattern because
-// Hermes lacks the `v` flag and Intl.Segmenter.
-const EMOJI_GRAPHEME_PATTERN =
-  "(?:\\p{Regional_Indicator}{2}|[0-9#*]\\uFE0F?\\u20E3|\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*)*)";
+// The three RGI subdivision flags: England, Scotland, and Wales.
+const SUBDIVISION_FLAG_PATTERN =
+  "\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F}";
+const PICTOGRAPH_COMPONENT_PATTERN =
+  "(?:(?:\\p{Emoji_Modifier_Base}\\uFE0F?\\p{Emoji_Modifier})|(?:\\p{Extended_Pictographic}\\uFE0F?))";
+
+// One emoji grapheme: a regional-indicator or subdivision flag, a keycap, or
+// a pictographic base with at most one variation selector / valid skin tone,
+// optionally chained into a ZWJ sequence (e.g. 👨‍👩‍👧). Kept as a `u`-flag
+// pattern because Hermes lacks the `v` flag and Intl.Segmenter.
+const EMOJI_GRAPHEME_PATTERN = `(?:\\p{Regional_Indicator}{2}|[0-9#*]\\uFE0F?\\u20E3|${SUBDIVISION_FLAG_PATTERN}|${PICTOGRAPH_COMPONENT_PATTERN}(?:\\u200D${PICTOGRAPH_COMPONENT_PATTERN})*)`;
 const SINGLE_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}$`, "u");
 const LEADING_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}[ \\t]*`, "u");
 

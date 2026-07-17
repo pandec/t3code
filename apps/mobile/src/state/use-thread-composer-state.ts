@@ -191,9 +191,12 @@ export function useThreadComposerState() {
           });
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             const error = squashAtomCommandFailure(result);
+            const fallbackMessage = statusCommand
+              ? "The thread status could not be updated."
+              : "The thread could not be renamed.";
             Alert.alert(
-              "Unable to rename thread",
-              error instanceof Error ? error.message : "The thread could not be renamed.",
+              statusCommand ? "Unable to set thread status" : "Unable to rename thread",
+              error instanceof Error ? error.message : fallbackMessage,
             );
           }
         }

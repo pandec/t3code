@@ -400,11 +400,17 @@ describe("parseComposerStatusCommand", () => {
   });
 
   it("parses composed emoji graphemes", () => {
+    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+
     expect(parseComposerStatusCommand("/t3-status 👍🏽")).toEqual({ emoji: "👍🏽" });
     expect(parseComposerStatusCommand("/t3-status 👨‍👩‍👧")).toEqual({ emoji: "👨‍👩‍👧" });
     expect(parseComposerStatusCommand("/t3-status 🇵🇱")).toEqual({ emoji: "🇵🇱" });
+    expect(parseComposerStatusCommand(`/t3-status ${englandFlag}`)).toEqual({
+      emoji: englandFlag,
+    });
     expect(parseComposerStatusCommand("/t3-status 1️⃣")).toEqual({ emoji: "1️⃣" });
     expect(parseComposerStatusCommand("/t3-status ❤️")).toEqual({ emoji: "❤️" });
+    expect(parseComposerStatusCommand("/t3-status ❤")).toEqual({ emoji: "❤" });
   });
 
   it("matches the command case-insensitively and trims whitespace", () => {
@@ -417,6 +423,11 @@ describe("parseComposerStatusCommand", () => {
     expect(parseComposerStatusCommand("/t3-status 💡💡")).toEqual({ emoji: null });
     expect(parseComposerStatusCommand("/t3-status 💡 done")).toEqual({ emoji: null });
     expect(parseComposerStatusCommand("/t3-status x💡")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 1")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 🇵")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 💡🏽")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status 👍🏽🏾")).toEqual({ emoji: null });
+    expect(parseComposerStatusCommand("/t3-status ❤\uFE0F\uFE0F")).toEqual({ emoji: null });
   });
 
   it("ignores non-matching messages and slash commands", () => {
@@ -436,8 +447,11 @@ describe("applyThreadStatusEmoji", () => {
   });
 
   it("replaces composed leading emoji graphemes", () => {
+    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+
     expect(applyThreadStatusEmoji("👍🏽 Skin tone", "💡")).toBe("💡 Skin tone");
     expect(applyThreadStatusEmoji("👨‍👩‍👧 Family", "💡")).toBe("💡 Family");
+    expect(applyThreadStatusEmoji(`${englandFlag} England`, "💡")).toBe("💡 England");
     expect(applyThreadStatusEmoji("🔱 Forked thread", "💡")).toBe("💡 Forked thread");
   });
 
