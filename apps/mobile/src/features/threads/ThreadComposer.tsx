@@ -559,7 +559,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       } else if (item.type === "skill") {
         replacement = `$${item.skill.name} `;
       } else if (item.type === "slash-command") {
-        replacement = `/${item.command} `;
+        const currentTitle =
+          item.command === "t3-rename" ? props.selectedThread.title?.trim() : undefined;
+        replacement = currentTitle ? `/t3-rename ${currentTitle}` : `/${item.command} `;
       } else if (item.type === "provider-slash-command") {
         replacement = `/${item.command.name} `;
       }
@@ -573,7 +575,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       setComposerSelection({ start: result.cursor, end: result.cursor });
       onChangeDraftMessage(result.text);
     },
-    [composerTrigger, draftMessage, onChangeDraftMessage, onUpdateInteractionMode],
+    [
+      composerTrigger,
+      draftMessage,
+      onChangeDraftMessage,
+      onUpdateInteractionMode,
+      props.selectedThread.title,
+    ],
   );
 
   // ── Model menu ───────────────────────────────────────────

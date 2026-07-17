@@ -117,7 +117,7 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
       expect(created?.type).toBe("thread.created");
       if (created?.type === "thread.created") {
         expect(created.payload).toMatchObject({
-          title: "Source (fork)",
+          title: "🔱 Source",
           branch: "dev",
           worktreePath: "/tmp/project",
           runtimeMode: "full-access",

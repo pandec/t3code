@@ -285,7 +285,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: source.projectId,
-          title: `${source.title} (fork)`,
+          title: source.title.startsWith("🔱 ") ? source.title : `🔱 ${source.title}`,
           modelSelection: source.modelSelection,
           runtimeMode: source.runtimeMode,
           interactionMode: source.interactionMode,
