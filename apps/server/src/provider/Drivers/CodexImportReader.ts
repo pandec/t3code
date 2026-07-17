@@ -37,6 +37,8 @@ export interface CodexImportReaderOptions {
 
 export interface CodexImportableSessionSummary {
   readonly threadId: string;
+  /** User-assigned thread name (`/rename` in the CLI). */
+  readonly name: string | null;
   readonly preview: string;
   readonly updatedAt: string;
 }
@@ -139,6 +141,7 @@ export const listCodexImportableSessions = Effect.fn("listCodexImportableSession
         for (const thread of response.data) {
           summaries.push({
             threadId: thread.id,
+            name: thread.name ?? null,
             preview: thread.preview,
             updatedAt: unixSecondsToIso(thread.updatedAt, unixSecondsToIso(thread.createdAt, "")),
           });

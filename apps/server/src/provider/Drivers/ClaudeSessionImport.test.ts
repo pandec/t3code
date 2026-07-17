@@ -74,6 +74,27 @@ describe("parseClaudeTranscript", () => {
     }),
   );
 
+  it.effect("captures the latest custom-title record as the session name", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "custom-title", customTitle: "first-name", sessionId: SESSION_ID }),
+        toJsonLine({ type: "custom-title", customTitle: "final-name", sessionId: SESSION_ID }),
+        toJsonLine({ type: "custom-title", customTitle: "   ", sessionId: SESSION_ID }),
+      ]);
+      expect(result.name).toBe("final-name");
+    }),
+  );
+
+  it.effect("returns a null name when no custom-title record exists", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+      ]);
+      expect(result.name).toBeNull();
+    }),
+  );
+
   it.effect("supports plain string message content", () =>
     Effect.gen(function* () {
       const result = yield* run([

@@ -59,6 +59,8 @@ export interface ProviderForkSessionResult {
 
 export interface ProviderImportableSession {
   readonly nativeSessionId: string;
+  /** User-assigned session name (e.g. `/rename` in the provider CLI). */
+  readonly name: string | null;
   readonly preview: string;
   readonly messageCount: number | null;
   readonly updatedAt: string;
