@@ -5664,6 +5664,62 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("does not resend a shell snapshot for an exactly current cursor", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-current-shell");
+      const threadShell = makeDefaultOrchestrationThreadShell({
+        id: threadId,
+        title: "Current Thread",
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.make({
+              sequence: 43,
+              eventId: EventId.make("event-current-shell-live"),
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: now,
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              type: "thread.meta-updated",
+              payload: { threadId, title: "Current Thread", updatedAt: now },
+            } satisfies Extract<OrchestrationEvent, { type: "thread.meta-updated" }>),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 42,
+                projects: [],
+                threads: [threadShell],
+                updatedAt: now,
+              }),
+            getThreadShellById: () => Effect.succeed(Option.some(threadShell)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({ afterSequence: 42 }).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
+      );
+
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.kind, "thread-upserted");
+      if (items[0]?.kind === "thread-upserted") {
+        assert.equal(items[0].sequence, 43);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("buffers shell events published while the current snapshot loads", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
@@ -5671,25 +5727,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const snapshotStarted = yield* Deferred.make<void>();
       const releaseSnapshot = yield* Deferred.make<void>();
       const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
-      const threadShell: OrchestrationThreadShell = {
+      const threadShell = makeDefaultOrchestrationThreadShell({
         id: threadId,
-        projectId: defaultProjectId,
         title: "Buffered Thread",
-        modelSelection: defaultModelSelection,
-        interactionMode: "default",
-        runtimeMode: "full-access",
-        branch: null,
-        worktreePath: null,
-        latestTurn: null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        session: null,
-        latestUserMessageAt: null,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-        hasActionableProposedPlan: false,
-      };
+      });
 
       yield* buildAppUnderTest({
         layers: {

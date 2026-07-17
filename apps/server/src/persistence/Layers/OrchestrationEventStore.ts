@@ -62,11 +62,18 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
 
 const ReadFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
+  sequenceInclusive: NonNegativeInt,
   limit: Schema.Number,
 });
 const ReadAggregateFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
+  sequenceInclusive: NonNegativeInt,
   limit: Schema.Number,
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
+});
+const LatestSequenceRowSchema = Schema.Struct({ sequence: NonNegativeInt });
+const LatestAggregateSequenceRequestSchema = Schema.Struct({
   aggregateKind: OrchestrationAggregateKind,
   aggregateId: Schema.Union([ProjectId, ThreadId]),
 });
@@ -182,6 +189,7 @@ const makeEventStore = Effect.gen(function* () {
           metadata_json AS "metadata"
         FROM orchestration_events
         WHERE sequence > ${request.sequenceExclusive}
+          AND sequence <= ${request.sequenceInclusive}
         ORDER BY sequence ASC
         LIMIT ${request.limit}
       `,
@@ -208,8 +216,31 @@ const makeEventStore = Effect.gen(function* () {
         WHERE aggregate_kind = ${request.aggregateKind}
           AND stream_id = ${request.aggregateId}
           AND sequence > ${request.sequenceExclusive}
+          AND sequence <= ${request.sequenceInclusive}
         ORDER BY sequence ASC
         LIMIT ${request.limit}
+      `,
+  });
+
+  const readLatestSequence = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: LatestSequenceRowSchema,
+    execute: () =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "sequence"
+        FROM orchestration_events
+      `,
+  });
+
+  const readLatestAggregateSequence = SqlSchema.findOne({
+    Request: LatestAggregateSequenceRequestSchema,
+    Result: LatestSequenceRowSchema,
+    execute: (request) =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "sequence"
+        FROM orchestration_events
+        WHERE aggregate_kind = ${request.aggregateKind}
+          AND stream_id = ${request.aggregateId}
       `,
   });
 
@@ -252,15 +283,18 @@ const makeEventStore = Effect.gen(function* () {
     const readPage = (
       cursor: number,
       remaining: number,
+      highWaterSequence: number,
     ): Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError> =>
       Stream.fromEffect(
         (filter === undefined
           ? readEventRowsFromSequence({
               sequenceExclusive: cursor,
+              sequenceInclusive: highWaterSequence,
               limit: Math.min(remaining, READ_PAGE_SIZE),
             })
           : readAggregateEventRowsFromSequence({
               sequenceExclusive: cursor,
+              sequenceInclusive: highWaterSequence,
               limit: Math.min(remaining, READ_PAGE_SIZE),
               aggregateKind: filter.aggregateKind,
               aggregateId: filter.aggregateId,
@@ -293,12 +327,29 @@ const makeEventStore = Effect.gen(function* () {
           }
           return Stream.concat(
             Stream.fromIterable(events),
-            readPage(events[events.length - 1]!.sequence, nextRemaining),
+            readPage(events[events.length - 1]!.sequence, nextRemaining, highWaterSequence),
           );
         }),
       );
 
-    return readPage(sequenceExclusive, normalizedLimit);
+    const highWaterSequence =
+      filter === undefined
+        ? readLatestSequence()
+        : readLatestAggregateSequence({
+            aggregateKind: filter.aggregateKind,
+            aggregateId: filter.aggregateId,
+          });
+    return Stream.unwrap(
+      highWaterSequence.pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.readFromSequence:highWaterQuery",
+            "OrchestrationEventStore.readFromSequence:decodeHighWater",
+          ),
+        ),
+        Effect.map(({ sequence }) => readPage(sequenceExclusive, normalizedLimit, sequence)),
+      ),
+    );
   };
 
   return {

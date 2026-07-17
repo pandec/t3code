@@ -453,12 +453,10 @@ export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.T
 
 export const OrchestrationSubscribeShellInput = Schema.Struct({
   /**
-   * When provided, the server skips the initial full shell snapshot and instead
-   * replays shell events after this sequence before streaming live events.
-   * Clients that already hold a cached (or HTTP-loaded) shell snapshot pass its
-   * sequence here so the subscription resumes without re-sending the entire
-   * projects/threads list (overlapping events are deduped by sequence on the
-   * client).
+   * Clients that already hold a cached or HTTP-loaded shell snapshot pass its
+   * sequence here. The server may omit an identical current snapshot or replace
+   * a stale one before streaming live events; overlapping events are deduped by
+   * sequence on the client.
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
 });

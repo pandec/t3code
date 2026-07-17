@@ -1067,7 +1067,7 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.subscribeShell]: (_input) =>
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.sync(() => {
@@ -1104,10 +1104,11 @@ const makeWsRpcLayer = (
                         }),
                     ),
                   );
-                  return Stream.concat(
-                    Stream.make({ kind: "snapshot" as const, snapshot }),
-                    Stream.fromQueue(liveBuffer),
-                  );
+                  const snapshotStream =
+                    input.afterSequence === snapshot.snapshotSequence
+                      ? Stream.empty
+                      : Stream.make({ kind: "snapshot" as const, snapshot });
+                  return Stream.concat(snapshotStream, Stream.fromQueue(liveBuffer));
                 }),
               );
             }),

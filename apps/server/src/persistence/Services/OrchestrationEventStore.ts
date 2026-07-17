@@ -51,7 +51,10 @@ export interface OrchestrationEventStoreShape {
    *   are decoded.
    * @returns Stream containing ordered events.
    *
-   * Reads in fixed-size pages and normalizes non-integer/negative limits.
+   * Captures the current persisted high-water sequence before reading, then
+   * reads up to that boundary in fixed-size pages. Events appended after replay
+   * begins are left for the live stream. Non-integer/negative limits are
+   * normalized.
    */
   readonly readFromSequence: (
     sequenceExclusive: number,

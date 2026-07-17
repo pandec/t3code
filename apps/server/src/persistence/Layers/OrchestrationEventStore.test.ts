@@ -147,12 +147,37 @@ layer("OrchestrationEventStore", (it) => {
         }
       }
 
-      const replayed = yield* Stream.runCollect(
-        eventStore.readFromSequence(0, 10, {
+      let appendedDuringReplay = false;
+      const replayed = yield* eventStore
+        .readFromSequence(0, 10, {
           aggregateKind: "thread",
           aggregateId: threadA,
-        }),
-      ).pipe(Effect.map((chunk) => Array.from(chunk)));
+        })
+        .pipe(
+          Stream.mapEffect((event) =>
+            appendedDuringReplay
+              ? Effect.succeed(event)
+              : eventStore
+                  .append({
+                    type: "thread.session-stop-requested",
+                    eventId: EventId.make("evt-thread-filter-during-replay"),
+                    aggregateKind: "thread",
+                    aggregateId: threadA,
+                    occurredAt: now,
+                    commandId: CommandId.make("cmd-thread-filter-during-replay"),
+                    causationEventId: null,
+                    correlationId: null,
+                    metadata: {},
+                    payload: { threadId: threadA, createdAt: now },
+                  })
+                  .pipe(
+                    Effect.tap(() => Effect.sync(() => (appendedDuringReplay = true))),
+                    Effect.as(event),
+                  ),
+          ),
+          Stream.runCollect,
+          Effect.map((chunk) => Array.from(chunk)),
+        );
 
       assert.deepEqual(
         replayed.map((event) => event.aggregateId),
