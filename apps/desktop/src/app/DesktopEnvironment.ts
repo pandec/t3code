@@ -151,7 +151,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = Option.getOrElse(config.t3Home, () => path.join(homeDirectory, ".t3"));
+  const configuredBaseDir = config.t3Home;
+  const baseDir = Option.getOrElse(configuredBaseDir, () => path.join(homeDirectory, ".t3"));
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const branding = resolveDesktopAppBranding({
@@ -161,7 +162,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const displayName = branding.displayName;
   const stateDir = path.join(
     baseDir,
-    isPackagedDevBuild ? "dev-packaged" : isDevelopment ? "dev" : "userdata",
+    isPackagedDevBuild
+      ? "dev-packaged"
+      : isDevelopment && Option.isNone(configuredBaseDir)
+        ? "dev"
+        : "userdata",
   );
   const userDataDirName = isPackagedDevBuild
     ? "t3code-dev-packaged"

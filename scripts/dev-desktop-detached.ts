@@ -35,7 +35,7 @@ const main = Effect.gen(function* () {
   const repoRoot = path.resolve(scriptDir, "..");
   const configuredT3Home = process.env.T3CODE_HOME?.trim();
   const t3Home = path.resolve(configuredT3Home || path.join(NodeOS.homedir(), ".t3"));
-  const devStateDir = path.join(t3Home, "dev");
+  const devStateDir = path.join(t3Home, configuredT3Home ? "userdata" : "dev");
   const logPath = path.join(devStateDir, "logs", "dev-desktop-detached.log");
   const recordPath = path.join(devStateDir, "dev-desktop-detached.json");
 
