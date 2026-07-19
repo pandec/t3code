@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sync T3 Code Upstream"
+  short_description: "Safely merge T3 upstream main into fork dev"
+  default_prompt: "Use $sync-upstream to synchronize this T3 Code fork from upstream-sync/main, preserve fork behavior, validate it, and stop for my decision on semantic conflicts."
+policy:
+  allow_implicit_invocation: false

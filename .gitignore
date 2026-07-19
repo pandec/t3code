@@ -10,6 +10,14 @@ infra/*/dist
 packages/*/dist
 .env
 .env.local
+
+# Track this repository's Claude skill while keeping other .claude state ignored globally.
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/sync-upstream/
+!.claude/skills/sync-upstream/SKILL.md
 build/
 .logs/
 release/
