@@ -30,6 +30,7 @@ import {
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
   resolveDesktopUpdateChannel,
+  resolveDesktopWebAssetBrand,
   resolveGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
@@ -106,6 +107,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
       windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
     });
+  });
+
+  it("switches the bundled splash and favicon branding for nightly versions", () => {
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "production");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
 
   it.effect("creates an isolated macOS dev package identity without an update feed", () =>
