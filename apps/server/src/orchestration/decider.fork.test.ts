@@ -117,7 +117,7 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
       expect(created?.type).toBe("thread.created");
       if (created?.type === "thread.created") {
         expect(created.payload).toMatchObject({
-          title: "🔱 Source",
+          title: "(🔱) Source",
           branch: "dev",
           worktreePath: "/tmp/project",
           runtimeMode: "full-access",
@@ -141,7 +141,7 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
         metadata: {},
         payload: {
           threadId: sourceThreadId,
-          title: "🔱 Source",
+          title: "(🔱) Source",
           updatedAt: now,
         },
       });
@@ -159,7 +159,45 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
       const created = events[0];
       expect(created?.type).toBe("thread.created");
       if (created?.type === "thread.created") {
-        expect(created.payload.title).toBe("🔱 Source");
+        expect(created.payload.title).toBe("(🔱) Source");
+      }
+    }),
+  );
+
+  it.effect("places the fork marker after a leading status emoji", () =>
+    Effect.gen(function* () {
+      const readModel = yield* projectEvent(yield* seedReadModel, {
+        sequence: 4,
+        eventId: EventId.make("event-thread-status"),
+        aggregateKind: "thread",
+        aggregateId: sourceThreadId,
+        type: "thread.meta-updated",
+        occurredAt: now,
+        commandId: CommandId.make("command-thread-status"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-thread-status"),
+        metadata: {},
+        payload: {
+          threadId: sourceThreadId,
+          title: "💡 Source",
+          updatedAt: now,
+        },
+      });
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-fork-status"),
+          sourceThreadId,
+          threadId: ThreadId.make("destination-status"),
+          createdAt: now,
+        },
+      });
+      const events = Array.isArray(result) ? result : [result];
+      const created = events[0];
+      expect(created?.type).toBe("thread.created");
+      if (created?.type === "thread.created") {
+        expect(created.payload.title).toBe("💡 (🔱) Source");
       }
     }),
   );

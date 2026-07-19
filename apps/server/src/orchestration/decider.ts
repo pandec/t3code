@@ -9,6 +9,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type * as PlatformError from "effect/PlatformError";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
@@ -285,7 +286,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: source.projectId,
-          title: source.title.startsWith("🔱 ") ? source.title : `🔱 ${source.title}`,
+          title: formatForkedThreadTitle(source.title),
           modelSelection: source.modelSelection,
           runtimeMode: source.runtimeMode,
           interactionMode: source.interactionMode,

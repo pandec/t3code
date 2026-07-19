@@ -8,7 +8,13 @@ export {
 } from "@t3tools/shared/composerTrigger";
 
 export type ComposerTriggerKind = "path" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default" | "t3-rename" | "t3-status";
+export type ComposerSlashCommand =
+  | "model"
+  | "plan"
+  | "default"
+  | "t3-name"
+  | "t3-rename"
+  | "t3-status";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;

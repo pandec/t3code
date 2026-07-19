@@ -170,7 +170,7 @@ export function useThreadComposerState() {
         attachments.length === 0 && !renameCommand ? parseComposerStatusCommand(text) : null;
       if (renameCommand || statusCommand) {
         if (renameCommand && renameCommand.title === null) {
-          Alert.alert("Unable to rename thread", "Usage: /t3-rename <new title>");
+          Alert.alert("Unable to rename thread", "Usage: /t3-name <title> or /t3-rename <title>");
           return null;
         }
         if (statusCommand && statusCommand.emoji === null) {
