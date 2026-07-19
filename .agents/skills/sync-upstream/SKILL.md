@@ -80,3 +80,7 @@ Continue when upstream and fork changes are clearly complementary. Stop and expl
 Report old and new upstream tips, the `main` update and push, the `dev` merge and push, conflicts resolved, fork behavior preserved, and checks run. If stopped, separate completed safe work from the user decision and state whether a merge remains in progress. Do not call the sync complete until required checks pass and both origin branches are verified.
 
 After a completed sync, summarize what the fork gained from upstream: group the incorporated upstream commits into user-visible features, fixes, and notable internal changes, highlighting anything that affects fork-customized areas. Write it for the fork owner deciding what to try or watch out for, not as a raw commit list.
+
+State whether any conflict resolution could impact functionality. When every resolution was purely mechanical, one sentence saying so is enough — skip per-file detail. Only elaborate on resolutions that touched behavior and could plausibly change how something works.
+
+End with a rollout note: based on the protocol/contract, persistence, and update-feed changes in this sync, state whether the installed apps (desktop flavors, iOS) can be updated gradually one by one while older clients keep working against the new server, or whether everything should be closed and updated together, and call out anything that needs a reinstall or data migration.
