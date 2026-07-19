@@ -226,7 +226,9 @@ export function applyThreadStatusEmoji(title: string, emoji: string): string {
     const rest = trimmed.slice(leadingEmoji[0].length);
     return rest.length > 0 ? `${emoji} ${FORK_MARKER} ${rest}` : `${emoji} ${FORK_MARKER}`;
   }
-  const rest = leadingEmoji ? trimmed.slice(leadingEmoji[0].length) : trimmed;
+  const rest = normalizeLegacyForkMarker(
+    leadingEmoji ? trimmed.slice(leadingEmoji[0].length) : trimmed,
+  );
   return rest.length > 0 ? `${emoji} ${rest}` : emoji;
 }
 

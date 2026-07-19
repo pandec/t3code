@@ -90,4 +90,8 @@ describe("applyThreadStatusEmoji", () => {
     expect(applyThreadStatusEmoji("(🔱) Source", "💡")).toBe("💡 (🔱) Source");
     expect(applyThreadStatusEmoji("🔱 Source", "💡")).toBe("💡 (🔱) Source");
   });
+
+  it("normalizes a legacy fork marker that follows the replaced status emoji", () => {
+    expect(applyThreadStatusEmoji("💡 🔱 Source", "🎯")).toBe("🎯 (🔱) Source");
+  });
 });
