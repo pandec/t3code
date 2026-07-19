@@ -22,7 +22,10 @@ import {
   connectionStatusText,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
-import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import {
+  buildThreadTitleComposerText,
+  serializeComposerFileLink,
+} from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   memo,
@@ -974,11 +977,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ...(isServerThread
           ? [
               {
+                id: "slash:t3-name",
+                type: "slash-command" as const,
+                command: "t3-name" as const,
+                label: "/t3-name",
+                description: "Edit this thread's current name",
+              },
+              {
                 id: "slash:t3-rename",
                 type: "slash-command" as const,
                 command: "t3-rename" as const,
                 label: "/t3-rename",
-                description: "Rename this thread",
+                description: "Set a new name for this thread",
               },
               {
                 id: "slash:t3-status",
@@ -1597,12 +1607,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
-        if (item.command === "t3-rename" || item.command === "t3-status") {
-          const currentTitle = activeThread?.title?.trim();
+        if (
+          item.command === "t3-name" ||
+          item.command === "t3-rename" ||
+          item.command === "t3-status"
+        ) {
           const replacement =
-            item.command === "t3-rename" && currentTitle
-              ? `/t3-rename ${currentTitle}`
-              : `/${item.command} `;
+            item.command === "t3-status"
+              ? "/t3-status "
+              : buildThreadTitleComposerText(item.command, activeThread?.title);
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,

@@ -1,5 +1,6 @@
 export type ComposerTriggerKind = "path" | "slash-command" | "slash-model" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
+export type ThreadTitleComposerCommand = "t3-name" | "t3-rename";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -137,7 +138,7 @@ export function parseStandaloneComposerSlashCommand(
 }
 
 export function parseComposerRenameCommand(text: string): { title: string | null } | null {
-  const match = /^\/t3-rename(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  const match = /^\/t3-(?:name|rename)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) {
     return null;
   }
@@ -158,6 +159,56 @@ const PICTOGRAPH_COMPONENT_PATTERN =
 const EMOJI_GRAPHEME_PATTERN = `(?:\\p{Regional_Indicator}{2}|[0-9#*]\\uFE0F?\\u20E3|${SUBDIVISION_FLAG_PATTERN}|${PICTOGRAPH_COMPONENT_PATTERN}(?:\\u200D${PICTOGRAPH_COMPONENT_PATTERN})*)`;
 const SINGLE_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}$`, "u");
 const LEADING_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}[ \\t]*`, "u");
+const FORK_MARKER = "(🔱)";
+const LEGACY_FORK_MARKER = "🔱";
+
+export function buildThreadTitleComposerText(
+  command: ThreadTitleComposerCommand,
+  currentTitle: string | null | undefined,
+): string {
+  const title = currentTitle?.trim() ?? "";
+  return command === "t3-name" && title.length > 0 ? `/t3-name ${title}` : `/${command} `;
+}
+
+function hasForkMarker(title: string): boolean {
+  return title === FORK_MARKER || title.startsWith(`${FORK_MARKER} `);
+}
+
+function normalizeLegacyForkMarker(title: string): string {
+  if (title === LEGACY_FORK_MARKER) {
+    return FORK_MARKER;
+  }
+  if (title.startsWith(`${LEGACY_FORK_MARKER} `)) {
+    return `${FORK_MARKER} ${title.slice(LEGACY_FORK_MARKER.length).trimStart()}`;
+  }
+  return title;
+}
+
+export function formatForkedThreadTitle(title: string): string {
+  const trimmed = title.trim();
+  const leadingEmoji = LEADING_EMOJI_REGEX.exec(trimmed);
+  if (!leadingEmoji) {
+    const normalized = normalizeLegacyForkMarker(trimmed);
+    if (hasForkMarker(normalized)) {
+      return normalized;
+    }
+    return normalized.length > 0 ? `${FORK_MARKER} ${normalized}` : FORK_MARKER;
+  }
+
+  const statusEmoji = leadingEmoji[0].trimEnd();
+  const rest = trimmed.slice(leadingEmoji[0].length);
+  if (statusEmoji === LEGACY_FORK_MARKER) {
+    return rest.length > 0 ? `${FORK_MARKER} ${rest}` : FORK_MARKER;
+  }
+
+  const normalizedRest = normalizeLegacyForkMarker(rest);
+  if (hasForkMarker(normalizedRest)) {
+    return `${statusEmoji} ${normalizedRest}`;
+  }
+  return normalizedRest.length > 0
+    ? `${statusEmoji} ${FORK_MARKER} ${normalizedRest}`
+    : `${statusEmoji} ${FORK_MARKER}`;
+}
 
 export function parseComposerStatusCommand(text: string): { emoji: string | null } | null {
   const match = /^\/t3-status(?:\s+([\s\S]*))?$/i.exec(text.trim());
@@ -171,6 +222,10 @@ export function parseComposerStatusCommand(text: string): { emoji: string | null
 export function applyThreadStatusEmoji(title: string, emoji: string): string {
   const trimmed = title.trim();
   const leadingEmoji = LEADING_EMOJI_REGEX.exec(trimmed);
+  if (leadingEmoji?.[0].trimEnd() === LEGACY_FORK_MARKER) {
+    const rest = trimmed.slice(leadingEmoji[0].length);
+    return rest.length > 0 ? `${emoji} ${FORK_MARKER} ${rest}` : `${emoji} ${FORK_MARKER}`;
+  }
   const rest = leadingEmoji ? trimmed.slice(leadingEmoji[0].length) : trimmed;
   return rest.length > 0 ? `${emoji} ${rest}` : emoji;
 }

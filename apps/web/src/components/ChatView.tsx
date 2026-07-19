@@ -3941,7 +3941,7 @@ function ChatViewContent(props: ChatViewProps) {
         toastManager.add({
           type: "error",
           title: "Unable to rename thread",
-          description: "Usage: /t3-rename <new title>",
+          description: "Usage: /t3-name <title> or /t3-rename <title>",
         });
         return;
       }

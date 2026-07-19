@@ -365,6 +365,12 @@ describe("parseComposerRenameCommand", () => {
     });
   });
 
+  it("parses /t3-name with the same rename semantics", () => {
+    expect(parseComposerRenameCommand("/t3-name Existing title edited")).toEqual({
+      title: "Existing title edited",
+    });
+  });
+
   it("recognizes a bare command with no title", () => {
     expect(parseComposerRenameCommand("/t3-rename")).toEqual({ title: null });
   });
@@ -384,6 +390,7 @@ describe("parseComposerRenameCommand", () => {
   it("ignores non-matching messages and slash commands", () => {
     expect(parseComposerRenameCommand("rename this thread")).toBeNull();
     expect(parseComposerRenameCommand("/t3-renamex Almost a command")).toBeNull();
+    expect(parseComposerRenameCommand("/t3-namex Almost a command")).toBeNull();
     expect(parseComposerRenameCommand("/plan")).toBeNull();
   });
 
@@ -452,7 +459,8 @@ describe("applyThreadStatusEmoji", () => {
     expect(applyThreadStatusEmoji("👍🏽 Skin tone", "💡")).toBe("💡 Skin tone");
     expect(applyThreadStatusEmoji("👨‍👩‍👧 Family", "💡")).toBe("💡 Family");
     expect(applyThreadStatusEmoji(`${englandFlag} England`, "💡")).toBe("💡 England");
-    expect(applyThreadStatusEmoji("🔱 Forked thread", "💡")).toBe("💡 Forked thread");
+    expect(applyThreadStatusEmoji("(🔱) Forked thread", "💡")).toBe("💡 (🔱) Forked thread");
+    expect(applyThreadStatusEmoji("🔱 Forked thread", "💡")).toBe("💡 (🔱) Forked thread");
   });
 
   it("keeps non-emoji leading characters", () => {

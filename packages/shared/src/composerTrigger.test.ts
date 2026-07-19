@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { serializeComposerFileLink, serializeComposerMentionPath } from "./composerTrigger.ts";
+import {
+  applyThreadStatusEmoji,
+  buildThreadTitleComposerText,
+  formatForkedThreadTitle,
+  serializeComposerFileLink,
+  serializeComposerMentionPath,
+} from "./composerTrigger.ts";
 
 describe("serializeComposerMentionPath", () => {
   it("keeps simple mention paths unquoted", () => {
@@ -39,5 +45,49 @@ describe("serializeComposerFileLink", () => {
     expect(serializeComposerFileLink("@scope/package.json")).toBe(
       "[package.json](@scope/package.json)",
     );
+  });
+});
+
+describe("buildThreadTitleComposerText", () => {
+  it("prefills /t3-name with the current title", () => {
+    expect(buildThreadTitleComposerText("t3-name", "  Current title  ")).toBe(
+      "/t3-name Current title",
+    );
+  });
+
+  it("leaves /t3-rename empty for a replacement title", () => {
+    expect(buildThreadTitleComposerText("t3-rename", "Current title")).toBe("/t3-rename ");
+  });
+
+  it("leaves /t3-name empty when the current title is blank", () => {
+    expect(buildThreadTitleComposerText("t3-name", "  ")).toBe("/t3-name ");
+  });
+});
+
+describe("formatForkedThreadTitle", () => {
+  it("adds the parenthesized fork marker before an unstyled title", () => {
+    expect(formatForkedThreadTitle("Source")).toBe("(🔱) Source");
+  });
+
+  it("places the fork marker after a leading status emoji", () => {
+    expect(formatForkedThreadTitle("💡 Source")).toBe("💡 (🔱) Source");
+    expect(formatForkedThreadTitle("👍🏽 Source")).toBe("👍🏽 (🔱) Source");
+  });
+
+  it("does not stack an existing fork marker", () => {
+    expect(formatForkedThreadTitle("(🔱) Source")).toBe("(🔱) Source");
+    expect(formatForkedThreadTitle("💡 (🔱) Source")).toBe("💡 (🔱) Source");
+  });
+
+  it("normalizes the legacy fork prefix", () => {
+    expect(formatForkedThreadTitle("🔱 Source")).toBe("(🔱) Source");
+    expect(formatForkedThreadTitle("💡 🔱 Source")).toBe("💡 (🔱) Source");
+  });
+});
+
+describe("applyThreadStatusEmoji", () => {
+  it("keeps current and legacy fork markers when setting status", () => {
+    expect(applyThreadStatusEmoji("(🔱) Source", "💡")).toBe("💡 (🔱) Source");
+    expect(applyThreadStatusEmoji("🔱 Source", "💡")).toBe("💡 (🔱) Source");
   });
 });

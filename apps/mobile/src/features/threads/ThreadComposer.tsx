@@ -9,6 +9,7 @@ import type {
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
+  buildThreadTitleComposerText,
   detectComposerTrigger,
   replaceTextRange,
   serializeComposerFileLink,
@@ -383,11 +384,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           description: "Switch to default mode",
         },
         {
+          id: "cmd:t3-name",
+          type: "slash-command" as const,
+          command: "t3-name",
+          label: "/t3-name",
+          description: "Edit current thread name",
+        },
+        {
           id: "cmd:t3-rename",
           type: "slash-command" as const,
           command: "t3-rename",
           label: "/t3-rename",
-          description: "Rename this thread",
+          description: "Set a new thread name",
         },
         {
           id: "cmd:t3-status",
@@ -566,9 +574,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       } else if (item.type === "skill") {
         replacement = `$${item.skill.name} `;
       } else if (item.type === "slash-command") {
-        const currentTitle =
-          item.command === "t3-rename" ? props.selectedThread.title?.trim() : undefined;
-        replacement = currentTitle ? `/t3-rename ${currentTitle}` : `/${item.command} `;
+        replacement =
+          item.command === "t3-name" || item.command === "t3-rename"
+            ? buildThreadTitleComposerText(item.command, props.selectedThread.title)
+            : `/${item.command} `;
       } else if (item.type === "provider-slash-command") {
         replacement = `/${item.command.name} `;
       }
