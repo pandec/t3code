@@ -164,6 +164,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
         Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
       ),
     ),
+    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
   );
 });
 

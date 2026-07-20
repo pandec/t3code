@@ -81,6 +81,7 @@ export const statusCommand = Command.make("status", {
             Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
           ),
         ),
+        Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
       );
     }),
   ),

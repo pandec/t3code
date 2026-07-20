@@ -226,6 +226,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
         Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
       ),
     ),
+    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
   );
 });
 

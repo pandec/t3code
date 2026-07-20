@@ -4,6 +4,10 @@ The `t3` CLI exposes project and thread operations for scripts and external agen
 to receive one structured JSON document on stdout; routine runtime logs are suppressed so the output
 can be piped directly to tools such as `jq`.
 
+Check the exit code before parsing. On success the command exits `0` and stdout holds only the JSON
+document. On failure it exits non-zero and stdout carries a human-readable diagnostic instead of
+JSON, so `t3 ... --json | jq` should be guarded (for example `if out=$(t3 ... --json); then ...`).
+
 ## Projects
 
 ```bash
@@ -34,6 +38,18 @@ the provider supports steering.
 
 The project argument accepts either a project id or an exact workspace-root path. Thread mutation
 commands intentionally require a thread id so automation cannot act on an ambiguous title.
+
+### Permissions and Isolation
+
+`thread new` accepts `--runtime-mode` (`approval-required`, `auto-accept-edits`, `full-access`) and
+`--interaction-mode` (`default`, `plan`). Both default to the product defaults, which means
+**`--runtime-mode full-access`**: the agent edits files and runs commands without asking for
+approval. Pass `--runtime-mode approval-required` for unattended automation you do not fully trust.
+`thread send` inherits the mode the thread was created with and cannot change it.
+
+Threads created through the CLI run directly in the project workspace root. Unlike the desktop and
+web clients, the CLI does not provision a per-thread git worktree, so concurrent CLI threads on the
+same project share one working tree.
 
 ## Environment Status
 

@@ -540,7 +540,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     const result = NodeChildProcess.spawnSync(
       process.execPath,
       [
-        NodePath.join(process.cwd(), "apps/server/src/bin.ts"),
+        NodePath.join(import.meta.dirname, "bin.ts"),
         "project",
         "add",
         workspaceRoot,
@@ -555,6 +555,28 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     const output = JSON.parse(result.stdout) as { readonly workspaceRoot: string };
     assert.equal(output.workspaceRoot, workspaceRoot);
   });
+
+  it.effect("keeps runtime warnings out of --json stdout in a real CLI process", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-json-warning-test-"),
+      );
+      const { serverRuntimeStatePath } = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      NodeFS.mkdirSync(NodePath.dirname(serverRuntimeStatePath), { recursive: true });
+      // An undecodable runtime state file makes readPersistedServerRuntimeState log a warning.
+      NodeFS.writeFileSync(serverRuntimeStatePath, "not-json");
+
+      const result = NodeChildProcess.spawnSync(
+        process.execPath,
+        [NodePath.join(import.meta.dirname, "bin.ts"), "status", "--base-dir", baseDir, "--json"],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+      assert.deepEqual(JSON.parse(result.stdout), { running: false });
+    }),
+  );
 
   it.effect("reports stopped status as structured JSON", () =>
     Effect.gen(function* () {
