@@ -1,11 +1,19 @@
 import type { ProviderInstanceId, ServerProviderSkillsResult } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 
+import { AUTH_PROBE_TIMEOUT_MS } from "./providerSnapshot.ts";
 import type { ProviderInstanceRegistryShape } from "./Services/ProviderInstanceRegistry.ts";
 
-const SKILL_LIST_TIMEOUT = "5 seconds" as const;
+/**
+ * Discovery spawns an ephemeral `codex app-server` per request, so it pays the
+ * same cold-start cost as the startup snapshot probe. Reuse that budget rather
+ * than a tighter one: timing out here silently degrades to the server-cwd
+ * snapshot skills, which is exactly the behaviour this lookup exists to avoid.
+ */
+const SKILL_LIST_TIMEOUT = Duration.millis(AUTH_PROBE_TIMEOUT_MS);
 
 export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(function* (
   registry: Pick<ProviderInstanceRegistryShape, "getInstance">,
@@ -13,12 +21,12 @@ export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(fu
 ) {
   const instance = yield* registry.getInstance(input.instanceId);
   if (instance === undefined) {
-    return { skills: [] };
+    return { skills: [] } satisfies ServerProviderSkillsResult;
   }
 
   const snapshot = yield* instance.snapshot.getSnapshot;
   if (!instance.enabled || instance.adapter.listSkills === undefined) {
-    return { skills: snapshot.skills };
+    return { skills: snapshot.skills } satisfies ServerProviderSkillsResult;
   }
 
   const result = yield* instance.adapter

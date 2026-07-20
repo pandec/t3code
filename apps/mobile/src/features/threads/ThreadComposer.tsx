@@ -7,6 +7,7 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
+  ServerProviderSkill,
 } from "@t3tools/contracts";
 import {
   buildThreadTitleComposerText,
@@ -63,8 +64,6 @@ import {
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 
 /**
@@ -100,6 +99,12 @@ export interface ThreadComposerProps {
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
+  /**
+   * Skills discovered for the thread's own working directory (worktree-aware),
+   * resolved by the parent so the `$` menu and the feed's skill chips always
+   * agree and only one discovery request is issued per thread.
+   */
+  readonly providerSkills: ReadonlyArray<ServerProviderSkill>;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
@@ -324,18 +329,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
-  const providerSkillsQuery = useEnvironmentQuery(
-    props.projectCwd !== null
-      ? serverEnvironment.providerSkills({
-          environmentId: props.environmentId,
-          input: {
-            instanceId: props.selectedThread.modelSelection.instanceId,
-            cwd: props.projectCwd,
-          },
-        })
-      : null,
-  );
-  const providerSkills = providerSkillsQuery.data?.skills ?? selectedProviderStatus?.skills ?? [];
+  const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({

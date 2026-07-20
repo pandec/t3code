@@ -135,6 +135,8 @@ import { serverEnvironment } from "../../state/server";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
+const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
+
 const runtimeModeConfig: Record<
   RuntimeMode,
   { label: string; description: string; icon: LucideIcon }
@@ -810,7 +812,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : null,
   );
   const effectiveProviderSkills =
-    providerSkillsQuery.data?.skills ?? selectedProviderStatus?.skills ?? [];
+    providerSkillsQuery.data?.skills ?? selectedProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS;
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],

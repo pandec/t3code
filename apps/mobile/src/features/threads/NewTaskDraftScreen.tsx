@@ -153,7 +153,8 @@ export function NewTaskDraftScreen(props: {
     if (!skillTrigger) {
       return [];
     }
-    const query = skillTrigger.query.toLowerCase();
+    // Match ThreadComposer: `$$foo` should still search for `foo`.
+    const query = skillTrigger.query.replace(/^\$+/, "").toLowerCase();
     return flow.selectedProviderSkills
       .filter(
         (skill) =>
