@@ -216,7 +216,7 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions.push(session);
       return Effect.succeed(session);
     });
-    const sendTurn = vi.fn((_: unknown) =>
+    const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((_) =>
       Effect.succeed({
         threadId: ThreadId.make("thread-1"),
         turnId: asTurnId("turn-1"),
@@ -894,6 +894,116 @@ describe("ProviderCommandReactor", () => {
       interactionMode: "plan",
     });
   });
+
+  effectIt.effect("preserves a running turn across accepted and failed steer attempts", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-failed-steer"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-failed-steer"),
+          role: "user",
+          text: "start review",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-running-before-failed-steer"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("active-review-turn"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-accepted-steer"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-accepted-steer"),
+          role: "user",
+          text: "accepted steering context",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+      const acceptedSteerReadModel = yield* Effect.promise(() => harness.readModel());
+      const acceptedSteerThread = acceptedSteerReadModel.threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(acceptedSteerThread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("active-review-turn"),
+        lastError: null,
+      });
+
+      harness.sendTurn.mockImplementation(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: ProviderDriverKind.make("codex"),
+            method: "turn/start",
+            detail: "The active review turn cannot accept same-turn steering.",
+          }),
+        ),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-failed-steer"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-failed-steer"),
+          role: "user",
+          text: "additional context",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+          return (
+            thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
+      );
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("active-review-turn"),
+        lastError: "The active review turn cannot accept same-turn steering.",
+      });
+    }),
+  );
 
   it("preserves the active session model when in-session model switching is unsupported", async () => {
     const harness = await createHarness({ sessionModelSwitch: "unsupported" });
