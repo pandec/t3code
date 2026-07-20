@@ -13,6 +13,7 @@ import type {
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
+  ServerProviderSkill,
   ModelSelection,
   RuntimeMode,
   ProviderSendTurnInput,
@@ -85,6 +86,10 @@ export interface ProviderListImportableSessionsInput {
   readonly cwd: string;
 }
 
+export interface ProviderListSkillsInput {
+  readonly cwd: string;
+}
+
 export interface ProviderReadImportableSessionInput {
   readonly nativeSessionId: string;
   readonly cwd: string;
@@ -114,6 +119,11 @@ export interface ProviderAdapterShape<TError> {
   readonly listImportableSessions?: (
     input: ProviderListImportableSessionsInput,
   ) => Effect.Effect<ReadonlyArray<ProviderImportableSession>, TError>;
+
+  /** List provider skills available from a workspace root. */
+  readonly listSkills?: (
+    input: ProviderListSkillsInput,
+  ) => Effect.Effect<ReadonlyArray<ServerProviderSkill>, TError>;
 
   /** Read one provider-native persisted session's message history for import. */
   readonly readImportableSession?: (

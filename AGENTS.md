@@ -41,6 +41,9 @@ upstream merges harder. Add only the most important focused tests for private cu
 out production-grade test matrices unless the change is unusually risky. The task completion checks above
 still apply.
 
+When this policy conflicts with the broader maintainability guidance above, prefer the narrower change that
+reduces future upstream merge cost, even when a wider refactor would be architecturally cleaner.
+
 Treat local verification as a prerequisite to pushing fork-development branches and opening or updating
 pull requests. Run the task completion checks above plus every additional locally runnable check relevant
 to the affected scope, and push the branch only after the applicable checks pass. Use the pull request for
