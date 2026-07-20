@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -531,6 +532,30 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it("reserves stdout for JSON in a real CLI process", () => {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-json-process-test-"));
+    const workspaceRoot = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-cli-json-process-workspace-"),
+    );
+    const result = NodeChildProcess.spawnSync(
+      process.execPath,
+      [
+        NodePath.join(process.cwd(), "apps/server/src/bin.ts"),
+        "project",
+        "add",
+        workspaceRoot,
+        "--base-dir",
+        baseDir,
+        "--json",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout) as { readonly workspaceRoot: string };
+    assert.equal(output.workspaceRoot, workspaceRoot);
+  });
+
   it.effect("reports stopped status as structured JSON", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
@@ -595,6 +620,48 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         assert.equal(snapshot.projects.length, 0);
       }),
     ),
+  );
+
+  it.effect("clears stale runtime discovery when its port refuses connections", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-status-refused-test-"),
+      );
+      const config = yield* makeCliTestServerConfig(baseDir);
+      const server = NodeHttp.createServer();
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+          }),
+      );
+      const address = server.address();
+      if (typeof address === "string" || address === null) {
+        assert.fail(`Expected TCP address, got ${String(address)}`);
+      }
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve())),
+          ),
+      );
+      yield* persistServerRuntimeState({
+        path: config.serverRuntimeStatePath,
+        state: {
+          version: 1,
+          pid: process.pid,
+          port: address.port,
+          origin: `http://127.0.0.1:${address.port}`,
+          startedAt: DateTime.formatIso(yield* DateTime.now),
+        },
+      });
+
+      const { output } = yield* captureStdout(runCli(["status", "--base-dir", baseDir, "--json"]));
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+      assert.deepEqual(JSON.parse(output), { running: false });
+      assert.isFalse(NodeFS.existsSync(config.serverRuntimeStatePath));
+    }),
   );
 
   it.effect("manages a thread lifecycle through a running server", () =>

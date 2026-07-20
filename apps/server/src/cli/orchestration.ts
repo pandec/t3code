@@ -167,6 +167,16 @@ const isProcessAlive = (pid: number) =>
     }
   });
 
+const causeHasCode = (cause: unknown, code: string, seen = new Set<unknown>()): boolean => {
+  if (typeof cause !== "object" || cause === null || seen.has(cause)) return false;
+  seen.add(cause);
+  if ("code" in cause && cause.code === code) return true;
+  if ("cause" in cause && causeHasCode(cause.cause, code, seen)) return true;
+  return "reason" in cause && causeHasCode(cause.reason, code, seen);
+};
+
+const isConnectionRefused = (error: unknown): boolean => causeHasCode(error, "ECONNREFUSED");
+
 export const tryResolveLiveOrchestrationServer = Effect.fn("tryResolveLiveOrchestrationServer")(
   function* (
     environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
@@ -197,7 +207,10 @@ export const tryResolveLiveOrchestrationServer = Effect.fn("tryResolveLiveOrches
       origin: runtimeState.value.origin,
       cause: attempted.failure,
     });
-    if (!(yield* isProcessAlive(runtimeState.value.pid))) {
+    if (
+      !(yield* isProcessAlive(runtimeState.value.pid)) ||
+      isConnectionRefused(attempted.failure)
+    ) {
       yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
       return Option.none<CliLiveOrchestrationServer>();
     }

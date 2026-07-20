@@ -26,12 +26,14 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import {
+  CliOrchestrationDeclaredResponseError,
   type CliLiveOrchestrationServer,
   dispatchLiveOrchestrationCommand,
   requireLiveOrchestrationServer,
   withCliOrchestrationSession,
 } from "./orchestration.ts";
 import { findActiveProjectTarget } from "./projectTarget.ts";
+import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -39,6 +41,7 @@ const jsonFlag = Flag.boolean("json").pipe(
 );
 
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
+const isCliOrchestrationDeclaredResponseError = Schema.is(CliOrchestrationDeclaredResponseError);
 
 export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNotFoundError>()(
   "ThreadCliNotFoundError",
@@ -125,23 +128,11 @@ export const deriveThreadCliTitle = (message: string): string => {
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 };
 
-const threadState = (thread: OrchestrationThreadShell) => {
-  if (thread.session?.status === "error") return "error";
-  if (
-    thread.session?.status === "starting" ||
-    thread.session?.status === "running" ||
-    thread.latestTurn?.state === "running"
-  ) {
-    return "running";
-  }
-  return thread.latestTurn?.state ?? "idle";
-};
-
 const threadSummary = (thread: OrchestrationThreadShell) => ({
   id: thread.id,
   projectId: thread.projectId,
   title: thread.title,
-  state: threadState(thread),
+  state: threadCliState(thread),
   sessionStatus: thread.session?.status ?? null,
   activeTurnId: thread.session?.activeTurnId ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
@@ -152,6 +143,7 @@ const threadSummary = (thread: OrchestrationThreadShell) => ({
 
 const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
   flags: CliAuthLocationFlags,
+  json: boolean,
   run: (input: {
     readonly live: CliLiveOrchestrationServer;
     readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
@@ -159,7 +151,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = config.logLevel;
+  const minimumLogLevel = json ? "None" : config.logLevel;
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const live = yield* requireLiveOrchestrationServer(environmentAuth, config, "t3 thread cli");
@@ -200,7 +192,7 @@ const threadListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List active threads."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, ({ live }) =>
+    runThreadCli(flags, flags.json, ({ live }) =>
       Effect.gen(function* () {
         const project = Option.isSome(flags.project)
           ? yield* findActiveProjectTarget({
@@ -212,7 +204,7 @@ const threadListCommand = Command.make("list", {
         const threads = live.shell.threads
           .filter((thread) => thread.archivedAt === null)
           .filter((thread) => project === null || thread.projectId === project.id)
-          .filter((thread) => requestedState === null || threadState(thread) === requestedState)
+          .filter((thread) => requestedState === null || threadCliState(thread) === requestedState)
           .map(threadSummary);
         yield* Console.log(
           flags.json
@@ -246,7 +238,7 @@ const threadNewCommand = Command.make("new", {
 }).pipe(
   Command.withDescription("Create a thread and start its first turn."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, (input) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const message = yield* requireTrimmedMessage(flags.message);
         const project = yield* findActiveProjectTarget({
@@ -285,11 +277,24 @@ const threadNewCommand = Command.make("new", {
           threadId,
           message: { messageId, role: "user", text: message, attachments: [] },
           modelSelection,
-          ...(hasExplicitTitle ? {} : { titleSeed: title }),
+          ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
           runtimeMode: flags.runtimeMode,
           interactionMode: flags.interactionMode,
           createdAt,
-        });
+        }).pipe(
+          Effect.tapError((error) =>
+            isCliOrchestrationDeclaredResponseError(error)
+              ? Effect.gen(function* () {
+                  const cleanupCommandId = CommandId.make(yield* randomUuid);
+                  yield* dispatchThreadCommand(input, {
+                    type: "thread.delete",
+                    commandId: cleanupCommandId,
+                    threadId,
+                  }).pipe(Effect.ignore({ log: true }));
+                })
+              : Effect.void,
+          ),
+        );
         yield* Console.log(
           flags.json
             ? jsonOutput({
@@ -315,7 +320,7 @@ const threadSendCommand = Command.make("send", {
 }).pipe(
   Command.withDescription("Send a message to a thread, steering it when already running."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, (input) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
         const message = yield* requireTrimmedMessage(flags.message);
@@ -338,9 +343,9 @@ const threadSendCommand = Command.make("send", {
                 commandId,
                 messageId,
                 sequence: result.sequence,
-                action: threadState(thread) === "running" ? "steered" : "started",
+                action: threadCliState(thread) === "running" ? "steered" : "started",
               })
-            : `${threadState(thread) === "running" ? "Steered" : "Started"} thread ${thread.id}.`,
+            : `${threadCliState(thread) === "running" ? "Steered" : "Started"} thread ${thread.id}.`,
         );
       }),
     ),
@@ -355,7 +360,7 @@ const threadRenameCommand = Command.make("rename", {
 }).pipe(
   Command.withDescription("Rename a thread."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, (input) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
         const title = yield* requireTrimmedTitle(flags.title);
@@ -398,10 +403,10 @@ const threadInterruptCommand = Command.make("interrupt", {
 }).pipe(
   Command.withDescription("Interrupt the active turn in a thread."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, (input) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
-        if (threadState(thread) !== "running") {
+        if (!threadHasActiveTurn(thread)) {
           return yield* new ThreadCliNoActiveTurnError({
             operation: "interruptThread",
             threadId: thread.id,
@@ -437,7 +442,7 @@ const threadStatusCommand = Command.make("status", {
 }).pipe(
   Command.withDescription("Show thread status."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, ({ live }) =>
+    runThreadCli(flags, flags.json, ({ live }) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(live, flags.threadId);
         const summary = threadSummary(thread);

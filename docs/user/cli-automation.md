@@ -1,7 +1,8 @@
 # CLI Automation
 
 The `t3` CLI exposes project and thread operations for scripts and external agents. Pass `--json`
-to receive structured output suitable for automation.
+to receive one structured JSON document on stdout; routine runtime logs are suppressed so the output
+can be piped directly to tools such as `jq`.
 
 ## Projects
 

@@ -10,6 +10,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { tryResolveLiveOrchestrationServer } from "./orchestration.ts";
+import { threadCliState } from "./threadState.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -25,7 +26,7 @@ export const statusCommand = Command.make("status", {
     Effect.gen(function* () {
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
-      const minimumLogLevel = config.logLevel;
+      const minimumLogLevel = flags.json ? "None" : config.logLevel;
       return yield* Effect.gen(function* () {
         const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const live = yield* tryResolveLiveOrchestrationServer(
@@ -54,12 +55,8 @@ export const statusCommand = Command.make("status", {
           snapshotSequence: live.value.shell.snapshotSequence,
           projectCount: live.value.shell.projects.length,
           threadCount: activeThreads.length,
-          runningThreadCount: activeThreads.filter(
-            (thread) =>
-              thread.session?.status === "starting" ||
-              thread.session?.status === "running" ||
-              thread.latestTurn?.state === "running",
-          ).length,
+          runningThreadCount: activeThreads.filter((thread) => threadCliState(thread) === "running")
+            .length,
           pendingApprovalCount: activeThreads.filter((thread) => thread.hasPendingApprovals).length,
           pendingUserInputCount: activeThreads.filter((thread) => thread.hasPendingUserInput)
             .length,

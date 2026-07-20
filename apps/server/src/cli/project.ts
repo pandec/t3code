@@ -157,6 +157,7 @@ const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
 
 const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   flags: CliAuthLocationFlags,
+  json: boolean,
   run: (input: {
     readonly snapshot: OrchestrationReadModel;
     readonly dispatch: (
@@ -175,7 +176,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = config.logLevel;
+  const minimumLogLevel = json ? "None" : config.logLevel;
 
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -240,6 +241,7 @@ const projectAddCommand = Command.make("add", {
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
+      flags.json,
       Effect.fn("projectAddMutation")(function* ({
         snapshot,
         dispatch,
@@ -291,6 +293,7 @@ const projectRemoveCommand = Command.make("remove", {
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
+      flags.json,
       Effect.fn("projectRemoveMutation")(function* ({
         snapshot,
         dispatch,
@@ -329,6 +332,7 @@ const projectRenameCommand = Command.make("rename", {
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
+      flags.json,
       Effect.fn("projectRenameMutation")(function* ({
         snapshot,
         dispatch,
@@ -379,7 +383,7 @@ const projectListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List active projects."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, ({ snapshot, mode }) => {
+    runProjectMutation(flags, flags.json, ({ snapshot, mode }) => {
       const projects = snapshot.projects
         .filter((project) => project.deletedAt === null)
         .map((project) => ({

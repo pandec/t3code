@@ -106,7 +106,12 @@ export function providerErrorLabelFromInstanceHint(input: {
   );
 }
 
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
+export function canReplaceThreadTitle(
+  currentTitle: string,
+  titleSeed?: string,
+  titlePinned = false,
+): boolean {
+  if (titlePinned) return false;
   const trimmedCurrentTitle = currentTitle.trim();
   if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
     return true;
@@ -713,6 +718,7 @@ const make = Effect.gen(function* () {
       readonly messageText: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
       readonly titleSeed?: string;
+      readonly titlePinned?: boolean;
     }) {
       const attachments = input.attachments ?? [];
       yield* Effect.gen(function* () {
@@ -729,7 +735,7 @@ const make = Effect.gen(function* () {
 
         const thread = yield* resolveThread(input.threadId);
         if (!thread) return;
-        if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
+        if (!canReplaceThreadTitle(thread.title, input.titleSeed, input.titlePinned)) {
           return;
         }
 
@@ -790,6 +796,9 @@ const make = Effect.gen(function* () {
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
+        ...(event.payload.titlePinned !== undefined
+          ? { titlePinned: event.payload.titlePinned }
+          : {}),
       };
 
       yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
@@ -799,7 +808,7 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed, event.payload.titlePinned)) {
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
