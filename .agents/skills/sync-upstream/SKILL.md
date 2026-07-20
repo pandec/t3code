@@ -1,8 +1,6 @@
 ---
 name: sync-upstream
 description: Synchronize this T3 Code private fork by fast-forwarding mirror-only main from upstream-sync/main, pushing origin/main, merging main into dev, preserving fork behavior, running required checks, and pushing origin/dev. Use only when explicitly invoked in this repository; never trigger proactively.
-user-invocable: true
-disable-model-invocation: true
 ---
 
 # Sync T3 Code From Upstream
@@ -73,9 +71,10 @@ Continue when upstream and fork changes are clearly complementary. Stop and expl
 1. Run `vp check` and `vp run typecheck`.
 2. Run `vp run lint:mobile` when native mobile code changed.
 3. Run focused tests when the integration touches risky behavior; use `vp test` for built-in Vite+ tests and `vp run test` only for the package script.
-4. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior.
-5. When checks pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
-6. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
+4. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
+5. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior.
+6. When checks pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
+7. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
 
 ## Report
 
