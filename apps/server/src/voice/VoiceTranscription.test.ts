@@ -1,7 +1,16 @@
 import { VOICE_TRANSCRIPTION_MAX_BYTES } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { decodeVoiceDataUrl, VoiceTranscriptionError } from "./VoiceTranscription.ts";
+import {
+  decodeVoiceDataUrl,
+  ElevenLabsTranscriptionResponse,
+  VoiceTranscriptionError,
+} from "./VoiceTranscription.ts";
+
+const decodeElevenLabsTranscriptionResponse = Schema.decodeUnknownSync(
+  ElevenLabsTranscriptionResponse,
+);
 
 describe("decodeVoiceDataUrl", () => {
   it("decodes a matching supported audio data URL", () => {
@@ -43,5 +52,14 @@ describe("decodeVoiceDataUrl", () => {
     });
 
     expect(result).toBeInstanceOf(VoiceTranscriptionError);
+  });
+
+  it("accepts a successful response with a null detected language", () => {
+    expect(
+      decodeElevenLabsTranscriptionResponse({
+        text: "hello",
+        language_code: null,
+      }),
+    ).toEqual({ text: "hello", language_code: null });
   });
 });

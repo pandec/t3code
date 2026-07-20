@@ -2656,6 +2656,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
                 <DesktopVoiceRecorder
+                  key={
+                    typeof composerDraftTarget === "string"
+                      ? composerDraftTarget
+                      : `${composerDraftTarget.environmentId}:${composerDraftTarget.threadId}`
+                  }
                   environmentId={environmentId}
                   available={voiceTranscriptionAvailable}
                   disabled={isConnecting || environmentUnavailable !== null}

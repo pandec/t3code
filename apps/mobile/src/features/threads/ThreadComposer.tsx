@@ -895,6 +895,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   showChevron={false}
                 />
                 <VoiceRecorderControl
+                  key={`${props.environmentId}:${props.selectedThread.id}`}
                   environmentId={props.environmentId}
                   available={props.serverConfig?.speechToText.available === true}
                   disabled={props.connectionState !== "connected"}

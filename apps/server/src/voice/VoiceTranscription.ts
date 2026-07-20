@@ -15,16 +15,17 @@ import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 const ELEVENLABS_SPEECH_TO_TEXT_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 
-const ElevenLabsTranscriptionResponse = Schema.Struct({
+const ELEVENLABS_TRANSCRIPTION_TIMEOUT = "70 seconds";
+
+export const ElevenLabsTranscriptionResponse = Schema.Struct({
   text: Schema.String,
-  language_code: Schema.optionalKey(Schema.String),
+  language_code: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 export class VoiceTranscriptionError extends Schema.TaggedErrorClass<VoiceTranscriptionError>()(
   "VoiceTranscriptionError",
   {
     reason: Schema.Literals(["unavailable", "invalid_audio", "provider_failed"]),
-    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -121,9 +122,8 @@ export const layer = Layer.effect(
         .pipe(
           Effect.flatMap(HttpClientResponse.filterStatusOk),
           Effect.flatMap(HttpClientResponse.schemaBodyJson(ElevenLabsTranscriptionResponse)),
-          Effect.mapError(
-            (cause) => new VoiceTranscriptionError({ reason: "provider_failed", cause }),
-          ),
+          Effect.timeout(ELEVENLABS_TRANSCRIPTION_TIMEOUT),
+          Effect.mapError(() => new VoiceTranscriptionError({ reason: "provider_failed" })),
         );
 
       const text = response.text.trim();

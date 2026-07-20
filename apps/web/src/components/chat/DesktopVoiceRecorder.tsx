@@ -67,7 +67,9 @@ export function DesktopVoiceRecorder({
   onTranscript,
 }: DesktopVoiceRecorderProps) {
   const transcribe = useAtomCommand(transcribeVoiceRecording, { reportFailure: false });
-  const [phase, setPhase] = useState<"idle" | "recording" | "transcribing" | "failed">("idle");
+  const [phase, setPhase] = useState<"idle" | "starting" | "recording" | "transcribing" | "failed">(
+    "idle",
+  );
   const [elapsedMs, setElapsedMs] = useState(0);
   const [retained, setRetained] = useState<RetainedRecording | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -75,18 +77,38 @@ export function DesktopVoiceRecorder({
   const chunksRef = useRef<Blob[]>([]);
   const startedAtRef = useRef(0);
   const finishingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   const releaseStream = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder !== null && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // The recorder may already be stopping as its owner unmounts.
+      }
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     recorderRef.current = null;
     chunksRef.current = [];
   }, []);
 
-  useEffect(() => releaseStream, [releaseStream]);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      phaseRef.current = "idle";
+      releaseStream();
+    },
+    [releaseStream],
+  );
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
+      if (phaseRef.current === "transcribing") return;
+      phaseRef.current = "transcribing";
       setPhase("transcribing");
       try {
         const dataUrl = await readFileAsDataUrl(
@@ -101,8 +123,9 @@ export function DesktopVoiceRecorder({
             sizeBytes: recording.blob.size,
           },
         });
-        if (result._tag === "Success") {
+        if (result._tag === "Success" && mountedRef.current) {
           setRetained(null);
+          phaseRef.current = "idle";
           setPhase("idle");
           onTranscript(result.value.text);
           return;
@@ -110,8 +133,11 @@ export function DesktopVoiceRecorder({
       } catch {
         // Retain the Blob for the explicit Retry action below.
       }
-      setRetained(recording);
-      setPhase("failed");
+      if (mountedRef.current) {
+        setRetained(recording);
+        phaseRef.current = "failed";
+        setPhase("failed");
+      }
     },
     [environmentId, onTranscript, transcribe],
   );
@@ -139,11 +165,13 @@ export function DesktopVoiceRecorder({
       if (discard) {
         setElapsedMs(0);
         setRetained(null);
+        phaseRef.current = "idle";
         setPhase("idle");
         return;
       }
       if (mimeType === null || blob.size === 0 || blob.size > VOICE_TRANSCRIPTION_MAX_BYTES) {
         setRetained(null);
+        phaseRef.current = "idle";
         setPhase("idle");
         toastManager.add({
           type: "error",
@@ -174,14 +202,21 @@ export function DesktopVoiceRecorder({
   }, [phase, stopRecording]);
 
   const startRecording = useCallback(async () => {
-    if (disabled || phase !== "idle") return;
+    if (disabled || phaseRef.current !== "idle") return;
+    phaseRef.current = "starting";
+    setPhase("starting");
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current || phaseRef.current !== "starting") {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
       const mimeType = supportedMimeType();
       const recorder = mimeType
         ? new MediaRecorder(stream, { mimeType })
         : new MediaRecorder(stream);
-      streamRef.current = stream;
       recorderRef.current = recorder;
       chunksRef.current = [];
       recorder.addEventListener("dataavailable", (event) => {
@@ -189,10 +224,14 @@ export function DesktopVoiceRecorder({
       });
       startedAtRef.current = Date.now();
       setElapsedMs(0);
+      phaseRef.current = "recording";
       setPhase("recording");
       recorder.start(1_000);
     } catch {
+      stream?.getTracks().forEach((track) => track.stop());
       releaseStream();
+      phaseRef.current = "idle";
+      if (!mountedRef.current) return;
       setPhase("idle");
       toastManager.add({
         type: "error",
@@ -200,7 +239,7 @@ export function DesktopVoiceRecorder({
         description: "Allow microphone access to record a voice message.",
       });
     }
-  }, [disabled, phase, releaseStream]);
+  }, [disabled, releaseStream]);
 
   if (!available || typeof MediaRecorder === "undefined") return null;
 
@@ -230,14 +269,14 @@ export function DesktopVoiceRecorder({
     );
   }
 
-  if (phase === "transcribing") {
+  if (phase === "starting" || phase === "transcribing") {
     return (
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
         disabled
-        aria-label="Transcribing recording"
+        aria-label={phase === "starting" ? "Starting recording" : "Transcribing recording"}
       >
         <LoaderCircleIcon className="size-4 animate-spin" />
       </Button>

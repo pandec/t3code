@@ -12,4 +12,8 @@ describe("withInputOriginNotice", () => {
   it("leaves typed messages unchanged", () => {
     expect(withInputOriginNotice("change the cache key", undefined)).toBe("change the cache key");
   });
+
+  it("does not turn an empty voice message into a notice-only turn", () => {
+    expect(withInputOriginNotice("   ", "voice-transcription")).toBeUndefined();
+  });
 });

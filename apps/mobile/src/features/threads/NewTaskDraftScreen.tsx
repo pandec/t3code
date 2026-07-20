@@ -1063,6 +1063,7 @@ export function NewTaskDraftScreen(props: {
       />
       {flow.selectedEnvironmentId ? (
         <VoiceRecorderControl
+          key={`${flow.selectedEnvironmentId}:${flow.selectedProjectKey ?? "unselected"}`}
           environmentId={flow.selectedEnvironmentId}
           available={serverConfigs.get(flow.selectedEnvironmentId)?.speechToText.available === true}
           disabled={isIncomingShareTransferPending || !environmentConnected}

@@ -72,10 +72,12 @@ const VOICE_TRANSCRIPTION_NOTICE =
 export function withInputOriginNotice(
   messageText: string,
   inputOrigin: MessageInputOrigin | undefined,
-): string {
+): string | undefined {
+  const normalized = toNonEmptyProviderInput(messageText);
+  if (normalized === undefined) return undefined;
   return inputOrigin === "voice-transcription"
-    ? `${messageText.trimEnd()}\n\n${VOICE_TRANSCRIPTION_NOTICE}`
-    : messageText;
+    ? `${normalized}\n\n${VOICE_TRANSCRIPTION_NOTICE}`
+    : normalized;
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -626,9 +628,7 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(
-      withInputOriginNotice(input.messageText, input.inputOrigin),
-    );
+    const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

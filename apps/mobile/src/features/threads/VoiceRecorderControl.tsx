@@ -12,7 +12,7 @@ import {
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, PanResponder, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, PanResponder, Platform, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { ComposerToolbarButton } from "../../components/ComposerToolbarTrigger";
@@ -42,7 +42,10 @@ export function VoiceRecorderControl(props: {
   const lockedRef = useRef(false);
   const startedAtRef = useRef(0);
   const releasedBeforeStartRef = useRef(false);
+  const cancelStartRef = useRef(false);
   const finishingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const retainedUriRef = useRef<string | null>(null);
   phaseRef.current = phase;
 
   const discardFile = useCallback((uri: string | null | undefined) => {
@@ -57,7 +60,9 @@ export function VoiceRecorderControl(props: {
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
+      phaseRef.current = "transcribing";
       setPhase("transcribing");
+      retainedUriRef.current = recording.uri;
       try {
         const file = new File(recording.uri);
         const sizeBytes = file.size ?? 0;
@@ -76,16 +81,26 @@ export function VoiceRecorderControl(props: {
         });
         if (result._tag === "Success") {
           discardFile(recording.uri);
-          setRetained(null);
-          setPhase("idle");
-          props.onTranscript(result.value.text);
+          retainedUriRef.current = null;
+          if (mountedRef.current) {
+            setRetained(null);
+            phaseRef.current = "idle";
+            setPhase("idle");
+            props.onTranscript(result.value.text);
+          }
           return;
         }
       } catch {
         // Retain the local file so Retry remains useful after a transient failure.
       }
-      setRetained(recording);
-      setPhase("failed");
+      if (mountedRef.current) {
+        setRetained(recording);
+        phaseRef.current = "failed";
+        setPhase("failed");
+      } else {
+        discardFile(recording.uri);
+        retainedUriRef.current = null;
+      }
     },
     [discardFile, props, transcribe],
   );
@@ -101,17 +116,24 @@ export function VoiceRecorderControl(props: {
       try {
         await recorder.stop();
         const uri = recorder.uri;
-        setLocked(false);
+        await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
         lockedRef.current = false;
-        setElapsedMs(0);
+        if (mountedRef.current) setLocked(false);
+        if (mountedRef.current) setElapsedMs(0);
         if (discard || uri === null) {
           discardFile(uri);
-          setPhase("idle");
+          retainedUriRef.current = null;
+          phaseRef.current = "idle";
+          if (mountedRef.current) setPhase("idle");
           return;
         }
+        retainedUriRef.current = uri;
         await submitRecording({ uri, durationMs });
       } catch {
-        setPhase("idle");
+        discardFile(recorder.uri);
+        retainedUriRef.current = null;
+        phaseRef.current = "idle";
+        if (mountedRef.current) setPhase("idle");
       } finally {
         finishingRef.current = false;
         await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
@@ -123,10 +145,15 @@ export function VoiceRecorderControl(props: {
   const startRecording = useCallback(async () => {
     if (props.disabled || phaseRef.current !== "idle") return;
     releasedBeforeStartRef.current = false;
+    cancelStartRef.current = false;
     phaseRef.current = "starting";
     setPhase("starting");
     try {
       const permission = await requestRecordingPermissionsAsync();
+      if (!mountedRef.current || cancelStartRef.current) {
+        phaseRef.current = "idle";
+        return;
+      }
       if (!permission.granted) {
         Alert.alert(
           "Microphone access needed",
@@ -138,6 +165,13 @@ export function VoiceRecorderControl(props: {
       }
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
+      if (!mountedRef.current || cancelStartRef.current) {
+        discardFile(recorder.uri);
+        phaseRef.current = "idle";
+        if (mountedRef.current) setPhase("idle");
+        await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+        return;
+      }
       startedAtRef.current = Date.now();
       phaseRef.current = "recording";
       setPhase("recording");
@@ -145,10 +179,28 @@ export function VoiceRecorderControl(props: {
       if (releasedBeforeStartRef.current) void finishRecording(false);
     } catch {
       phaseRef.current = "idle";
-      setPhase("idle");
+      if (mountedRef.current) setPhase("idle");
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [finishRecording, props.disabled, recorder]);
+  }, [discardFile, finishRecording, props.disabled, recorder]);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      cancelStartRef.current = true;
+      const retainedUri = retainedUriRef.current;
+      retainedUriRef.current = null;
+      discardFile(retainedUri);
+      if (phaseRef.current === "recording") {
+        void recorder
+          .stop()
+          .then(() => discardFile(recorder.uri))
+          .catch(() => undefined);
+      }
+      void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+    },
+    [discardFile, recorder],
+  );
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -165,8 +217,9 @@ export function VoiceRecorderControl(props: {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState !== "active" && phaseRef.current === "recording") {
-        void finishRecording(true);
+      if (nextState !== "active") {
+        if (phaseRef.current === "starting") cancelStartRef.current = true;
+        if (phaseRef.current === "recording") void finishRecording(true);
       }
     });
     return () => subscription.remove();
@@ -196,6 +249,7 @@ export function VoiceRecorderControl(props: {
           if (!lockedRef.current) void finishRecording(false);
         },
         onPanResponderTerminate: () => {
+          if (phaseRef.current === "starting") cancelStartRef.current = true;
           if (phaseRef.current === "recording" && !lockedRef.current) {
             void finishRecording(true);
           }
@@ -204,7 +258,7 @@ export function VoiceRecorderControl(props: {
     [finishRecording, lockRecording, props.disabled, startRecording],
   );
 
-  if (!props.available) return null;
+  if (!props.available || Platform.OS !== "ios") return null;
 
   const content = (() => {
     if (phase === "recording") {
@@ -264,7 +318,9 @@ export function VoiceRecorderControl(props: {
             variant="danger"
             onPress={() => {
               discardFile(retained.uri);
+              retainedUriRef.current = null;
               setRetained(null);
+              phaseRef.current = "idle";
               setPhase("idle");
             }}
           />
