@@ -143,10 +143,6 @@ export function useThreadComposerState() {
     );
   }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const activeThreadBusy =
-    !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
-
   const onSendMessage = useCallback(
     async (onWillEnqueueAgentMessage?: () => void) => {
       if (!selectedThreadShell) {
@@ -360,7 +356,6 @@ export function useThreadComposerState() {
     modelSelection,
     runtimeMode,
     interactionMode,
-    activeThreadBusy,
     onChangeDraftMessage,
     onPickDraftImages,
     onPasteIntoDraft,

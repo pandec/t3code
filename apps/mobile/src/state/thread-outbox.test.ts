@@ -359,7 +359,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("wait");
     expect(
@@ -368,7 +368,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("remove");
     expect(
@@ -377,7 +377,7 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("send");
   });
@@ -389,7 +389,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -400,7 +400,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("wait");
     expect(
@@ -409,7 +409,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
+        threadStatus: null,
       }),
     ).toBe("send");
     expect(
@@ -418,9 +418,30 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: true,
+        threadStatus: "starting",
       }),
     ).toBe("remove");
+  });
+
+  it("delivers steering messages while a thread is running but waits for session startup", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus: "running",
+      }),
+    ).toBe("send");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus: "starting",
+      }),
+    ).toBe("wait");
   });
 
   it("round-trips queued creations and gates incomplete ones from sending", () => {
