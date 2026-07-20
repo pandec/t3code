@@ -8,12 +8,17 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 
 import { EnvironmentId } from "@t3tools/contracts";
+import { detectComposerTrigger, replaceTextRange } from "@t3tools/shared/composerTrigger";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
-import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
+import {
+  ComposerEditor,
+  type ComposerEditorHandle,
+  type ComposerEditorSelection,
+} from "../../components/ComposerEditor";
 import {
   ComposerToolbarButton,
   ComposerToolbarRow,
@@ -25,6 +30,7 @@ import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStri
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
+import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
@@ -96,6 +102,10 @@ export function NewTaskDraftScreen(props: {
       (environment) => environment.environmentId === selectedProject.environmentId,
     )?.connectionState === "connected";
   const promptInputRef = useRef<ComposerEditorHandle>(null);
+  const [promptSelection, setPromptSelection] = useState<ComposerEditorSelection>(() => ({
+    start: flow.prompt.length,
+    end: flow.prompt.length,
+  }));
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
@@ -123,6 +133,61 @@ export function NewTaskDraftScreen(props: {
         project.environmentId === props.initialProjectRef?.environmentId &&
         project.id === props.initialProjectRef?.projectId,
     ),
+  );
+  useEffect(() => {
+    const end = flow.prompt.length;
+    setPromptSelection((selection) => ({
+      start: Math.min(selection.start, end),
+      end: Math.min(selection.end, end),
+    }));
+  }, [flow.prompt.length]);
+
+  const skillTrigger = useMemo(() => {
+    if (promptSelection.start !== promptSelection.end) {
+      return null;
+    }
+    const trigger = detectComposerTrigger(flow.prompt, promptSelection.end);
+    return trigger?.kind === "skill" ? trigger : null;
+  }, [flow.prompt, promptSelection]);
+  const skillMenuItems = useMemo<ReadonlyArray<ComposerCommandItem>>(() => {
+    if (!skillTrigger) {
+      return [];
+    }
+    const query = skillTrigger.query.toLowerCase();
+    return flow.selectedProviderSkills
+      .filter(
+        (skill) =>
+          skill.enabled &&
+          (query.length === 0 ||
+            skill.name.toLowerCase().includes(query) ||
+            skill.displayName?.toLowerCase().includes(query) === true ||
+            skill.shortDescription?.toLowerCase().includes(query) === true),
+      )
+      .slice(0, 20)
+      .map((skill) => ({
+        id: `skill:${skill.name}`,
+        type: "skill" as const,
+        skill,
+        label: skill.displayName ?? skill.name,
+        description: skill.shortDescription ?? skill.description ?? "",
+      }));
+  }, [flow.selectedProviderSkills, skillTrigger]);
+  const handleSkillSelect = useCallback(
+    (item: ComposerCommandItem) => {
+      if (!skillTrigger || item.type !== "skill") {
+        return;
+      }
+      const result = replaceTextRange(
+        flow.prompt,
+        skillTrigger.rangeStart,
+        skillTrigger.rangeEnd,
+        `$${item.skill.name} `,
+      );
+      setPromptSelection({ start: result.cursor, end: result.cursor });
+      flow.setPrompt(result.text);
+      promptInputRef.current?.focus();
+    },
+    [flow, skillTrigger],
   );
   const isProjectPickerReturnActive =
     isReturningToProjectPicker && !requestedInitialProjectAvailable;
@@ -950,6 +1015,8 @@ export function NewTaskDraftScreen(props: {
       value={flow.prompt}
       skills={flow.selectedProviderSkills}
       onChangeText={flow.setPrompt}
+      selection={promptSelection}
+      onSelectionChange={setPromptSelection}
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => setIsComposerFocused(false)}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
@@ -972,6 +1039,15 @@ export function NewTaskDraftScreen(props: {
       }
     />
   );
+  const skillPopover =
+    skillTrigger && skillMenuItems.length > 0 ? (
+      <ComposerCommandPopover
+        items={skillMenuItems}
+        triggerKind="skill"
+        isLoading={false}
+        onSelect={handleSkillSelect}
+      />
+    ) : null;
 
   const toolbarPills = (
     <>
@@ -1062,6 +1138,9 @@ export function NewTaskDraftScreen(props: {
                 : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.85) 40%, rgba(255,255,255,0.95) 100%)",
             }}
           >
+            {skillPopover ? (
+              <View className="absolute inset-x-4 bottom-full z-10 mb-2">{skillPopover}</View>
+            ) : null}
             <ComposerSurface
               isDarkMode={isDarkMode}
               style={
@@ -1126,7 +1205,12 @@ export function NewTaskDraftScreen(props: {
       <NativeStackScreenOptions options={{ title: selectedProject.title }} />
 
       <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
-        <View className="min-h-0 flex-1 px-5 pt-2">{promptEditor}</View>
+        <View className="relative min-h-0 flex-1 px-5 pt-2">
+          {promptEditor}
+          {skillPopover ? (
+            <View className="absolute inset-x-5 bottom-2 z-10">{skillPopover}</View>
+          ) : null}
+        </View>
 
         <View className="border-t border-border" style={{ paddingBottom: controlsBottomPadding }}>
           {flow.attachments.length > 0 ? (

@@ -2296,6 +2296,16 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const activeProviderSkillsQuery = useEnvironmentQuery(
+    gitCwd !== null && activeProviderStatus !== null
+      ? serverEnvironment.providerSkills({
+          environmentId,
+          input: { instanceId: activeProviderStatus.instanceId, cwd: gitCwd },
+        })
+      : null,
+  );
+  const activeProviderSkills =
+    activeProviderSkillsQuery.data?.skills ?? activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -5402,7 +5412,7 @@ function ChatViewContent(props: ChatViewProps) {
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
-                skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                skills={activeProviderSkills}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
                 onAnchorSizeChanged={onTimelineAnchorSizeChanged}

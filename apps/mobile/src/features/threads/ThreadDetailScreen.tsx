@@ -34,6 +34,8 @@ import type {
   PendingUserInputDraftAnswer,
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
@@ -270,12 +272,21 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
-  const selectedProviderSkills = useMemo(
+  const providerSnapshotSkills = useMemo(
     () =>
       props.serverConfig?.providers.find((provider) => provider.instanceId === selectedInstanceId)
         ?.skills ?? [],
     [props.serverConfig, selectedInstanceId],
   );
+  const providerSkillsQuery = useEnvironmentQuery(
+    props.threadCwd !== null
+      ? serverEnvironment.providerSkills({
+          environmentId: props.environmentId,
+          input: { instanceId: selectedInstanceId, cwd: props.threadCwd },
+        })
+      : null,
+  );
+  const selectedProviderSkills = providerSkillsQuery.data?.skills ?? providerSnapshotSkills;
 
   useLayoutEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;
