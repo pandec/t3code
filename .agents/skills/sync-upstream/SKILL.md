@@ -1,6 +1,8 @@
 ---
 name: sync-upstream
 description: Synchronize this T3 Code private fork by fast-forwarding mirror-only main from upstream-sync/main, pushing origin/main, merging main into dev, preserving fork behavior, running required checks, and pushing origin/dev. Use only when explicitly invoked in this repository; never trigger proactively.
+user-invocable: true
+disable-model-invocation: true
 ---
 
 # Sync T3 Code From Upstream
