@@ -10,6 +10,7 @@ import type {
   ProviderInstanceId,
   ProviderDriverKind,
   ServerProvider,
+  ServerProviderSkillsResult,
   ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -47,6 +48,12 @@ export interface ProviderRegistryShape {
   readonly refreshInstance: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /** List the skills available to one provider instance from a workspace root. */
+  readonly listSkillsForCwd: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly cwd: string;
+  }) => Effect.Effect<ServerProviderSkillsResult>;
 
   /**
    * Resolve the maintenance capabilities owned by one live provider instance.

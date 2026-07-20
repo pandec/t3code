@@ -41,6 +41,9 @@ upstream merges harder. Add only the most important focused tests for private cu
 out production-grade test matrices unless the change is unusually risky. The task completion checks above
 still apply.
 
+When this policy conflicts with the broader maintainability guidance above, prefer the narrower change that
+reduces future upstream merge cost, even when a wider refactor would be architecturally cleaner.
+
 Use `dev` as the fork's primary integration and build branch. Commit private fork work to `dev`, base
 fork-specific feature branches and worktrees on `dev`, and merge completed work back into `dev`. Keep `main`
 as a clean mirror of `upstream/main` for synchronization only: do not develop, build fork releases, or commit

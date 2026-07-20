@@ -63,6 +63,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   listCodexImportableSessions,
+  listCodexSkills,
   readCodexImportableThread,
 } from "../Drivers/CodexImportReader.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
@@ -1770,7 +1771,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const canonicalizeImportCwd = Effect.fn("CodexAdapter.canonicalizeImportCwd")(function* (
     cwd: string,
-    operation: "listImportableSessions" | "readImportableSession",
+    operation: "listImportableSessions" | "listSkills" | "readImportableSession",
   ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
@@ -1786,6 +1787,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const importReaderContext = <A, E>(
     effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
+    method = "session/import",
   ) =>
     effect.pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
@@ -1793,7 +1795,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
-            method: "session/import",
+            method,
             detail:
               typeof cause === "object" && cause !== null && "detail" in cause
                 ? String((cause as { detail: unknown }).detail)
@@ -1802,6 +1804,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }),
       ),
     );
+
+  const listSkills: NonNullable<CodexAdapterShape["listSkills"]> = Effect.fn(
+    "CodexAdapter.listSkills",
+  )(function* (input) {
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
+    return yield* importReaderContext(
+      listCodexSkills(importReaderOptions(canonicalCwd)),
+      "skills/list",
+    );
+  });
 
   const listImportableSessions: NonNullable<CodexAdapterShape["listImportableSessions"]> =
     Effect.fn("CodexAdapter.listImportableSessions")(function* (input) {
@@ -1863,6 +1875,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     },
     startSession,
     forkSession,
+    listSkills,
     listImportableSessions,
     readImportableSession,
     sendTurn,
