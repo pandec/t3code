@@ -68,13 +68,23 @@ Continue when upstream and fork changes are clearly complementary. Stop and expl
 
 ## 5. Validate and publish
 
-1. Run `vp check` and `vp run typecheck`.
-2. Run `vp run lint:mobile` when native mobile code changed.
-3. Run focused tests when the integration touches risky behavior; use `vp test` for built-in Vite+ tests and `vp run test` only for the package script.
-4. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
-5. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior.
-6. When checks pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
-7. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
+Complete the applicable local verification before pushing `dev`.
+
+1. Determine the applicable checks from the complete merged diff, current `AGENTS.md`, affected package scripts, and changed repository tooling. Run every relevant check that is available locally before pushing; do not omit a relevant check merely because it is conditional or slower than the baseline.
+2. Install the merged dependency graph with `vp install --frozen-lockfile`.
+3. Run the routine sync baseline in the merged worktree:
+   - `vp check`
+   - `vp run typecheck`
+   - `vp run test`
+4. Run focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap. Use `vp test run <test-files>` for built-in Vite+ tests and `vp run test` only when the affected package specifically requires its test script.
+5. Add conditional static, generated-output, or build checks when the merged changes make them relevant:
+   - run `vp run lint:mobile` when native mobile code, native configuration, mobile dependencies, or patches changed
+   - run the affected build, smoke, or generated-asset check when packaging, preload code, build configuration, release/update behavior, or generated assets changed
+   - inspect changes to repository tooling for newly introduced checks that protect code affected by the sync
+6. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
+7. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior. Do not push with a failing applicable gate.
+8. Only after the applicable local gates pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
+9. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
 
 ## Report
 

@@ -29,6 +29,7 @@ const makeDesktopClerkLayer = (isDevelopment = true) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
+    usesDevelopmentIdentity: isDevelopment,
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
   return DesktopClerk.layer.pipe(
