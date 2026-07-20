@@ -296,12 +296,13 @@ const make = Effect.gen(function* () {
     if (!session) {
       return;
     }
+    const preserveActiveTurn = session.status === "running";
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
         ...session,
-        status: session.status === "stopped" ? "stopped" : "ready",
-        activeTurnId: null,
+        status: session.status === "stopped" || preserveActiveTurn ? session.status : "ready",
+        activeTurnId: preserveActiveTurn ? session.activeTurnId : null,
         lastError: input.detail,
         updatedAt: input.createdAt,
       },
