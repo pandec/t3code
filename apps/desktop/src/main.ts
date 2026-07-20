@@ -8,6 +8,29 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
+Electron.protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "t3code",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+  {
+    scheme: "t3code-dev",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
+
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";

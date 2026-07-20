@@ -275,6 +275,37 @@ export const make = Effect.gen(function* () {
       window.setAutoHideCursor(false);
     }
 
+    const rendererUrl = new URL(applicationUrl);
+    const isRendererUrl = (value: string): boolean => {
+      try {
+        const url = new URL(value);
+        return url.protocol === rendererUrl.protocol && url.host === rendererUrl.host;
+      } catch {
+        return false;
+      }
+    };
+    window.webContents.session.setPermissionCheckHandler(
+      (_webContents, permission, requestingOrigin, details) =>
+        permission === "media" &&
+        isRendererUrl(requestingOrigin) &&
+        (details.mediaType === "audio" || details.mediaType === "unknown"),
+    );
+    window.webContents.session.setPermissionRequestHandler(
+      (_webContents, permission, callback, details) => {
+        const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
+        const requestingUrl =
+          "securityOrigin" in details && details.securityOrigin
+            ? details.securityOrigin
+            : details.requestingUrl;
+        callback(
+          permission === "media" &&
+            isRendererUrl(requestingUrl) &&
+            (mediaTypes?.length ?? 0) > 0 &&
+            mediaTypes?.every((mediaType) => mediaType === "audio") === true,
+        );
+      },
+    );
+
     yield* previewManager.setMainWindow(window);
     window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
       if (

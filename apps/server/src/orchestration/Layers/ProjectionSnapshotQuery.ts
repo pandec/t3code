@@ -3,6 +3,7 @@ import {
   CheckpointRef,
   IsoDateTime,
   MessageId,
+  MessageInputOrigin,
   NonNegativeInt,
   OrchestrationCheckpointFile,
   OrchestrationProposedPlanId,
@@ -72,6 +73,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    inputOrigin: Schema.NullOr(MessageInputOrigin),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -416,6 +418,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          input_origin AS "inputOrigin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -779,6 +782,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          input_origin AS "inputOrigin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -1050,6 +1054,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   role: row.role,
                   text: row.text,
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+                  ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
                   createdAt: row.createdAt,
@@ -1993,7 +1998,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             updatedAt: row.updatedAt,
           };
           if (row.attachments !== null) {
-            return Object.assign(message, { attachments: row.attachments });
+            Object.assign(message, { attachments: row.attachments });
+          }
+          if (row.inputOrigin !== null) {
+            Object.assign(message, { inputOrigin: row.inputOrigin });
           }
           return message;
         }),

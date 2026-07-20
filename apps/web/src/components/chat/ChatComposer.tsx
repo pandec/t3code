@@ -71,6 +71,7 @@ import {
   shouldUseCompactComposerFooter,
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
+import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -471,6 +472,7 @@ export interface ChatComposerProps {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
   } | null;
+  voiceTranscriptionAvailable: boolean;
 
   // Pending approvals / inputs
   activePendingApproval: PendingApproval | null;
@@ -579,6 +581,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isPreparingWorktree,
     environmentUnavailable,
+    voiceTranscriptionAvailable,
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
@@ -2652,6 +2655,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                <DesktopVoiceRecorder
+                  environmentId={environmentId}
+                  available={voiceTranscriptionAvailable}
+                  disabled={isConnecting || environmentUnavailable !== null}
+                  onTranscript={(text) => {
+                    const nextPrompt =
+                      prompt.trim().length > 0 ? `${prompt.trimEnd()}\n\n${text}` : text;
+                    promptRef.current = nextPrompt;
+                    setComposerDraftPrompt(composerDraftTarget, nextPrompt, "voice-transcription");
+                    const nextCursor = collapseExpandedComposerCursor(
+                      nextPrompt,
+                      nextPrompt.length,
+                    );
+                    setComposerCursor(nextCursor);
+                    setComposerTrigger(null);
+                    scheduleComposerFocus();
+                  }}
+                />
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}

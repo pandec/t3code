@@ -48,7 +48,8 @@ import {
   restoreComposerDraftSnapshot,
   type ComposerDraft,
 } from "../../state/use-composer-drafts";
-import { useProjects } from "../../state/entities";
+import { useProjects, useServerConfigs } from "../../state/entities";
+import { VoiceRecorderControl } from "./VoiceRecorderControl";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
@@ -80,6 +81,7 @@ export function NewTaskDraftScreen(props: {
   readonly incomingShareId?: string;
 }) {
   const projects = useProjects();
+  const serverConfigs = useServerConfigs();
   const createProjectThread = useCreateProjectThread();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
@@ -935,6 +937,7 @@ export function NewTaskDraftScreen(props: {
       runtimeMode,
       interactionMode,
       initialMessageText,
+      ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
       initialAttachments: draft.attachments,
       ...(editingPendingTask
         ? {
@@ -1058,6 +1061,19 @@ export function NewTaskDraftScreen(props: {
         showChevron={false}
         disabled={isIncomingShareTransferPending}
       />
+      {flow.selectedEnvironmentId ? (
+        <VoiceRecorderControl
+          environmentId={flow.selectedEnvironmentId}
+          available={serverConfigs.get(flow.selectedEnvironmentId)?.speechToText.available === true}
+          disabled={isIncomingShareTransferPending || !environmentConnected}
+          onTranscript={(text) => {
+            const next =
+              flow.prompt.trim().length > 0 ? `${flow.prompt.trimEnd()}\n\n${text}` : text;
+            flow.setPrompt(next, "voice-transcription");
+            setPromptSelection({ start: next.length, end: next.length });
+          }}
+        />
+      ) : null}
       <ControlPillMenu
         actions={modelMenuActions}
         onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}

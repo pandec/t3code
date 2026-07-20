@@ -149,7 +149,7 @@ type NewTaskFlowContextValue = {
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
   readonly buildPendingTaskMessage: (metadata: TurnCommandMetadata) => QueuedThreadMessage | null;
-  readonly setPrompt: (value: string) => void;
+  readonly setPrompt: (value: string, inputOrigin?: "voice-transcription") => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
   readonly appendAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
   readonly removeAttachment: (imageId: string) => void;
@@ -438,11 +438,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const setPrompt = useCallback(
-    (value: string) => {
+    (value: string, inputOrigin?: "voice-transcription") => {
       if (!selectedProjectDraftKey) {
         return;
       }
-      setComposerDraftText(selectedProjectDraftKey, value);
+      setComposerDraftText(selectedProjectDraftKey, value, inputOrigin);
     },
     [selectedProjectDraftKey],
   );
@@ -646,7 +646,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     const draftKey = pendingTaskDraftKey(message.messageId);
     // Only hydrate a fresh editing draft; reopening mid-edit keeps newer edits.
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
-      setComposerDraftText(draftKey, message.text);
+      setComposerDraftText(draftKey, message.text, message.inputOrigin);
       replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
         modelSelection: message.modelSelection,
@@ -700,6 +700,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         messageId: MessageId.make(metadata.messageId),
         commandId: CommandId.make(metadata.commandId),
         text,
+        ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
         attachments: draft.attachments,
         modelSelection: draftModelSelection,
         runtimeMode: draft.runtimeMode ?? DEFAULT_RUNTIME_MODE,

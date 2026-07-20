@@ -65,6 +65,7 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { VoiceRecorderControl } from "./VoiceRecorderControl";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -106,6 +107,7 @@ export interface ThreadComposerProps {
   readonly providerSkills: ReadonlyArray<ServerProviderSkill>;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
+  readonly onVoiceTranscript: (text: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
@@ -891,6 +893,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   icon="plus"
                   onPress={() => void props.onPickDraftImages()}
                   showChevron={false}
+                />
+                <VoiceRecorderControl
+                  environmentId={props.environmentId}
+                  available={props.serverConfig?.speechToText.available === true}
+                  disabled={props.connectionState !== "connected"}
+                  onTranscript={props.onVoiceTranscript}
                 />
                 <ControlPillMenu
                   actions={modelMenuActions}

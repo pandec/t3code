@@ -241,6 +241,12 @@ const config: ExpoConfig = {
   plugins: [
     "expo-asset",
     [
+      "expo-audio",
+      {
+        microphonePermission: "Allow T3 Code to record voice prompts for transcription.",
+      },
+    ],
+    [
       "expo-font",
       {
         ios: {

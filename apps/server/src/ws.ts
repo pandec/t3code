@@ -943,6 +943,9 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          speechToText: {
+            available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
+          },
         };
       });
 

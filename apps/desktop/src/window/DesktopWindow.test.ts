@@ -61,6 +61,10 @@ function makeFakeBrowserWindow() {
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    session: {
+      setPermissionCheckHandler: vi.fn(),
+      setPermissionRequestHandler: vi.fn(),
+    },
   };
 
   const window = {

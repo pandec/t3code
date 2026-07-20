@@ -124,6 +124,9 @@ const SERVER_CONFIG: ServerConfigType = {
   issues: [],
   providers: [],
   availableEditors: [],
+  speechToText: {
+    available: false,
+  },
   observability: {
     logsDirectoryPath: "/tmp/logs",
     localTracingEnabled: false,

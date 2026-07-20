@@ -200,6 +200,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useServerConfigs,
   useThread,
   useThreadProposedPlans,
   useThreadRefs,
@@ -1131,6 +1132,7 @@ function ChatViewContent(props: ChatViewProps) {
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
+  const serverConfigs = useServerConfigs();
   const primaryEnvironment = usePrimaryEnvironment();
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const environmentById = useMemo(
@@ -4298,6 +4300,9 @@ function ChatViewContent(props: ChatViewProps) {
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
+    const inputOriginForSend = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)?.inputOrigin;
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
@@ -4356,6 +4361,7 @@ function ChatViewContent(props: ChatViewProps) {
         id: messageIdForSend,
         role: "user",
         text: outgoingMessageText,
+        ...(inputOriginForSend !== undefined ? { inputOrigin: inputOriginForSend } : {}),
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
         turnId: null,
         createdAt: messageCreatedAt,
@@ -4482,6 +4488,7 @@ function ChatViewContent(props: ChatViewProps) {
             role: "user",
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
+            ...(inputOriginForSend !== undefined ? { inputOrigin: inputOriginForSend } : {}),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
@@ -4522,7 +4529,7 @@ function ChatViewContent(props: ChatViewProps) {
         composerImagesRef.current = retryComposerImages;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;
-        setComposerDraftPrompt(composerDraftTarget, promptForSend);
+        setComposerDraftPrompt(composerDraftTarget, promptForSend, inputOriginForSend);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
         setComposerDraftElementContexts(composerDraftTarget, composerElementContextsSnapshot);
@@ -5521,6 +5528,10 @@ function ChatViewContent(props: ChatViewProps) {
                         isSendBusy={isSendBusy}
                         isPreparingWorktree={isPreparingWorktree}
                         environmentUnavailable={activeEnvironmentUnavailableState}
+                        voiceTranscriptionAvailable={
+                          isElectron &&
+                          serverConfigs.get(environmentId)?.speechToText.available === true
+                        }
                         activePendingApproval={activePendingApproval}
                         pendingApprovals={pendingApprovals}
                         pendingUserInputs={pendingUserInputs}

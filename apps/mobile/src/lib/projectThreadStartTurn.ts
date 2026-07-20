@@ -3,6 +3,7 @@ import {
   MessageId,
   ThreadId,
   type ModelSelection,
+  type MessageInputOrigin,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -28,6 +29,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly messageId: string;
   readonly createdAt: string;
   readonly text: string;
+  readonly inputOrigin?: MessageInputOrigin;
   readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
@@ -56,6 +58,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
       role: "user" as const,
       text: spec.text,
       attachments: toUploadChatImageAttachments(spec.attachments),
+      ...(spec.inputOrigin !== undefined ? { inputOrigin: spec.inputOrigin } : {}),
     },
     modelSelection: spec.modelSelection,
     titleSeed: title,
