@@ -1,0 +1,4 @@
+interface:
+  display_name: "T3 Log Diagnostics"
+  short_description: "Inspect and escalate T3 Code diagnostics"
+  default_prompt: "Use $diagnose-t3-logs to inspect this T3 Code instance and identify the most relevant logs."
