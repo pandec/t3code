@@ -296,6 +296,8 @@ const make = Effect.gen(function* () {
     if (!session) {
       return;
     }
+    // A failed steer must not settle the original turn. Fresh-turn failures
+    // still return non-stopped sessions to ready so they can be retried.
     const preserveActiveTurn = session.status === "running";
     yield* setThreadSession({
       threadId: input.threadId,

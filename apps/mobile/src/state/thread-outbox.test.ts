@@ -424,15 +424,24 @@ describe("thread outbox", () => {
   });
 
   it("delivers steering messages while a thread is running but waits for session startup", () => {
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadStatus: "running",
-      }),
-    ).toBe("send");
+    for (const threadStatus of [
+      "idle",
+      "running",
+      "ready",
+      "interrupted",
+      "stopped",
+      "error",
+    ] as const) {
+      expect(
+        resolveThreadOutboxDeliveryAction({
+          isCreation: false,
+          threadExists: true,
+          shellStatus: "live",
+          environmentConnected: true,
+          threadStatus,
+        }),
+      ).toBe("send");
+    }
     expect(
       resolveThreadOutboxDeliveryAction({
         isCreation: false,

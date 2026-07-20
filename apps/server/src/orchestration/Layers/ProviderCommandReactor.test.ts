@@ -895,7 +895,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  effectIt.effect("preserves a running turn when an attempted steer fails", () =>
+  effectIt.effect("preserves a running turn across accepted and failed steer attempts", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());
       const now = "2026-01-01T00:00:00.000Z";
@@ -931,6 +931,32 @@ describe("ProviderCommandReactor", () => {
           updatedAt: now,
         },
         createdAt: now,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-accepted-steer"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-accepted-steer"),
+          role: "user",
+          text: "accepted steering context",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+      const acceptedSteerReadModel = yield* Effect.promise(() => harness.readModel());
+      const acceptedSteerThread = acceptedSteerReadModel.threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(acceptedSteerThread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("active-review-turn"),
+        lastError: null,
       });
 
       harness.sendTurn.mockImplementation(() =>
