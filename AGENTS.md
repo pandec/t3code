@@ -8,9 +8,9 @@
   - Use `vp test run <test-files>` for focused built-in Vite+ tests. Use `vp run test` only when the affected package specifically requires its `test` script.
   - Backend changes must include and run focused tests for the changed behavior.
   - Run targeted formatting, lint, and type checks for the affected scope when available.
-- After frontend feature development or any user-visible frontend behavior change, the primary agent must run one integrated verification pass for each affected client surface after integrating the work:
-  - Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the printed pairing URL, and verify the affected flow in the controlled browser.
-  - Mobile: use the `test-t3-mobile` skill. Connect one representative iOS Simulator or Android Emulator available on the host to one isolated environment and verify the affected flow. On compatible macOS hosts, prefer iOS for cross-platform changes and stream it through serve-sim in the T3 Code in-app browser or another available agent browser; use Android when it is the affected or viable platform.
+- Integrated client verification is normally skipped for private-fork changes when focused automated checks adequately cover the affected behavior. Before launching a local web or mobile environment, assess whether the change has meaningful runtime-only risk. For changes involving cross-client behavior, native UI integration, authentication, environment or working-directory selection, or other behavior difficult to verify statically, explain why integrated verification would be especially valuable and suggest it to the user. Run it when requested or approved, and limit it to the affected client surfaces.
+  - Web: use the `test-t3-app` skill.
+  - Mobile: use the `test-t3-mobile` skill and one representative iOS Simulator or Android Emulator available on the host.
   - Subagents must not independently launch dev servers or repeat integrated client verification unless their delegated task explicitly requires it.
   - Stop dev servers, watchers, and other long-running verification processes when the focused verification is complete.
 
@@ -46,8 +46,9 @@ reduces future upstream merge cost, even when a wider refactor would be architec
 
 Treat local verification as a prerequisite to pushing fork-development branches and opening or updating
 pull requests. Run the task completion checks above plus every additional locally runnable check relevant
-to the affected scope, and push the branch only after the applicable checks pass. Use the pull request for
-review and integration, not as a substitute for pre-push verification.
+to the affected scope, and push the branch only after the applicable checks pass. This does not by itself
+require launching an integrated app environment; follow the guidance above for those checks. Use the pull
+request for review and integration, not as a substitute for pre-push verification.
 
 Use `dev` as the fork's primary integration and build branch. Commit private fork work to `dev`, base
 fork-specific feature branches and worktrees on `dev`, and merge completed work back into `dev`. Keep `main`
