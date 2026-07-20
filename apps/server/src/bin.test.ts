@@ -495,6 +495,172 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("lists projects as structured JSON", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-list-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-list-workspace-"),
+      );
+      yield* runCliWithRuntime([
+        "project",
+        "add",
+        workspaceRoot,
+        "--title",
+        "Listed Project",
+        "--base-dir",
+        baseDir,
+      ]);
+
+      const { output } = yield* captureStdout(
+        runCli(["project", "list", "--base-dir", baseDir, "--json"]),
+      );
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+      const result = JSON.parse(output) as {
+        readonly mode: string;
+        readonly projects: ReadonlyArray<{
+          readonly title: string;
+          readonly workspaceRoot: string;
+        }>;
+      };
+      assert.equal(result.mode, "offline");
+      assert.deepInclude(result.projects[0], { title: "Listed Project", workspaceRoot });
+    }),
+  );
+
+  it.effect("reports stopped status as structured JSON", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-status-stopped-test-"),
+      );
+      const { output } = yield* captureStdout(runCli(["status", "--base-dir", baseDir, "--json"]));
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+      const status = JSON.parse(output) as { readonly running: boolean };
+      assert.equal(status.running, false);
+    }),
+  );
+
+  it.effect("manages a thread lifecycle through a running server", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-live-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-live-workspace-"),
+      );
+
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime([
+            "project",
+            "add",
+            workspaceRoot,
+            "--title",
+            "Thread Project",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const createdOutput = yield* captureStdout(
+            runCli([
+              "thread",
+              "new",
+              "--project",
+              workspaceRoot,
+              "--message",
+              "Inspect the repository",
+              "--base-dir",
+              baseDir,
+              "--json",
+            ]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const created = JSON.parse(createdOutput.output) as {
+            readonly threadId: string;
+            readonly projectId: string;
+            readonly sequence: number;
+          };
+          assert.isTrue(created.threadId.length > 0);
+          assert.isTrue(created.projectId.length > 0);
+          assert.isTrue(created.sequence > 0);
+
+          const listOutput = yield* captureStdout(
+            runCli(["thread", "list", "--project", workspaceRoot, "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const listed = JSON.parse(listOutput.output) as {
+            readonly threads: ReadonlyArray<{ readonly id: string; readonly state: string }>;
+          };
+          assert.deepInclude(listed.threads[0], { id: created.threadId, state: "idle" });
+
+          const renamedOutput = yield* captureStdout(
+            runCli([
+              "thread",
+              "rename",
+              created.threadId,
+              "Renamed Thread",
+              "--base-dir",
+              baseDir,
+              "--json",
+            ]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const renamed = JSON.parse(renamedOutput.output) as {
+            readonly action: string;
+            readonly title: string;
+          };
+          assert.equal(renamed.action, "renamed");
+          assert.equal(renamed.title, "Renamed Thread");
+
+          const sentOutput = yield* captureStdout(
+            runCli([
+              "thread",
+              "send",
+              created.threadId,
+              "--message",
+              "Also check the tests",
+              "--base-dir",
+              baseDir,
+              "--json",
+            ]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const sent = JSON.parse(sentOutput.output) as { readonly action: string };
+          assert.equal(sent.action, "started");
+
+          const interruptedOutput = yield* captureStdout(
+            runCli(["thread", "interrupt", created.threadId, "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const interrupted = JSON.parse(interruptedOutput.output) as { readonly action: string };
+          assert.equal(interrupted.action, "interrupt-requested");
+
+          const statusOutput = yield* captureStdout(
+            runCli(["thread", "status", created.threadId, "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const threadStatus = JSON.parse(statusOutput.output) as {
+            readonly id: string;
+            readonly title: string;
+          };
+          assert.deepInclude(threadStatus, { id: created.threadId, title: "Renamed Thread" });
+
+          const overallOutput = yield* captureStdout(
+            runCli(["status", "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const overall = JSON.parse(overallOutput.output) as {
+            readonly running: boolean;
+            readonly projectCount: number;
+            readonly threadCount: number;
+          };
+          assert.deepInclude(overall, { running: true, projectCount: 1, threadCount: 1 });
+        }),
+      );
+    }),
+  );
+
   it.effect("rejects dev-url on project commands", () =>
     Effect.gen(function* () {
       const workspaceRoot = NodeFS.mkdtempSync(

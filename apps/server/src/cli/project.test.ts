@@ -2,11 +2,11 @@ import { assert, it } from "@effect/vitest";
 
 import { EnvironmentInternalError } from "@t3tools/contracts";
 
+import { projectCommandErrorFromLiveServerRequest } from "./project.ts";
 import {
-  ProjectLiveServerDeclaredResponseError,
-  ProjectLiveServerRequestError,
-  projectCommandErrorFromLiveServerRequest,
-} from "./project.ts";
+  CliOrchestrationDeclaredResponseError,
+  CliOrchestrationRequestError,
+} from "./orchestration.ts";
 
 it("maps declared server failures into structural project command errors", () => {
   const cause = new EnvironmentInternalError({
@@ -17,7 +17,7 @@ it("maps declared server failures into structural project command errors", () =>
 
   const error = projectCommandErrorFromLiveServerRequest(cause);
 
-  assert.instanceOf(error, ProjectLiveServerDeclaredResponseError);
+  assert.instanceOf(error, CliOrchestrationDeclaredResponseError);
   assert.strictEqual(error.operation, "callLiveServer");
   assert.strictEqual(error.code, "internal_error");
   assert.strictEqual(error.traceId, "trace-123");
@@ -30,7 +30,7 @@ it("preserves unexpected server failures without deriving the message from them"
 
   const error = projectCommandErrorFromLiveServerRequest(cause);
 
-  assert.instanceOf(error, ProjectLiveServerRequestError);
+  assert.instanceOf(error, CliOrchestrationRequestError);
   assert.strictEqual(error.operation, "callLiveServer");
   assert.strictEqual(error.message, "Failed to call the running server.");
   assert.strictEqual(error.cause, cause);

@@ -56,6 +56,7 @@ There's no public docs site yet, checkout the miscellaneous markdown files in [d
 - [Getting started](./docs/getting-started/quick-start.md)
 - [Architecture overview](./docs/architecture/overview.md)
 - [Provider guides](./docs/providers/codex.md)
+- [CLI automation](./docs/user/cli-automation.md)
 - [Operations](./docs/operations/ci.md)
 - [Reference](./docs/reference/encyclopedia.md)
 
