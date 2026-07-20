@@ -55,7 +55,10 @@ export const statusCommand = Command.make("status", {
           projectCount: live.value.shell.projects.length,
           threadCount: activeThreads.length,
           runningThreadCount: activeThreads.filter(
-            (thread) => thread.latestTurn?.state === "running",
+            (thread) =>
+              thread.session?.status === "starting" ||
+              thread.session?.status === "running" ||
+              thread.latestTurn?.state === "running",
           ).length,
           pendingApprovalCount: activeThreads.filter((thread) => thread.hasPendingApprovals).length,
           pendingUserInputCount: activeThreads.filter((thread) => thread.hasPendingUserInput)

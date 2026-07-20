@@ -74,6 +74,18 @@ export class ThreadCliTitleEmptyError extends Schema.TaggedErrorClass<ThreadCliT
   }
 }
 
+export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCliNoActiveTurnError>()(
+  "ThreadCliNoActiveTurnError",
+  {
+    operation: Schema.Literal("interruptThread"),
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Thread '${this.threadId}' has no active turn to interrupt.`;
+  }
+}
+
 const randomUuid = Crypto.Crypto.pipe(
   Effect.flatMap((crypto) => crypto.randomUUIDv4),
   Effect.orDie,
@@ -113,7 +125,17 @@ export const deriveThreadCliTitle = (message: string): string => {
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 };
 
-const threadState = (thread: OrchestrationThreadShell) => thread.latestTurn?.state ?? "idle";
+const threadState = (thread: OrchestrationThreadShell) => {
+  if (thread.session?.status === "error") return "error";
+  if (
+    thread.session?.status === "starting" ||
+    thread.session?.status === "running" ||
+    thread.latestTurn?.state === "running"
+  ) {
+    return "running";
+  }
+  return thread.latestTurn?.state ?? "idle";
+};
 
 const threadSummary = (thread: OrchestrationThreadShell) => ({
   id: thread.id,
@@ -232,7 +254,8 @@ const threadNewCommand = Command.make("new", {
           identifier: flags.project,
         });
         const projectShell = input.live.shell.projects.find((item) => item.id === project.id)!;
-        const title = Option.isSome(flags.title)
+        const hasExplicitTitle = Option.isSome(flags.title);
+        const title = hasExplicitTitle
           ? yield* requireTrimmedTitle(flags.title.value)
           : deriveThreadCliTitle(message);
         const modelSelection =
@@ -262,22 +285,11 @@ const threadNewCommand = Command.make("new", {
           threadId,
           message: { messageId, role: "user", text: message, attachments: [] },
           modelSelection,
-          titleSeed: title,
+          ...(hasExplicitTitle ? {} : { titleSeed: title }),
           runtimeMode: flags.runtimeMode,
           interactionMode: flags.interactionMode,
           createdAt,
-        }).pipe(
-          Effect.tapError(() =>
-            Effect.gen(function* () {
-              const cleanupCommandId = CommandId.make(yield* randomUuid);
-              yield* dispatchThreadCommand(input, {
-                type: "thread.delete",
-                commandId: cleanupCommandId,
-                threadId,
-              }).pipe(Effect.ignore({ log: true }));
-            }),
-          ),
-        );
+        });
         yield* Console.log(
           flags.json
             ? jsonOutput({
@@ -389,6 +401,12 @@ const threadInterruptCommand = Command.make("interrupt", {
     runThreadCli(flags, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
+        if (threadState(thread) !== "running") {
+          return yield* new ThreadCliNoActiveTurnError({
+            operation: "interruptThread",
+            threadId: thread.id,
+          });
+        }
         const commandId = CommandId.make(yield* randomUuid);
         const result = yield* dispatchThreadCommand(input, {
           type: "thread.turn.interrupt",

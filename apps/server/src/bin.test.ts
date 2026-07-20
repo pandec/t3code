@@ -9,6 +9,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentOrchestrationHttpApi } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -34,6 +35,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { ThreadCliNoActiveTurnError } from "./cli/thread.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
@@ -541,6 +543,60 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("preserves live runtime discovery when a server probe fails transiently", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const baseDir = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-status-probe-failure-test-"),
+        );
+        const workspaceRoot = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-status-probe-failure-workspace-"),
+        );
+        const config = yield* makeCliTestServerConfig(baseDir);
+        const server = NodeHttp.createServer((_request, response) => {
+          response.writeHead(503).end();
+        });
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", resolve);
+            }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.closeAllConnections();
+            server.close();
+          }),
+        );
+        const address = server.address();
+        if (typeof address === "string" || address === null) {
+          assert.fail(`Expected TCP address, got ${String(address)}`);
+        }
+        yield* persistServerRuntimeState({
+          path: config.serverRuntimeStatePath,
+          state: {
+            version: 1,
+            pid: process.pid,
+            port: address.port,
+            origin: `http://127.0.0.1:${address.port}`,
+            startedAt: DateTime.formatIso(yield* DateTime.now),
+          },
+        });
+
+        yield* runCliWithRuntime(["status", "--base-dir", baseDir, "--json"]).pipe(Effect.flip);
+        assert.isTrue(NodeFS.existsSync(config.serverRuntimeStatePath));
+
+        yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]).pipe(
+          Effect.flip,
+        );
+        assert.isTrue(NodeFS.existsSync(config.serverRuntimeStatePath));
+        const snapshot = yield* readPersistedSnapshot(baseDir);
+        assert.equal(snapshot.projects.length, 0);
+      }),
+    ),
+  );
+
   it.effect("manages a thread lifecycle through a running server", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
@@ -629,12 +685,15 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           const sent = JSON.parse(sentOutput.output) as { readonly action: string };
           assert.equal(sent.action, "started");
 
-          const interruptedOutput = yield* captureStdout(
-            runCli(["thread", "interrupt", created.threadId, "--base-dir", baseDir, "--json"]),
-          );
-          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
-          const interrupted = JSON.parse(interruptedOutput.output) as { readonly action: string };
-          assert.equal(interrupted.action, "interrupt-requested");
+          const interruptError = yield* runCliWithRuntime([
+            "thread",
+            "interrupt",
+            created.threadId,
+            "--base-dir",
+            baseDir,
+            "--json",
+          ]).pipe(Effect.flip);
+          assert.instanceOf(interruptError, ThreadCliNoActiveTurnError);
 
           const statusOutput = yield* captureStdout(
             runCli(["thread", "status", created.threadId, "--base-dir", baseDir, "--json"]),

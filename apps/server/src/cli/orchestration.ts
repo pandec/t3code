@@ -152,6 +152,21 @@ export interface CliLiveOrchestrationServer {
   readonly shell: OrchestrationShellSnapshot;
 }
 
+const isProcessAlive = (pid: number) =>
+  Effect.sync(() => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (cause) {
+      return !(
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "ESRCH"
+      );
+    }
+  });
+
 export const tryResolveLiveOrchestrationServer = Effect.fn("tryResolveLiveOrchestrationServer")(
   function* (
     environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
@@ -182,8 +197,12 @@ export const tryResolveLiveOrchestrationServer = Effect.fn("tryResolveLiveOrches
       origin: runtimeState.value.origin,
       cause: attempted.failure,
     });
-    yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
-    return Option.none<CliLiveOrchestrationServer>();
+    if (!(yield* isProcessAlive(runtimeState.value.pid))) {
+      yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
+      return Option.none<CliLiveOrchestrationServer>();
+    }
+
+    return yield* attempted.failure;
   },
 );
 
