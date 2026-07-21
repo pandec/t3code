@@ -30,7 +30,6 @@ interface RetainedRecording {
 
 interface DesktopVoiceRecorderProps {
   readonly environmentId: EnvironmentId;
-  readonly available: boolean;
   readonly disabled: boolean;
   readonly onTranscript: (text: string) => void;
 }
@@ -63,7 +62,6 @@ function formatDuration(durationMs: number): string {
 
 export function DesktopVoiceRecorder({
   environmentId,
-  available,
   disabled,
   onTranscript,
 }: DesktopVoiceRecorderProps) {
@@ -106,18 +104,9 @@ export function DesktopVoiceRecorder({
     };
   }, [releaseStream]);
 
-  useEffect(() => {
-    if (available) return;
-    phaseRef.current = "idle";
-    setPhase("idle");
-    setElapsedMs(0);
-    setRetained(null);
-    releaseStream();
-  }, [available, releaseStream]);
-
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
-      if (phaseRef.current === "transcribing") return;
+      if (!mountedRef.current || phaseRef.current === "transcribing") return;
       phaseRef.current = "transcribing";
       setPhase("transcribing");
       try {
@@ -169,6 +158,10 @@ export function DesktopVoiceRecorder({
         );
         recorder.stop();
       });
+      if (!mountedRef.current) {
+        finishingRef.current = false;
+        return;
+      }
       const mimeType = normalizeMimeType(blob.type);
       releaseStream();
       finishingRef.current = false;
@@ -262,7 +255,7 @@ export function DesktopVoiceRecorder({
     }
   }, [disabled, releaseStream]);
 
-  if (!available || typeof MediaRecorder === "undefined") return null;
+  if (typeof MediaRecorder === "undefined") return null;
 
   if (phase === "recording") {
     return (

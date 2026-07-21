@@ -894,13 +894,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   onPress={() => void props.onPickDraftImages()}
                   showChevron={false}
                 />
-                <VoiceRecorderControl
-                  key={`${props.environmentId}:${props.selectedThread.id}`}
-                  environmentId={props.environmentId}
-                  available={props.serverConfig?.speechToText.available === true}
-                  disabled={props.connectionState !== "connected"}
-                  onTranscript={props.onVoiceTranscript}
-                />
+                {props.serverConfig?.speechToText.available === true ? (
+                  <VoiceRecorderControl
+                    key={`${props.environmentId}:${props.selectedThread.id}`}
+                    environmentId={props.environmentId}
+                    disabled={props.connectionState !== "connected"}
+                    onTranscript={props.onVoiceTranscript}
+                  />
+                ) : null}
                 <ControlPillMenu
                   actions={modelMenuActions}
                   onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}

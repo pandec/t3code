@@ -1061,11 +1061,11 @@ export function NewTaskDraftScreen(props: {
         showChevron={false}
         disabled={isIncomingShareTransferPending}
       />
-      {flow.selectedEnvironmentId ? (
+      {flow.selectedEnvironmentId &&
+      serverConfigs.get(flow.selectedEnvironmentId)?.speechToText.available === true ? (
         <VoiceRecorderControl
           key={`${flow.selectedEnvironmentId}:${flow.selectedProjectKey ?? "unselected"}`}
           environmentId={flow.selectedEnvironmentId}
-          available={serverConfigs.get(flow.selectedEnvironmentId)?.speechToText.available === true}
           disabled={isIncomingShareTransferPending || !environmentConnected}
           onTranscript={(text) => {
             const next =

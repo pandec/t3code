@@ -27,7 +27,6 @@ interface RetainedRecording {
 
 export function VoiceRecorderControl(props: {
   readonly environmentId: EnvironmentId;
-  readonly available: boolean;
   readonly disabled?: boolean;
   readonly onTranscript: (text: string) => void;
 }) {
@@ -62,7 +61,7 @@ export function VoiceRecorderControl(props: {
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
-      if (phaseRef.current === "transcribing") return;
+      if (!mountedRef.current || phaseRef.current === "transcribing") return;
       const submissionId = ++submissionIdRef.current;
       phaseRef.current = "transcribing";
       setPhase("transcribing");
@@ -123,6 +122,12 @@ export function VoiceRecorderControl(props: {
         await recorder.stop();
         const uri = recorder.uri;
         await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+        if (!mountedRef.current) {
+          discardFile(uri);
+          retainedUriRef.current = null;
+          phaseRef.current = "idle";
+          return;
+        }
         lockedRef.current = false;
         if (mountedRef.current) setLocked(false);
         if (mountedRef.current) setElapsedMs(0);
@@ -171,6 +176,7 @@ export function VoiceRecorderControl(props: {
       const permission = await requestRecordingPermissionsAsync();
       if (!mountedRef.current || cancelStartRef.current) {
         phaseRef.current = "idle";
+        if (mountedRef.current) setPhase("idle");
         return;
       }
       if (!permission.granted) {
@@ -278,7 +284,7 @@ export function VoiceRecorderControl(props: {
     [finishRecording, lockRecording, props.disabled, startRecording],
   );
 
-  if (!props.available || Platform.OS !== "ios") return null;
+  if (Platform.OS !== "ios") return null;
 
   const content = (() => {
     if (phase === "recording") {

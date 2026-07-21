@@ -2655,30 +2655,35 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
-                <DesktopVoiceRecorder
-                  key={
-                    `${environmentId}:` +
-                    (typeof composerDraftTarget === "string"
-                      ? composerDraftTarget
-                      : composerDraftTarget.threadId)
-                  }
-                  environmentId={environmentId}
-                  available={voiceTranscriptionAvailable}
-                  disabled={isConnecting || environmentUnavailable !== null}
-                  onTranscript={(text) => {
-                    const nextPrompt =
-                      prompt.trim().length > 0 ? `${prompt.trimEnd()}\n\n${text}` : text;
-                    promptRef.current = nextPrompt;
-                    setComposerDraftPrompt(composerDraftTarget, nextPrompt, "voice-transcription");
-                    const nextCursor = collapseExpandedComposerCursor(
-                      nextPrompt,
-                      nextPrompt.length,
-                    );
-                    setComposerCursor(nextCursor);
-                    setComposerTrigger(null);
-                    scheduleComposerFocus();
-                  }}
-                />
+                {voiceTranscriptionAvailable ? (
+                  <DesktopVoiceRecorder
+                    key={
+                      `${environmentId}:` +
+                      (typeof composerDraftTarget === "string"
+                        ? composerDraftTarget
+                        : composerDraftTarget.threadId)
+                    }
+                    environmentId={environmentId}
+                    disabled={isConnecting || environmentUnavailable !== null}
+                    onTranscript={(text) => {
+                      const nextPrompt =
+                        prompt.trim().length > 0 ? `${prompt.trimEnd()}\n\n${text}` : text;
+                      promptRef.current = nextPrompt;
+                      setComposerDraftPrompt(
+                        composerDraftTarget,
+                        nextPrompt,
+                        "voice-transcription",
+                      );
+                      const nextCursor = collapseExpandedComposerCursor(
+                        nextPrompt,
+                        nextPrompt.length,
+                      );
+                      setComposerCursor(nextCursor);
+                      setComposerTrigger(null);
+                      scheduleComposerFocus();
+                    }}
+                  />
+                ) : null}
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
