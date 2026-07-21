@@ -1,7 +1,14 @@
 import * as Haptics from "expo-haptics";
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  MessageId,
+  MessageSpeechSynthesisResult,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -26,6 +33,7 @@ import {
 } from "react-native-nitro-markdown";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   Platform,
@@ -94,6 +102,8 @@ import { ThreadWorkGroupToggle, ThreadWorkLog } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
+import { synthesizeMessageSpeech } from "../../state/voice";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -139,6 +149,7 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly textToSpeechAvailable?: boolean;
 }
 
 function MessageAttachmentImage(props: {
@@ -794,7 +805,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {
+  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "textToSpeechAvailable"> & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -977,18 +988,14 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <View className="mt-1 flex-row items-center gap-1">
-            <CopyTextButton
-              accessibilityLabel="Copy message"
-              text={message.text}
-              tintColor={iconSubtleColor}
-              buttonSize={28}
-              iconSize={13}
-            />
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
-              {timestampLabel}
-            </Text>
-          </View>
+          <AssistantMessageMetaAndSpeech
+            environmentId={props.environmentId}
+            messageId={message.id}
+            messageText={message.text}
+            timestampLabel={timestampLabel}
+            iconSubtleColor={iconSubtleColor}
+            textToSpeechAvailable={props.textToSpeechAvailable === true}
+          />
         ) : null}
       </Animated.View>
     );
@@ -1003,6 +1010,198 @@ function renderFeedEntry(
       onCopyRow={props.onCopyWorkRow}
       onToggleRow={props.onToggleWorkRow}
     />
+  );
+}
+
+function formatPlaybackTime(seconds: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function AssistantMessageMetaAndSpeech(props: {
+  readonly environmentId: EnvironmentId;
+  readonly messageId: MessageId;
+  readonly messageText: string;
+  readonly timestampLabel: string;
+  readonly iconSubtleColor: ColorValue;
+  readonly textToSpeechAvailable: boolean;
+}) {
+  const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+
+  const onPressSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setExpanded((current) => !current);
+      return;
+    }
+    if (preparing) return;
+
+    setPreparing(true);
+    const result = await synthesize({
+      environmentId: props.environmentId,
+      input: { messageId: props.messageId },
+    });
+    setPreparing(false);
+    if (result._tag === "Success") {
+      setSpeech(result.value);
+      setExpanded(true);
+      return;
+    }
+    Alert.alert(
+      "Listening version unavailable",
+      "T3 Code could not prepare audio for this message. Try again in a moment.",
+    );
+  }, [preparing, props.environmentId, props.messageId, speech, synthesize]);
+
+  return (
+    <View>
+      <View className="mt-1 flex-row items-center gap-1">
+        <CopyTextButton
+          accessibilityLabel="Copy message"
+          text={props.messageText}
+          tintColor={props.iconSubtleColor}
+          buttonSize={28}
+          iconSize={13}
+        />
+        {props.textToSpeechAvailable ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              speech === null ? "Create listening version" : "Toggle listening version"
+            }
+            accessibilityState={{
+              expanded: speech === null ? undefined : expanded,
+              busy: preparing,
+            }}
+            className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+            disabled={preparing}
+            onPress={() => void onPressSpeech()}
+          >
+            {preparing ? (
+              <ActivityIndicator size="small" color={props.iconSubtleColor} />
+            ) : (
+              <SymbolView
+                name="headphones"
+                size={14}
+                tintColor={props.iconSubtleColor}
+                type="monochrome"
+              />
+            )}
+          </Pressable>
+        ) : null}
+        <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+          {props.timestampLabel}
+        </Text>
+      </View>
+      {speech !== null && expanded ? (
+        <AssistantSpeechPlayer
+          environmentId={props.environmentId}
+          speech={speech}
+          iconSubtleColor={props.iconSubtleColor}
+          transcriptExpanded={transcriptExpanded}
+          onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function AssistantSpeechPlayer(props: {
+  readonly environmentId: EnvironmentId;
+  readonly speech: MessageSpeechSynthesisResult;
+  readonly iconSubtleColor: ColorValue;
+  readonly transcriptExpanded: boolean;
+  readonly onToggleTranscript: () => void;
+}) {
+  const audioUrl = useAssetUrl(props.environmentId, {
+    _tag: "attachment",
+    attachmentId: props.speech.speechId,
+  });
+  const player = useAudioPlayer(audioUrl, { updateInterval: 250 });
+  const status = useAudioPlayerStatus(player);
+  const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
+
+  const onTogglePlayback = useCallback(async () => {
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    if (status.duration > 0 && status.currentTime >= status.duration - 0.1) {
+      await player.seekTo(0);
+    }
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    player.play();
+  }, [player, status.currentTime, status.duration, status.playing]);
+
+  return (
+    <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
+      <View className="flex-row items-center gap-2">
+        <SymbolView
+          name="headphones"
+          size={14}
+          tintColor={props.iconSubtleColor}
+          type="monochrome"
+        />
+        <Text className="font-t3-bold text-xs text-foreground">Listening version</Text>
+      </View>
+      {audioUrl === null ? (
+        <View className="flex-row items-center gap-2 py-1">
+          <ActivityIndicator size="small" color={props.iconSubtleColor} />
+          <Text className="text-xs text-foreground-muted">Loading audio…</Text>
+        </View>
+      ) : (
+        <View className="flex-row items-center gap-3">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              status.playing ? "Pause listening version" : "Play listening version"
+            }
+            className="size-9 items-center justify-center rounded-full bg-foreground active:opacity-75"
+            onPress={() => void onTogglePlayback()}
+          >
+            <SymbolView
+              name={status.playing ? "pause.fill" : "play"}
+              size={15}
+              tintColor="white"
+              type="monochrome"
+            />
+          </Pressable>
+          <View className="flex-1 gap-1.5">
+            <View className="h-1.5 overflow-hidden rounded-full bg-neutral-300 dark:bg-neutral-700">
+              <View
+                className="h-full rounded-full bg-foreground"
+                style={{ width: `${progress * 100}%` }}
+              />
+            </View>
+            <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
+              {formatPlaybackTime(status.currentTime)} / {formatPlaybackTime(status.duration)}
+            </Text>
+          </View>
+        </View>
+      )}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.transcriptExpanded }}
+        className="min-h-8 flex-row items-center gap-1"
+        onPress={props.onToggleTranscript}
+      >
+        <Text className="font-t3-medium text-xs text-foreground-muted">
+          View listening transcript
+        </Text>
+        <SymbolView
+          name={props.transcriptExpanded ? "chevron.up" : "chevron.down"}
+          size={13}
+          tintColor={props.iconSubtleColor}
+          type="monochrome"
+        />
+      </Pressable>
+      {props.transcriptExpanded ? (
+        <Text className="text-sm leading-5 text-foreground-muted">{props.speech.transcript}</Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -1368,6 +1567,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      textToSpeechAvailable: props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
     }),
@@ -1377,6 +1577,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
     ],
@@ -1614,6 +1815,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        textToSpeechAvailable: props.textToSpeechAvailable,
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
@@ -1650,6 +1852,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.textToSpeechAvailable,
       props.skills,
     ],
   );

@@ -127,6 +127,9 @@ const SERVER_CONFIG: ServerConfigType = {
   speechToText: {
     available: false,
   },
+  textToSpeech: {
+    available: false,
+  },
   observability: {
     logsDirectoryPath: "/tmp/logs",
     localTracingEnabled: false,

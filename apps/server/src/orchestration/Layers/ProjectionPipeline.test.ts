@@ -913,6 +913,7 @@ it.layer(
       const path = yield* Path.Path;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
       const { attachmentsDir } = yield* ServerConfig;
       const now = "2026-01-01T00:00:00.000Z";
       const threadId = ThreadId.make("Thread Revert.Files");
@@ -920,6 +921,8 @@ it.layer(
       const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
       const otherThreadAttachmentId =
         "thread-revert-files-extra-00000000-0000-4000-8000-000000000003";
+      const keepSpeechId = "thread-revert-files-00000000-0000-4000-8000-000000000004";
+      const removeSpeechId = "thread-revert-files-00000000-0000-4000-8000-000000000005";
 
       const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
         eventStore
@@ -1081,14 +1084,30 @@ it.layer(
 
       const keepPath = path.join(attachmentsDir, `${keepAttachmentId}.png`);
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
+      const keepSpeechPath = path.join(attachmentsDir, `${keepSpeechId}.mp3`);
+      const removeSpeechPath = path.join(attachmentsDir, `${removeSpeechId}.mp3`);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
       yield* fileSystem.writeFileString(keepPath, "keep");
       yield* fileSystem.writeFileString(removePath, "remove");
+      yield* fileSystem.writeFileString(keepSpeechPath, "keep speech");
+      yield* fileSystem.writeFileString(removeSpeechPath, "remove speech");
+      yield* sql`
+        INSERT INTO projection_message_speech (
+          message_id, thread_id, speech_id, transcript, mime_type, size_bytes,
+          source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
+        ) VALUES
+          ('message-keep', ${threadId}, ${keepSpeechId}, 'Keep speech', 'audio/mpeg', 11,
+           'keep-source', 'recipe', 'voice', 'model', ${now}),
+          ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/mpeg', 13,
+           'remove-source', 'recipe', 'voice', 'model', ${now})
+      `;
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
       assert.isTrue(yield* exists(removePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(keepSpeechPath));
+      assert.isTrue(yield* exists(removeSpeechPath));
 
       yield* appendAndProject({
         type: "thread.reverted",
@@ -1109,6 +1128,15 @@ it.layer(
       assert.isTrue(yield* exists(keepPath));
       assert.isFalse(yield* exists(removePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(keepSpeechPath));
+      assert.isFalse(yield* exists(removeSpeechPath));
+      const speechRows = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_message_speech
+        WHERE thread_id = ${threadId}
+        ORDER BY message_id
+      `;
+      assert.deepEqual(speechRows, [{ messageId: "message-keep" }]);
     }),
   );
 });

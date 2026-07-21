@@ -1102,6 +1102,9 @@ const makeWsRpcLayer = (
           speechToText: {
             available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
           },
+          textToSpeech: {
+            available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
+          },
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
         };

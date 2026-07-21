@@ -21,6 +21,8 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
+    generateSpeechScript: () =>
+      Effect.die("generateSpeechScript stub not configured for this test"),
     ...overrides,
   });
 
@@ -64,12 +66,17 @@ describe("makeTextGenerationFromRegistry", () => {
     Effect.gen(function* () {
       const personalId = ProviderInstanceId.make("codex_personal");
       const personalCalls: string[] = [];
+      const speechCalls: string[] = [];
       const personal = makeStubInstance(
         personalId,
         makeStubTextGeneration({
           generateBranchName: (input) => {
             personalCalls.push(input.message);
             return Effect.succeed({ branch: "personal-branch" });
+          },
+          generateSpeechScript: (input) => {
+            speechCalls.push(input.message);
+            return Effect.succeed({ script: "A spoken version." });
           },
         }),
       );
@@ -92,6 +99,14 @@ describe("makeTextGenerationFromRegistry", () => {
 
       expect(result.branch).toBe("personal-branch");
       expect(personalCalls).toEqual(["Refactor the routing layer"]);
+
+      const speech = yield* tg.generateSpeechScript({
+        cwd: process.cwd(),
+        message: "Written response",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex_personal"), "gpt-5"),
+      });
+      expect(speech.script).toBe("A spoken version.");
+      expect(speechCalls).toEqual(["Written response"]);
     }),
   );
 

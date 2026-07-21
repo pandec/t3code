@@ -99,6 +99,7 @@ import {
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
+import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -312,7 +313,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreDependenciesLive = Layer.mergeAll(ReactorLayerLive, MessageSpeech.layer).pipe(
   // Core Services
   Layer.provideMerge(
     Layer.mergeAll(
@@ -326,7 +327,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(Keybindings.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, TextGeneration.layer)),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`

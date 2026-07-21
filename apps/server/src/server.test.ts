@@ -90,6 +90,7 @@ import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/provid
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -532,14 +533,20 @@ const buildAppUnderTest = (options?: {
       disableLogger: true,
     }).pipe(
       Layer.provide(
-        Layer.mock(Keybindings.Keybindings)({
-          loadConfigState: Effect.succeed({
-            keybindings: [],
-            issues: [],
+        Layer.mergeAll(
+          Layer.mock(MessageSpeech.MessageSpeech)({
+            available: false,
+            synthesize: () => Effect.die("message speech is not configured for this test"),
           }),
-          streamChanges: Stream.empty,
-          ...options?.layers?.keybindings,
-        }),
+          Layer.mock(Keybindings.Keybindings)({
+            loadConfigState: Effect.succeed({
+              keybindings: [],
+              issues: [],
+            }),
+            streamChanges: Stream.empty,
+            ...options?.layers?.keybindings,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProviderRegistry.ProviderRegistry)({

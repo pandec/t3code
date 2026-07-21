@@ -42,7 +42,12 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
-import { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "./voice.ts";
+import {
+  MessageSpeechSynthesisRequest,
+  MessageSpeechSynthesisResult,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResult,
+} from "./voice.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -61,6 +66,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "audio_too_large",
   "audio_unsupported_format",
   "audio_empty",
+  "speech_message_unavailable",
+  "speech_source_too_long",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -91,6 +98,9 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_dispatch_failed",
   "transcription_unavailable",
   "transcription_provider_failed",
+  "speech_unavailable",
+  "speech_script_failed",
+  "speech_provider_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -501,14 +511,23 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice").add(
-  HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
-    headers: OptionalBearerHeaders,
-    payload: VoiceTranscriptionRequest,
-    success: VoiceTranscriptionResult,
-    error: EnvironmentVoiceTranscriptionErrors,
-  }).middleware(EnvironmentAuthenticatedAuth),
-) {}
+export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
+  .add(
+    HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
+      headers: OptionalBearerHeaders,
+      payload: VoiceTranscriptionRequest,
+      success: VoiceTranscriptionResult,
+      error: EnvironmentVoiceTranscriptionErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("synthesizeMessage", "/api/voice/message-speech", {
+      headers: OptionalBearerHeaders,
+      payload: MessageSpeechSynthesisRequest,
+      success: MessageSpeechSynthesisResult,
+      error: EnvironmentVoiceTranscriptionErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
 
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(

@@ -117,6 +117,8 @@ describe("DesktopShellEnvironment", () => {
             SSH_AUTH_SOCK: "/tmp/secretive.sock",
             HOMEBREW_PREFIX: "/opt/homebrew",
             ELEVENLABS_API_KEY: "shell-elevenlabs-key",
+            ELEVENLABS_TTS_MODEL: "eleven-flash-test",
+            ELEVENLABS_TTS_VOICE_ID: "voice-test",
           });
         },
       });
@@ -127,6 +129,8 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
       assert.equal(env.ELEVENLABS_API_KEY, "shell-elevenlabs-key");
+      assert.equal(env.ELEVENLABS_TTS_MODEL, "eleven-flash-test");
+      assert.equal(env.ELEVENLABS_TTS_VOICE_ID, "voice-test");
     }),
   );
 

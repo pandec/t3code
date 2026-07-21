@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type MessageSpeechSynthesisResult,
   type MessageId,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -51,6 +52,8 @@ import {
   FileDiffIcon,
   GlobeIcon,
   HammerIcon,
+  HeadphonesIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
   MicIcon,
   MousePointerClickIcon,
@@ -104,6 +107,10 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { useAssetUrl } from "../../assets/assetUrls";
+import { synthesizeMessageSpeech } from "../../state/voice";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { toastManager } from "../ui/toast";
 
 import {
   buildInlineTerminalContextText,
@@ -135,6 +142,7 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -174,6 +182,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -208,6 +217,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  textToSpeechAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -426,6 +436,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -440,6 +451,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1021,6 +1033,41 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
+  const [speechExpanded, setSpeechExpanded] = useState(false);
+
+  const canSynthesizeSpeech =
+    ctx.textToSpeechAvailable &&
+    row.showAssistantMeta &&
+    !row.message.streaming &&
+    row.message.text.trim().length > 0;
+
+  const onToggleSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setSpeechExpanded((expanded) => !expanded);
+      return;
+    }
+    if (speechPhase === "preparing") return;
+
+    setSpeechPhase("preparing");
+    const result = await synthesize({
+      environmentId: ctx.activeThreadEnvironmentId,
+      input: { messageId: row.message.id },
+    });
+    setSpeechPhase("idle");
+    if (result._tag === "Success") {
+      setSpeech(result.value);
+      setSpeechExpanded(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Listening version unavailable",
+      description: "T3 Code could not prepare audio for this message. Try again in a moment.",
+    });
+  }, [ctx.activeThreadEnvironmentId, row.message.id, speech, speechPhase, synthesize]);
 
   return (
     <>
@@ -1041,6 +1088,38 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
+            {canSynthesizeSpeech ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={
+                        speech === null ? "Create listening version" : "Toggle listening version"
+                      }
+                      aria-expanded={speech === null ? undefined : speechExpanded}
+                      onClick={() => void onToggleSpeech()}
+                    />
+                  }
+                >
+                  {speechPhase === "preparing" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <HeadphonesIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {speechPhase === "preparing"
+                    ? "Preparing listening version"
+                    : speech === null
+                      ? "Listen to this response"
+                      : speechExpanded
+                        ? "Hide listening version"
+                        : "Show listening version"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
             {!row.message.streaming && (
               <Tooltip>
                 <TooltipTrigger
@@ -1055,8 +1134,49 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           </div>
         ) : null}
+        {speech !== null && speechExpanded ? (
+          <AssistantSpeechPlayer environmentId={ctx.activeThreadEnvironmentId} speech={speech} />
+        ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantSpeechPlayer({
+  environmentId,
+  speech,
+}: {
+  environmentId: EnvironmentId;
+  speech: MessageSpeechSynthesisResult;
+}) {
+  const audioUrl = useAssetUrl(environmentId, {
+    _tag: "attachment",
+    attachmentId: speech.speechId,
+  });
+
+  return (
+    <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+        <HeadphonesIcon className="size-3.5 text-muted-foreground" />
+        <span>Listening version</span>
+      </div>
+      {audioUrl === null ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+          <span>Loading audio…</span>
+        </div>
+      ) : (
+        <audio className="h-9 w-full" controls preload="metadata" src={audioUrl} />
+      )}
+      <details className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer select-none hover:text-foreground">
+          View listening transcript
+        </summary>
+        <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
+          {speech.transcript}
+        </p>
+      </details>
+    </div>
   );
 }
 
