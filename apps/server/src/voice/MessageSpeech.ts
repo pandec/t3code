@@ -10,6 +10,7 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -135,6 +136,51 @@ export class MessageSpeech extends Context.Service<
 
 const storageError = () => new MessageSpeechError({ reason: "storage_failed" });
 
+interface MessageSpeechLockEntry {
+  readonly lock: Semaphore.Semaphore;
+  readonly users: number;
+}
+
+export const makeMessageSpeechLockCoordinator = Effect.fn("MessageSpeech.makeLockCoordinator")(
+  function* () {
+    const locksRef = yield* Ref.make<ReadonlyMap<string, MessageSpeechLockEntry>>(new Map());
+
+    const acquire = Effect.fn("MessageSpeech.acquireLock")(function* (messageId: string) {
+      const created = yield* Semaphore.make(1);
+      return yield* Ref.modify(locksRef, (locks) => {
+        const existing = locks.get(messageId);
+        const lock = existing?.lock ?? created;
+        const next = new Map(locks);
+        next.set(messageId, { lock, users: (existing?.users ?? 0) + 1 });
+        return [lock, next] as const;
+      });
+    });
+
+    const release = (messageId: string, lock: Semaphore.Semaphore) =>
+      Ref.update(locksRef, (locks) => {
+        const current = locks.get(messageId);
+        if (!current || current.lock !== lock) return locks;
+        const next = new Map(locks);
+        if (current.users <= 1) {
+          next.delete(messageId);
+        } else {
+          next.set(messageId, { lock, users: current.users - 1 });
+        }
+        return next;
+      });
+
+    return {
+      withMessageLock: <A, E, R>(messageId: string, effect: Effect.Effect<A, E, R>) =>
+        Effect.acquireUseRelease(
+          acquire(messageId),
+          (lock) => lock.withPermit(effect),
+          (lock) => release(messageId, lock),
+        ),
+      activeLockCount: Ref.get(locksRef).pipe(Effect.map((locks) => locks.size)),
+    };
+  },
+);
+
 export const layer = Layer.effect(
   MessageSpeech,
   Effect.gen(function* () {
@@ -152,22 +198,7 @@ export const layer = Layer.effect(
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettingsService;
     const textGeneration = yield* TextGeneration;
-    const synthesisLocksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
-
-    const getSynthesisLock = Effect.fn("MessageSpeech.getSynthesisLock")(function* (
-      messageId: string,
-    ) {
-      const existing = (yield* Ref.get(synthesisLocksRef)).get(messageId);
-      if (existing) return existing;
-      const created = yield* Semaphore.make(1);
-      return yield* Ref.modify(synthesisLocksRef, (locks) => {
-        const current = locks.get(messageId);
-        if (current) return [current, locks] as const;
-        const next = new Map(locks);
-        next.set(messageId, created);
-        return [created, next] as const;
-      });
-    });
+    const synthesisLocks = yield* makeMessageSpeechLockCoordinator();
 
     const resolveSpeechPath = (speechId: string) =>
       resolveAttachmentRelativePath({
@@ -326,14 +357,15 @@ export const layer = Layer.effect(
       }
       const createdAt = DateTime.formatIso(yield* DateTime.now);
 
-      yield* fileSystem
-        .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
-        .pipe(
-          Effect.andThen(fileSystem.writeFile(speechPath, audioBytes)),
-          Effect.mapError(storageError),
-        );
+      yield* Effect.gen(function* () {
+        yield* fileSystem
+          .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
+          .pipe(
+            Effect.andThen(fileSystem.writeFile(speechPath, audioBytes)),
+            Effect.mapError(storageError),
+          );
 
-      const persistedRows = yield* sql<MessageSpeechCacheRow>`
+        const rows = yield* sql<MessageSpeechCacheRow>`
         INSERT INTO projection_message_speech (
           message_id,
           thread_id,
@@ -394,15 +426,19 @@ export const layer = Layer.effect(
           voice_id AS "voiceId",
           tts_model AS "ttsModel",
           created_at AS "createdAt"
-      `.pipe(
-        Effect.mapError(storageError),
-        Effect.tapError(() => fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore)),
-      );
+        `.pipe(Effect.mapError(storageError));
 
-      if (persistedRows.length === 0) {
-        yield* fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore);
-        return yield* new MessageSpeechError({ reason: "message_unavailable" });
-      }
+        if (rows.length === 0) {
+          return yield* new MessageSpeechError({ reason: "message_unavailable" });
+        }
+        return rows;
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore),
+        ),
+      );
 
       if (cached && cached.speechId !== speechId) {
         const previousPath = resolveSpeechPath(cached.speechId);
@@ -424,9 +460,7 @@ export const layer = Layer.effect(
     return MessageSpeech.of({
       available,
       synthesize: (request) =>
-        Effect.flatMap(getSynthesisLock(request.messageId), (lock) =>
-          lock.withPermit(synthesizeUnlocked(request)),
-        ),
+        synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
     });
   }),
 );
