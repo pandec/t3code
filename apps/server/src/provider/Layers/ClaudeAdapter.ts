@@ -4024,6 +4024,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               pathToClaudeCodeExecutable: claudeSdkExecutablePath,
               abortController,
               settingSources: ["user", "project", "local"],
+              // Project settings must be loaded to see project skills, but a
+              // metadata lookup must not boot the workspace's `.mcp.json`
+              // servers. Strict mode keeps discovery to the skills we asked
+              // for instead of spawning arbitrary project subprocesses.
+              strictMcpConfig: true,
               allowedTools: [],
               env: claudeEnvironment,
               stderr: () => {},

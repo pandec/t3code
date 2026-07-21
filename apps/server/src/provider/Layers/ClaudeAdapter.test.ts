@@ -331,6 +331,10 @@ describe("ClaudeAdapterLive", () => {
         "project",
         "local",
       ]);
+      // Project settings are loaded for skills, so discovery must opt out of
+      // the workspace's `.mcp.json` servers rather than booting them.
+      assert.equal(harness.getLastCreateQueryInput()?.options.strictMcpConfig, true);
+      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
