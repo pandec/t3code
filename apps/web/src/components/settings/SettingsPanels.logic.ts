@@ -8,6 +8,8 @@ import type {
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 export interface ArchivedThreadSearchCandidate {
+  readonly environmentLabel: string;
+  readonly modelName: string;
   readonly projectName: string;
   readonly projectCwd: string;
   readonly threadTitle: string;
@@ -22,7 +24,13 @@ export function archivedThreadMatchesSearch(
     return true;
   }
 
-  const searchableText = [candidate.threadTitle, candidate.projectName, candidate.projectCwd]
+  const searchableText = [
+    candidate.threadTitle,
+    candidate.projectName,
+    candidate.projectCwd,
+    candidate.environmentLabel,
+    candidate.modelName,
+  ]
     .join("\n")
     .toLowerCase();
   return searchTerms.every((term) => searchableText.includes(term));
