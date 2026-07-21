@@ -428,6 +428,9 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
+  speechToText: Schema.Struct({
+    available: Schema.Boolean,
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

@@ -49,6 +49,7 @@ import {
   GlobeIcon,
   HammerIcon,
   MessageCircleIcon,
+  MicIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
@@ -855,6 +856,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   return (
     <div className="group flex flex-col items-end gap-1">
       <div className="relative max-w-[80%] rounded-2xl border border-border bg-secondary p-3">
+        {row.message.inputOrigin === "voice-transcription" ? (
+          <div className="mb-1.5 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+            <MicIcon className="size-3" />
+            <span>Transcribed</span>
+          </div>
+        ) : null}
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (

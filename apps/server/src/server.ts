@@ -1,7 +1,14 @@
-import { EnvironmentHttpApi } from "@t3tools/contracts";
+import { EnvironmentHttpApi, VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpIncomingMessage,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+} from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as ServerConfig from "./config.ts";
@@ -91,6 +98,8 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
+import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -100,6 +109,23 @@ import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale"
 // already closes the websocket gracefully. Do not add an artificial drain before
 // those finalizers get a chance to run.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
+const VOICE_TRANSCRIPTION_MAX_HTTP_BODY_SIZE = FileSystem.Size(
+  VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS + 1_024,
+);
+
+const withVoiceTranscriptionBodyLimit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+    // `url` is the request path on both the Node and Bun adapters, whereas
+    // `originalUrl` is an absolute URL under Bun and would never match here.
+    request.url.startsWith("/api/voice/transcriptions")
+      ? effect.pipe(
+          Effect.provideService(
+            HttpIncomingMessage.MaxBodySize,
+            VOICE_TRANSCRIPTION_MAX_HTTP_BODY_SIZE,
+          ),
+        )
+      : effect,
+  );
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -359,6 +385,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(voiceHttpApiLayer.pipe(Layer.provide(VoiceTranscription.layer))),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
@@ -480,6 +507,7 @@ export const makeServerLayer = Layer.unwrap(
     const serverApplicationLayer = Layer.mergeAll(
       HttpRouter.serve(makeRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
+        middleware: withVoiceTranscriptionBodyLimit,
       }),
       httpListeningLayer,
       runtimeStateLayer,

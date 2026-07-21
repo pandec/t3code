@@ -211,6 +211,7 @@ export function useThreadComposerState() {
           messageId,
           commandId: CommandId.make(metadata.commandId),
           text,
+          ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
           attachments,
           modelSelection: draft.modelSelection ?? thread.modelSelection,
           runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
@@ -237,6 +238,17 @@ export function useThreadComposerState() {
 
       const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
       setComposerDraftText(threadKey, value);
+    },
+    [selectedThreadShell],
+  );
+
+  const onVoiceTranscript = useCallback(
+    (text: string) => {
+      if (!selectedThreadShell) return;
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const current = getComposerDraftSnapshot(threadKey).text;
+      const next = current.trim().length > 0 ? `${current.trimEnd()}\n\n${text}` : text;
+      setComposerDraftText(threadKey, next, "voice-transcription");
     },
     [selectedThreadShell],
   );
@@ -357,6 +369,7 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     onChangeDraftMessage,
+    onVoiceTranscript,
     onPickDraftImages,
     onPasteIntoDraft,
     onNativePasteImages,

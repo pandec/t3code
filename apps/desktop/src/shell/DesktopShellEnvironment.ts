@@ -66,14 +66,20 @@ export class DesktopShellEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/shell/DesktopShellEnvironment") {}
 
-const LOGIN_SHELL_ENV_NAMES = [
-  "PATH",
-  "SSH_AUTH_SOCK",
+const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
   "HOMEBREW_PREFIX",
   "HOMEBREW_CELLAR",
   "HOMEBREW_REPOSITORY",
   "XDG_CONFIG_HOME",
   "XDG_DATA_HOME",
+  "ELEVENLABS_API_KEY",
+  "ELEVENLABS_STT_MODEL",
+  "ELEVENLABS_STT_LANGUAGE",
+] as const;
+const LOGIN_SHELL_ENV_NAMES = [
+  "PATH",
+  "SSH_AUTH_SOCK",
+  ...LOGIN_SHELL_PASSTHROUGH_ENV_NAMES,
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
 const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
@@ -383,13 +389,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       config.env.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
     }
 
-    for (const name of [
-      "HOMEBREW_PREFIX",
-      "HOMEBREW_CELLAR",
-      "HOMEBREW_REPOSITORY",
-      "XDG_CONFIG_HOME",
-      "XDG_DATA_HOME",
-    ] as const) {
+    for (const name of LOGIN_SHELL_PASSTHROUGH_ENV_NAMES) {
       if (!config.env[name] && shellEnvironment[name]) {
         config.env[name] = shellEnvironment[name];
       }

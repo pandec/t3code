@@ -61,6 +61,10 @@ function makeFakeBrowserWindow() {
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    session: {
+      setPermissionCheckHandler: vi.fn(),
+      setPermissionRequestHandler: vi.fn(),
+    },
   };
 
   const window = {
@@ -311,6 +315,52 @@ describe("DesktopWindow", () => {
       DesktopWindow.isSameOriginRendererNavigation({
         applicationUrl: "t3code://app/",
         navigationUrl: "not a url",
+      }),
+    );
+  });
+
+  it("gates only microphone capture and leaves other renderer permissions granted", () => {
+    const applicationUrl = "t3code://app/";
+    // Unrelated permissions must keep Electron's default (granted) behaviour;
+    // denying them would break renderer APIs such as clipboard writes.
+    assert.isTrue(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "clipboard-sanitized-write",
+        requestingUrl: applicationUrl,
+        mediaTypes: [],
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: ["audio"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: ["audio", "video"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "https://evil.example",
+        mediaTypes: ["audio"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: [],
       }),
     );
   });

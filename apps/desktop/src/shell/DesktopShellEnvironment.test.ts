@@ -116,6 +116,7 @@ describe("DesktopShellEnvironment", () => {
             PATH: "/opt/homebrew/bin:/usr/bin",
             SSH_AUTH_SOCK: "/tmp/secretive.sock",
             HOMEBREW_PREFIX: "/opt/homebrew",
+            ELEVENLABS_API_KEY: "shell-elevenlabs-key",
           });
         },
       });
@@ -125,6 +126,7 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
+      assert.equal(env.ELEVENLABS_API_KEY, "shell-elevenlabs-key");
     }),
   );
 
@@ -134,6 +136,7 @@ describe("DesktopShellEnvironment", () => {
         SHELL: "/bin/zsh",
         PATH: "/usr/bin",
         SSH_AUTH_SOCK: "/tmp/inherited.sock",
+        ELEVENLABS_API_KEY: "inherited-elevenlabs-key",
       };
 
       yield* runShellEnvironment({
@@ -143,11 +146,13 @@ describe("DesktopShellEnvironment", () => {
           envOutput({
             PATH: "/opt/homebrew/bin:/usr/bin",
             SSH_AUTH_SOCK: "/tmp/login-shell.sock",
+            ELEVENLABS_API_KEY: "shell-elevenlabs-key",
           }),
       });
 
       assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin");
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/inherited.sock");
+      assert.equal(env.ELEVENLABS_API_KEY, "inherited-elevenlabs-key");
     }),
   );
 

@@ -904,6 +904,19 @@ function renderFeedEntry(
             })}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+            {message.inputOrigin === "voice-transcription" ? (
+              <View className="flex-row items-center gap-1 pr-1">
+                <SymbolView
+                  name="mic.fill"
+                  size={11}
+                  tintColor={iconSubtleColor}
+                  type="monochrome"
+                />
+                <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+                  Transcribed
+                </Text>
+              </View>
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
