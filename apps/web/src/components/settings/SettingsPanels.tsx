@@ -1,6 +1,14 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  LoaderIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  XIcon,
+} from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
@@ -76,6 +84,7 @@ import {
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
+  archivedThreadMatchesSearch,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
 } from "./SettingsPanels.logic";
@@ -1433,6 +1442,8 @@ export function ProviderSettingsPanel() {
 export function ArchivedThreadsPanel() {
   const projects = useProjects();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
     [projects],
@@ -1493,6 +1504,53 @@ export function ArchivedThreadsPanel() {
     }
     return groups;
   }, [archivedSnapshots]);
+  const filteredArchivedGroups = useMemo(
+    () =>
+      archivedGroups.flatMap(({ project, threads }) => {
+        const matchingThreads = threads.filter((thread) =>
+          archivedThreadMatchesSearch(
+            {
+              projectName: project.name,
+              projectCwd: project.cwd,
+              threadTitle: thread.title,
+            },
+            searchQuery,
+          ),
+        );
+        return matchingThreads.length > 0 ? [{ project, threads: matchingThreads }] : [];
+      }),
+    [archivedGroups, searchQuery],
+  );
+  const matchingThreadCount = useMemo(
+    () => filteredArchivedGroups.reduce((count, group) => count + group.threads.length, 0),
+    [filteredArchivedGroups],
+  );
+  const hasSearchQuery = searchQuery.trim().length > 0;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isMod = event.metaKey || event.ctrlKey;
+      if (event.defaultPrevented || !isMod || event.altKey || event.key.toLowerCase() !== "f") {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target !== searchInputRef.current &&
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      searchInputRef.current?.focus({ preventScroll: true });
+      searchInputRef.current?.select();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -1544,6 +1602,56 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
+      <div className="space-y-1.5">
+        <div className="relative">
+          <SearchIcon
+            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && searchQuery.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setSearchQuery("");
+              }
+            }}
+            placeholder="Search archived threads"
+            aria-label="Search archived threads"
+            aria-describedby="archived-thread-search-status"
+            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+          />
+          {searchQuery.length > 0 ? (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              className="absolute top-1/2 right-2 size-6 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus({ preventScroll: true });
+              }}
+              aria-label="Clear archived thread search"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          ) : null}
+        </div>
+        <p
+          id="archived-thread-search-status"
+          className="min-h-4 px-1 text-[11px] text-muted-foreground"
+          aria-live="polite"
+        >
+          {hasSearchQuery
+            ? `${matchingThreadCount} ${matchingThreadCount === 1 ? "thread" : "threads"} found`
+            : "Press Command+F or Ctrl+F to focus search."}
+        </p>
+      </div>
+
       {archivedGroups.length === 0 ? (
         <SettingsSection title="Archived threads">
           <SettingsRow
@@ -1568,8 +1676,15 @@ export function ArchivedThreadsPanel() {
             }
           />
         </SettingsSection>
+      ) : filteredArchivedGroups.length === 0 ? (
+        <SettingsSection title="Archived threads">
+          <SettingsRow
+            title="No matching archived threads"
+            description="Try a different thread title, project, or workspace path."
+          />
+        </SettingsSection>
       ) : (
-        archivedGroups.map(({ project, threads: projectThreads }) => (
+        filteredArchivedGroups.map(({ project, threads: projectThreads }) => (
           <SettingsSection
             key={project.id}
             title={project.name}
