@@ -13,6 +13,8 @@ import {
 
 describe("archivedThreadMatchesSearch", () => {
   const candidate = {
+    environmentLabel: "Grey Mac",
+    modelName: "gpt-5.4",
     projectName: "T3 Code",
     projectCwd: "/Users/example/repos/t3code",
     threadTitle: "Add archived thread search",
@@ -21,6 +23,7 @@ describe("archivedThreadMatchesSearch", () => {
   it("matches case-insensitive terms across thread and project metadata", () => {
     expect(archivedThreadMatchesSearch(candidate, "ARCHIVED t3")).toBe(true);
     expect(archivedThreadMatchesSearch(candidate, "example search")).toBe(true);
+    expect(archivedThreadMatchesSearch(candidate, "grey 5.4")).toBe(true);
   });
 
   it("requires every search term to match", () => {
