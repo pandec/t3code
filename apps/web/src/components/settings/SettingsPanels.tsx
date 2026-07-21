@@ -1672,6 +1672,15 @@ export function ArchivedThreadsPanel() {
         </p>
       </div>
 
+      {archiveError && archivedGroups.length > 0 ? (
+        <SettingsSection title="Archive availability">
+          <SettingsRow
+            title="Some archived threads could not be loaded"
+            description="One or more environments are unavailable. The results below may be incomplete."
+          />
+        </SettingsSection>
+      ) : null}
+
       {archivedGroups.length === 0 ? (
         <SettingsSection title="Archived threads">
           <SettingsRow
@@ -1711,17 +1720,21 @@ export function ArchivedThreadsPanel() {
               key={group.key}
               title={group.displayName}
               collapsed={isCollapsed}
-              onToggleCollapsed={() => {
-                setCollapsedProjectKeys((current) => {
-                  const next = new Set(current);
-                  if (next.has(group.key)) {
-                    next.delete(group.key);
-                  } else {
-                    next.add(group.key);
-                  }
-                  return next;
-                });
-              }}
+              onToggleCollapsed={
+                hasSearchQuery
+                  ? undefined
+                  : () => {
+                      setCollapsedProjectKeys((current) => {
+                        const next = new Set(current);
+                        if (next.has(group.key)) {
+                          next.delete(group.key);
+                        } else {
+                          next.add(group.key);
+                        }
+                        return next;
+                      });
+                    }
+              }
               icon={
                 <ProjectFavicon
                   environmentId={group.representativeProject.environmentId}

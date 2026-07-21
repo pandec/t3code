@@ -29,7 +29,7 @@ export function SettingsSection({
   icon?: ReactNode;
   headerAction?: ReactNode;
   collapsed?: boolean;
-  onToggleCollapsed?: () => void;
+  onToggleCollapsed?: (() => void) | undefined;
   children: ReactNode;
 }) {
   const contentId = useId();

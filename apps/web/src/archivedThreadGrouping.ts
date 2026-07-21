@@ -46,6 +46,10 @@ export function buildArchivedThreadGroups(input: {
     const projectById = new Map(
       snapshot.projects.map((project) => {
         const scopedProject = scopeProject(environmentId, project);
+        const key = deriveLogicalProjectKeyFromSettings(scopedProject, input.groupingSettings);
+        const group = groupsByKey.get(key) ?? { projects: [], threads: [] };
+        group.projects.push(scopedProject);
+        groupsByKey.set(key, group);
         return [scopedProject.id, scopedProject] as const;
       }),
     );
@@ -56,10 +60,8 @@ export function buildArchivedThreadGroups(input: {
       if (!project) continue;
 
       const key = deriveLogicalProjectKeyFromSettings(project, input.groupingSettings);
-      const group = groupsByKey.get(key) ?? { projects: [], threads: [] };
-      if (!group.projects.some((candidate) => candidate === project)) {
-        group.projects.push(project);
-      }
+      const group = groupsByKey.get(key);
+      if (!group) continue;
       group.threads.push({
         environmentLabel: input.resolveEnvironmentLabel(environmentId),
         project,
@@ -71,6 +73,7 @@ export function buildArchivedThreadGroups(input: {
 
   const groups: ArchivedThreadGroup[] = [];
   for (const [key, group] of groupsByKey) {
+    if (group.threads.length === 0) continue;
     const representativeProject =
       (input.primaryEnvironmentId
         ? group.projects.find((project) => project.environmentId === input.primaryEnvironmentId)

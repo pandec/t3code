@@ -159,6 +159,37 @@ describe("buildArchivedThreadGroups", () => {
     expect(groups).toHaveLength(2);
   });
 
+  it("uses the primary project as representative when only a remote member has archived chats", () => {
+    const localProject = makeProject({
+      id: "local-project",
+      root: "/Users/example/t3code",
+      title: "Local checkout",
+      canonicalKey: "github.com/t3tools/t3code",
+    });
+    const remoteProject = makeProject({
+      id: "remote-project",
+      root: "/workspace/t3code",
+      title: "Remote checkout",
+      canonicalKey: "github.com/t3tools/t3code",
+    });
+
+    const groups = buildArchivedThreadGroups({
+      groupingSettings,
+      primaryEnvironmentId: localEnvironmentId,
+      resolveEnvironmentLabel: String,
+      snapshots: [
+        snapshot(localEnvironmentId, localProject, []),
+        snapshot(remoteEnvironmentId, remoteProject, [
+          makeThread({ id: "remote-thread", projectId: remoteProject.id, title: "Remote chat" }),
+        ]),
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.representativeProject.environmentId).toBe(localEnvironmentId);
+    expect(groups[0]?.displayName).toBe("T3 Code");
+  });
+
   it("omits active threads returned by an archive snapshot", () => {
     const project = makeProject({ id: "project", root: "/repo", title: "Project" });
     const groups = buildArchivedThreadGroups({
