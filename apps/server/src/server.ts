@@ -115,7 +115,9 @@ const VOICE_TRANSCRIPTION_MAX_HTTP_BODY_SIZE = FileSystem.Size(
 
 const withVoiceTranscriptionBodyLimit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-    request.originalUrl.startsWith("/api/voice/transcriptions")
+    // `url` is the request path on both the Node and Bun adapters, whereas
+    // `originalUrl` is an absolute URL under Bun and would never match here.
+    request.url.startsWith("/api/voice/transcriptions")
       ? effect.pipe(
           Effect.provideService(
             HttpIncomingMessage.MaxBodySize,

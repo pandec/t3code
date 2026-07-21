@@ -319,6 +319,52 @@ describe("DesktopWindow", () => {
     );
   });
 
+  it("gates only microphone capture and leaves other renderer permissions granted", () => {
+    const applicationUrl = "t3code://app/";
+    // Unrelated permissions must keep Electron's default (granted) behaviour;
+    // denying them would break renderer APIs such as clipboard writes.
+    assert.isTrue(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "clipboard-sanitized-write",
+        requestingUrl: applicationUrl,
+        mediaTypes: [],
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: ["audio"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: ["audio", "video"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "https://evil.example",
+        mediaTypes: ["audio"],
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.shouldGrantRendererMediaPermission({
+        applicationUrl,
+        permission: "media",
+        requestingUrl: "t3code://app",
+        mediaTypes: [],
+      }),
+    );
+  });
+
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

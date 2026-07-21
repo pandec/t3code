@@ -228,6 +228,13 @@ export function VoiceRecorderControl(props: {
     };
   }, [discardFile, recorder]);
 
+  // `finishRecording` changes identity on every composer render (its props
+  // object is recreated), so subscribe through a ref. Otherwise the ticker
+  // interval is torn down and restarted before it can fire, stalling both the
+  // elapsed readout and the maximum-duration auto-stop.
+  const finishRecordingRef = useRef(finishRecording);
+  finishRecordingRef.current = finishRecording;
+
   useEffect(() => {
     if (phase !== "recording") return;
     const timer = setInterval(() => {
@@ -235,21 +242,21 @@ export function VoiceRecorderControl(props: {
       setElapsedMs(Math.min(nextElapsedMs, VOICE_TRANSCRIPTION_MAX_DURATION_MS));
       if (nextElapsedMs >= VOICE_TRANSCRIPTION_MAX_DURATION_MS) {
         clearInterval(timer);
-        void finishRecording(false);
+        void finishRecordingRef.current(false);
       }
     }, 250);
     return () => clearInterval(timer);
-  }, [finishRecording, phase]);
+  }, [phase]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState !== "active") {
         if (phaseRef.current === "starting") cancelStartRef.current = true;
-        if (phaseRef.current === "recording") void finishRecording(true);
+        if (phaseRef.current === "recording") void finishRecordingRef.current(true);
       }
     });
     return () => subscription.remove();
-  }, [finishRecording]);
+  }, []);
 
   const lockRecording = useCallback(() => {
     if (phaseRef.current !== "recording" || lockedRef.current) return;

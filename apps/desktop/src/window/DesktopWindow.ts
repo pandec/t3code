@@ -122,6 +122,38 @@ export function isSameOriginRendererNavigation(input: {
   }
 }
 
+function isRendererOrigin(applicationUrl: string, value: string): boolean {
+  try {
+    const rendererUrl = new URL(applicationUrl);
+    const url = new URL(value);
+    return url.protocol === rendererUrl.protocol && url.host === rendererUrl.host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Microphone capture for the voice composer is the only permission this window
+ * needs to gate. Every other permission keeps Electron's default (granted)
+ * behaviour, so installing the handlers does not silently break unrelated
+ * renderer APIs such as `navigator.clipboard.writeText`.
+ */
+export function shouldGrantRendererMediaPermission(input: {
+  readonly applicationUrl: string;
+  readonly permission: string;
+  readonly requestingUrl: string;
+  readonly mediaTypes: ReadonlyArray<string>;
+}): boolean {
+  if (input.permission !== "media") {
+    return true;
+  }
+  return (
+    isRendererOrigin(input.applicationUrl, input.requestingUrl) &&
+    input.mediaTypes.length > 0 &&
+    input.mediaTypes.every((mediaType) => mediaType === "audio" || mediaType === "unknown")
+  );
+}
+
 export function isRetryableDevelopmentRendererLoadFailure(input: {
   readonly applicationUrl: string;
   readonly errorCode: number;
@@ -275,33 +307,28 @@ export const make = Effect.gen(function* () {
       window.setAutoHideCursor(false);
     }
 
-    const rendererUrl = new URL(applicationUrl);
-    const isRendererUrl = (value: string): boolean => {
-      try {
-        const url = new URL(value);
-        return url.protocol === rendererUrl.protocol && url.host === rendererUrl.host;
-      } catch {
-        return false;
-      }
-    };
     window.webContents.session.setPermissionCheckHandler(
       (_webContents, permission, requestingOrigin, details) =>
-        permission === "media" &&
-        isRendererUrl(requestingOrigin) &&
-        (details.mediaType === "audio" || details.mediaType === "unknown"),
+        shouldGrantRendererMediaPermission({
+          applicationUrl,
+          permission,
+          requestingUrl: requestingOrigin,
+          mediaTypes: details.mediaType === undefined ? [] : [details.mediaType],
+        }),
     );
     window.webContents.session.setPermissionRequestHandler(
       (_webContents, permission, callback, details) => {
-        const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
         const requestingUrl =
           "securityOrigin" in details && details.securityOrigin
             ? details.securityOrigin
             : details.requestingUrl;
         callback(
-          permission === "media" &&
-            isRendererUrl(requestingUrl) &&
-            (mediaTypes?.length ?? 0) > 0 &&
-            mediaTypes?.every((mediaType) => mediaType === "audio") === true,
+          shouldGrantRendererMediaPermission({
+            applicationUrl,
+            permission,
+            requestingUrl,
+            mediaTypes: "mediaTypes" in details ? (details.mediaTypes ?? []) : [],
+          }),
         );
       },
     );

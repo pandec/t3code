@@ -202,6 +202,14 @@ export function DesktopVoiceRecorder({
     [releaseStream, submitRecording],
   );
 
+  // `stopRecording` changes identity whenever the composer re-renders (its
+  // `onTranscript` prop is an inline closure). Reading it through a ref keeps
+  // the ticker keyed on `phase` alone, so a busy composer cannot restart the
+  // interval before it fires and stall both the elapsed readout and the
+  // maximum-duration auto-stop.
+  const stopRecordingRef = useRef(stopRecording);
+  stopRecordingRef.current = stopRecording;
+
   useEffect(() => {
     if (phase !== "recording") return;
     const timer = window.setInterval(() => {
@@ -209,11 +217,11 @@ export function DesktopVoiceRecorder({
       setElapsedMs(Math.min(nextElapsedMs, VOICE_TRANSCRIPTION_MAX_DURATION_MS));
       if (nextElapsedMs >= VOICE_TRANSCRIPTION_MAX_DURATION_MS) {
         window.clearInterval(timer);
-        void stopRecording(false);
+        void stopRecordingRef.current(false);
       }
     }, 250);
     return () => window.clearInterval(timer);
-  }, [phase, stopRecording]);
+  }, [phase]);
 
   const startRecording = useCallback(async () => {
     if (disabled || phaseRef.current !== "idle") return;
