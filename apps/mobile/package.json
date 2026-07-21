@@ -27,7 +27,7 @@
     "ios:prod": "APP_VARIANT=production EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios",
     "ios:release": "APP_VARIANT=production EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios --configuration Release --no-bundler",
     "ios:local": "APP_VARIANT=development T3CODE_IOS_PERSONAL_TEAM=0 T3CODE_APPLE_TEAM_ID=2BY9VZMTHG T3CODE_IOS_BUNDLE_ID=com.pandec.tools.t3code EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios --device",
-    "ios:local:release": "APP_VARIANT=production T3CODE_IOS_PERSONAL_TEAM=0 T3CODE_APPLE_TEAM_ID=2BY9VZMTHG T3CODE_IOS_BUNDLE_ID=com.pandec.tools.t3code EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios --device --configuration Release --no-bundler",
+    "ios:local:release": "APP_VARIANT=production T3CODE_IOS_PERSONAL_TEAM=0 T3CODE_APPLE_TEAM_ID=2BY9VZMTHG T3CODE_IOS_BUNDLE_ID=com.pandec.tools.t3code EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios --device 'Bartosz Dec’s iPhone' --configuration Release --no-bundler",
     "eas:ios:dev": "eas build --profile development -p ios",
     "eas:ios:preview": "eas build --profile preview -p ios",
     "eas:ios:preview:dev": "eas build --profile preview:dev -p ios",
