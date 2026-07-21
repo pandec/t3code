@@ -16,6 +16,8 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlInitializeResponse,
+  type SDKControlReloadSkillsResponse,
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
@@ -83,6 +85,7 @@ import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
+  parseClaudeSkills,
   resolveClaudeApiModelId,
   resolveClaudeEffort,
 } from "./ClaudeProvider.ts";
@@ -214,6 +217,8 @@ interface ClaudeSessionContext {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly initializationResult: () => Promise<SDKControlInitializeResponse>;
+  readonly reloadSkills: () => Promise<SDKControlReloadSkillsResponse>;
   readonly interrupt: () => Promise<void>;
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
@@ -3968,7 +3973,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const canonicalizeImportCwd = Effect.fn("canonicalizeImportCwd")(function* (
     cwd: string,
-    operation: "listImportableSessions" | "readImportableSession",
+    operation: "listImportableSessions" | "listSkills" | "readImportableSession",
   ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
@@ -3980,6 +3985,59 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           }),
       ),
     );
+  });
+
+  const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = Effect.fn(
+    "ClaudeAdapter.listSkills",
+  )(function* (input) {
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
+
+    return yield* Effect.tryPromise({
+      try: async (signal) => {
+        const abortController = new AbortController();
+        const abortQuery = () => abortController.abort();
+        signal.addEventListener("abort", abortQuery, { once: true });
+
+        const claudeQuery = createQuery({
+          // Never yield because discovery must not send a user message.
+          // oxlint-disable-next-line require-yield
+          prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+            if (!abortController.signal.aborted) {
+              await new Promise<void>((resolve) =>
+                abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
+              );
+            }
+          })(),
+          options: {
+            cwd: canonicalCwd,
+            persistSession: false,
+            pathToClaudeCodeExecutable: claudeSdkExecutablePath,
+            abortController,
+            settingSources: ["user", "project", "local"],
+            allowedTools: [],
+            env: claudeEnvironment,
+            stderr: () => {},
+          },
+        });
+
+        try {
+          await claudeQuery.initializationResult();
+          const result = await claudeQuery.reloadSkills();
+          return parseClaudeSkills(result.skills);
+        } finally {
+          signal.removeEventListener("abort", abortQuery);
+          abortController.abort();
+          claudeQuery.close();
+        }
+      },
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "skills/reload",
+          detail: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    });
   });
 
   const importDriverContext = <A, E>(
@@ -4075,6 +4133,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     forkSession,
     listImportableSessions,
+    listSkills,
     readImportableSession,
     sendTurn,
     interruptTurn,
