@@ -2,10 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  Sidebar,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuSubButton,
   SidebarProvider,
+  SidebarRail,
   SidebarTrigger,
 } from "./sidebar";
 import { resolveSidebarState } from "./sidebarState";
@@ -48,6 +50,19 @@ describe("sidebar interactive cursors", () => {
 
     expect(html).toContain("[-webkit-app-region:no-drag]");
     expect(html).toContain("size-[var(--workspace-titlebar-control-size)]!");
+  });
+
+  it("keeps the sidebar resize rail interactive inside Electron drag regions", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <Sidebar resizable>
+          <SidebarRail />
+        </Sidebar>
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain('data-slot="sidebar-rail"');
+    expect(html).toContain("[-webkit-app-region:no-drag]");
   });
 
   it("uses a pointer cursor for menu buttons by default", () => {
