@@ -196,6 +196,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             ? [
                 "--ignore-user-config",
                 "--ignore-rules",
+                "--config",
+                "project_doc_max_bytes=0",
                 "--disable",
                 "shell_tool",
                 "--disable",

@@ -1,11 +1,41 @@
 import { MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   getElevenLabsTtsCharacterLimit,
   isMessageSpeechCacheReusable,
   isMessageSpeechSourceEligible,
+  makeMessageSpeechLockCoordinator,
 } from "./MessageSpeech.ts";
+
+describe("message speech locking", () => {
+  effectIt.effect("serializes the same message and evicts locks after success or failure", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* makeMessageSpeechLockCoordinator();
+      const active = yield* Ref.make(0);
+      const maxActive = yield* Ref.make(0);
+      const run = coordinator.withMessageLock(
+        "message",
+        Effect.gen(function* () {
+          const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+          yield* Ref.update(maxActive, (value) => Math.max(value, count));
+          yield* Effect.sleep("10 millis");
+          yield* Ref.update(active, (value) => value - 1);
+        }),
+      );
+
+      yield* Effect.all([run, run], { concurrency: "unbounded" });
+      expect(yield* Ref.get(maxActive)).toBe(1);
+      expect(yield* coordinator.activeLockCount).toBe(0);
+
+      yield* coordinator.withMessageLock("missing", Effect.fail("boom")).pipe(Effect.result);
+      expect(yield* coordinator.activeLockCount).toBe(0);
+    }),
+  );
+});
 
 describe("message speech eligibility", () => {
   it("accepts only completed, non-empty assistant responses within the source limit", () => {

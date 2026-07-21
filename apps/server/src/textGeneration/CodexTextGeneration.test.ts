@@ -641,11 +641,11 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
       ),
   );
 
-  it.effect("disables Codex tools while generating a listening script", () =>
+  it.effect("isolates Codex while generating a listening script", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({ script: "There are three retries." }),
-        requireArg: "--disable shell_tool",
+        requireArg: "project_doc_max_bytes=0",
         stdinMustContain: "within 5000 characters",
       },
       (textGeneration) =>

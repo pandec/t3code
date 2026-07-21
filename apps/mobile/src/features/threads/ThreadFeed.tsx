@@ -100,7 +100,7 @@ import {
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { ThreadWorkGroupToggle, ThreadWorkLog } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
-import { useAssetUrl } from "../../state/assets";
+import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1103,6 +1103,10 @@ function AssistantMessageMetaAndSpeech(props: {
           iconSubtleColor={props.iconSubtleColor}
           transcriptExpanded={transcriptExpanded}
           onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
+          onReset={() => {
+            setSpeech(null);
+            setExpanded(false);
+          }}
         />
       ) : null}
     </View>
@@ -1115,11 +1119,13 @@ function AssistantSpeechPlayer(props: {
   readonly iconSubtleColor: ColorValue;
   readonly transcriptExpanded: boolean;
   readonly onToggleTranscript: () => void;
+  readonly onReset: () => void;
 }) {
-  const audioUrl = useAssetUrl(props.environmentId, {
+  const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
   });
+  const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
   const player = useAudioPlayer(audioUrl, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
   const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
@@ -1147,7 +1153,16 @@ function AssistantSpeechPlayer(props: {
         />
         <Text className="font-t3-bold text-xs text-foreground">Listening version</Text>
       </View>
-      {audioUrl === null ? (
+      {audioUrlState._tag === "Failure" ? (
+        <View className="gap-2 py-1">
+          <Text className="text-xs text-foreground-muted">
+            The audio file is unavailable. Dismiss this card and try again.
+          </Text>
+          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onReset}>
+            <Text className="font-t3-medium text-xs text-foreground">Dismiss</Text>
+          </Pressable>
+        </View>
+      ) : audioUrl === null ? (
         <View className="flex-row items-center gap-2 py-1">
           <ActivityIndicator size="small" color={props.iconSubtleColor} />
           <Text className="text-xs text-foreground-muted">Loading audio…</Text>

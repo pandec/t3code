@@ -107,7 +107,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
-import { useAssetUrl } from "../../assets/assetUrls";
+import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
@@ -1135,7 +1135,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           </div>
         ) : null}
         {speech !== null && speechExpanded ? (
-          <AssistantSpeechPlayer environmentId={ctx.activeThreadEnvironmentId} speech={speech} />
+          <AssistantSpeechPlayer
+            environmentId={ctx.activeThreadEnvironmentId}
+            speech={speech}
+            onReset={() => {
+              setSpeech(null);
+              setSpeechExpanded(false);
+            }}
+          />
         ) : null}
       </div>
     </>
@@ -1145,11 +1152,13 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 function AssistantSpeechPlayer({
   environmentId,
   speech,
+  onReset,
 }: {
   environmentId: EnvironmentId;
   speech: MessageSpeechSynthesisResult;
+  onReset: () => void;
 }) {
-  const audioUrl = useAssetUrl(environmentId, {
+  const audioUrlState = useAssetUrlState(environmentId, {
     _tag: "attachment",
     attachmentId: speech.speechId,
   });
@@ -1160,13 +1169,20 @@ function AssistantSpeechPlayer({
         <HeadphonesIcon className="size-3.5 text-muted-foreground" />
         <span>Listening version</span>
       </div>
-      {audioUrl === null ? (
+      {audioUrlState._tag === "Failure" ? (
+        <div className="space-y-2 text-xs text-muted-foreground">
+          <p>The audio file is unavailable. Dismiss this card and try again.</p>
+          <Button variant="outline" size="xs" onClick={onReset}>
+            Dismiss
+          </Button>
+        </div>
+      ) : audioUrlState._tag === "Loading" ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <LoaderCircleIcon className="size-3.5 animate-spin" />
           <span>Loading audio…</span>
         </div>
       ) : (
-        <audio className="h-9 w-full" controls preload="metadata" src={audioUrl} />
+        <audio className="h-9 w-full" controls preload="metadata" src={audioUrlState.url} />
       )}
       <details className="mt-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer select-none hover:text-foreground">
