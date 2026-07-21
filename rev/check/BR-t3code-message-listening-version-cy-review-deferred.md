@@ -9,3 +9,5 @@ The same player-ownership follow-up should guarantee that starting one listening
 ## Mobile recording and playback arbitration
 
 The listening player sets Expo's process-wide audio mode to disallow recording immediately before playback, while the composer voice recorder independently enables recording mode. Starting playback during an active recording can therefore disrupt the recorder without synchronizing its UI state. Resolving this requires a product decision: disable playback while recording, or explicitly stop and retain/discard the recording before playback. I recommend disabling playback during recording unless the user explicitly confirms an interruption.
+
+> cy-review complete — 2026-07-21T17:23:01+02:00 — rounds: 2
