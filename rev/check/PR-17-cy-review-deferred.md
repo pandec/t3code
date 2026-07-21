@@ -1,20 +1,21 @@
 # PR 17 cy-review deferred items
 
-No items deferred this run.
+## Deferred by separate Opus review
 
-> cy-review complete — 2026-07-21T11:23:33Z — rounds: 2
+1. **Skill discovery runs the workspace's `SessionStart` hooks.**
 
-## Deferred by separate Opus review — 2026-07-21
+   `ClaudeAdapter.listSkills` must load user, project, and local settings to
+   discover project skills. With Claude Agent SDK 0.3.170, loading project
+   settings also executes the project's configured `SessionStart` hooks. Opus
+   verified this with a scratch project: the project skill and hook were both
+   active with project settings enabled, and neither was active with only user
+   settings.
 
-- **Skill discovery runs the workspace's `SessionStart` hooks.**
-  `ClaudeAdapter.listSkills` must pass `settingSources: ["user", "project",
-"local"]` to see project skills, and loading project settings also executes
-  the project's configured `SessionStart` hooks. Verified against
-  `@anthropic-ai/claude-agent-sdk@0.3.170`: with `["user", "project", "local"]`
-  a project `.claude/skills/demo-skill` is discovered and the project's
-  `SessionStart` hook command runs; with `["user"]` neither happens. Because
-  the composer refreshes skills per workspace on a 60s stale window, hooks with
-  real side effects now fire from merely opening a thread. There is no SDK
-  option to load project skills without project hooks, so narrowing this needs
-  a product decision (for example, discovering only on `$` trigger, caching
-  longer, or accepting user-scope-only skills).
+   This matters because the composer refreshes skills per workspace on a
+   60-second stale window, so opening a thread can run hooks with side effects.
+   The SDK exposes no option to load project skills without project hooks, so
+   resolving this would require a product tradeoff such as on-demand discovery,
+   longer caching, or accepting only user-level skills. Keep this as a follow-up
+   unless the SDK adds a side-effect-free discovery mode.
+
+> cy-review complete — 2026-07-21T11:36:00Z — rounds: 2
