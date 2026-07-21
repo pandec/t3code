@@ -1544,7 +1544,7 @@ export function ArchivedThreadsPanel() {
       }
 
       event.preventDefault();
-      searchInputRef.current?.focus({ preventScroll: true });
+      searchInputRef.current?.focus();
       searchInputRef.current?.select();
     };
 

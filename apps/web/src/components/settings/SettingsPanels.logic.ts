@@ -17,14 +17,14 @@ export function archivedThreadMatchesSearch(
   candidate: ArchivedThreadSearchCandidate,
   query: string,
 ): boolean {
-  const searchTerms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const searchTerms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (searchTerms.length === 0) {
     return true;
   }
 
   const searchableText = [candidate.threadTitle, candidate.projectName, candidate.projectCwd]
     .join("\n")
-    .toLocaleLowerCase();
+    .toLowerCase();
   return searchTerms.every((term) => searchableText.includes(term));
 }
 
