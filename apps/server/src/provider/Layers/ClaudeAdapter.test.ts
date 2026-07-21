@@ -64,6 +64,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public initializationResultOverride: (() => Promise<SDKControlInitializeResponse>) | undefined;
   public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
   public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
@@ -118,8 +119,12 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
   };
 
-  readonly initializationResult = async (): Promise<SDKControlInitializeResponse> =>
-    ({}) as SDKControlInitializeResponse;
+  readonly initializationResult = async (): Promise<SDKControlInitializeResponse> => {
+    if (this.initializationResultOverride) {
+      return this.initializationResultOverride();
+    }
+    return {} as SDKControlInitializeResponse;
+  };
 
   readonly reloadSkills = async (): Promise<SDKControlReloadSkillsResponse> => {
     if (this.reloadSkillsFailure !== undefined) {
@@ -345,6 +350,45 @@ describe("ClaudeAdapterLive", () => {
       const error = yield* Effect.flip(listSkills({ cwd }));
 
       assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));
+    const harness = makeHarness({ cwd });
+    let abortObserved = false;
+    let markInitializationStarted: () => void = () => {};
+    const initializationStarted = new Promise<void>((resolve) => {
+      markInitializationStarted = resolve;
+    });
+    harness.query.initializationResultOverride = () =>
+      new Promise<SDKControlInitializeResponse>((_resolve, reject) => {
+        markInitializationStarted();
+        const signal = harness.getLastCreateQueryInput()?.options.abortController?.signal;
+        signal?.addEventListener(
+          "abort",
+          () => {
+            abortObserved = true;
+            reject(new Error("discovery aborted"));
+          },
+          { once: true },
+        );
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+
+      const fiber = yield* Effect.forkChild(listSkills({ cwd }));
+      yield* Effect.promise(() => initializationStarted);
+      yield* Fiber.interrupt(fiber);
+
+      assert.equal(abortObserved, true);
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),

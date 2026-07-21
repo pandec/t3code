@@ -3995,39 +3995,45 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return yield* Effect.tryPromise({
       try: async (signal) => {
         const abortController = new AbortController();
-        const abortQuery = () => abortController.abort();
+        let claudeQuery: ClaudeQueryRuntime | undefined;
+        let cleanedUp = false;
+        const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
+          signal.removeEventListener("abort", abortQuery);
+          abortController.abort();
+          claudeQuery?.close();
+        };
+        const abortQuery = () => cleanup();
         signal.addEventListener("abort", abortQuery, { once: true });
 
-        const claudeQuery = createQuery({
-          // Never yield because discovery must not send a user message.
-          // oxlint-disable-next-line require-yield
-          prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
-            if (!abortController.signal.aborted) {
-              await new Promise<void>((resolve) =>
-                abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
-              );
-            }
-          })(),
-          options: {
-            cwd: canonicalCwd,
-            persistSession: false,
-            pathToClaudeCodeExecutable: claudeSdkExecutablePath,
-            abortController,
-            settingSources: ["user", "project", "local"],
-            allowedTools: [],
-            env: claudeEnvironment,
-            stderr: () => {},
-          },
-        });
-
         try {
+          claudeQuery = createQuery({
+            // Never yield because discovery must not send a user message.
+            // oxlint-disable-next-line require-yield
+            prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+              if (!abortController.signal.aborted) {
+                await new Promise<void>((resolve) =>
+                  abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
+                );
+              }
+            })(),
+            options: {
+              cwd: canonicalCwd,
+              persistSession: false,
+              pathToClaudeCodeExecutable: claudeSdkExecutablePath,
+              abortController,
+              settingSources: ["user", "project", "local"],
+              allowedTools: [],
+              env: claudeEnvironment,
+              stderr: () => {},
+            },
+          });
           await claudeQuery.initializationResult();
           const result = await claudeQuery.reloadSkills();
           return parseClaudeSkills(result.skills);
         } finally {
-          signal.removeEventListener("abort", abortQuery);
-          abortController.abort();
-          claudeQuery.close();
+          cleanup();
         }
       },
       catch: (cause) =>
