@@ -1,6 +1,9 @@
 import { MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -17,17 +20,43 @@ describe("message speech locking", () => {
       const coordinator = yield* makeMessageSpeechLockCoordinator();
       const active = yield* Ref.make(0);
       const maxActive = yield* Ref.make(0);
-      const run = coordinator.withMessageLock(
-        "message",
-        Effect.gen(function* () {
-          const count = yield* Ref.updateAndGet(active, (value) => value + 1);
-          yield* Ref.update(maxActive, (value) => Math.max(value, count));
-          yield* Effect.sleep("10 millis");
-          yield* Ref.update(active, (value) => value - 1);
-        }),
-      );
+      const firstStarted = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
 
-      yield* Effect.all([run, run], { concurrency: "unbounded" });
+      const first = yield* Effect.forkChild(
+        coordinator.withMessageLock(
+          "message",
+          Effect.gen(function* () {
+            const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+            yield* Ref.update(maxActive, (value) => Math.max(value, count));
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(releaseFirst);
+            yield* Ref.update(active, (value) => value - 1);
+          }),
+        ),
+      );
+      yield* Deferred.await(firstStarted);
+
+      const second = yield* Effect.forkChild(
+        coordinator.withMessageLock(
+          "message",
+          Effect.gen(function* () {
+            const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+            yield* Ref.update(maxActive, (value) => Math.max(value, count));
+            yield* Deferred.succeed(secondStarted, undefined);
+            yield* Ref.update(active, (value) => value - 1);
+          }),
+        ),
+      );
+      yield* Effect.yieldNow;
+      expect(Option.isNone(yield* Deferred.poll(secondStarted))).toBe(true);
+
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      yield* Deferred.await(secondStarted);
+
       expect(yield* Ref.get(maxActive)).toBe(1);
       expect(yield* coordinator.activeLockCount).toBe(0);
 
