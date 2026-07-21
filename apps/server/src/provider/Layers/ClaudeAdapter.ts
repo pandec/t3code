@@ -78,6 +78,7 @@ import {
   readClaudeSessionTranscript,
 } from "../Drivers/ClaudeSessionImport.ts";
 import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
+import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -1369,6 +1370,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
+  );
+  const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
+    claudeSettings.binaryPath,
+    claudeEnvironment,
   );
   const nativeEventLogger =
     options?.nativeEventLogger ??
@@ -3465,7 +3470,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return {};
       };
 
-      const claudeBinaryPath = claudeSettings.binaryPath;
+      const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;

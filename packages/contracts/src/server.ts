@@ -431,6 +431,10 @@ export const ServerConfig = Schema.Struct({
   speechToText: Schema.Struct({
     available: Schema.Boolean,
   }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
+  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
+  threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
