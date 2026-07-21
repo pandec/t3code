@@ -2657,9 +2657,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <DesktopVoiceRecorder
                   key={
-                    typeof composerDraftTarget === "string"
+                    `${environmentId}:` +
+                    (typeof composerDraftTarget === "string"
                       ? composerDraftTarget
-                      : `${composerDraftTarget.environmentId}:${composerDraftTarget.threadId}`
+                      : composerDraftTarget.threadId)
                   }
                   environmentId={environmentId}
                   available={voiceTranscriptionAvailable}

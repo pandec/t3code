@@ -1,4 +1,4 @@
-import { VOICE_TRANSCRIPTION_MAX_BYTES } from "@t3tools/contracts";
+import { VOICE_TRANSCRIPTION_MAX_BYTES, VoiceTranscriptionRequest } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -11,6 +11,7 @@ import {
 const decodeElevenLabsTranscriptionResponse = Schema.decodeUnknownSync(
   ElevenLabsTranscriptionResponse,
 );
+const decodeVoiceTranscriptionRequest = Schema.decodeUnknownSync(VoiceTranscriptionRequest);
 
 describe("decodeVoiceDataUrl", () => {
   it("decodes a matching supported audio data URL", () => {
@@ -52,6 +53,17 @@ describe("decodeVoiceDataUrl", () => {
     });
 
     expect(result).toBeInstanceOf(VoiceTranscriptionError);
+  });
+
+  it("rejects audio shorter than the provider minimum", () => {
+    expect(() =>
+      decodeVoiceTranscriptionRequest({
+        mimeType: "audio/mp4",
+        dataUrl: "data:audio/mp4;base64,aGVsbG8=",
+        durationMs: 99,
+        sizeBytes: 5,
+      }),
+    ).toThrow();
   });
 
   it("accepts a successful response with a null detected language", () => {

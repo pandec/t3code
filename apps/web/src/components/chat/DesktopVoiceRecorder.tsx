@@ -1,6 +1,7 @@
 import {
   VOICE_TRANSCRIPTION_MAX_BYTES,
   VOICE_TRANSCRIPTION_MAX_DURATION_MS,
+  VOICE_TRANSCRIPTION_MIN_DURATION_MS,
   type EnvironmentId,
   type VoiceAudioMimeType,
 } from "@t3tools/contracts";
@@ -96,14 +97,23 @@ export function DesktopVoiceRecorder({
     chunksRef.current = [];
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       phaseRef.current = "idle";
       releaseStream();
-    },
-    [releaseStream],
-  );
+    };
+  }, [releaseStream]);
+
+  useEffect(() => {
+    if (available) return;
+    phaseRef.current = "idle";
+    setPhase("idle");
+    setElapsedMs(0);
+    setRetained(null);
+    releaseStream();
+  }, [available, releaseStream]);
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
@@ -167,6 +177,17 @@ export function DesktopVoiceRecorder({
         setRetained(null);
         phaseRef.current = "idle";
         setPhase("idle");
+        return;
+      }
+      if (durationMs < VOICE_TRANSCRIPTION_MIN_DURATION_MS) {
+        setRetained(null);
+        phaseRef.current = "idle";
+        setPhase("idle");
+        toastManager.add({
+          type: "error",
+          title: "Recording too short",
+          description: "Hold the microphone a little longer and try again.",
+        });
         return;
       }
       if (mimeType === null || blob.size === 0 || blob.size > VOICE_TRANSCRIPTION_MAX_BYTES) {

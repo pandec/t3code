@@ -1,6 +1,7 @@
 import {
   VOICE_TRANSCRIPTION_MAX_BYTES,
   VOICE_TRANSCRIPTION_MAX_DURATION_MS,
+  VOICE_TRANSCRIPTION_MIN_DURATION_MS,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import {
@@ -46,6 +47,7 @@ export function VoiceRecorderControl(props: {
   const finishingRef = useRef(false);
   const mountedRef = useRef(true);
   const retainedUriRef = useRef<string | null>(null);
+  const submissionIdRef = useRef(0);
   phaseRef.current = phase;
 
   const discardFile = useCallback((uri: string | null | undefined) => {
@@ -60,6 +62,8 @@ export function VoiceRecorderControl(props: {
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
+      if (phaseRef.current === "transcribing") return;
+      const submissionId = ++submissionIdRef.current;
       phaseRef.current = "transcribing";
       setPhase("transcribing");
       retainedUriRef.current = recording.uri;
@@ -79,6 +83,7 @@ export function VoiceRecorderControl(props: {
             sizeBytes,
           },
         });
+        if (submissionId !== submissionIdRef.current || !mountedRef.current) return;
         if (result._tag === "Success") {
           discardFile(recording.uri);
           retainedUriRef.current = null;
@@ -93,6 +98,7 @@ export function VoiceRecorderControl(props: {
       } catch {
         // Retain the local file so Retry remains useful after a transient failure.
       }
+      if (submissionId !== submissionIdRef.current) return;
       if (mountedRef.current) {
         setRetained(recording);
         phaseRef.current = "failed";
@@ -125,6 +131,19 @@ export function VoiceRecorderControl(props: {
           retainedUriRef.current = null;
           phaseRef.current = "idle";
           if (mountedRef.current) setPhase("idle");
+          return;
+        }
+        if (durationMs < VOICE_TRANSCRIPTION_MIN_DURATION_MS) {
+          discardFile(uri);
+          retainedUriRef.current = null;
+          phaseRef.current = "idle";
+          if (mountedRef.current) {
+            setPhase("idle");
+            Alert.alert(
+              "Recording too short",
+              "Hold the microphone a little longer and try again.",
+            );
+          }
           return;
         }
         retainedUriRef.current = uri;
@@ -184,10 +203,12 @@ export function VoiceRecorderControl(props: {
     }
   }, [discardFile, finishRecording, props.disabled, recorder]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       cancelStartRef.current = true;
+      submissionIdRef.current += 1;
       const retainedUri = retainedUriRef.current;
       retainedUriRef.current = null;
       discardFile(retainedUri);
@@ -198,9 +219,8 @@ export function VoiceRecorderControl(props: {
           .catch(() => undefined);
       }
       void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-    },
-    [discardFile, recorder],
-  );
+    };
+  }, [discardFile, recorder]);
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -317,6 +337,7 @@ export function VoiceRecorderControl(props: {
             showChevron={false}
             variant="danger"
             onPress={() => {
+              submissionIdRef.current += 1;
               discardFile(retained.uri);
               retainedUriRef.current = null;
               setRetained(null);
