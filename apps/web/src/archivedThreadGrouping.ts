@@ -9,9 +9,13 @@ import type { EnvironmentId } from "@t3tools/contracts";
 
 import {
   deriveLogicalProjectKeyFromSettings,
-  deriveProjectGroupLabel,
+  derivePhysicalProjectKey,
   type ProjectGroupingSettings,
 } from "./logicalProject";
+import {
+  buildPhysicalToLogicalProjectKeyMap,
+  buildSidebarProjectSnapshots,
+} from "./sidebarProjectGrouping";
 
 export interface ArchivedThreadListItem {
   readonly environmentLabel: string;
@@ -34,64 +38,68 @@ function archiveTimestamp(thread: EnvironmentThreadShell): string {
 export function buildArchivedThreadGroups(input: {
   readonly groupingSettings: ProjectGroupingSettings;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly resolveEnvironmentLabel: (environmentId: EnvironmentId) => string;
   readonly snapshots: ReadonlyArray<ArchivedSnapshotEntry>;
 }): ReadonlyArray<ArchivedThreadGroup> {
-  const groupsByKey = new Map<
-    string,
-    { projects: EnvironmentProject[]; threads: ArchivedThreadListItem[] }
-  >();
+  const scopedProjectKey = (environmentId: EnvironmentId, projectId: string) =>
+    `${environmentId}\u0000${projectId}`;
+  const archivedProjectByScopedKey = new Map<string, EnvironmentProject>();
 
   for (const { environmentId, snapshot } of input.snapshots) {
-    const projectById = new Map(
-      snapshot.projects.map((project) => {
-        const scopedProject = scopeProject(environmentId, project);
-        const key = deriveLogicalProjectKeyFromSettings(scopedProject, input.groupingSettings);
-        const group = groupsByKey.get(key) ?? { projects: [], threads: [] };
-        group.projects.push(scopedProject);
-        groupsByKey.set(key, group);
-        return [scopedProject.id, scopedProject] as const;
-      }),
-    );
+    for (const project of snapshot.projects) {
+      const scopedProject = scopeProject(environmentId, project);
+      archivedProjectByScopedKey.set(scopedProjectKey(environmentId, project.id), scopedProject);
+    }
+  }
 
+  const projectCandidates = [...input.projects, ...archivedProjectByScopedKey.values()];
+  const physicalToLogicalKey = buildPhysicalToLogicalProjectKeyMap({
+    projects: projectCandidates,
+    settings: input.groupingSettings,
+    primaryEnvironmentId: input.primaryEnvironmentId,
+  });
+  const projectGroups = buildSidebarProjectSnapshots({
+    projects: projectCandidates,
+    settings: input.groupingSettings,
+    primaryEnvironmentId: input.primaryEnvironmentId,
+    resolveEnvironmentLabel: input.resolveEnvironmentLabel,
+  });
+  const threadsByGroupKey = new Map<string, ArchivedThreadListItem[]>();
+
+  for (const { environmentId, snapshot } of input.snapshots) {
     for (const rawThread of snapshot.threads) {
       if (rawThread.archivedAt === null) continue;
-      const project = projectById.get(rawThread.projectId);
+      const project = archivedProjectByScopedKey.get(
+        scopedProjectKey(environmentId, rawThread.projectId),
+      );
       if (!project) continue;
 
-      const key = deriveLogicalProjectKeyFromSettings(project, input.groupingSettings);
-      const group = groupsByKey.get(key);
-      if (!group) continue;
-      group.threads.push({
+      const physicalKey = derivePhysicalProjectKey(project);
+      const groupKey =
+        physicalToLogicalKey.get(physicalKey) ??
+        deriveLogicalProjectKeyFromSettings(project, input.groupingSettings);
+      const threads = threadsByGroupKey.get(groupKey) ?? [];
+      threads.push({
         environmentLabel: input.resolveEnvironmentLabel(environmentId),
         project,
         thread: scopeThreadShell(environmentId, rawThread),
       });
-      groupsByKey.set(key, group);
+      threadsByGroupKey.set(groupKey, threads);
     }
   }
 
   const groups: ArchivedThreadGroup[] = [];
-  for (const [key, group] of groupsByKey) {
-    if (group.threads.length === 0) continue;
-    const representativeProject =
-      (input.primaryEnvironmentId
-        ? group.projects.find((project) => project.environmentId === input.primaryEnvironmentId)
-        : undefined) ?? group.projects[0];
-    if (!representativeProject) continue;
+  for (const projectGroup of projectGroups) {
+    const threads = threadsByGroupKey.get(projectGroup.projectKey);
+    if (!threads || threads.length === 0) continue;
 
     groups.push({
-      displayName:
-        group.projects.length > 1
-          ? deriveProjectGroupLabel({
-              representative: representativeProject,
-              members: group.projects,
-            })
-          : representativeProject.title,
-      key,
-      projects: group.projects,
-      representativeProject,
-      threads: group.threads.toSorted(
+      displayName: projectGroup.displayName,
+      key: projectGroup.projectKey,
+      projects: projectGroup.memberProjects,
+      representativeProject: projectGroup,
+      threads: threads.toSorted(
         (left, right) =>
           archiveTimestamp(right.thread).localeCompare(archiveTimestamp(left.thread)) ||
           right.thread.id.localeCompare(left.thread.id),

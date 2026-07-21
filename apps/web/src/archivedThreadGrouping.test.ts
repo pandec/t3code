@@ -1,4 +1,5 @@
 import type { ArchivedSnapshotEntry } from "@t3tools/client-runtime/state/threads";
+import { scopeProject } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationProjectShell, OrchestrationThreadShell } from "@t3tools/contracts";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,6 +18,7 @@ function makeProject(input: {
   root: string;
   title: string;
   canonicalKey?: string;
+  updatedAt?: string;
 }): OrchestrationProjectShell {
   return {
     id: ProjectId.make(input.id),
@@ -37,7 +39,7 @@ function makeProject(input: {
     defaultModelSelection: null,
     scripts: [],
     createdAt: "2026-07-01T00:00:00.000Z",
-    updatedAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: input.updatedAt ?? "2026-07-01T00:00:00.000Z",
   };
 }
 
@@ -102,6 +104,7 @@ describe("buildArchivedThreadGroups", () => {
     const groups = buildArchivedThreadGroups({
       groupingSettings,
       primaryEnvironmentId: localEnvironmentId,
+      projects: [],
       resolveEnvironmentLabel: (environmentId) =>
         environmentId === localEnvironmentId ? "Mac" : "Grey Mac",
       snapshots: [
@@ -145,6 +148,7 @@ describe("buildArchivedThreadGroups", () => {
     const groups = buildArchivedThreadGroups({
       groupingSettings,
       primaryEnvironmentId: localEnvironmentId,
+      projects: [],
       resolveEnvironmentLabel: String,
       snapshots: [
         snapshot(localEnvironmentId, localProject, [
@@ -176,9 +180,12 @@ describe("buildArchivedThreadGroups", () => {
     const groups = buildArchivedThreadGroups({
       groupingSettings,
       primaryEnvironmentId: localEnvironmentId,
+      projects: [
+        scopeProject(localEnvironmentId, localProject),
+        scopeProject(remoteEnvironmentId, remoteProject),
+      ],
       resolveEnvironmentLabel: String,
       snapshots: [
-        snapshot(localEnvironmentId, localProject, []),
         snapshot(remoteEnvironmentId, remoteProject, [
           makeThread({ id: "remote-thread", projectId: remoteProject.id, title: "Remote chat" }),
         ]),
@@ -190,11 +197,45 @@ describe("buildArchivedThreadGroups", () => {
     expect(groups[0]?.displayName).toBe("T3 Code");
   });
 
+  it("routes stale duplicate project records through the current physical-project winner", () => {
+    const staleProject = makeProject({
+      id: "stale-project",
+      root: "/Users/example/t3code",
+      title: "Stale checkout",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    });
+    const canonicalProject = makeProject({
+      id: "canonical-project",
+      root: "/Users/example/t3code",
+      title: "Current checkout",
+      canonicalKey: "github.com/t3tools/t3code",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+
+    const groups = buildArchivedThreadGroups({
+      groupingSettings,
+      primaryEnvironmentId: localEnvironmentId,
+      projects: [scopeProject(localEnvironmentId, canonicalProject)],
+      resolveEnvironmentLabel: String,
+      snapshots: [
+        snapshot(localEnvironmentId, staleProject, [
+          makeThread({ id: "stale-thread", projectId: staleProject.id, title: "Archived chat" }),
+        ]),
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.key).toBe("github.com/t3tools/t3code");
+    expect(groups[0]?.representativeProject.id).toBe(canonicalProject.id);
+    expect(groups[0]?.threads.map(({ thread }) => thread.id)).toEqual(["stale-thread"]);
+  });
+
   it("omits active threads returned by an archive snapshot", () => {
     const project = makeProject({ id: "project", root: "/repo", title: "Project" });
     const groups = buildArchivedThreadGroups({
       groupingSettings,
       primaryEnvironmentId: localEnvironmentId,
+      projects: [],
       resolveEnvironmentLabel: String,
       snapshots: [
         snapshot(localEnvironmentId, project, [

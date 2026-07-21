@@ -67,6 +67,7 @@ import {
   serverEnvironment,
 } from "../../state/server";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
+import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -1485,6 +1486,7 @@ function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThrea
 export function ArchivedThreadsPanel() {
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
+  const projects = useProjects();
   const groupingSettings = usePrimarySettings(selectProjectGroupingSettings);
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const [searchQuery, setSearchQuery] = useState("");
@@ -1515,12 +1517,19 @@ export function ArchivedThreadsPanel() {
       buildArchivedThreadGroups({
         groupingSettings,
         primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
+        projects,
         resolveEnvironmentLabel: (environmentId) =>
           environmentLabelById.get(environmentId) ??
           (environmentId === primaryEnvironment?.environmentId ? "Local" : "Remote"),
         snapshots: archivedSnapshots,
       }),
-    [archivedSnapshots, environmentLabelById, groupingSettings, primaryEnvironment?.environmentId],
+    [
+      archivedSnapshots,
+      environmentLabelById,
+      groupingSettings,
+      primaryEnvironment?.environmentId,
+      projects,
+    ],
   );
   const filteredArchivedGroups = useMemo(
     () =>
@@ -1673,7 +1682,7 @@ export function ArchivedThreadsPanel() {
       </div>
 
       {archiveError && archivedGroups.length > 0 ? (
-        <SettingsSection title="Archive availability">
+        <SettingsSection title="Archive availability" role="status">
           <SettingsRow
             title="Some archived threads could not be loaded"
             description="One or more environments are unavailable. The results below may be incomplete."
@@ -1682,7 +1691,7 @@ export function ArchivedThreadsPanel() {
       ) : null}
 
       {archivedGroups.length === 0 ? (
-        <SettingsSection title="Archived threads">
+        <SettingsSection title="Archived threads" role={archiveError ? "alert" : "status"}>
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">

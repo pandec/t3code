@@ -37,7 +37,7 @@ export function SettingsSection({
   return (
     <section {...sectionProps} className={cn("space-y-2.5", className)}>
       <div className="flex items-center justify-between px-1">
-        <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/50">
+        <h2 className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/50">
           {isCollapsible ? (
             <button
               type="button"
@@ -53,18 +53,17 @@ export function SettingsSection({
             <span className="inline-block h-px w-3 bg-border" aria-hidden />
           )}
           {icon}
-          {title}
+          <span className="min-w-0 truncate">{title}</span>
         </h2>
         <div className="flex h-5 min-w-5 items-center justify-end">{headerAction}</div>
       </div>
-      {!collapsed ? (
-        <div
-          id={contentId}
-          className="relative overflow-visible rounded-2xl border bg-card text-card-foreground shadow-sm/4 not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:shadow-none dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-        >
-          {children}
-        </div>
-      ) : null}
+      <div
+        id={contentId}
+        hidden={collapsed}
+        className="relative overflow-visible rounded-2xl border bg-card text-card-foreground shadow-sm/4 not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:shadow-none dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -98,7 +97,7 @@ export function SettingsRow({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+            <h3 className="min-w-0 flex-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground">
               {title}
             </h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
