@@ -417,8 +417,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           onTouchCancel={handleFeedTouchCancel}
         >
           <ThreadFeed
-            key={props.selectedThread.id}
+            key={`${props.environmentId}:${props.selectedThread.id}`}
             environmentId={props.environmentId}
+            textToSpeechAvailable={props.serverConfig?.textToSpeech.available === true}
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}

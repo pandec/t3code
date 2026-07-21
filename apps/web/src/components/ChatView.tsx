@@ -5384,7 +5384,7 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
-                key={activeThread.id}
+                key={routeThreadKey}
                 isWorking={isWorking}
                 activeTurnInProgress={isWorking || !latestTurnSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
@@ -5398,6 +5398,9 @@ function ChatViewContent(props: ChatViewProps) {
                 }
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
+                textToSpeechAvailable={
+                  serverConfigs.get(activeThread.environmentId)?.textToSpeech.available === true
+                }
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}

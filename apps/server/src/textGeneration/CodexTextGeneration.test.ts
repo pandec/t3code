@@ -641,6 +641,27 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
       ),
   );
 
+  it.effect("disables Codex tools while generating a listening script", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ script: "There are three retries." }),
+        requireArg: "--disable shell_tool",
+        stdinMustContain: "within 5000 characters",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateSpeechScript({
+            cwd: process.cwd(),
+            message: "Retries: 3",
+            maxScriptChars: 5_000,
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.script).toBe("There are three retries.");
+        }),
+    ),
+  );
+
   it.effect("returns typed TextGenerationError when codex exits non-zero", () =>
     withFakeCodexEnv(
       {

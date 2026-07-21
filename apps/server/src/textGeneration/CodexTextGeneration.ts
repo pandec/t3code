@@ -21,6 +21,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -98,7 +99,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateSpeechScript",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -159,7 +161,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSpeechScript";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -189,6 +192,22 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--skip-git-repo-check",
           "-s",
           "read-only",
+          ...(operation === "generateSpeechScript"
+            ? [
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "unified_exec",
+                "--disable",
+                "browser_use",
+                "--disable",
+                "apps",
+                "--disable",
+                "multi_agent",
+              ]
+            : []),
           "--model",
           modelSelection.model,
           "--config",
@@ -398,10 +417,27 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateSpeechScript: TextGeneration.TextGeneration["Service"]["generateSpeechScript"] =
+    Effect.fn("CodexTextGeneration.generateSpeechScript")(function* (input) {
+      const { prompt, outputSchema } = buildSpeechScriptPrompt({
+        message: input.message,
+        maxScriptChars: input.maxScriptChars,
+      });
+      const generated = yield* runCodexJson({
+        operation: "generateSpeechScript",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { script: generated.script.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSpeechScript,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -219,6 +219,40 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("shows the listening action only when text-to-speech is available", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const timelineEntries = [
+      {
+        id: "entry-assistant-listening",
+        kind: "message" as const,
+        createdAt: MESSAGE_CREATED_AT,
+        message: {
+          id: MessageId.make("message-assistant-listening"),
+          role: "assistant" as const,
+          text: "A response worth listening to.",
+          turnId: TurnId.make("turn-listening"),
+          createdAt: MESSAGE_CREATED_AT,
+          updatedAt: MESSAGE_CREATED_AT,
+          streaming: false,
+        },
+      },
+    ];
+
+    const unavailableMarkup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={timelineEntries} />,
+    );
+    const availableMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={timelineEntries}
+        textToSpeechAvailable
+      />,
+    );
+
+    expect(unavailableMarkup).not.toContain("Create listening version");
+    expect(availableMarkup).toContain("Create listening version");
+  });
+
   it("keeps assistant changed-files headers sticky below the thread header", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.make("message-assistant-with-files");
