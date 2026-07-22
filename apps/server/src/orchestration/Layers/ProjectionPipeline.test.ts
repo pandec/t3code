@@ -188,13 +188,15 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             readonly text: string;
             readonly turnId: string | null;
             readonly isStreaming: number;
+            readonly generationCwd: string | null;
           }>`
             SELECT
               message_id AS "messageId",
               role,
               text,
               turn_id AS "turnId",
-              is_streaming AS "isStreaming"
+              is_streaming AS "isStreaming",
+              generation_cwd AS "generationCwd"
             FROM projection_thread_messages
             WHERE thread_id = ${threadId}
             ORDER BY created_at, message_id
@@ -207,6 +209,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             text: "Remember the codeword PINEAPPLE-42.",
             turnId: null,
             isStreaming: 0,
+            generationCwd: null,
           },
           {
             messageId: "import:imported-thread:00001",
@@ -214,6 +217,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             text: "OK",
             turnId: null,
             isStreaming: 0,
+            generationCwd: "/tmp/project",
           },
         ]);
 
@@ -223,6 +227,110 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
         yield* sql`DELETE FROM projection_state`;
         yield* projectionPipeline.bootstrap;
         assert.deepEqual(yield* readRows(), rows);
+      }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-generation-provenance-test-")))(
+  "OrchestrationProjectionPipeline generation provenance",
+  (it) => {
+    it.effect("captures a turn model override as assistant-message generation provenance", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-generation-override");
+        const now = "2026-07-22T00:00:00.000Z";
+
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES (
+          'project-generation-override', 'Project', '/workspace/project', '[]', ${now}, ${now}
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, worktree_path, created_at, updated_at
+        ) VALUES (
+          ${threadId}, 'project-generation-override', 'Thread',
+          '{"instanceId":"codex-default","model":"gpt-default"}',
+          'full-access', 'default', '/workspace/worktree', ${now}, ${now}
+        )
+      `;
+
+        const turnEvent = yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.make("event-generation-override-turn"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("command-generation-override-turn"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("command-generation-override-turn"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("user-generation-override"),
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex-override"),
+              model: "gpt-override",
+              options: [{ id: "reasoningEffort", value: "high" }],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: now,
+          },
+        });
+        yield* projectionPipeline.projectEvent(turnEvent);
+        const messageEvent = yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("event-generation-override-message"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("command-generation-override-message"),
+          causationEventId: turnEvent.eventId,
+          correlationId: CorrelationId.make("command-generation-override-turn"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("assistant-generation-override"),
+            role: "assistant",
+            text: "Response",
+            turnId: TurnId.make("turn-generation-override"),
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionPipeline.projectEvent(messageEvent);
+
+        const rows = yield* sql<{
+          readonly modelSelection: string;
+          readonly cwd: string;
+        }>`
+        SELECT
+          generation_model_selection_json AS modelSelection,
+          generation_cwd AS cwd
+        FROM projection_thread_messages
+        WHERE message_id = 'assistant-generation-override'
+      `;
+        assert.deepEqual(rows, [
+          {
+            modelSelection:
+              '{"instanceId":"codex-override","model":"gpt-override","options":[{"id":"reasoningEffort","value":"high"}]}',
+            cwd: "/workspace/worktree",
+          },
+        ]);
+        yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
+        yield* sql`DELETE FROM projection_turns WHERE thread_id = ${threadId}`;
+        yield* sql`DELETE FROM projection_threads WHERE thread_id = ${threadId}`;
+        yield* sql`DELETE FROM projection_projects WHERE project_id = 'project-generation-override'`;
+        yield* sql`DELETE FROM orchestration_events WHERE stream_id = ${threadId}`;
+        yield* sql`DELETE FROM projection_state`;
       }),
     );
   },
@@ -1101,6 +1209,21 @@ it.layer(
           ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/mpeg', 13,
            'remove-source', 'recipe', 'voice', 'model', ${now})
       `;
+      yield* sql`
+        INSERT INTO projection_message_summary (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_hash, created_at
+        ) VALUES
+          ('message-keep', ${threadId}, 'Keep summary', 'keep-source', 'recipe', 'model', ${now}),
+          ('message-remove', ${threadId}, 'Remove summary', 'remove-source', 'recipe', 'model', ${now})
+      `;
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET
+          generation_model_selection_json = '{"instanceId":"codex-original","model":"gpt-original"}',
+          generation_cwd = '/workspace/original'
+        WHERE message_id = 'message-keep'
+      `;
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
@@ -1137,6 +1260,29 @@ it.layer(
         ORDER BY message_id
       `;
       assert.deepEqual(speechRows, [{ messageId: "message-keep" }]);
+      const summaryRows = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_message_summary
+        WHERE thread_id = ${threadId}
+        ORDER BY message_id
+      `;
+      assert.deepEqual(summaryRows, [{ messageId: "message-keep" }]);
+      const provenanceRows = yield* sql<{
+        readonly generationModelSelectionJson: string;
+        readonly generationCwd: string;
+      }>`
+        SELECT
+          generation_model_selection_json AS "generationModelSelectionJson",
+          generation_cwd AS "generationCwd"
+        FROM projection_thread_messages
+        WHERE message_id = 'message-keep'
+      `;
+      assert.deepEqual(provenanceRows, [
+        {
+          generationModelSelectionJson: '{"instanceId":"codex-original","model":"gpt-original"}',
+          generationCwd: "/workspace/original",
+        },
+      ]);
     }),
   );
 });

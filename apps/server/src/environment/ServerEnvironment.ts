@@ -136,6 +136,7 @@ export const make = Effect.gen(function* () {
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
+      messageSummaries: true,
     },
   };
 

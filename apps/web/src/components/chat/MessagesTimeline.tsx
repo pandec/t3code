@@ -25,6 +25,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -57,6 +58,7 @@ import {
   CircleAlertIcon,
   EyeIcon,
   FileDiffIcon,
+  FileTextIcon,
   GlobeIcon,
   HammerIcon,
   HeadphonesIcon,
@@ -117,6 +119,13 @@ import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
+import { summarizeMessage } from "../../state/messageArtifacts";
+import {
+  getMessageArtifactSessionSnapshot,
+  rememberMessageSpeech,
+  rememberMessageSummary,
+  subscribeMessageArtifactSession,
+} from "@t3tools/client-runtime/state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
@@ -153,6 +162,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable: boolean;
+  messageSummariesAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -193,6 +203,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable?: boolean;
+  messageSummariesAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -228,6 +239,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   activeThreadEnvironmentId,
   textToSpeechAvailable = false,
+  messageSummariesAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -447,6 +459,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -462,6 +475,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1044,23 +1058,46 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
-  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
   const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
   const [speechExpanded, setSpeechExpanded] = useState(false);
+  const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const readSessionArtifacts = useCallback(
+    () =>
+      getMessageArtifactSessionSnapshot(
+        ctx.activeThreadEnvironmentId,
+        row.message.id,
+        row.message.text,
+      ),
+    [ctx.activeThreadEnvironmentId, row.message.id, row.message.text],
+  );
+  const sessionArtifacts = useSyncExternalStore(
+    useCallback(
+      (listener) =>
+        subscribeMessageArtifactSession(ctx.activeThreadEnvironmentId, row.message.id, listener),
+      [ctx.activeThreadEnvironmentId, row.message.id],
+    ),
+    readSessionArtifacts,
+    readSessionArtifacts,
+  );
+  const speech = sessionArtifacts.speech ?? row.message.speech ?? null;
+  const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
 
-  const canSynthesizeSpeech =
-    ctx.textToSpeechAvailable &&
+  const canShowSpeech =
+    speech !== null ||
+    (ctx.textToSpeechAvailable &&
+      row.showAssistantMeta &&
+      !row.message.streaming &&
+      row.message.text.trim().length > 0);
+  const canShowSummary =
+    (summary !== null || ctx.messageSummariesAvailable) &&
     row.showAssistantMeta &&
     !row.message.streaming &&
     row.message.text.trim().length > 0;
 
-  const onToggleSpeech = useCallback(async () => {
-    if (speech !== null) {
-      setSpeechExpanded((expanded) => !expanded);
-      return;
-    }
+  const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;
-
     setSpeechPhase("preparing");
     const result = await synthesize({
       environmentId: ctx.activeThreadEnvironmentId,
@@ -1068,7 +1105,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     });
     setSpeechPhase("idle");
     if (result._tag === "Success") {
-      setSpeech(result.value);
+      rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
       setSpeechExpanded(true);
       return;
     }
@@ -1077,7 +1114,46 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       title: "Listening version unavailable",
       description: "T3 Code could not prepare audio for this message. Try again in a moment.",
     });
-  }, [ctx.activeThreadEnvironmentId, row.message.id, speech, speechPhase, synthesize]);
+  }, [ctx.activeThreadEnvironmentId, row.message.id, row.message.text, speechPhase, synthesize]);
+
+  const onToggleSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setSpeechExpanded((expanded) => !expanded);
+      return;
+    }
+    await prepareSpeech();
+  }, [prepareSpeech, speech]);
+
+  const onToggleSummary = useCallback(async () => {
+    if (summary !== null) {
+      setSummaryExpanded((expanded) => !expanded);
+      return;
+    }
+    if (summaryPhase === "preparing") return;
+    setSummaryPhase("preparing");
+    const result = await summarize({
+      environmentId: ctx.activeThreadEnvironmentId,
+      input: { messageId: row.message.id },
+    });
+    setSummaryPhase("idle");
+    if (result._tag === "Success") {
+      rememberMessageSummary(ctx.activeThreadEnvironmentId, row.message.text, result.value);
+      setSummaryExpanded(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Summary unavailable",
+      description: "T3 Code could not summarize this message. Try again in a moment.",
+    });
+  }, [
+    ctx.activeThreadEnvironmentId,
+    row.message.id,
+    row.message.text,
+    summarize,
+    summary,
+    summaryPhase,
+  ]);
 
   return (
     <>
@@ -1098,7 +1174,39 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
-            {canSynthesizeSpeech ? (
+            {canShowSummary ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={summary === null ? "Create summary" : "Toggle summary"}
+                      aria-expanded={summary === null ? undefined : summaryExpanded}
+                      aria-busy={summaryPhase === "preparing"}
+                      disabled={summaryPhase === "preparing"}
+                      onClick={() => void onToggleSummary()}
+                    />
+                  }
+                >
+                  {summaryPhase === "preparing" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <FileTextIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {summaryPhase === "preparing"
+                    ? "Preparing summary"
+                    : summary === null
+                      ? "Summarize this response"
+                      : summaryExpanded
+                        ? "Hide summary"
+                        : "Show summary"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {canShowSpeech ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1109,6 +1217,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                         speech === null ? "Create listening version" : "Toggle listening version"
                       }
                       aria-expanded={speech === null ? undefined : speechExpanded}
+                      aria-busy={speechPhase === "preparing"}
+                      disabled={speechPhase === "preparing"}
                       onClick={() => void onToggleSpeech()}
                     />
                   }
@@ -1144,14 +1254,25 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           </div>
         ) : null}
+        {summary !== null && summaryExpanded ? (
+          <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+              <FileTextIcon className="size-3.5 text-muted-foreground" />
+              <span>Summary</span>
+            </div>
+            <ChatMarkdown
+              text={summary.summary}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              skills={ctx.skills}
+            />
+          </div>
+        ) : null}
         {speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             speech={speech}
-            onReset={() => {
-              setSpeech(null);
-              setSpeechExpanded(false);
-            }}
+            onRetry={() => void prepareSpeech()}
           />
         ) : null}
       </div>
@@ -1162,11 +1283,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 function AssistantSpeechPlayer({
   environmentId,
   speech,
-  onReset,
+  onRetry,
 }: {
   environmentId: EnvironmentId;
   speech: MessageSpeechSynthesisResult;
-  onReset: () => void;
+  onRetry: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const { blocked, speed } = useListeningPlaybackSnapshot();
@@ -1199,9 +1320,9 @@ function AssistantSpeechPlayer({
       </div>
       {audioUrlState._tag === "Failure" ? (
         <div className="space-y-2 text-xs text-muted-foreground">
-          <p>The audio file is unavailable. Dismiss this card and try again.</p>
-          <Button variant="outline" size="xs" onClick={onReset}>
-            Dismiss
+          <p>The audio file is unavailable. Regenerate it to listen again.</p>
+          <Button variant="outline" size="xs" onClick={onRetry}>
+            Regenerate
           </Button>
         </div>
       ) : audioUrlState._tag === "Loading" ? (

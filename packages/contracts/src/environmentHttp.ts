@@ -45,6 +45,8 @@ import {
 import {
   MessageSpeechSynthesisRequest,
   MessageSpeechSynthesisResult,
+  MessageSummaryRequest,
+  MessageSummaryResult,
   VoiceTranscriptionRequest,
   VoiceTranscriptionResult,
 } from "./voice.ts";
@@ -68,6 +70,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "audio_empty",
   "speech_message_unavailable",
   "speech_source_too_long",
+  "summary_message_unavailable",
+  "summary_source_too_long",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -96,6 +100,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "summary_generation_failed",
   "transcription_unavailable",
   "transcription_provider_failed",
   "speech_unavailable",
@@ -529,6 +534,15 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
+  HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
+    headers: OptionalBearerHeaders,
+    payload: MessageSummaryRequest,
+    success: MessageSummaryResult,
+    error: EnvironmentVoiceTranscriptionErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -594,5 +608,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi) {}

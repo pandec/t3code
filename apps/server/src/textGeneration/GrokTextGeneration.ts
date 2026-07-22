@@ -15,6 +15,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildMessageSummaryPrompt,
   buildPrContentPrompt,
   buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
@@ -54,7 +55,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript";
+      | "generateSpeechScript"
+      | "generateMessageSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -82,7 +84,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
-      if (operation === "generateSpeechScript") {
+      if (operation === "generateSpeechScript" || operation === "generateMessageSummary") {
         yield* runtime.handleRequestPermission(() =>
           Effect.succeed({ outcome: { outcome: "cancelled" as const } }),
         );
@@ -270,11 +272,25 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       return { script: generated.script.trim() };
     });
 
+  const generateMessageSummary: TextGeneration.TextGeneration["Service"]["generateMessageSummary"] =
+    Effect.fn("GrokTextGeneration.generateMessageSummary")(function* (input) {
+      const { prompt, outputSchema } = buildMessageSummaryPrompt(input);
+      const generated = yield* runGrokJson({
+        operation: "generateMessageSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: generated.summary.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateSpeechScript,
+    generateMessageSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -20,6 +20,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildMessageSummaryPrompt,
   buildPrContentPrompt,
   buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
@@ -100,7 +101,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript",
+      | "generateSpeechScript"
+      | "generateMessageSummary",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -162,7 +164,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript";
+      | "generateSpeechScript"
+      | "generateMessageSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -192,7 +195,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--skip-git-repo-check",
           "-s",
           "read-only",
-          ...(operation === "generateSpeechScript"
+          ...(operation === "generateSpeechScript" || operation === "generateMessageSummary"
             ? [
                 "--ignore-user-config",
                 "--ignore-rules",
@@ -435,11 +438,25 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       return { script: generated.script.trim() };
     });
 
+  const generateMessageSummary: TextGeneration.TextGeneration["Service"]["generateMessageSummary"] =
+    Effect.fn("CodexTextGeneration.generateMessageSummary")(function* (input) {
+      const { prompt, outputSchema } = buildMessageSummaryPrompt(input);
+      const generated = yield* runCodexJson({
+        operation: "generateMessageSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: generated.summary.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateSpeechScript,
+    generateMessageSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

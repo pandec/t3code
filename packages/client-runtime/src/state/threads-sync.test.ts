@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EventId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -11,6 +12,7 @@ import {
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -130,6 +132,7 @@ function awaitThreadState(
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationThread;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
+  readonly snapshotLoadGate?: Deferred.Deferred<void>;
   readonly completionMarker?: boolean;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
@@ -179,6 +182,11 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const snapshotLoader = ThreadSnapshotLoader.of({
     load: (_prepared, threadId) =>
       Ref.update(loaderCalls, (count) => count + 1).pipe(
+        Effect.andThen(
+          options?.snapshotLoadGate === undefined
+            ? Effect.void
+            : Deferred.await(options.snapshotLoadGate),
+        ),
         Effect.as(
           threadId === THREAD_ID
             ? (options?.httpSnapshot ?? Option.none<OrchestrationThreadDetailSnapshot>())
@@ -321,7 +329,7 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("resumes a warm cache via afterSequence without an HTTP fetch", () =>
+  it.effect("refreshes a warm cache before resuming from its sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
 
@@ -336,10 +344,119 @@ describe("EnvironmentThreads", () => {
           value.data.value.title === "Live title",
       );
 
-      // The subscription resumed from the cached sequence and never fetched the
-      // full snapshot over HTTP.
+      // The HTTP refresh can hydrate state stored outside orchestration events,
+      // then the subscription still resumes from the cached sequence.
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
+  it.effect("hydrates persisted message artifacts over a same-sequence cache", () =>
+    Effect.gen(function* () {
+      const cachedThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        messages: [
+          {
+            id: MessageId.make("message-1"),
+            role: "assistant",
+            text: "Response",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+          },
+        ],
+      };
+      const httpThread: OrchestrationThread = {
+        ...cachedThread,
+        messages: [
+          {
+            id: MessageId.make("message-1"),
+            role: "assistant",
+            text: "Response",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+            generatedSummary: {
+              messageId: MessageId.make("message-1"),
+              summary: "Persisted summary",
+              createdAt: "2026-04-01T00:01:00.000Z",
+            },
+          },
+        ],
+      };
+      const harness = yield* makeHarness({
+        cached: cachedThread,
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          thread: httpThread,
+        }),
+      });
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
+      );
+
+      expect(Option.getOrThrow(state.data).messages[0]?.generatedSummary?.summary).toBe(
+        "Persisted summary",
+      );
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+    }),
+  );
+
+  it.effect("merges older artifact metadata after a live event wins the refresh race", () =>
+    Effect.gen(function* () {
+      const message = {
+        id: MessageId.make("message-race"),
+        role: "assistant" as const,
+        text: "Response",
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      };
+      const cachedThread: OrchestrationThread = { ...BASE_THREAD, messages: [message] };
+      const snapshotLoadGate = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        cached: cachedThread,
+        snapshotLoadGate,
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          thread: {
+            ...cachedThread,
+            messages: [
+              {
+                ...message,
+                generatedSummary: {
+                  messageId: message.id,
+                  summary: "Persisted summary",
+                  createdAt: "2026-04-01T00:01:00.000Z",
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "Live title",
+      );
+      yield* Deferred.succeed(snapshotLoadGate, undefined);
+
+      const hydrated = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.title === "Live title" &&
+          value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
+      );
+      expect(Option.getOrThrow(hydrated.data).title).toBe("Live title");
     }),
   );
 
@@ -465,16 +582,22 @@ describe("EnvironmentThreads", () => {
       yield* Queue.offer(harness.inputs, deleted());
       yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
 
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       yield* Queue.offer(harness.wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        if (
+          (yield* Ref.get(harness.subscriptionCount)) >= 2 &&
+          (yield* Ref.get(harness.loaderCalls)) >= 2
+        )
+          break;
         yield* Effect.yieldNow;
       }
 
       const latest = yield* Ref.get(harness.latest);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      // A deleted thread skips later snapshot refreshes, so the initial load is
+      // the only HTTP request.
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       expect(latest.status).toBe("deleted");
       expect(Option.isNone(latest.data)).toBe(true);
     }),
@@ -676,7 +799,11 @@ describe("EnvironmentThreads", () => {
         (value) => value.status === "synchronizing" && Option.isSome(value.data),
       );
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        if (
+          (yield* Ref.get(harness.subscriptionCount)) >= 2 &&
+          (yield* Ref.get(harness.loaderCalls)) >= 2
+        )
+          break;
         yield* Effect.yieldNow;
       }
 
@@ -684,7 +811,7 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
       expect(yield* Ref.get(harness.lastRequestCompletionMarker)).toBe(true);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
 
       yield* Queue.offer(harness.inputs, synchronized());
       const live = yield* awaitThreadState(

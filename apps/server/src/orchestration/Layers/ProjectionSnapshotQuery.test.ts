@@ -244,6 +244,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           role,
           text,
           input_origin,
+          generation_model_selection_json,
+          generation_cwd,
           is_streaming,
           created_at,
           updated_at
@@ -255,9 +257,35 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'assistant',
           'hello from projection',
           'voice-transcription',
+          '{"instanceId":"codex","model":"gpt-5.6-sol"}',
+          '/workspace/project',
           0,
           '2026-02-24T00:00:04.000Z',
           '2026-02-24T00:00:05.000Z'
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_message_summary (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_hash, created_at
+        ) VALUES (
+          'message-1', 'thread-1', 'A persisted summary.',
+          'cb4c9dde1134dad525db661e435148f33868d34c644cc34bead9caa957d3e700',
+          '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b',
+          'model-selection-hash', '2026-02-24T00:00:05.250Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_message_speech (
+          message_id, thread_id, speech_id, transcript, mime_type, size_bytes,
+          source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
+        ) VALUES (
+          'message-1', 'thread-1', 'speech-1', 'A persisted transcript.',
+          'audio/mpeg', 42,
+          'cb4c9dde1134dad525db661e435148f33868d34c644cc34bead9caa957d3e700',
+          'speech-recipe', 'voice-1',
+          'eleven_flash_v2_5', '2026-02-24T00:00:05.500Z'
         )
       `;
 
@@ -451,6 +479,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",
               updatedAt: "2026-02-24T00:00:05.000Z",
+              generatedSummary: {
+                messageId: asMessageId("message-1"),
+                summary: "A persisted summary.",
+                createdAt: "2026-02-24T00:00:05.250Z",
+              },
+              speech: {
+                messageId: asMessageId("message-1"),
+                speechId: "speech-1",
+                transcript: "A persisted transcript.",
+                mimeType: "audio/mpeg",
+                sizeBytes: 42,
+                createdAt: "2026-02-24T00:00:05.500Z",
+              },
             },
           ],
           proposedPlans: [
@@ -571,6 +612,30 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
         assert.deepEqual(threadDetail.value, snapshot.threads[0]);
+      }
+
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET generation_model_selection_json = NULL
+        WHERE message_id = 'message-1'
+      `;
+      const unpinnedLegacy = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(unpinnedLegacy._tag, "Some");
+      if (unpinnedLegacy._tag === "Some") {
+        assert.isUndefined(unpinnedLegacy.value.messages[0]?.generatedSummary);
+        assert.isDefined(unpinnedLegacy.value.messages[0]?.speech);
+      }
+
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET text = 'Corrected response'
+        WHERE message_id = 'message-1'
+      `;
+      const corrected = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(corrected._tag, "Some");
+      if (corrected._tag === "Some") {
+        assert.isUndefined(corrected.value.messages[0]?.generatedSummary);
+        assert.isUndefined(corrected.value.messages[0]?.speech);
       }
     }),
   );

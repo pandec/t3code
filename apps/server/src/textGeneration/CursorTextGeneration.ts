@@ -14,6 +14,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildMessageSummaryPrompt,
   buildPrContentPrompt,
   buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
@@ -56,7 +57,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript";
+      | "generateSpeechScript"
+      | "generateMessageSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -83,7 +85,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
-      if (operation === "generateSpeechScript") {
+      if (operation === "generateSpeechScript" || operation === "generateMessageSummary") {
         yield* runtime.handleRequestPermission(() =>
           Effect.succeed({ outcome: { outcome: "cancelled" as const } }),
         );
@@ -278,11 +280,25 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       return { script: generated.script.trim() };
     });
 
+  const generateMessageSummary: TextGeneration.TextGeneration["Service"]["generateMessageSummary"] =
+    Effect.fn("CursorTextGeneration.generateMessageSummary")(function* (input) {
+      const { prompt, outputSchema } = buildMessageSummaryPrompt(input);
+      const generated = yield* runCursorJson({
+        operation: "generateMessageSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: generated.summary.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateSpeechScript,
+    generateMessageSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

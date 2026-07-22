@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  type MessageId,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -407,6 +408,10 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       DELETE FROM projection_message_speech
       WHERE thread_id = ${threadId}
     `;
+    yield* sql`
+      DELETE FROM projection_message_summary
+      WHERE thread_id = ${threadId}
+    `;
   });
 
   const pruneThreadAttachmentEntry = Effect.fn("pruneThreadAttachmentEntry")(function* (
@@ -488,6 +493,16 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
           FROM projection_thread_messages AS messages
           WHERE messages.message_id = projection_message_speech.message_id
             AND messages.thread_id = projection_message_speech.thread_id
+        )
+    `;
+    yield* sql`
+      DELETE FROM projection_message_summary
+      WHERE thread_id = ${threadId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_messages AS messages
+          WHERE messages.message_id = projection_message_summary.message_id
+            AND messages.thread_id = projection_message_summary.thread_id
         )
     `;
 
@@ -857,6 +872,90 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const captureAssistantMessageGenerationContext = Effect.fn(
+      "captureAssistantMessageGenerationContext",
+    )(function* (input: {
+      readonly messageId: MessageId;
+      readonly threadId: ThreadId;
+      readonly cwdOverride?: string;
+      readonly eventSequence?: number;
+    }) {
+      yield* sql`
+        UPDATE projection_thread_messages AS messages
+        SET
+          generation_model_selection_json = COALESCE(
+            messages.generation_model_selection_json,
+            (
+              SELECT COALESCE(
+                json_extract(turn_events.payload_json, '$.modelSelection'),
+                (
+                  SELECT json_extract(context_events.payload_json, '$.modelSelection')
+                  FROM orchestration_events AS context_events
+                  WHERE context_events.stream_id = ${input.threadId}
+                    AND context_events.sequence <= turn_events.sequence
+                    AND context_events.event_type IN ('thread.created', 'thread.meta-updated')
+                    AND json_type(context_events.payload_json, '$.modelSelection') IS NOT NULL
+                  ORDER BY context_events.sequence DESC
+                  LIMIT 1
+                )
+              )
+              FROM orchestration_events AS turn_events
+              WHERE turn_events.stream_id = ${input.threadId}
+                AND turn_events.event_type = 'thread.turn-start-requested'
+                AND turn_events.sequence <= ${input.eventSequence ?? -1}
+              ORDER BY turn_events.sequence DESC
+              LIMIT 1
+            ),
+            (
+              SELECT threads.model_selection_json
+              FROM projection_threads AS threads
+              WHERE threads.thread_id = ${input.threadId}
+            )
+          ),
+          generation_cwd = COALESCE(
+            messages.generation_cwd,
+            ${input.cwdOverride ?? null},
+            (
+              SELECT json_extract(context_events.payload_json, '$.worktreePath')
+              FROM orchestration_events AS context_events
+              WHERE context_events.stream_id = ${input.threadId}
+                AND context_events.sequence <= COALESCE(
+                  (
+                    SELECT turn_events.sequence
+                    FROM orchestration_events AS turn_events
+                    WHERE turn_events.stream_id = ${input.threadId}
+                      AND turn_events.event_type = 'thread.turn-start-requested'
+                      AND turn_events.sequence <= ${input.eventSequence ?? -1}
+                    ORDER BY turn_events.sequence DESC
+                    LIMIT 1
+                  ),
+                  ${input.eventSequence ?? -1}
+                )
+                AND context_events.event_type IN ('thread.created', 'thread.meta-updated')
+                AND json_type(context_events.payload_json, '$.worktreePath') IS NOT NULL
+              ORDER BY context_events.sequence DESC
+              LIMIT 1
+            ),
+            (
+              SELECT COALESCE(threads.worktree_path, projects.workspace_root)
+              FROM projection_threads AS threads
+              INNER JOIN projection_projects AS projects
+                ON projects.project_id = threads.project_id
+              WHERE threads.thread_id = ${input.threadId}
+            )
+          )
+        WHERE messages.message_id = ${input.messageId}
+      `.pipe(
+        Effect.catchTag("SqlError", (sqlError) =>
+          Effect.fail(
+            toPersistenceSqlError("ProjectionPipeline.captureAssistantGenerationContext:query")(
+              sqlError,
+            ),
+          ),
+        ),
+      );
+    });
+
     const applyThreadMessagesProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadMessagesProjection",
     )(function* (event, attachmentSideEffects) {
@@ -900,6 +999,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          if (event.payload.role === "assistant") {
+            yield* captureAssistantMessageGenerationContext({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              eventSequence: event.sequence,
+            });
+          }
           return;
         }
 
@@ -914,15 +1020,24 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Effect.forEach(
             event.payload.messages,
             (message) =>
-              projectionThreadMessageRepository.upsert({
-                messageId: message.messageId,
-                threadId: event.payload.threadId,
-                turnId: null,
-                role: message.role,
-                text: message.text,
-                isStreaming: false,
-                createdAt: message.createdAt,
-                updatedAt: message.createdAt,
+              Effect.gen(function* () {
+                yield* projectionThreadMessageRepository.upsert({
+                  messageId: message.messageId,
+                  threadId: event.payload.threadId,
+                  turnId: null,
+                  role: message.role,
+                  text: message.text,
+                  isStreaming: false,
+                  createdAt: message.createdAt,
+                  updatedAt: message.createdAt,
+                });
+                if (message.role === "assistant") {
+                  yield* captureAssistantMessageGenerationContext({
+                    messageId: message.messageId,
+                    threadId: event.payload.threadId,
+                    cwdOverride: event.payload.source.nativeCwd,
+                  });
+                }
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);

@@ -6,6 +6,7 @@ import type {
   EnvironmentId,
   MessageId,
   MessageSpeechSynthesisResult,
+  MessageSummaryResult,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -30,6 +31,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -111,6 +113,13 @@ import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
+import { summarizeMessage } from "../../state/messageArtifacts";
+import {
+  getMessageArtifactSessionSnapshot,
+  rememberMessageSpeech,
+  rememberMessageSummary,
+  subscribeMessageArtifactSession,
+} from "@t3tools/client-runtime/state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   listeningPlayback,
@@ -163,6 +172,7 @@ export interface ThreadFeedProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textToSpeechAvailable?: boolean;
+  readonly messageSummariesAvailable?: boolean;
 }
 
 function MessageAttachmentImage(props: {
@@ -818,7 +828,10 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "textToSpeechAvailable"> & {
+  props: Pick<
+    ThreadFeedProps,
+    "environmentId" | "skills" | "textToSpeechAvailable" | "messageSummariesAvailable"
+  > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1001,13 +1014,19 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <AssistantMessageMetaAndSpeech
+          <AssistantMessageMetaAndArtifacts
             environmentId={props.environmentId}
             messageId={message.id}
             messageText={message.text}
+            persistedSummary={message.generatedSummary ?? null}
+            persistedSpeech={message.speech ?? null}
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             textToSpeechAvailable={props.textToSpeechAvailable === true}
+            messageSummariesAvailable={props.messageSummariesAvailable === true}
+            markdownStyles={styles}
+            skills={props.skills}
+            onLinkPress={props.onMarkdownLinkPress}
           />
         ) : null}
       </Animated.View>
@@ -1031,27 +1050,45 @@ function formatPlaybackTime(seconds: number): string {
   return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
-function AssistantMessageMetaAndSpeech(props: {
+function AssistantMessageMetaAndArtifacts(props: {
   readonly environmentId: EnvironmentId;
   readonly messageId: MessageId;
   readonly messageText: string;
+  readonly persistedSummary: MessageSummaryResult | null;
+  readonly persistedSpeech: MessageSpeechSynthesisResult | null;
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly textToSpeechAvailable: boolean;
+  readonly messageSummariesAvailable: boolean;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress: (href: string) => void;
 }) {
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
-  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
   const [preparing, setPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [summaryPreparing, setSummaryPreparing] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const readSessionArtifacts = useCallback(
+    () =>
+      getMessageArtifactSessionSnapshot(props.environmentId, props.messageId, props.messageText),
+    [props.environmentId, props.messageId, props.messageText],
+  );
+  const sessionArtifacts = useSyncExternalStore(
+    useCallback(
+      (listener) => subscribeMessageArtifactSession(props.environmentId, props.messageId, listener),
+      [props.environmentId, props.messageId],
+    ),
+    readSessionArtifacts,
+    readSessionArtifacts,
+  );
+  const speech = sessionArtifacts.speech ?? props.persistedSpeech;
+  const summary = sessionArtifacts.summary ?? props.persistedSummary;
 
-  const onPressSpeech = useCallback(async () => {
-    if (speech !== null) {
-      setExpanded((current) => !current);
-      return;
-    }
+  const prepareSpeech = useCallback(async () => {
     if (preparing) return;
-
     setPreparing(true);
     const result = await synthesize({
       environmentId: props.environmentId,
@@ -1059,7 +1096,7 @@ function AssistantMessageMetaAndSpeech(props: {
     });
     setPreparing(false);
     if (result._tag === "Success") {
-      setSpeech(result.value);
+      rememberMessageSpeech(props.environmentId, props.messageText, result.value);
       setExpanded(true);
       return;
     }
@@ -1067,7 +1104,45 @@ function AssistantMessageMetaAndSpeech(props: {
       "Listening version unavailable",
       "T3 Code could not prepare audio for this message. Try again in a moment.",
     );
-  }, [preparing, props.environmentId, props.messageId, speech, synthesize]);
+  }, [preparing, props.environmentId, props.messageId, props.messageText, synthesize]);
+
+  const onPressSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setExpanded((current) => !current);
+      return;
+    }
+    await prepareSpeech();
+  }, [prepareSpeech, speech]);
+
+  const onPressSummary = useCallback(async () => {
+    if (summary !== null) {
+      setSummaryExpanded((current) => !current);
+      return;
+    }
+    if (summaryPreparing) return;
+    setSummaryPreparing(true);
+    const result = await summarize({
+      environmentId: props.environmentId,
+      input: { messageId: props.messageId },
+    });
+    setSummaryPreparing(false);
+    if (result._tag === "Success") {
+      rememberMessageSummary(props.environmentId, props.messageText, result.value);
+      setSummaryExpanded(true);
+      return;
+    }
+    Alert.alert(
+      "Summary unavailable",
+      "T3 Code could not summarize this message. Try again in a moment.",
+    );
+  }, [
+    props.environmentId,
+    props.messageId,
+    props.messageText,
+    summarize,
+    summary,
+    summaryPreparing,
+  ]);
 
   return (
     <View>
@@ -1079,7 +1154,33 @@ function AssistantMessageMetaAndSpeech(props: {
           buttonSize={28}
           iconSize={13}
         />
-        {props.textToSpeechAvailable ? (
+        {(summary !== null || props.messageSummariesAvailable) &&
+        props.messageText.trim().length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
+            accessibilityState={{
+              expanded: summary === null ? undefined : summaryExpanded,
+              busy: summaryPreparing,
+            }}
+            className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+            disabled={summaryPreparing}
+            hitSlop={8}
+            onPress={() => void onPressSummary()}
+          >
+            {summaryPreparing ? (
+              <ActivityIndicator size="small" color={props.iconSubtleColor} />
+            ) : (
+              <SymbolView
+                name="doc.text"
+                size={14}
+                tintColor={props.iconSubtleColor}
+                type="monochrome"
+              />
+            )}
+          </Pressable>
+        ) : null}
+        {props.textToSpeechAvailable || speech !== null ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={
@@ -1091,6 +1192,7 @@ function AssistantMessageMetaAndSpeech(props: {
             }}
             className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
             disabled={preparing}
+            hitSlop={8}
             onPress={() => void onPressSpeech()}
           >
             {preparing ? (
@@ -1109,6 +1211,36 @@ function AssistantMessageMetaAndSpeech(props: {
           {props.timestampLabel}
         </Text>
       </View>
+      {summary !== null && summaryExpanded ? (
+        <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
+          <View className="flex-row items-center gap-2">
+            <SymbolView
+              name="doc.text"
+              size={14}
+              tintColor={props.iconSubtleColor}
+              type="monochrome"
+            />
+            <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
+          </View>
+          {hasNativeSelectableMarkdownText() ? (
+            <SelectableMarkdownText
+              markdown={summary.summary}
+              skills={props.skills}
+              textStyle={props.markdownStyles.nativeTextStyle}
+              onLinkPress={props.onLinkPress}
+            />
+          ) : (
+            <Markdown
+              options={{ gfm: true }}
+              renderers={props.markdownStyles.renderers}
+              styles={props.markdownStyles.styles}
+              theme={props.markdownStyles.theme}
+            >
+              {summary.summary}
+            </Markdown>
+          )}
+        </View>
+      ) : null}
       {speech !== null && expanded ? (
         <AssistantSpeechPlayer
           environmentId={props.environmentId}
@@ -1116,10 +1248,7 @@ function AssistantMessageMetaAndSpeech(props: {
           iconSubtleColor={props.iconSubtleColor}
           transcriptExpanded={transcriptExpanded}
           onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
-          onReset={() => {
-            setSpeech(null);
-            setExpanded(false);
-          }}
+          onRetry={() => void prepareSpeech()}
         />
       ) : null}
     </View>
@@ -1132,7 +1261,7 @@ function AssistantSpeechPlayer(props: {
   readonly iconSubtleColor: ColorValue;
   readonly transcriptExpanded: boolean;
   readonly onToggleTranscript: () => void;
-  readonly onReset: () => void;
+  readonly onRetry: () => void;
 }) {
   const { blocked, speed } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(props.environmentId, {
@@ -1214,10 +1343,10 @@ function AssistantSpeechPlayer(props: {
       {audioUrlState._tag === "Failure" ? (
         <View className="gap-2 py-1">
           <Text className="text-xs text-foreground-muted">
-            The audio file is unavailable. Dismiss this card and try again.
+            The audio file is unavailable. Regenerate it to listen again.
           </Text>
-          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onReset}>
-            <Text className="font-t3-medium text-xs text-foreground">Dismiss</Text>
+          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onRetry}>
+            <Text className="font-t3-medium text-xs text-foreground">Regenerate</Text>
           </Pressable>
         </View>
       ) : audioUrl === null ? (
@@ -1718,6 +1847,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      messageSummariesAvailable: props.messageSummariesAvailable,
       textToSpeechAvailable: props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
@@ -1728,6 +1858,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      props.messageSummariesAvailable,
       props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
@@ -1966,6 +2097,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        messageSummariesAvailable: props.messageSummariesAvailable,
         textToSpeechAvailable: props.textToSpeechAvailable,
         copiedRowId,
         expandedWorkRows,
@@ -2003,6 +2135,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.messageSummariesAvailable,
       props.textToSpeechAvailable,
       props.skills,
     ],
