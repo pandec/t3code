@@ -1,9 +1,26 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider } from "./server.ts";
+import { ServerProvider, ServerProviderSkill } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
+const decodeServerProviderSkill = Schema.decodeUnknownSync(ServerProviderSkill);
+
+describe("ServerProviderSkill", () => {
+  it("accepts provider-native skills without filesystem metadata", () => {
+    expect(
+      decodeServerProviderSkill({
+        name: "project-review",
+        description: "Review this project",
+        enabled: true,
+      }),
+    ).toEqual({
+      name: "project-review",
+      description: "Review this project",
+      enabled: true,
+    });
+  });
+});
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {

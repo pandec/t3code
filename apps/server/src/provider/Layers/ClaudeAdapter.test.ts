@@ -8,6 +8,8 @@ import type {
   Options as ClaudeQueryOptions,
   PermissionMode,
   PermissionResult,
+  SDKControlInitializeResponse,
+  SDKControlReloadSkillsResponse,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -62,6 +64,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public initializationResultOverride: (() => Promise<SDKControlInitializeResponse>) | undefined;
+  public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
+  public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
 
   emit(message: SDKMessage): void {
@@ -112,6 +117,20 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly setMaxThinkingTokens = async (maxThinkingTokens: number | null): Promise<void> => {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
+  };
+
+  readonly initializationResult = async (): Promise<SDKControlInitializeResponse> => {
+    if (this.initializationResultOverride) {
+      return this.initializationResultOverride();
+    }
+    return {} as SDKControlInitializeResponse;
+  };
+
+  readonly reloadSkills = async (): Promise<SDKControlReloadSkillsResponse> => {
+    if (this.reloadSkillsFailure !== undefined) {
+      throw this.reloadSkillsFailure;
+    }
+    return this.reloadSkillsResult;
   };
 
   readonly close = (): void => {
@@ -274,6 +293,113 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("lists genuine Claude skills for the active workspace", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-"));
+    const harness = makeHarness({ cwd });
+    harness.query.reloadSkillsResult = {
+      skills: [
+        {
+          name: "project-review",
+          description: "Review this project",
+          argumentHint: "",
+        },
+        {
+          name: "PROJECT-REVIEW",
+          description: "Duplicate",
+          argumentHint: "",
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      assert.deepEqual(skills, [
+        {
+          name: "project-review",
+          description: "Review this project",
+          enabled: true,
+        },
+      ]);
+      assert.equal(harness.getLastCreateQueryInput()?.options.cwd, NodeFS.realpathSync(cwd));
+      assert.equal(harness.getLastCreateQueryInput()?.options.persistSession, false);
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.settingSources, [
+        "user",
+        "project",
+        "local",
+      ]);
+      // Project settings are loaded for skills, so discovery must opt out of
+      // the workspace's `.mcp.json` servers rather than booting them.
+      assert.equal(harness.getLastCreateQueryInput()?.options.strictMcpConfig, true);
+      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("closes the discovery query when Claude skill reload fails", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
+    const harness = makeHarness({ cwd });
+    harness.query.reloadSkillsFailure = new Error("reload failed");
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const error = yield* Effect.flip(listSkills({ cwd }));
+
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));
+    const harness = makeHarness({ cwd });
+    let abortObserved = false;
+    let markInitializationStarted: () => void = () => {};
+    const initializationStarted = new Promise<void>((resolve) => {
+      markInitializationStarted = resolve;
+    });
+    harness.query.initializationResultOverride = () =>
+      new Promise<SDKControlInitializeResponse>((_resolve, reject) => {
+        markInitializationStarted();
+        const signal = harness.getLastCreateQueryInput()?.options.abortController?.signal;
+        signal?.addEventListener(
+          "abort",
+          () => {
+            abortObserved = true;
+            reject(new Error("discovery aborted"));
+          },
+          { once: true },
+        );
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+
+      const fiber = yield* Effect.forkChild(listSkills({ cwd }));
+      yield* Effect.promise(() => initializationStarted);
+      yield* Fiber.interrupt(fiber);
+
+      assert.equal(abortObserved, true);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
   it("derives pending work from background tasks and session crons", () => {
     assert.equal(hasPendingClaudeWork({}), false);
     assert.equal(hasPendingClaudeWork({ background_tasks: [] }), false);

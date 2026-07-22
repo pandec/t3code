@@ -25,6 +25,11 @@ describe("formatProviderSkillDisplayName", () => {
 });
 
 describe("formatProviderSkillInstallSource", () => {
+  it("omits an install source when the provider exposes no origin metadata", () => {
+    expect(formatProviderSkillInstallSource({})).toBeNull();
+    expect(formatProviderSkillInstallSource({ scope: "user" })).toBe("Personal");
+  });
+
   it("marks plugin-backed skills as app installs", () => {
     expect(
       formatProviderSkillInstallSource({

@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   type ServerProviderModel,
+  type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -548,6 +549,29 @@ function parseClaudeInitializationCommands(
       ];
     }),
   );
+}
+
+export function parseClaudeSkills(
+  skills: ReadonlyArray<ClaudeSlashCommand>,
+): ReadonlyArray<ServerProviderSkill> {
+  const skillsByName = new Map<string, ServerProviderSkill>();
+
+  for (const skill of skills) {
+    const name = nonEmptyProbeString(skill.name);
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (skillsByName.has(key)) continue;
+
+    const description = nonEmptyProbeString(skill.description);
+    skillsByName.set(key, {
+      name,
+      enabled: true,
+      ...(description ? { description } : {}),
+    });
+  }
+
+  return [...skillsByName.values()];
 }
 
 function dedupeSlashCommands(
