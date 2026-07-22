@@ -878,12 +878,34 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       readonly messageId: MessageId;
       readonly threadId: ThreadId;
       readonly cwdOverride?: string;
+      readonly eventSequence?: number;
     }) {
       yield* sql`
         UPDATE projection_thread_messages AS messages
         SET
           generation_model_selection_json = COALESCE(
             messages.generation_model_selection_json,
+            (
+              SELECT COALESCE(
+                json_extract(turn_events.payload_json, '$.modelSelection'),
+                (
+                  SELECT json_extract(context_events.payload_json, '$.modelSelection')
+                  FROM orchestration_events AS context_events
+                  WHERE context_events.stream_id = ${input.threadId}
+                    AND context_events.sequence <= turn_events.sequence
+                    AND context_events.event_type IN ('thread.created', 'thread.meta-updated')
+                    AND json_type(context_events.payload_json, '$.modelSelection') IS NOT NULL
+                  ORDER BY context_events.sequence DESC
+                  LIMIT 1
+                )
+              )
+              FROM orchestration_events AS turn_events
+              WHERE turn_events.stream_id = ${input.threadId}
+                AND turn_events.event_type = 'thread.turn-start-requested'
+                AND turn_events.sequence <= ${input.eventSequence ?? -1}
+              ORDER BY turn_events.sequence DESC
+              LIMIT 1
+            ),
             (
               SELECT threads.model_selection_json
               FROM projection_threads AS threads
@@ -893,6 +915,27 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           generation_cwd = COALESCE(
             messages.generation_cwd,
             ${input.cwdOverride ?? null},
+            (
+              SELECT json_extract(context_events.payload_json, '$.worktreePath')
+              FROM orchestration_events AS context_events
+              WHERE context_events.stream_id = ${input.threadId}
+                AND context_events.sequence <= COALESCE(
+                  (
+                    SELECT turn_events.sequence
+                    FROM orchestration_events AS turn_events
+                    WHERE turn_events.stream_id = ${input.threadId}
+                      AND turn_events.event_type = 'thread.turn-start-requested'
+                      AND turn_events.sequence <= ${input.eventSequence ?? -1}
+                    ORDER BY turn_events.sequence DESC
+                    LIMIT 1
+                  ),
+                  ${input.eventSequence ?? -1}
+                )
+                AND context_events.event_type IN ('thread.created', 'thread.meta-updated')
+                AND json_type(context_events.payload_json, '$.worktreePath') IS NOT NULL
+              ORDER BY context_events.sequence DESC
+              LIMIT 1
+            ),
             (
               SELECT COALESCE(threads.worktree_path, projects.workspace_root)
               FROM projection_threads AS threads
@@ -960,6 +1003,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* captureAssistantMessageGenerationContext({
               messageId: event.payload.messageId,
               threadId: event.payload.threadId,
+              eventSequence: event.sequence,
             });
           }
           return;

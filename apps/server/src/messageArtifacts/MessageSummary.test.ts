@@ -54,12 +54,26 @@ describe("message summary model selection", () => {
 
   it("leaves providers without a low-effort option unchanged", () => {
     const selection: ModelSelection = {
-      instanceId: ProviderInstanceId.make("opencode-work"),
+      instanceId: ProviderInstanceId.make("grok-work"),
       model: "auto",
       options: [{ id: "custom", value: true }],
     };
 
-    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("opencode"))).toBe(selection);
+    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("grok"))).toBe(selection);
+  });
+
+  it("uses the low OpenCode model variant", () => {
+    const selection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("opencode-work"),
+      model: "openai/gpt-5.6-sol",
+      options: [{ id: "variant", value: "high" }],
+    };
+
+    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("opencode"))).toEqual({
+      instanceId: ProviderInstanceId.make("opencode-work"),
+      model: "openai/gpt-5.6-sol",
+      options: [{ id: "variant", value: "low" }],
+    });
   });
 
   it("uses low reasoning for Cursor", () => {

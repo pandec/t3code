@@ -49,7 +49,9 @@ export function withLowSummaryEffort(
         ? "effort"
         : driverKind === ProviderDriverKind.make("cursor")
           ? "reasoning"
-          : null;
+          : driverKind === ProviderDriverKind.make("opencode")
+            ? "variant"
+            : null;
   if (effortOptionId === null) return modelSelection;
 
   return {
@@ -147,6 +149,19 @@ export const make = Effect.gen(function* () {
       return yield* new MessageSummaryError({ reason: "provider_unavailable" });
     }
     const summaryModelSelection = withLowSummaryEffort(modelSelection, instance.driverKind);
+    // Once a legacy message is summarized, pin the best-effort fallback used
+    // for this request. Later thread model/worktree changes must not reinterpret
+    // either the persisted summary or future regenerations.
+    yield* sql`
+      UPDATE projection_thread_messages
+      SET
+        generation_model_selection_json = COALESCE(
+          generation_model_selection_json,
+          ${message.modelSelection}
+        ),
+        generation_cwd = COALESCE(generation_cwd, ${message.cwd})
+      WHERE message_id = ${message.messageId}
+    `.pipe(Effect.mapError(storageError));
     const sourceTextHash = messageArtifactTextHash(sourceText);
     const recipeHash = MESSAGE_SUMMARY_RECIPE_HASH;
     // @effect-diagnostics-next-line preferSchemaOverJson:off

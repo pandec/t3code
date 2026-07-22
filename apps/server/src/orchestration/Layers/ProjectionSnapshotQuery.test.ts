@@ -244,6 +244,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           role,
           text,
           input_origin,
+          generation_model_selection_json,
+          generation_cwd,
           is_streaming,
           created_at,
           updated_at
@@ -255,6 +257,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'assistant',
           'hello from projection',
           'voice-transcription',
+          '{"instanceId":"codex","model":"gpt-5.6-sol"}',
+          '/workspace/project',
           0,
           '2026-02-24T00:00:04.000Z',
           '2026-02-24T00:00:05.000Z'
@@ -608,6 +612,18 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
         assert.deepEqual(threadDetail.value, snapshot.threads[0]);
+      }
+
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET generation_model_selection_json = NULL
+        WHERE message_id = 'message-1'
+      `;
+      const unpinnedLegacy = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(unpinnedLegacy._tag, "Some");
+      if (unpinnedLegacy._tag === "Some") {
+        assert.isUndefined(unpinnedLegacy.value.messages[0]?.generatedSummary);
+        assert.isDefined(unpinnedLegacy.value.messages[0]?.speech);
       }
 
       yield* sql`

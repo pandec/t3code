@@ -88,6 +88,7 @@ const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
   summaryCreatedAt: Schema.NullOr(IsoDateTime),
   summarySourceTextHash: Schema.NullOr(Schema.String),
   summaryRecipeHash: Schema.NullOr(Schema.String),
+  generationModelSelectionJson: Schema.NullOr(Schema.String),
   speechId: Schema.NullOr(Schema.String),
   speechTranscript: Schema.NullOr(Schema.String),
   speechMimeType: Schema.NullOr(Schema.String),
@@ -278,7 +279,10 @@ function mapProposedPlanRow(
 function mapMessageRow(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageArtifactDbRowSchema>,
 ): OrchestrationMessage {
-  const currentSourceTextHash = messageArtifactTextHash(row.text.trim());
+  const currentSourceTextHash =
+    row.summarySourceTextHash !== null || row.speechSourceTextHash !== null
+      ? messageArtifactTextHash(row.text.trim())
+      : null;
   return {
     id: row.messageId,
     role: row.role,
@@ -287,6 +291,7 @@ function mapMessageRow(
     ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
     ...(row.summaryText !== null &&
     row.summaryCreatedAt !== null &&
+    row.generationModelSelectionJson !== null &&
     row.summarySourceTextHash === currentSourceTextHash &&
     row.summaryRecipeHash === MESSAGE_SUMMARY_RECIPE_HASH
       ? {
@@ -536,6 +541,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           summary.created_at AS "summaryCreatedAt",
           summary.source_text_hash AS "summarySourceTextHash",
           summary.recipe_hash AS "summaryRecipeHash",
+          messages.generation_model_selection_json AS "generationModelSelectionJson",
           speech.speech_id AS "speechId",
           speech.transcript AS "speechTranscript",
           speech.mime_type AS "speechMimeType",
@@ -918,6 +924,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           summary.created_at AS "summaryCreatedAt",
           summary.source_text_hash AS "summarySourceTextHash",
           summary.recipe_hash AS "summaryRecipeHash",
+          messages.generation_model_selection_json AS "generationModelSelectionJson",
           speech.speech_id AS "speechId",
           speech.transcript AS "speechTranscript",
           speech.mime_type AS "speechMimeType",
