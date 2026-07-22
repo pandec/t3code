@@ -253,6 +253,40 @@ describe("MessagesTimeline", () => {
     expect(availableMarkup).toContain("Create listening version");
   });
 
+  it("shows the summarize action only when the remote environment supports it", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const timelineEntries = [
+      {
+        id: "entry-assistant-summary",
+        kind: "message" as const,
+        createdAt: MESSAGE_CREATED_AT,
+        message: {
+          id: MessageId.make("message-assistant-summary"),
+          role: "assistant" as const,
+          text: "A response worth summarizing.",
+          turnId: TurnId.make("turn-summary"),
+          createdAt: MESSAGE_CREATED_AT,
+          updatedAt: MESSAGE_CREATED_AT,
+          streaming: false,
+        },
+      },
+    ];
+
+    const unavailableMarkup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={timelineEntries} />,
+    );
+    const availableMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={timelineEntries}
+        messageSummariesAvailable
+      />,
+    );
+
+    expect(unavailableMarkup).not.toContain("Create summary");
+    expect(availableMarkup).toContain("Create summary");
+  });
+
   it("keeps assistant changed-files headers sticky below the thread header", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.make("message-assistant-with-files");

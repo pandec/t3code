@@ -5401,6 +5401,10 @@ function ChatViewContent(props: ChatViewProps) {
                 textToSpeechAvailable={
                   serverConfigs.get(activeThread.environmentId)?.textToSpeech.available === true
                 }
+                messageSummariesAvailable={
+                  serverConfigs.get(activeThread.environmentId)?.environment.capabilities
+                    .messageSummaries === true
+                }
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}

@@ -172,6 +172,7 @@ export interface ThreadFeedProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textToSpeechAvailable?: boolean;
+  readonly messageSummariesAvailable?: boolean;
 }
 
 function MessageAttachmentImage(props: {
@@ -827,7 +828,10 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "textToSpeechAvailable"> & {
+  props: Pick<
+    ThreadFeedProps,
+    "environmentId" | "skills" | "textToSpeechAvailable" | "messageSummariesAvailable"
+  > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1019,6 +1023,7 @@ function renderFeedEntry(
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             textToSpeechAvailable={props.textToSpeechAvailable === true}
+            messageSummariesAvailable={props.messageSummariesAvailable === true}
             markdownStyles={styles}
             skills={props.skills}
             onLinkPress={props.onMarkdownLinkPress}
@@ -1054,6 +1059,7 @@ function AssistantMessageMetaAndArtifacts(props: {
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly textToSpeechAvailable: boolean;
+  readonly messageSummariesAvailable: boolean;
   readonly markdownStyles: MarkdownStyleSet;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onLinkPress: (href: string) => void;
@@ -1065,16 +1071,18 @@ function AssistantMessageMetaAndArtifacts(props: {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [summaryPreparing, setSummaryPreparing] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const readSessionArtifacts = useCallback(
+    () =>
+      getMessageArtifactSessionSnapshot(props.environmentId, props.messageId, props.messageText),
+    [props.environmentId, props.messageId, props.messageText],
+  );
   const sessionArtifacts = useSyncExternalStore(
     useCallback(
       (listener) => subscribeMessageArtifactSession(props.environmentId, props.messageId, listener),
       [props.environmentId, props.messageId],
     ),
-    useCallback(
-      () =>
-        getMessageArtifactSessionSnapshot(props.environmentId, props.messageId, props.messageText),
-      [props.environmentId, props.messageId, props.messageText],
-    ),
+    readSessionArtifacts,
+    readSessionArtifacts,
   );
   const speech = sessionArtifacts.speech ?? props.persistedSpeech;
   const summary = sessionArtifacts.summary ?? props.persistedSummary;
@@ -1146,7 +1154,8 @@ function AssistantMessageMetaAndArtifacts(props: {
           buttonSize={28}
           iconSize={13}
         />
-        {props.messageText.trim().length > 0 ? (
+        {(summary !== null || props.messageSummariesAvailable) &&
+        props.messageText.trim().length > 0 ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
@@ -1838,6 +1847,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      messageSummariesAvailable: props.messageSummariesAvailable,
       textToSpeechAvailable: props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
@@ -1848,6 +1858,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
+      props.messageSummariesAvailable,
       props.textToSpeechAvailable,
       userBubbleColor,
       viewportWidth,
@@ -2086,6 +2097,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        messageSummariesAvailable: props.messageSummariesAvailable,
         textToSpeechAvailable: props.textToSpeechAvailable,
         copiedRowId,
         expandedWorkRows,
@@ -2123,6 +2135,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.messageSummariesAvailable,
       props.textToSpeechAvailable,
       props.skills,
     ],

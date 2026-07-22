@@ -188,13 +188,15 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             readonly text: string;
             readonly turnId: string | null;
             readonly isStreaming: number;
+            readonly generationCwd: string | null;
           }>`
             SELECT
               message_id AS "messageId",
               role,
               text,
               turn_id AS "turnId",
-              is_streaming AS "isStreaming"
+              is_streaming AS "isStreaming",
+              generation_cwd AS "generationCwd"
             FROM projection_thread_messages
             WHERE thread_id = ${threadId}
             ORDER BY created_at, message_id
@@ -207,6 +209,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             text: "Remember the codeword PINEAPPLE-42.",
             turnId: null,
             isStreaming: 0,
+            generationCwd: null,
           },
           {
             messageId: "import:imported-thread:00001",
@@ -214,6 +217,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hist
             text: "OK",
             turnId: null,
             isStreaming: 0,
+            generationCwd: "/tmp/project",
           },
         ]);
 
@@ -1109,6 +1113,13 @@ it.layer(
           ('message-keep', ${threadId}, 'Keep summary', 'keep-source', 'recipe', 'model', ${now}),
           ('message-remove', ${threadId}, 'Remove summary', 'remove-source', 'recipe', 'model', ${now})
       `;
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET
+          generation_model_selection_json = '{"instanceId":"codex-original","model":"gpt-original"}',
+          generation_cwd = '/workspace/original'
+        WHERE message_id = 'message-keep'
+      `;
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
@@ -1152,6 +1163,22 @@ it.layer(
         ORDER BY message_id
       `;
       assert.deepEqual(summaryRows, [{ messageId: "message-keep" }]);
+      const provenanceRows = yield* sql<{
+        readonly generationModelSelectionJson: string;
+        readonly generationCwd: string;
+      }>`
+        SELECT
+          generation_model_selection_json AS "generationModelSelectionJson",
+          generation_cwd AS "generationCwd"
+        FROM projection_thread_messages
+        WHERE message_id = 'message-keep'
+      `;
+      assert.deepEqual(provenanceRows, [
+        {
+          generationModelSelectionJson: '{"instanceId":"codex-original","model":"gpt-original"}',
+          generationCwd: "/workspace/original",
+        },
+      ]);
     }),
   );
 });

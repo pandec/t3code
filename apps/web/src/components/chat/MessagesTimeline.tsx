@@ -162,6 +162,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable: boolean;
+  messageSummariesAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -202,6 +203,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable?: boolean;
+  messageSummariesAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -237,6 +239,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   activeThreadEnvironmentId,
   textToSpeechAvailable = false,
+  messageSummariesAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -456,6 +459,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -471,6 +475,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1058,21 +1063,23 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const [speechExpanded, setSpeechExpanded] = useState(false);
   const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const readSessionArtifacts = useCallback(
+    () =>
+      getMessageArtifactSessionSnapshot(
+        ctx.activeThreadEnvironmentId,
+        row.message.id,
+        row.message.text,
+      ),
+    [ctx.activeThreadEnvironmentId, row.message.id, row.message.text],
+  );
   const sessionArtifacts = useSyncExternalStore(
     useCallback(
       (listener) =>
         subscribeMessageArtifactSession(ctx.activeThreadEnvironmentId, row.message.id, listener),
       [ctx.activeThreadEnvironmentId, row.message.id],
     ),
-    useCallback(
-      () =>
-        getMessageArtifactSessionSnapshot(
-          ctx.activeThreadEnvironmentId,
-          row.message.id,
-          row.message.text,
-        ),
-      [ctx.activeThreadEnvironmentId, row.message.id, row.message.text],
-    ),
+    readSessionArtifacts,
+    readSessionArtifacts,
   );
   const speech = sessionArtifacts.speech ?? row.message.speech ?? null;
   const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
@@ -1084,7 +1091,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       !row.message.streaming &&
       row.message.text.trim().length > 0);
   const canShowSummary =
-    row.showAssistantMeta && !row.message.streaming && row.message.text.trim().length > 0;
+    (summary !== null || ctx.messageSummariesAvailable) &&
+    row.showAssistantMeta &&
+    !row.message.streaming &&
+    row.message.text.trim().length > 0;
 
   const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;

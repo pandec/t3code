@@ -23,6 +23,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     inputOrigin: Schema.NullOr(MessageInputOrigin),
+    generationModelSelectionJson: Schema.NullOr(Schema.String),
+    generationCwd: Schema.NullOr(Schema.String),
   }),
 );
 
@@ -40,6 +42,10 @@ function toProjectionThreadMessage(
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
+    ...(row.generationModelSelectionJson !== null
+      ? { generationModelSelectionJson: row.generationModelSelectionJson }
+      : {}),
+    ...(row.generationCwd !== null ? { generationCwd: row.generationCwd } : {}),
   };
 }
 
@@ -60,6 +66,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json,
           input_origin,
+          generation_model_selection_json,
+          generation_cwd,
           is_streaming,
           created_at,
           updated_at
@@ -86,6 +94,22 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          COALESCE(
+            ${row.generationModelSelectionJson ?? null},
+            (
+              SELECT generation_model_selection_json
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
+          COALESCE(
+            ${row.generationCwd ?? null},
+            (
+              SELECT generation_cwd
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           ${row.isStreaming ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -103,6 +127,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin = COALESCE(
             excluded.input_origin,
             projection_thread_messages.input_origin
+          ),
+          generation_model_selection_json = COALESCE(
+            excluded.generation_model_selection_json,
+            projection_thread_messages.generation_model_selection_json
+          ),
+          generation_cwd = COALESCE(
+            excluded.generation_cwd,
+            projection_thread_messages.generation_cwd
           ),
           is_streaming = excluded.is_streaming,
           created_at = excluded.created_at,
@@ -124,6 +156,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           input_origin AS "inputOrigin",
+          generation_model_selection_json AS "generationModelSelectionJson",
+          generation_cwd AS "generationCwd",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -146,6 +180,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           input_origin AS "inputOrigin",
+          generation_model_selection_json AS "generationModelSelectionJson",
+          generation_cwd AS "generationCwd",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"

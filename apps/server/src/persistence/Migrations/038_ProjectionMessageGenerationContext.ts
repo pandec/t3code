@@ -14,21 +14,7 @@ export default Effect.gen(function* () {
     ADD COLUMN generation_cwd TEXT
   `;
 
-  yield* sql`
-    UPDATE projection_thread_messages AS messages
-    SET
-      generation_model_selection_json = (
-        SELECT threads.model_selection_json
-        FROM projection_threads AS threads
-        WHERE threads.thread_id = messages.thread_id
-      ),
-      generation_cwd = (
-        SELECT COALESCE(threads.worktree_path, projects.workspace_root)
-        FROM projection_threads AS threads
-        INNER JOIN projection_projects AS projects
-          ON projects.project_id = threads.project_id
-        WHERE threads.thread_id = messages.thread_id
-      )
-    WHERE messages.role = 'assistant'
-  `;
+  // Pre-feature messages do not carry authoritative generation provenance.
+  // Leave them null so runtime fallback remains explicit instead of persisting
+  // the thread's mutable current model and directory as historical fact.
 });

@@ -105,6 +105,9 @@ export const make = Effect.gen(function* () {
           messages.is_streaming AS "isStreaming",
           COALESCE(
             messages.generation_model_selection_json,
+            -- Legacy/imported messages can lack authoritative provenance.
+            -- Falling back at request time is intentionally best-effort and
+            -- never persisted as immutable historical context.
             threads.model_selection_json
           ) AS "modelSelection",
           COALESCE(

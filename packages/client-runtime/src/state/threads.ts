@@ -58,7 +58,7 @@ function mergeThreadMessageArtifacts(
     ...current,
     messages: current.messages.map((message) => {
       const refreshedMessage = refreshedById.get(message.id);
-      if (refreshedMessage === undefined) return message;
+      if (refreshedMessage === undefined || refreshedMessage.text !== message.text) return message;
       const { generatedSummary: _summary, speech: _speech, ...base } = message;
       return {
         ...base,
@@ -263,11 +263,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           yield* setThread(httpSnapshot.value.thread);
           return;
         }
-        if (httpSnapshot.value.snapshotSequence === sequence) {
-          yield* setThread(
-            mergeThreadMessageArtifacts(currentState.data.value, httpSnapshot.value.thread),
-          );
-        }
+        yield* setThread(
+          mergeThreadMessageArtifacts(currentState.data.value, httpSnapshot.value.thread),
+        );
       }),
     );
   });

@@ -874,7 +874,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
     const captureAssistantMessageGenerationContext = Effect.fn(
       "captureAssistantMessageGenerationContext",
-    )(function* (input: { readonly messageId: MessageId; readonly threadId: ThreadId }) {
+    )(function* (input: {
+      readonly messageId: MessageId;
+      readonly threadId: ThreadId;
+      readonly cwdOverride?: string;
+    }) {
       yield* sql`
         UPDATE projection_thread_messages AS messages
         SET
@@ -888,6 +892,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           ),
           generation_cwd = COALESCE(
             messages.generation_cwd,
+            ${input.cwdOverride ?? null},
             (
               SELECT COALESCE(threads.worktree_path, projects.workspace_root)
               FROM projection_threads AS threads
@@ -986,6 +991,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   yield* captureAssistantMessageGenerationContext({
                     messageId: message.messageId,
                     threadId: event.payload.threadId,
+                    cwdOverride: event.payload.source.nativeCwd,
                   });
                 }
               }),

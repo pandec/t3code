@@ -9,7 +9,7 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 layer("038_ProjectionMessageGenerationContext", (it) => {
-  it.effect("backfills generation model and directory for existing assistant messages", () =>
+  it.effect("leaves unverifiable historical generation context unset", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 37 });
@@ -44,8 +44,8 @@ layer("038_ProjectionMessageGenerationContext", (it) => {
       yield* runMigrations({ toMigrationInclusive: 38 });
 
       const rows = yield* sql<{
-        readonly generationModelSelectionJson: string;
-        readonly generationCwd: string;
+        readonly generationModelSelectionJson: string | null;
+        readonly generationCwd: string | null;
       }>`
         SELECT
           generation_model_selection_json AS generationModelSelectionJson,
@@ -55,8 +55,8 @@ layer("038_ProjectionMessageGenerationContext", (it) => {
       `;
       assert.deepStrictEqual(rows, [
         {
-          generationModelSelectionJson: '{"instanceId":"codex","model":"gpt-5.6-sol"}',
-          generationCwd: "/workspace/worktree",
+          generationModelSelectionJson: null,
+          generationCwd: null,
         },
       ]);
     }),
