@@ -84,7 +84,9 @@ export type ServerProviderSlashCommand = typeof ServerProviderSlashCommand.Type;
 export const ServerProviderSkill = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
-  path: TrimmedNonEmptyString,
+  // Provider-native discovery may not expose a filesystem origin. Claude's
+  // SDK, for example, reports genuine skills without their backing path.
+  path: Schema.optional(TrimmedNonEmptyString),
   scope: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.Boolean,
   displayName: Schema.optional(TrimmedNonEmptyString),

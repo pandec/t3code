@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   type ServerProviderModel,
+  type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -506,7 +507,7 @@ function apiProviderAuthMetadata(
 // Bedrock backend and runs the `awsAuthRefresh` credential hook before returning
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
-const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+export const CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS = 25_000;
 
 function nonEmptyProbeString(value: string): string | undefined {
   const candidate = value.trim();
@@ -548,6 +549,29 @@ function parseClaudeInitializationCommands(
       ];
     }),
   );
+}
+
+export function parseClaudeSkills(
+  skills: ReadonlyArray<ClaudeSlashCommand>,
+): ReadonlyArray<ServerProviderSkill> {
+  const skillsByName = new Map<string, ServerProviderSkill>();
+
+  for (const skill of skills) {
+    const name = nonEmptyProbeString(skill.name);
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (skillsByName.has(key)) continue;
+
+    const description = nonEmptyProbeString(skill.description);
+    skillsByName.set(key, {
+      name,
+      enabled: true,
+      ...(description ? { description } : {}),
+    });
+  }
+
+  return [...skillsByName.values()];
 }
 
 function dedupeSlashCommands(
@@ -665,7 +689,7 @@ const probeClaudeCapabilities = (
         if (!abort.signal.aborted) abort.abort();
       }),
     ),
-    Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS),
     Effect.result,
     Effect.map((result) => {
       if (Result.isFailure(result)) return undefined;

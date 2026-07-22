@@ -125,6 +125,9 @@ export interface ProviderAdapterShape<TError> {
     input: ProviderListSkillsInput,
   ) => Effect.Effect<ReadonlyArray<ServerProviderSkill>, TError>;
 
+  /** Provider-specific cold-start budget for workspace skill discovery. */
+  readonly listSkillsTimeoutMillis?: number;
+
   /** Read one provider-native persisted session's message history for import. */
   readonly readImportableSession?: (
     input: ProviderReadImportableSessionInput,
