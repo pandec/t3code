@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import { isLoopbackHostname, parseSingleByteRange, resolveDevRedirectUrl } from "./http.ts";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -23,5 +23,37 @@ describe("http dev routing", () => {
     expect(resolveDevRedirectUrl(devUrl, requestUrl)).toBe(
       "http://127.0.0.1:5173/pair?token=test-token",
     );
+  });
+});
+
+describe("parseSingleByteRange", () => {
+  it("parses bounded, open-ended, and suffix ranges", () => {
+    expect(parseSingleByteRange("bytes=10-19", 100)).toEqual({
+      _tag: "Range",
+      start: 10,
+      end: 19,
+    });
+    expect(parseSingleByteRange("bytes=90-", 100)).toEqual({
+      _tag: "Range",
+      start: 90,
+      end: 99,
+    });
+    expect(parseSingleByteRange("bytes=-10", 100)).toEqual({
+      _tag: "Range",
+      start: 90,
+      end: 99,
+    });
+  });
+
+  it("clamps ranges and rejects unsupported or unsatisfiable requests", () => {
+    expect(parseSingleByteRange("bytes=90-199", 100)).toEqual({
+      _tag: "Range",
+      start: 90,
+      end: 99,
+    });
+    expect(parseSingleByteRange("bytes=100-", 100)).toEqual({ _tag: "Unsatisfiable" });
+    expect(parseSingleByteRange("bytes=20-10", 100)).toEqual({ _tag: "Unsatisfiable" });
+    expect(parseSingleByteRange("items=0-10", 100)).toEqual({ _tag: "Invalid" });
+    expect(parseSingleByteRange("bytes=0-1,4-5", 100)).toEqual({ _tag: "Invalid" });
   });
 });

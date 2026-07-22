@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, MessageId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const VOICE_TRANSCRIPTION_MAX_DURATION_MS = 3 * 60 * 1_000;
 export const VOICE_TRANSCRIPTION_MIN_DURATION_MS = 100;
@@ -32,3 +32,21 @@ export const VoiceTranscriptionResult = Schema.Struct({
   languageCode: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type VoiceTranscriptionResult = typeof VoiceTranscriptionResult.Type;
+
+export const MESSAGE_SPEECH_MAX_SOURCE_CHARS = 40_000;
+export const MESSAGE_SPEECH_MAX_SCRIPT_CHARS = 40_000;
+
+export const MessageSpeechSynthesisRequest = Schema.Struct({
+  messageId: MessageId,
+});
+export type MessageSpeechSynthesisRequest = typeof MessageSpeechSynthesisRequest.Type;
+
+export const MessageSpeechSynthesisResult = Schema.Struct({
+  messageId: MessageId,
+  speechId: TrimmedNonEmptyString,
+  transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
+  mimeType: Schema.Literal("audio/mpeg"),
+  sizeBytes: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.Type;

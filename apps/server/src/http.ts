@@ -75,6 +75,56 @@ export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
   return redirectUrl.toString();
 }
 
+export type ByteRange =
+  | { readonly _tag: "Range"; readonly start: number; readonly end: number }
+  | { readonly _tag: "Unsatisfiable" }
+  | { readonly _tag: "Invalid" };
+
+const parseRangeInteger = (value: string): number | undefined => {
+  if (!/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+};
+
+export function parseSingleByteRange(header: string, fileSize: number): ByteRange {
+  const value = header.trim();
+  if (!value.toLowerCase().startsWith("bytes=")) return { _tag: "Invalid" };
+
+  const rangeValue = value.slice(6).trim();
+  if (rangeValue.length === 0 || rangeValue.includes(",")) return { _tag: "Invalid" };
+
+  const separatorIndex = rangeValue.indexOf("-");
+  if (separatorIndex === -1) return { _tag: "Invalid" };
+
+  const startPart = rangeValue.slice(0, separatorIndex).trim();
+  const endPart = rangeValue.slice(separatorIndex + 1).trim();
+  if (startPart === "" && endPart === "") return { _tag: "Invalid" };
+
+  if (startPart === "") {
+    const suffixLength = parseRangeInteger(endPart);
+    if (suffixLength === undefined) return { _tag: "Invalid" };
+    if (suffixLength === 0 || fileSize === 0) return { _tag: "Unsatisfiable" };
+    return {
+      _tag: "Range",
+      start: Math.max(fileSize - suffixLength, 0),
+      end: fileSize - 1,
+    };
+  }
+
+  const start = parseRangeInteger(startPart);
+  if (start === undefined) return { _tag: "Invalid" };
+  if (endPart === "") {
+    return start >= fileSize
+      ? { _tag: "Unsatisfiable" }
+      : { _tag: "Range", start, end: fileSize - 1 };
+  }
+
+  const end = parseRangeInteger(endPart);
+  if (end === undefined) return { _tag: "Invalid" };
+  if (start > end || start >= fileSize) return { _tag: "Unsatisfiable" };
+  return { _tag: "Range", start, end: Math.min(end, fileSize - 1) };
+}
+
 const authenticateRawRouteWithScope = (
   scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
 ) =>
@@ -192,13 +242,45 @@ export const assetRouteLayer = HttpRouter.add(
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
-    return yield* HttpServerResponse.file(asset.path, {
-      status: 200,
-      headers: {
-        "Cache-Control": "private, max-age=3600",
-        "X-Content-Type-Options": "nosniff",
-      },
-    }).pipe(
+
+    const headers = {
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    };
+    const rangeHeader = request.headers["range"];
+    if (rangeHeader !== undefined) {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const fileInfo = yield* fileSystem.stat(asset.path).pipe(Effect.orElseSucceed(() => null));
+      if (fileInfo === null) {
+        return HttpServerResponse.text("Internal Server Error", { status: 500 });
+      }
+      const fileSize = Number(fileInfo.size);
+      const range = parseSingleByteRange(rangeHeader, fileSize);
+      if (range._tag === "Unsatisfiable") {
+        return HttpServerResponse.empty({
+          status: 416,
+          headers: { ...headers, "Content-Range": `bytes */${fileSize}` },
+        });
+      }
+      if (range._tag === "Range") {
+        return yield* HttpServerResponse.file(asset.path, {
+          status: 206,
+          offset: range.start,
+          bytesToRead: range.end - range.start + 1,
+          headers: {
+            ...headers,
+            "Content-Range": `bytes ${range.start}-${range.end}/${fileSize}`,
+          },
+        }).pipe(
+          Effect.orElseSucceed(() =>
+            HttpServerResponse.text("Internal Server Error", { status: 500 }),
+          ),
+        );
+      }
+    }
+
+    return yield* HttpServerResponse.file(asset.path, { status: 200, headers }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),

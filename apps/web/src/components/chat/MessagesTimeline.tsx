@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type MessageSpeechSynthesisResult,
   type MessageId,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -7,6 +8,13 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import {
+  formatListeningSpeed,
+  LISTENING_SPEED_MAX,
+  LISTENING_SPEED_MIN,
+  LISTENING_SPEED_PRESETS,
+  listeningSpeedSpokenLabel,
+} from "@t3tools/shared/listeningPlayback";
 import {
   createContext,
   Fragment,
@@ -51,11 +59,14 @@ import {
   FileDiffIcon,
   GlobeIcon,
   HammerIcon,
+  HeadphonesIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
   MicIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  PlusIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -104,6 +115,12 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { useAssetUrlState } from "../../assets/assetUrls";
+import { synthesizeMessageSpeech } from "../../state/voice";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { toastManager } from "../ui/toast";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
 
 import {
   buildInlineTerminalContextText,
@@ -135,6 +152,7 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -174,6 +192,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -208,6 +227,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  textToSpeechAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -426,6 +446,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -440,6 +461,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1021,6 +1043,41 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
+  const [speechExpanded, setSpeechExpanded] = useState(false);
+
+  const canSynthesizeSpeech =
+    ctx.textToSpeechAvailable &&
+    row.showAssistantMeta &&
+    !row.message.streaming &&
+    row.message.text.trim().length > 0;
+
+  const onToggleSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setSpeechExpanded((expanded) => !expanded);
+      return;
+    }
+    if (speechPhase === "preparing") return;
+
+    setSpeechPhase("preparing");
+    const result = await synthesize({
+      environmentId: ctx.activeThreadEnvironmentId,
+      input: { messageId: row.message.id },
+    });
+    setSpeechPhase("idle");
+    if (result._tag === "Success") {
+      setSpeech(result.value);
+      setSpeechExpanded(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Listening version unavailable",
+      description: "T3 Code could not prepare audio for this message. Try again in a moment.",
+    });
+  }, [ctx.activeThreadEnvironmentId, row.message.id, speech, speechPhase, synthesize]);
 
   return (
     <>
@@ -1041,6 +1098,38 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
+            {canSynthesizeSpeech ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={
+                        speech === null ? "Create listening version" : "Toggle listening version"
+                      }
+                      aria-expanded={speech === null ? undefined : speechExpanded}
+                      onClick={() => void onToggleSpeech()}
+                    />
+                  }
+                >
+                  {speechPhase === "preparing" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <HeadphonesIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {speechPhase === "preparing"
+                    ? "Preparing listening version"
+                    : speech === null
+                      ? "Listen to this response"
+                      : speechExpanded
+                        ? "Hide listening version"
+                        : "Show listening version"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
             {!row.message.streaming && (
               <Tooltip>
                 <TooltipTrigger
@@ -1055,8 +1144,158 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           </div>
         ) : null}
+        {speech !== null && speechExpanded ? (
+          <AssistantSpeechPlayer
+            environmentId={ctx.activeThreadEnvironmentId}
+            speech={speech}
+            onReset={() => {
+              setSpeech(null);
+              setSpeechExpanded(false);
+            }}
+          />
+        ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantSpeechPlayer({
+  environmentId,
+  speech,
+  onReset,
+}: {
+  environmentId: EnvironmentId;
+  speech: MessageSpeechSynthesisResult;
+  onReset: () => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const { blocked, speed } = useListeningPlaybackSnapshot();
+  const audioUrlState = useAssetUrlState(environmentId, {
+    _tag: "attachment",
+    attachmentId: speech.speechId,
+  });
+
+  const pauseAudio = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio === null) return;
+    audio.preservesPitch = true;
+    audio.playbackRate = speed;
+  }, [audioUrlState, speed]);
+
+  useEffect(
+    () => () => listeningPlayback.release(speech.speechId, pauseAudio),
+    [pauseAudio, speech.speechId],
+  );
+
+  return (
+    <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+        <HeadphonesIcon className="size-3.5 text-muted-foreground" />
+        <span>Listening version</span>
+      </div>
+      {audioUrlState._tag === "Failure" ? (
+        <div className="space-y-2 text-xs text-muted-foreground">
+          <p>The audio file is unavailable. Dismiss this card and try again.</p>
+          <Button variant="outline" size="xs" onClick={onReset}>
+            Dismiss
+          </Button>
+        </div>
+      ) : audioUrlState._tag === "Loading" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+          <span>Loading audio…</span>
+        </div>
+      ) : (
+        <>
+          <audio
+            ref={audioRef}
+            aria-disabled={blocked}
+            className={cn("h-9 w-full", blocked && "pointer-events-none opacity-60")}
+            controls
+            onLoadedMetadata={(event) => {
+              event.currentTarget.preservesPitch = true;
+              event.currentTarget.playbackRate = speed;
+            }}
+            onPlay={(event) => {
+              if (!listeningPlayback.activate(speech.speechId, pauseAudio)) {
+                event.currentTarget.pause();
+              }
+            }}
+            preload="metadata"
+            src={audioUrlState.url}
+            tabIndex={blocked ? -1 : undefined}
+          />
+          {blocked ? (
+            <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
+          ) : null}
+          <ListeningSpeedControl speed={speed} />
+        </>
+      )}
+      <details className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer select-none hover:text-foreground">
+          View listening transcript
+        </summary>
+        <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
+          {speech.transcript}
+        </p>
+      </details>
+    </div>
+  );
+}
+
+function ListeningSpeedControl({ speed }: { speed: number }) {
+  const speedLabel = listeningSpeedSpokenLabel(speed);
+
+  return (
+    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <span>Playback speed</span>
+      <div aria-label="Playback speed" className="flex items-center gap-1" role="group">
+        <Button
+          aria-label="Decrease playback speed"
+          disabled={speed <= LISTENING_SPEED_MIN}
+          onClick={() => listeningPlayback.nudgeSpeed(-1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <MinusIcon className="size-3.5" />
+        </Button>
+        <Menu>
+          <MenuTrigger
+            aria-label={`Playback speed, ${speedLabel}`}
+            render={<Button className="min-w-16 tabular-nums" size="xs" variant="outline" />}
+          >
+            <span aria-live="polite">{formatListeningSpeed(speed)}</span>
+          </MenuTrigger>
+          <MenuPopup align="center" side="top" className="min-w-32">
+            <MenuRadioGroup
+              value={String(speed)}
+              onValueChange={(value) => listeningPlayback.setSpeed(Number(value))}
+            >
+              {LISTENING_SPEED_PRESETS.map((preset) => (
+                <MenuRadioItem key={preset} value={String(preset)}>
+                  {formatListeningSpeed(preset)}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
+        <Button
+          aria-label="Increase playback speed"
+          disabled={speed >= LISTENING_SPEED_MAX}
+          onClick={() => listeningPlayback.nudgeSpeed(1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
+      </div>
+    </div>
   );
 }
 

@@ -21,6 +21,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { setListeningRecordingActive } from "../../state/listeningPlayback";
 
 interface RetainedRecording {
   readonly blob: Blob;
@@ -78,6 +79,7 @@ export function DesktopVoiceRecorder({
   const finishingRef = useRef(false);
   const mountedRef = useRef(true);
   const phaseRef = useRef(phase);
+  const listeningRecordingOwnerRef = useRef(Symbol("desktop-voice-recorder"));
   phaseRef.current = phase;
 
   const releaseStream = useCallback(() => {
@@ -100,9 +102,17 @@ export function DesktopVoiceRecorder({
     return () => {
       mountedRef.current = false;
       phaseRef.current = "idle";
+      setListeningRecordingActive(listeningRecordingOwnerRef.current, false);
       releaseStream();
     };
   }, [releaseStream]);
+
+  useEffect(() => {
+    setListeningRecordingActive(
+      listeningRecordingOwnerRef.current,
+      phase === "starting" || phase === "recording",
+    );
+  }, [phase]);
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {
@@ -225,6 +235,7 @@ export function DesktopVoiceRecorder({
 
   const startRecording = useCallback(async () => {
     if (disabled || phaseRef.current !== "idle") return;
+    setListeningRecordingActive(listeningRecordingOwnerRef.current, true);
     phaseRef.current = "starting";
     setPhase("starting");
     let stream: MediaStream | null = null;
@@ -253,6 +264,7 @@ export function DesktopVoiceRecorder({
       stream?.getTracks().forEach((track) => track.stop());
       releaseStream();
       phaseRef.current = "idle";
+      setListeningRecordingActive(listeningRecordingOwnerRef.current, false);
       if (!mountedRef.current) return;
       setPhase("idle");
       toastManager.add({

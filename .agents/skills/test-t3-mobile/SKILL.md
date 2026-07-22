@@ -34,6 +34,8 @@ The development identity on both platforms is:
 
 Bundle or package presence proves the correct variant, not native compatibility. Reuse it only when the current changes did not alter its Expo SDK, native dependencies, config plugins, entitlements, generated project, or native source.
 
+Before opening a development-client URL, account for any other installed development builds that register the same `t3code-dev` scheme. `simctl openurl` selects by scheme rather than by bundle identifier, so a stale private build can receive the URL even after the intended app was launched explicitly. Remove only a disposable conflicting client installed by the current test; otherwise report the collision and use an uncontested simulator instead of uninstalling unrelated app data.
+
 ## Start one disposable T3 environment
 
 Run backend commands from the repository root. Use the ignored, worktree-local `.t3` directory or create a fresh directory with the host OS's temporary-directory mechanism. An explicit base directory stores state in `<base-dir>/userdata`; never point testing at shared `~/.t3` state.
@@ -159,6 +161,8 @@ Pairing credentials are secret, short-lived, and single-use. Create a different 
 
 Use `snapshot_ui` and current element references from XcodeBuildMCP for taps and typing. Stream the same UDID through `ios-simulator-browser` so the user can watch in T3 Code when the host supports it. Use the stream as a visual feed rather than a reason to switch to fragile browser coordinates.
 
+Treat scrolling, virtualized-list recycling, media progress, card expansion, and composer changes as accessibility-layout changes. Keep the target fully visible, refresh with `snapshot_ui` immediately before acting, and do not reuse or batch references when an earlier action can change the layout. A reported element can be partly offscreen or stale enough that its resolved point lands on visible app or developer chrome.
+
 ### Android
 
 Prefer semantic Android automation exposed by the current agent host. Otherwise inspect the current hierarchy with `adb shell uiautomator dump`, target stable resource IDs, content descriptions, text, or bounds, and use scoped `adb shell input` actions. Refresh the hierarchy after navigation. Capture the final state with `adb exec-out screencap -p`.
@@ -181,8 +185,10 @@ Keep local verification focused. Do not turn this workflow into a full repositor
 ## Troubleshoot predictable failures
 
 - **Old UI or an old error appears:** verify Metro's worktree, variant, URL, and port before diagnosing the app.
+- **A development URL opens the wrong build:** check for another installed app claiming `t3code-dev`; launch and verify the expected `com.t3tools.t3code.dev` client, and remove only conflicting test-owned installs.
+- **`Cannot find native module` appears:** treat the installed client as native-incompatible even when its bundle identifier is correct; rebuild after native dependency or Expo configuration changes.
 - **The environment remains empty:** verify the platform-specific HTTP origin, use a fresh token, and confirm project seeding used the identical base directory.
 - **A second client cannot pair:** pairing tokens are single-use; issue another token.
-- **iOS semantic actions fail:** set explicit XcodeBuildMCP defaults and refresh with `snapshot_ui`.
+- **iOS semantic actions fail:** set explicit XcodeBuildMCP defaults, scroll the target away from viewport edges, refresh with `snapshot_ui`, and avoid batching layout-changing actions.
 - **Android cannot reach Metro:** verify `adb reverse` for the exact Metro port and relaunch the development-client URL.
 - **Android cannot reach the backend:** use `10.0.2.2`, not `127.0.0.1`, for the Android Emulator.

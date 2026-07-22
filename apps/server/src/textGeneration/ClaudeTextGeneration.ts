@@ -23,6 +23,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -85,7 +86,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateSpeechScript",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -115,7 +117,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSpeechScript";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -169,6 +172,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
+          ...(operation === "generateSpeechScript"
+            ? ["--tools", "", "--strict-mcp-config", "--disable-slash-commands"]
+            : []),
           "--dangerously-skip-permissions",
         ],
         { env: claudeEnvironment },
@@ -355,10 +361,27 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateSpeechScript: TextGeneration.TextGeneration["Service"]["generateSpeechScript"] =
+    Effect.fn("ClaudeTextGeneration.generateSpeechScript")(function* (input) {
+      const { prompt, outputSchema } = buildSpeechScriptPrompt({
+        message: input.message,
+        maxScriptChars: input.maxScriptChars,
+      });
+      const generated = yield* runClaudeJson({
+        operation: "generateSpeechScript",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { script: generated.script.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSpeechScript,
   } satisfies TextGeneration.TextGeneration["Service"];
 });
