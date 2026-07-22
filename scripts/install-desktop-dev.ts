@@ -16,6 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const MAC_APP_PATH = "/Applications/T3 Code (Dev).app";
 const MAC_APP_PROCESS = "T3 Code (Dev)";
+const MAC_APP_PROCESS_PATTERN = escapeProcessNameForExactMatch(MAC_APP_PROCESS);
 const MAC_APP_ID = "com.t3tools.t3code.dev";
 const LINUX_APP_PROCESS = "t3code-dev";
 const LINUX_SERVICE = "t3code.service";
@@ -45,6 +46,10 @@ function formatCommand(command: string, args: ReadonlyArray<string>): string {
 
 function asDesktopInstallError(message: string, cause: unknown): DesktopInstallError {
   return cause instanceof DesktopInstallError ? cause : new DesktopInstallError({ message, cause });
+}
+
+export function escapeProcessNameForExactMatch(processName: string): string {
+  return processName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 const runCommand = Effect.fn("installDesktopDev.runCommand")(
@@ -103,13 +108,13 @@ const commandSucceeds = Effect.fn("installDesktopDev.commandSucceeds")(function*
 
 const waitForProcessToStop = Effect.fn("installDesktopDev.waitForProcessToStop")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
-  processName: string,
+  processPattern: string,
 ) {
   for (let attempt = 0; attempt < PROCESS_STOP_ATTEMPTS; attempt += 1) {
-    if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", processName]))) return true;
+    if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]))) return true;
     yield* Effect.sleep("250 millis");
   }
-  return !(yield* commandSucceeds(spawner, "pgrep", ["-x", processName]));
+  return !(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]));
 });
 
 const findLatestArtifact = Effect.fn("installDesktopDev.findLatestArtifact")(
@@ -163,9 +168,9 @@ const stopMacApp = Effect.fn("installDesktopDev.stopMacApp")(function* (
     "-e",
     `tell application id "${MAC_APP_ID}" to quit`,
   ]);
-  if (yield* waitForProcessToStop(spawner, MAC_APP_PROCESS)) return;
-  yield* runCommand(spawner, "pkill", ["-x", MAC_APP_PROCESS]);
-  if (!(yield* waitForProcessToStop(spawner, MAC_APP_PROCESS))) {
+  if (yield* waitForProcessToStop(spawner, MAC_APP_PROCESS_PATTERN)) return;
+  yield* runCommand(spawner, "pkill", ["-x", MAC_APP_PROCESS_PATTERN]);
+  if (!(yield* waitForProcessToStop(spawner, MAC_APP_PROCESS_PATTERN))) {
     return yield* new DesktopInstallError({
       message: `${MAC_APP_PROCESS} did not stop`,
       cause: undefined,
@@ -237,7 +242,7 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   const path = yield* Path.Path;
   const releaseDirectory = path.join(repoRoot, "release-dev");
   return {
-    isRunning: commandSucceeds(spawner, "pgrep", ["-x", MAC_APP_PROCESS]),
+    isRunning: commandSucceeds(spawner, "pgrep", ["-x", MAC_APP_PROCESS_PATTERN]),
     stop: stopMacApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev"], { cwd: repoRoot }),
     install: installMacArtifact(spawner, fs, path, releaseDirectory),

@@ -3,9 +3,14 @@ import * as Effect from "effect/Effect";
 
 import {
   DesktopInstallError,
+  escapeProcessNameForExactMatch,
   parseMacDmgMountPoint,
   runDesktopInstallLifecycle,
 } from "./install-desktop-dev.ts";
+
+it("escapes macOS app names before exact pgrep and pkill matching", () => {
+  assert.equal(escapeProcessNameForExactMatch("T3 Code (Dev)"), "T3 Code \\(Dev\\)");
+});
 
 function lifecycle(events: Array<string>, running: boolean, failAt?: "build" | "install") {
   return {
