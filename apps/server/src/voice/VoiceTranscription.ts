@@ -78,6 +78,29 @@ export function decodeVoiceDataUrl(
   return bytes;
 }
 
+export function buildElevenLabsTranscriptionFormData(options: {
+  readonly audio: Uint8Array;
+  readonly mimeType: VoiceAudioMimeType;
+  readonly model: string;
+  readonly language?: string;
+}): FormData {
+  const formData = new FormData();
+  formData.append(
+    "file",
+    new Blob([options.audio], { type: options.mimeType }),
+    `recording.${fileExtension(options.mimeType)}`,
+  );
+  formData.append("model_id", options.model);
+  formData.append("tag_audio_events", "false");
+  if (options.model === "scribe_v2") {
+    formData.append("no_verbatim", "true");
+  }
+  if (options.language?.trim()) {
+    formData.append("language_code", options.language.trim());
+  }
+  return formData;
+}
+
 export const layer = Layer.effect(
   VoiceTranscription,
   Effect.gen(function* () {
@@ -101,16 +124,12 @@ export const layer = Layer.effect(
         return yield* decoded;
       }
 
-      const formData = new FormData();
-      formData.append(
-        "file",
-        new Blob([decoded], { type: request.mimeType }),
-        `recording.${fileExtension(request.mimeType)}`,
-      );
-      formData.append("model_id", model);
-      if (Option.isSome(language) && language.value.trim().length > 0) {
-        formData.append("language_code", language.value.trim());
-      }
+      const formData = buildElevenLabsTranscriptionFormData({
+        audio: decoded,
+        mimeType: request.mimeType,
+        model,
+        ...(Option.isSome(language) ? { language: language.value } : {}),
+      });
 
       const response = yield* httpClient
         .post(ELEVENLABS_SPEECH_TO_TEXT_URL, {

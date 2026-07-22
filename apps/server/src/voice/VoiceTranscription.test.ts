@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildElevenLabsTranscriptionFormData,
   decodeVoiceDataUrl,
   ElevenLabsTranscriptionResponse,
   VoiceTranscriptionError,
@@ -73,5 +74,31 @@ describe("decodeVoiceDataUrl", () => {
         language_code: null,
       }),
     ).toEqual({ text: "hello", language_code: null });
+  });
+});
+
+describe("buildElevenLabsTranscriptionFormData", () => {
+  it("requests cleaned-up text from Scribe v2", () => {
+    const formData = buildElevenLabsTranscriptionFormData({
+      audio: Uint8Array.from([1, 2, 3]),
+      mimeType: "audio/mp4",
+      model: "scribe_v2",
+      language: " en ",
+    });
+
+    expect(formData.get("model_id")).toBe("scribe_v2");
+    expect(formData.get("tag_audio_events")).toBe("false");
+    expect(formData.get("no_verbatim")).toBe("true");
+    expect(formData.get("language_code")).toBe("en");
+  });
+
+  it("does not send the Scribe v2-only option to older models", () => {
+    const formData = buildElevenLabsTranscriptionFormData({
+      audio: Uint8Array.from([1, 2, 3]),
+      mimeType: "audio/mp4",
+      model: "scribe_v1",
+    });
+
+    expect(formData.get("no_verbatim")).toBeNull();
   });
 });
