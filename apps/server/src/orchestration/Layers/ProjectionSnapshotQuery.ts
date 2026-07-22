@@ -265,6 +265,20 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
       : toPersistenceSqlError(sqlOperation)(cause);
 }
 
+function repositoryIdentitiesEqual(left: RepositoryIdentity, right: RepositoryIdentity): boolean {
+  return (
+    left.canonicalKey === right.canonicalKey &&
+    left.locator.source === right.locator.source &&
+    left.locator.remoteName === right.locator.remoteName &&
+    left.locator.remoteUrl === right.locator.remoteUrl &&
+    left.rootPath === right.rootPath &&
+    left.displayName === right.displayName &&
+    left.provider === right.provider &&
+    left.owner === right.owner &&
+    left.name === right.name
+  );
+}
+
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -293,22 +307,32 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+    const rowsWithChangedRepositoryIdentity = filteredProjectRows.flatMap((row) => {
+      const repositoryIdentity = repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot);
+      return row.deletedAt === null &&
+        repositoryIdentity != null &&
+        (row.repositoryIdentity === null ||
+          !repositoryIdentitiesEqual(row.repositoryIdentity, repositoryIdentity))
+        ? [{ row, repositoryIdentity }]
+        : [];
+    });
     yield* Effect.forEach(
-      filteredProjectRows.filter(
-        (row) =>
-          row.deletedAt === null &&
-          row.repositoryIdentity === null &&
-          repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot) != null,
-      ),
-      (row) => {
-        const repositoryIdentity = repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot);
+      rowsWithChangedRepositoryIdentity,
+      ({ row, repositoryIdentity }) => {
+        const previousRepositoryIdentityJson = JSON.stringify(row.repositoryIdentity);
         return sql`
           UPDATE projection_projects
           SET repository_identity_json = ${JSON.stringify(repositoryIdentity)}
           WHERE project_id = ${row.projectId}
             AND workspace_root = ${row.workspaceRoot}
-            AND repository_identity_json IS NULL
-        `;
+            AND COALESCE(repository_identity_json, 'null') = ${previousRepositoryIdentityJson}
+        `.pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("failed to persist resolved project repository identity").pipe(
+              Effect.annotateLogs({ projectId: row.projectId, cause }),
+            ),
+          ),
+        );
       },
       { concurrency: repositoryIdentityResolutionConcurrency, discard: true },
     );

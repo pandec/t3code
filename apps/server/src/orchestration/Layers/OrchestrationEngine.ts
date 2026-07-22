@@ -50,6 +50,7 @@ const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
+const REPOSITORY_IDENTITY_ENRICHMENT_TIMEOUT = Duration.seconds(3);
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
@@ -108,6 +109,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return nextReadModel;
     });
 
+  const resolveRepositoryIdentityForDispatch = (workspaceRoot: string) =>
+    repositoryIdentityResolver
+      .resolve(workspaceRoot)
+      .pipe(
+        Effect.timeoutOption(REPOSITORY_IDENTITY_ENRICHMENT_TIMEOUT),
+        Effect.map(Option.getOrNull),
+      );
+
   const enrichProjectEventForPersistence = Effect.fn(
     "OrchestrationEngine.enrichProjectEventForPersistence",
   )(function* (event: PlannedOrchestrationEvent, readModel: OrchestrationReadModel) {
@@ -116,7 +125,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         if (event.payload.repositoryIdentity !== undefined) {
           return event;
         }
-        const repositoryIdentity = yield* repositoryIdentityResolver.resolve(
+        const repositoryIdentity = yield* resolveRepositoryIdentityForDispatch(
           event.payload.workspaceRoot,
         );
         return {
@@ -135,7 +144,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         if (workspaceRoot === undefined) {
           return event;
         }
-        const repositoryIdentity = yield* repositoryIdentityResolver.resolve(workspaceRoot);
+        const repositoryIdentity = yield* resolveRepositoryIdentityForDispatch(workspaceRoot);
         const workspaceRootChanged =
           event.payload.workspaceRoot !== undefined &&
           event.payload.workspaceRoot !== existingProject?.workspaceRoot;
