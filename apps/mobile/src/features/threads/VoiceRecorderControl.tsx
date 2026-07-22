@@ -140,10 +140,7 @@ export function VoiceRecorderControl(props: {
           phaseRef.current = "idle";
           if (mountedRef.current) {
             setPhase("idle");
-            Alert.alert(
-              "Recording too short",
-              "Hold the microphone a little longer and try again.",
-            );
+            Alert.alert("Recording too short", "Record a little longer and try again.");
           }
           return;
         }
