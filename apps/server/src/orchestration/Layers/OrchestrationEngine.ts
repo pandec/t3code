@@ -31,6 +31,7 @@ import {
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { RepositoryIdentityResolver } from "../../project/RepositoryIdentityResolver.ts";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
@@ -55,6 +56,10 @@ interface CommandEnvelope {
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
+
+type PlannedOrchestrationEvent<T = OrchestrationEvent> = T extends OrchestrationEvent
+  ? Omit<T, "sequence">
+  : never;
 
 function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: "project" | "thread";
@@ -82,6 +87,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
   const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -101,6 +107,50 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       return nextReadModel;
     });
+
+  const enrichProjectEventForPersistence = Effect.fn(
+    "OrchestrationEngine.enrichProjectEventForPersistence",
+  )(function* (event: PlannedOrchestrationEvent, readModel: OrchestrationReadModel) {
+    switch (event.type) {
+      case "project.created": {
+        if (event.payload.repositoryIdentity !== undefined) {
+          return event;
+        }
+        const repositoryIdentity = yield* repositoryIdentityResolver.resolve(
+          event.payload.workspaceRoot,
+        );
+        return {
+          ...event,
+          payload: { ...event.payload, repositoryIdentity },
+        } satisfies PlannedOrchestrationEvent;
+      }
+      case "project.meta-updated": {
+        if (event.payload.repositoryIdentity !== undefined) {
+          return event;
+        }
+        const existingProject = readModel.projects.find(
+          (project) => project.id === event.payload.projectId,
+        );
+        const workspaceRoot = event.payload.workspaceRoot ?? existingProject?.workspaceRoot;
+        if (workspaceRoot === undefined) {
+          return event;
+        }
+        const repositoryIdentity = yield* repositoryIdentityResolver.resolve(workspaceRoot);
+        const workspaceRootChanged =
+          event.payload.workspaceRoot !== undefined &&
+          event.payload.workspaceRoot !== existingProject?.workspaceRoot;
+        if (!workspaceRootChanged && repositoryIdentity === null) {
+          return event;
+        }
+        return {
+          ...event,
+          payload: { ...event.payload, repositoryIdentity },
+        } satisfies PlannedOrchestrationEvent;
+      }
+      default:
+        return event;
+    }
+  });
 
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
@@ -173,7 +223,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               let nextCommandReadModel = commandReadModel;
 
               for (const nextEvent of eventBases) {
-                const savedEvent = yield* eventStore.append(nextEvent);
+                const enrichedEvent = yield* enrichProjectEventForPersistence(
+                  nextEvent,
+                  nextCommandReadModel,
+                );
+                const savedEvent = yield* eventStore.append(enrichedEvent);
                 nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
                 yield* projectionPipeline.projectEvent(savedEvent);
                 committedEvents.push(savedEvent);

@@ -29,6 +29,15 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         projectId: ProjectId.make("project-null-options"),
         title: "Null options project",
         workspaceRoot: "/tmp/project-null-options",
+        repositoryIdentity: {
+          canonicalKey: "github.com/t3tools/t3code",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "git@github.com:t3tools/t3code.git",
+          },
+          rootPath: "/tmp/project-null-options",
+        },
         defaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
@@ -41,8 +50,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly defaultModelSelection: string | null;
+        readonly repositoryIdentity: string | null;
       }>`
-        SELECT default_model_selection_json AS "defaultModelSelection"
+        SELECT
+          default_model_selection_json AS "defaultModelSelection",
+          repository_identity_json AS "repositoryIdentity"
         FROM projection_projects
         WHERE project_id = 'project-null-options'
       `;
@@ -59,6 +71,16 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "gpt-5.4",
         }),
       );
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(row.repositoryIdentity ?? "null"), {
+        canonicalKey: "github.com/t3tools/t3code",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:t3tools/t3code.git",
+        },
+        rootPath: "/tmp/project-null-options",
+      });
 
       const persisted = yield* projects.getById({
         projectId: ProjectId.make("project-null-options"),

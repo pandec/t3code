@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -34,6 +35,51 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("falls back to persisted repository identity when live resolution fails", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const repositoryIdentity = {
+        canonicalKey: "github.com/t3tools/t3code",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:t3tools/t3code.git",
+        },
+        rootPath: "/definitely-not-a-git-repository/t3code-test",
+      } as const;
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const encodedRepositoryIdentity = JSON.stringify(repositoryIdentity);
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          repository_identity_json,
+          scripts_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'project-persisted-identity',
+          'Persisted Identity',
+          '/definitely-not-a-git-repository/t3code-test',
+          ${encodedRepositoryIdentity},
+          '[]',
+          '2026-07-22T00:00:00.000Z',
+          '2026-07-22T00:00:00.000Z'
+        )
+      `;
+
+      const project = yield* snapshotQuery.getProjectShellById(
+        asProjectId("project-persisted-identity"),
+      );
+      assert.deepEqual(project.pipe(Option.getOrThrow).repositoryIdentity, repositoryIdentity);
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

@@ -12,6 +12,7 @@ import {
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
+  RepositoryIdentity,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -66,6 +67,7 @@ const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    repositoryIdentity: Schema.NullOr(Schema.fromJsonString(RepositoryIdentity)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -291,10 +293,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+    yield* Effect.forEach(
+      filteredProjectRows.filter(
+        (row) =>
+          row.deletedAt === null &&
+          row.repositoryIdentity === null &&
+          repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot) != null,
+      ),
+      (row) => {
+        const repositoryIdentity = repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot);
+        return sql`
+          UPDATE projection_projects
+          SET repository_identity_json = ${JSON.stringify(repositoryIdentity)}
+          WHERE project_id = ${row.projectId}
+            AND repository_identity_json IS NULL
+        `;
+      },
+      { concurrency: repositoryIdentityResolutionConcurrency, discard: true },
+    );
+
     return new Map(
       filteredProjectRows.map((row) => [
         row.projectId,
-        repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot) ?? null,
+        repositoryIdentityByWorkspaceRoot.get(row.workspaceRoot) ?? row.repositoryIdentity,
       ]),
     );
   });
@@ -308,6 +329,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          repository_identity_json AS "repositoryIdentity",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           created_at AS "createdAt",
@@ -670,6 +692,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          repository_identity_json AS "repositoryIdentity",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           created_at AS "createdAt",
@@ -692,6 +715,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          repository_identity_json AS "repositoryIdentity",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           created_at AS "createdAt",
@@ -1728,7 +1752,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     id: option.value.projectId,
                     title: option.value.title,
                     workspaceRoot: option.value.workspaceRoot,
-                    repositoryIdentity,
+                    repositoryIdentity: repositoryIdentity ?? option.value.repositoryIdentity,
                     defaultModelSelection: option.value.defaultModelSelection,
                     scripts: option.value.scripts,
                     createdAt: option.value.createdAt,
@@ -1755,7 +1779,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               .resolve(option.value.workspaceRoot)
               .pipe(
                 Effect.map((repositoryIdentity) =>
-                  Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
+                  Option.some(
+                    mapProjectShellRow(
+                      option.value,
+                      repositoryIdentity ?? option.value.repositoryIdentity,
+                    ),
+                  ),
                 ),
               ),
       ),

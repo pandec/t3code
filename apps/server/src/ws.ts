@@ -588,6 +588,9 @@ const makeWsRpcLayer = (
       ): Effect.Effect<OrchestrationEvent, never, never> => {
         switch (event.type) {
           case "project.created":
+            if (event.payload.repositoryIdentity !== undefined) {
+              return Effect.succeed(event);
+            }
             return repositoryIdentityResolver.resolve(event.payload.workspaceRoot).pipe(
               Effect.map((repositoryIdentity) => ({
                 ...event,
@@ -598,6 +601,9 @@ const makeWsRpcLayer = (
               })),
             );
           case "project.meta-updated":
+            if (event.payload.repositoryIdentity !== undefined) {
+              return Effect.succeed(event);
+            }
             return Effect.gen(function* () {
               const workspaceRoot =
                 event.payload.workspaceRoot ??
