@@ -11,3 +11,5 @@ The server capability currently advertises only whether text-to-speech is availa
 ## Full synthesis-layer test harness
 
 The focused backend suite covers source eligibility, model limits, cache identity, same-message locking, rewrite-provider permission denial, HTTP error mapping, and audio range delivery. It does not construct the entire synthesis layer with fake SQLite, filesystem, text generation, and HTTP dependencies to exercise every cache and rollback branch. Such a harness would improve evidence but would also require a substantial private-only test seam; the narrower tests plus a real local ElevenLabs run are proportionate for the current fork customization. Add the harness if this transaction gains more behavior or begins changing independently of the listening feature.
+
+> cy-review complete — 2026-07-22T05:59:50Z — rounds: 2
