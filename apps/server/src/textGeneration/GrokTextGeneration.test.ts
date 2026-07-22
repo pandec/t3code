@@ -145,6 +145,34 @@ it.layer(GrokTextGenerationTestLayer)("GrokTextGeneration", (it) => {
     ),
   );
 
+  it.effect("denies tool permissions while generating a speech rewrite", () => {
+    const permissionLogDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-grok-speech-permission-"),
+    );
+    const permissionLogPath = NodePath.join(permissionLogDir, "permission.ndjson");
+
+    return withFakeAcpGrok(
+      {
+        T3_ACP_EMIT_TOOL_CALLS: "1",
+        T3_ACP_PERMISSION_LOG_PATH: permissionLogPath,
+        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ script: "A safe spoken rewrite." }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateSpeechScript({
+            cwd: process.cwd(),
+            message: "Rewrite this response for listening.",
+            maxScriptChars: 5_000,
+            modelSelection: createModelSelection(ProviderInstanceId.make("grok"), "grok-mock-alt"),
+          });
+
+          expect(generated.script).toBe("A safe spoken rewrite.");
+          expect(NodeFS.readFileSync(permissionLogPath, "utf8")).toContain('"outcome":"cancelled"');
+          NodeFS.rmSync(permissionLogDir, { recursive: true, force: true });
+        }),
+    );
+  });
+
   it.effect("surfaces ACP request failures as text generation errors", () =>
     withFakeAcpGrok(
       {

@@ -4,6 +4,7 @@ import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
   ModelSelection,
+  MessageInputOrigin,
   ProjectId,
   ProviderInstanceId,
   ProviderInteractionMode,
@@ -127,6 +128,7 @@ type PersistedElementContextDraft = typeof PersistedElementContextDraft.Type;
 
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
+  inputOrigin: Schema.optionalKey(MessageInputOrigin),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   elementContexts: Schema.optionalKey(Schema.Array(PersistedElementContextDraft)),
@@ -249,6 +251,7 @@ const PersistedComposerDraftStoreStorage = Schema.Struct({
  */
 export interface ComposerThreadDraftState {
   prompt: string;
+  inputOrigin?: MessageInputOrigin;
   images: ComposerImageAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
@@ -401,7 +404,11 @@ interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadRef: ComposerThreadTarget) => void;
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
-  setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
+  setPrompt: (
+    threadRef: ComposerThreadTarget,
+    prompt: string,
+    inputOrigin?: MessageInputOrigin,
+  ) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadRef: ComposerThreadTarget,
@@ -669,6 +676,7 @@ function normalizeTerminalContextsForThread(
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
     draft.prompt.length === 0 &&
+    draft.inputOrigin === undefined &&
     draft.images.length === 0 &&
     draft.persistedAttachments.length === 0 &&
     draft.terminalContexts.length === 0 &&
@@ -1639,6 +1647,8 @@ function normalizePersistedDraftsByThreadId(
     }
     const draftCandidate = draftValue as PersistedComposerThreadDraftState;
     const promptCandidate = typeof draftCandidate.prompt === "string" ? draftCandidate.prompt : "";
+    const inputOrigin =
+      draftCandidate.inputOrigin === "voice-transcription" ? draftCandidate.inputOrigin : undefined;
     const attachments = Array.isArray(draftCandidate.attachments)
       ? draftCandidate.attachments.flatMap((entry) => {
           const normalized = normalizePersistedAttachment(entry);
@@ -1721,6 +1731,7 @@ function normalizePersistedDraftsByThreadId(
       Object.keys(modelSelectionByProvider).length > 0 || activeProvider !== null;
     if (
       promptCandidate.length === 0 &&
+      inputOrigin === undefined &&
       attachments.length === 0 &&
       terminalContexts.length === 0 &&
       elementContexts.length === 0 &&
@@ -1745,6 +1756,7 @@ function normalizePersistedDraftsByThreadId(
             })();
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
+      ...(inputOrigin !== undefined ? { inputOrigin } : {}),
       attachments,
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(elementContexts.length > 0 ? { elementContexts } : {}),
@@ -1829,6 +1841,7 @@ function partializeComposerDraftStoreState(
       Object.keys(draft.modelSelectionByProvider).length > 0 || draft.activeProvider !== null;
     if (
       draft.prompt.length === 0 &&
+      draft.inputOrigin === undefined &&
       draft.persistedAttachments.length === 0 &&
       draft.terminalContexts.length === 0 &&
       draft.elementContexts.length === 0 &&
@@ -1842,6 +1855,7 @@ function partializeComposerDraftStoreState(
     }
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
+      ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
       attachments: draft.persistedAttachments,
       ...(draft.terminalContexts.length > 0
         ? {
@@ -2113,6 +2127,9 @@ function toHydratedThreadDraft(
 
   return {
     prompt: persistedDraft.prompt,
+    ...(persistedDraft.inputOrigin !== undefined
+      ? { inputOrigin: persistedDraft.inputOrigin }
+      : {}),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
@@ -2548,16 +2565,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setPrompt: (threadRef, prompt) => {
+        setPrompt: (threadRef, prompt, inputOrigin) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
           }
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const { inputOrigin: existingInputOrigin, ...existingWithoutInputOrigin } = existing;
+            const nextInputOrigin =
+              prompt.length === 0 ? undefined : (inputOrigin ?? existingInputOrigin);
             const nextDraft: ComposerThreadDraftState = {
-              ...existing,
+              ...existingWithoutInputOrigin,
               prompt,
+              ...(nextInputOrigin !== undefined ? { inputOrigin: nextInputOrigin } : {}),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -3316,8 +3337,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (!current) {
               return state;
             }
+            const { inputOrigin: _inputOrigin, ...currentWithoutInputOrigin } = current;
             const nextDraft: ComposerThreadDraftState = {
-              ...current,
+              ...currentWithoutInputOrigin,
               prompt: "",
               images: [],
               nonPersistedImageIds: [],

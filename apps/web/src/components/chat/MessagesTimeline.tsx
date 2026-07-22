@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type MessageSpeechSynthesisResult,
   type MessageId,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -7,6 +8,13 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import {
+  formatListeningSpeed,
+  LISTENING_SPEED_MAX,
+  LISTENING_SPEED_MIN,
+  LISTENING_SPEED_PRESETS,
+  listeningSpeedSpokenLabel,
+} from "@t3tools/shared/listeningPlayback";
 import {
   createContext,
   Fragment,
@@ -44,14 +52,21 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   CircleAlertIcon,
   EyeIcon,
+  FileDiffIcon,
   GlobeIcon,
   HammerIcon,
+  HeadphonesIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
+  MicIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  PlusIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -73,7 +88,9 @@ import {
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
   resolveTimelineMinimapHeightStyle,
+  resolveTimelineMinimapHitStripWidth,
   resolveTimelineMinimapIndexFromPointer,
+  resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -98,6 +115,12 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { useAssetUrlState } from "../../assets/assetUrls";
+import { synthesizeMessageSpeech } from "../../state/voice";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { toastManager } from "../ui/toast";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
 
 import {
   buildInlineTerminalContextText,
@@ -129,6 +152,7 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -168,6 +192,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  textToSpeechAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -202,6 +227,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  textToSpeechAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -324,6 +350,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     null,
   );
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
+  const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const handleAnchorReady = useCallback(
     (info: { anchorIndex: number | undefined }) => {
       if (anchorMessageId !== null && info.anchorIndex !== undefined) {
@@ -395,6 +422,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       setMinimapHasPersistentGutter((current) =>
         current === nextHasPersistentGutter ? current : nextHasPersistentGutter,
       );
+      setMinimapHitStripWidth(resolveTimelineMinimapHitStripWidth(viewportWidth));
     };
 
     const frame = requestAnimationFrame(measure);
@@ -418,6 +446,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -432,6 +461,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      textToSpeechAvailable,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -511,6 +541,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             items={minimapItems}
             bottomInset={contentInsetEndAdjustment}
             hasPersistentGutter={minimapHasPersistentGutter}
+            hitStripWidth={minimapHitStripWidth}
             stripMap={minimapStripMap}
             onSelect={(item) => {
               onManualNavigation();
@@ -605,15 +636,21 @@ function resolveTimelineRowHeight(state: TimelinePositionState, rowIndex: number
   return typeof height === "number" && Number.isFinite(height) ? height : null;
 }
 
+function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
+  return target instanceof Element && target.closest("[data-minimap-preview]") !== null;
+}
+
 function TimelineMinimap({
   bottomInset,
   hasPersistentGutter,
+  hitStripWidth,
   items,
   stripMap,
   onSelect,
 }: {
   bottomInset: number;
   hasPersistentGutter: boolean;
+  hitStripWidth: number;
   items: ReadonlyArray<TimelineMinimapItem>;
   stripMap: Map<string, HTMLSpanElement>;
   onSelect: (item: TimelineMinimapItem) => void;
@@ -676,7 +713,7 @@ function TimelineMinimap({
   return (
     <div
       className={cn(
-        "group/minimap pointer-events-auto absolute top-0 left-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
+        "group/minimap pointer-events-none absolute top-0 left-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
         hasPersistentGutter
           ? "opacity-100"
           : "opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
@@ -688,9 +725,17 @@ function TimelineMinimap({
       <div className="relative h-full w-full select-none">
         <button
           aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
-          className="pointer-events-auto absolute top-1/2 left-3 w-10 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+          className={cn(
+            "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            // The strip is width-capped to the side gutter so it never overlays
+            // the centered content column; with no usable gutter it goes inert.
+            hitStripWidth > 0 ? "pointer-events-auto" : "pointer-events-none",
+          )}
           onBlur={() => setActiveIndex(null)}
           onClick={(event) => {
+            if (timelineMinimapEventTargetsPreview(event.target)) {
+              return;
+            }
             const nextIndex = resolveActiveIndexFromPointer(event);
             const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
             if (nextItem) {
@@ -722,9 +767,15 @@ function TimelineMinimap({
           onMouseLeave={() => setActiveIndex(null)}
           onMouseMove={updateActiveIndexFromPointer}
           onMouseDown={(event) => {
+            if (timelineMinimapEventTargetsPreview(event.target)) {
+              return;
+            }
             event.preventDefault();
           }}
-          style={{ height: resolveTimelineMinimapHeightStyle(items.length) }}
+          style={{
+            height: resolveTimelineMinimapHeightStyle(items.length),
+            width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
+          }}
           type="button"
         >
           <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
@@ -761,27 +812,31 @@ function TimelineMinimap({
           })}
           {activeItem ? (
             <span
-              className="pointer-events-none absolute left-8 w-80 rounded-xl border border-border/70 bg-popover/95 p-3 text-left text-popover-foreground shadow-xl shadow-black/25 backdrop-blur"
+              className="pointer-events-auto absolute left-8 w-80 cursor-text select-text"
+              data-minimap-preview
+              onMouseMove={(event) => event.stopPropagation()}
               style={{
                 top: `${activeTopPercent}%`,
                 transform: `translateY(${activeTooltipTranslate})`,
               }}
             >
-              <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
-                {activeItem.userText ?? "User message"}
-              </span>
-              {activeItem.assistantText ? (
-                <span
-                  className="mt-1 max-h-[3.75rem] overflow-hidden text-muted-foreground text-sm leading-5"
-                  style={{
-                    display: "-webkit-box",
-                    WebkitBoxOrient: "vertical",
-                    WebkitLineClamp: 3,
-                  }}
-                >
-                  {activeItem.assistantText}
+              <span className="block rounded-xl border border-border/70 bg-popover/95 p-3 text-left text-popover-foreground shadow-xl shadow-black/25 backdrop-blur">
+                <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
+                  {activeItem.userText ?? "User message"}
                 </span>
-              ) : null}
+                {activeItem.assistantText ? (
+                  <span
+                    className="mt-1 max-h-[3.75rem] overflow-hidden text-muted-foreground text-sm leading-5"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 3,
+                    }}
+                  >
+                    {activeItem.assistantText}
+                  </span>
+                ) : null}
+              </span>
             </span>
           ) : null}
         </button>
@@ -855,6 +910,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   return (
     <div className="group flex flex-col items-end gap-1">
       <div className="relative max-w-[80%] rounded-2xl border border-border bg-secondary p-3">
+        {row.message.inputOrigin === "voice-transcription" ? (
+          <div className="mb-1.5 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+            <MicIcon className="size-3" />
+            <span>Transcribed</span>
+          </div>
+        ) : null}
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
@@ -982,6 +1043,41 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
+  const [speechExpanded, setSpeechExpanded] = useState(false);
+
+  const canSynthesizeSpeech =
+    ctx.textToSpeechAvailable &&
+    row.showAssistantMeta &&
+    !row.message.streaming &&
+    row.message.text.trim().length > 0;
+
+  const onToggleSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setSpeechExpanded((expanded) => !expanded);
+      return;
+    }
+    if (speechPhase === "preparing") return;
+
+    setSpeechPhase("preparing");
+    const result = await synthesize({
+      environmentId: ctx.activeThreadEnvironmentId,
+      input: { messageId: row.message.id },
+    });
+    setSpeechPhase("idle");
+    if (result._tag === "Success") {
+      setSpeech(result.value);
+      setSpeechExpanded(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Listening version unavailable",
+      description: "T3 Code could not prepare audio for this message. Try again in a moment.",
+    });
+  }, [ctx.activeThreadEnvironmentId, row.message.id, speech, speechPhase, synthesize]);
 
   return (
     <>
@@ -1002,6 +1098,38 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
+            {canSynthesizeSpeech ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={
+                        speech === null ? "Create listening version" : "Toggle listening version"
+                      }
+                      aria-expanded={speech === null ? undefined : speechExpanded}
+                      onClick={() => void onToggleSpeech()}
+                    />
+                  }
+                >
+                  {speechPhase === "preparing" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <HeadphonesIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {speechPhase === "preparing"
+                    ? "Preparing listening version"
+                    : speech === null
+                      ? "Listen to this response"
+                      : speechExpanded
+                        ? "Hide listening version"
+                        : "Show listening version"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
             {!row.message.streaming && (
               <Tooltip>
                 <TooltipTrigger
@@ -1016,8 +1144,158 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           </div>
         ) : null}
+        {speech !== null && speechExpanded ? (
+          <AssistantSpeechPlayer
+            environmentId={ctx.activeThreadEnvironmentId}
+            speech={speech}
+            onReset={() => {
+              setSpeech(null);
+              setSpeechExpanded(false);
+            }}
+          />
+        ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantSpeechPlayer({
+  environmentId,
+  speech,
+  onReset,
+}: {
+  environmentId: EnvironmentId;
+  speech: MessageSpeechSynthesisResult;
+  onReset: () => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const { blocked, speed } = useListeningPlaybackSnapshot();
+  const audioUrlState = useAssetUrlState(environmentId, {
+    _tag: "attachment",
+    attachmentId: speech.speechId,
+  });
+
+  const pauseAudio = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio === null) return;
+    audio.preservesPitch = true;
+    audio.playbackRate = speed;
+  }, [audioUrlState, speed]);
+
+  useEffect(
+    () => () => listeningPlayback.release(speech.speechId, pauseAudio),
+    [pauseAudio, speech.speechId],
+  );
+
+  return (
+    <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+        <HeadphonesIcon className="size-3.5 text-muted-foreground" />
+        <span>Listening version</span>
+      </div>
+      {audioUrlState._tag === "Failure" ? (
+        <div className="space-y-2 text-xs text-muted-foreground">
+          <p>The audio file is unavailable. Dismiss this card and try again.</p>
+          <Button variant="outline" size="xs" onClick={onReset}>
+            Dismiss
+          </Button>
+        </div>
+      ) : audioUrlState._tag === "Loading" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+          <span>Loading audio…</span>
+        </div>
+      ) : (
+        <>
+          <audio
+            ref={audioRef}
+            aria-disabled={blocked}
+            className={cn("h-9 w-full", blocked && "pointer-events-none opacity-60")}
+            controls
+            onLoadedMetadata={(event) => {
+              event.currentTarget.preservesPitch = true;
+              event.currentTarget.playbackRate = speed;
+            }}
+            onPlay={(event) => {
+              if (!listeningPlayback.activate(speech.speechId, pauseAudio)) {
+                event.currentTarget.pause();
+              }
+            }}
+            preload="metadata"
+            src={audioUrlState.url}
+            tabIndex={blocked ? -1 : undefined}
+          />
+          {blocked ? (
+            <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
+          ) : null}
+          <ListeningSpeedControl speed={speed} />
+        </>
+      )}
+      <details className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer select-none hover:text-foreground">
+          View listening transcript
+        </summary>
+        <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
+          {speech.transcript}
+        </p>
+      </details>
+    </div>
+  );
+}
+
+function ListeningSpeedControl({ speed }: { speed: number }) {
+  const speedLabel = listeningSpeedSpokenLabel(speed);
+
+  return (
+    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <span>Playback speed</span>
+      <div aria-label="Playback speed" className="flex items-center gap-1" role="group">
+        <Button
+          aria-label="Decrease playback speed"
+          disabled={speed <= LISTENING_SPEED_MIN}
+          onClick={() => listeningPlayback.nudgeSpeed(-1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <MinusIcon className="size-3.5" />
+        </Button>
+        <Menu>
+          <MenuTrigger
+            aria-label={`Playback speed, ${speedLabel}`}
+            render={<Button className="min-w-16 tabular-nums" size="xs" variant="outline" />}
+          >
+            <span aria-live="polite">{formatListeningSpeed(speed)}</span>
+          </MenuTrigger>
+          <MenuPopup align="center" side="top" className="min-w-32">
+            <MenuRadioGroup
+              value={String(speed)}
+              onValueChange={(value) => listeningPlayback.setSpeed(Number(value))}
+            >
+              {LISTENING_SPEED_PRESETS.map((preset) => (
+                <MenuRadioItem key={preset} value={String(preset)}>
+                  {formatListeningSpeed(preset)}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
+        <Button
+          aria-label="Increase playback speed"
+          disabled={speed >= LISTENING_SPEED_MAX}
+          onClick={() => listeningPlayback.nudgeSpeed(1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1157,7 +1435,13 @@ function WorkGroupToggleTimelineRow({
   row: Extract<TimelineRow, { kind: "work-toggle" }>;
 }) {
   const ctx = use(TimelineRowCtx);
-  const labelNoun = row.onlyToolEntries ? "tool call" : "log entry";
+  const labelNoun = row.onlyToolEntries
+    ? row.hiddenCount === 1
+      ? "tool call"
+      : "tool calls"
+    : row.hiddenCount === 1
+      ? "log entry"
+      : "log entries";
 
   return (
     <button
@@ -1185,7 +1469,6 @@ function WorkGroupToggleTimelineRow({
       ) : (
         <span className="font-medium text-foreground/82">
           +{row.hiddenCount} previous {labelNoun}
-          {row.hiddenCount === 1 ? "" : "s"}
         </span>
       )}
     </button>
@@ -1240,38 +1523,67 @@ function AssistantChangedFilesSectionInner({
   );
   const setExpanded = useUiStateStore((store) => store.setThreadChangedFilesExpanded);
   const summaryStat = summarizeTurnDiffStats(checkpointFiles);
-  const changedFileCountLabel = String(checkpointFiles.length);
 
   return (
-    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-      <div className="sticky top-2 z-10 mb-1.5 flex items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:absolute before:inset-x-0 before:-top-2 before:h-2 before:bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:content-['']">
-        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-          <span>Changed files ({changedFileCountLabel})</span>
+    <div className="mt-4 rounded-2xl border border-input bg-background p-2 pt-4 shadow-xs/5 not-dark:bg-clip-padding dark:bg-input/32">
+      <div className="sticky top-2 z-10 mb-3 flex items-center justify-between gap-2 bg-background px-2 before:absolute before:inset-x-0 before:-top-4 before:h-4 before:bg-background before:content-[''] dark:bg-[color-mix(in_srgb,var(--foreground)_2.5%,var(--background))] dark:before:bg-[color-mix(in_srgb,var(--foreground)_2.5%,var(--background))]">
+        <p className="flex items-center gap-1 whitespace-nowrap font-medium text-foreground text-xs leading-4">
+          <span>
+            {checkpointFiles.length} changed file{checkpointFiles.length === 1 ? "" : "s"}
+          </span>
           {hasNonZeroStat(summaryStat) && (
-            <>
-              <span className="mx-1">•</span>
-              <DiffStatLabel additions={summaryStat.additions} deletions={summaryStat.deletions} />
-            </>
+            <DiffStatLabel
+              additions={summaryStat.additions}
+              className="text-xs leading-4"
+              deletions={summaryStat.deletions}
+              layout="inline"
+            />
           )}
         </p>
         <div className="flex items-center gap-1.5">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            data-scroll-anchor-ignore
-            onClick={() => setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)}
-          >
-            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
-          >
-            View diff
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  className="!size-[22px]"
+                  aria-label={allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+                  data-scroll-anchor-ignore
+                  onClick={() =>
+                    setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)
+                  }
+                />
+              }
+            >
+              {allDirectoriesExpanded ? (
+                <ChevronsDownUpIcon className="size-3" />
+              ) : (
+                <ChevronsUpDownIcon className="size-3" />
+              )}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  className="!size-[22px]"
+                  aria-label="View diff"
+                  onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
+                />
+              }
+            >
+              <FileDiffIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">View diff</TooltipPopup>
+          </Tooltip>
         </div>
       </div>
       <ChangedFilesTree

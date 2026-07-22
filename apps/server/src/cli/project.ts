@@ -289,6 +289,10 @@ const projectRemoveCommand = Command.make("remove", {
     Argument.withDescription("Project id or workspace root to remove."),
   ),
   json: jsonFlag,
+  force: Flag.boolean("force").pipe(
+    Flag.withDescription("Delete the project and all of its threads."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withDescription("Remove a project."),
   Command.withHandler((flags) =>
@@ -312,6 +316,7 @@ const projectRemoveCommand = Command.make("remove", {
           type: "project.delete",
           commandId: CommandId.make(yield* projectCommandUuid),
           projectId: project.id,
+          force: flags.force,
         });
         return flags.json
           ? jsonOutput({ projectId: project.id, title: project.title, action: "removed" })

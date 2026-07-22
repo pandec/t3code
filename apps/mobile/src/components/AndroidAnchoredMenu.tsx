@@ -39,6 +39,8 @@ type OverlayFrame = {
 
 export type AndroidAnchoredMenuProps = {
   readonly actions: readonly MenuAction[];
+  readonly accessibilityLabel?: string;
+  readonly actionAccessibilityRole?: "checkbox" | "radio";
   readonly title?: string;
   readonly onPressAction?: MenuComponentProps["onPressAction"];
   /** Applied to the anchor wrapper — call sites flex these to fill toolbars. */
@@ -201,6 +203,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       ) : (
         <Pressable
           ref={anchorRef}
+          accessibilityLabel={props.accessibilityLabel}
           accessibilityRole="button"
           className={props.className}
           collapsable={false}
@@ -277,6 +280,13 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
                     return (
                       <Pressable
                         key={action.id ?? `${index}-${action.title}`}
+                        accessibilityRole={props.actionAccessibilityRole ?? "button"}
+                        accessibilityState={{
+                          disabled,
+                          ...(props.actionAccessibilityRole === undefined
+                            ? {}
+                            : { selected: action.state === "on" }),
+                        }}
                         android_ripple={{ color: rippleColor }}
                         disabled={disabled}
                         className={cn(

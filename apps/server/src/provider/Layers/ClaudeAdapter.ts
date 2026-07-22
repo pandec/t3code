@@ -16,6 +16,8 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlInitializeResponse,
+  type SDKControlReloadSkillsResponse,
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
@@ -78,11 +80,15 @@ import {
   readClaudeSessionTranscript,
 } from "../Drivers/ClaudeSessionImport.ts";
 import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
+import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import {
+  CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
+  parseClaudeSkills,
   resolveClaudeApiModelId,
+  resolveClaudeContextWindow,
   resolveClaudeEffort,
 } from "./ClaudeProvider.ts";
 import {
@@ -213,6 +219,8 @@ interface ClaudeSessionContext {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly initializationResult: () => Promise<SDKControlInitializeResponse>;
+  readonly reloadSkills: () => Promise<SDKControlReloadSkillsResponse>;
   readonly interrupt: () => Promise<void>;
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
@@ -362,24 +370,18 @@ function selectedClaudeContextWindow(
   switch (modelSelection?.model) {
     case "claude-opus-4-8":
     case "claude-opus-4-7":
+      // Always 1M at the API; these models expose no contextWindow option.
       return 1_000_000;
   }
 
-  const optionValue = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
-  if (optionValue === "1m") {
-    return 1_000_000;
+  switch (resolveClaudeContextWindow(modelSelection)) {
+    case "1m":
+      return 1_000_000;
+    case "200k":
+      return 200_000;
+    default:
+      return undefined;
   }
-  if (optionValue === "200k") {
-    return 200_000;
-  }
-  const caps = getClaudeModelCapabilities(modelSelection?.model);
-  const hasContextWindowOption = getProviderOptionDescriptors({ caps }).some(
-    (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
-  );
-  if (hasContextWindowOption) {
-    return 200_000;
-  }
-  return undefined;
 }
 
 function finiteNonNegativeInteger(value: unknown): number | undefined {
@@ -1369,6 +1371,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
+  );
+  const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
+    claudeSettings.binaryPath,
+    claudeEnvironment,
   );
   const nativeEventLogger =
     options?.nativeEventLogger ??
@@ -2622,6 +2628,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       },
     };
 
+    // Undeclared-but-real subtypes (absent from the SDK's union, so they can't
+    // be switch cases): consumed intentionally without emitting, otherwise
+    // they fall through to the unknown-subtype warning and surface as spurious
+    // error rows in client work logs. `background_tasks_changed` is a roster
+    // snapshot ({tasks: [...]}) — the task_* lifecycle events carry the
+    // authoritative per-agent data and the typed background_tasks control
+    // request is the reconciliation source.
+    if ((message.subtype as string) === "background_tasks_changed") {
+      return;
+    }
+
     switch (message.subtype) {
       case "init":
         yield* offerRuntimeEvent({
@@ -2734,6 +2751,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      // Task state patch (status/backgrounded/end_time). No runtime mapping
+      // yet — the terminal task_notification reports the outcome — but it
+      // must not surface as an unknown-subtype warning row.
+      case "task_updated":
+        return;
       case "task_notification":
         yield* emitThreadTokenUsage(
           context,
@@ -2778,6 +2800,52 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       case "thinking_tokens":
         return;
+      case "api_retry":
+        // Transport-level retry heartbeat. Surfacing each attempt as a
+        // warning row spammed the work log (10 rows during a 502 storm);
+        // the terminal result/error path reports the actual failure. Keep
+        // the session visibly alive instead.
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "session.state.changed",
+          payload: {
+            state: "running",
+            reason: `api_retry:${message.attempt}/${message.max_retries}`,
+          },
+        });
+        return;
+      case "session_state_changed":
+        // Authoritative turn-over signal from the CLI.
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "session.state.changed",
+          payload: {
+            state:
+              message.state === "running"
+                ? "running"
+                : message.state === "requires_action"
+                  ? "waiting"
+                  : "ready",
+            reason: `session_state:${message.state}`,
+          },
+        });
+        return;
+      case "notification":
+        // User-facing CLI notification (e.g. context-limit warnings). Only
+        // high-priority ones warrant a work-log row.
+        if (message.priority === "high" || message.priority === "immediate") {
+          yield* emitRuntimeWarning(context, message.text, message);
+        }
+        return;
+      // Inner protocol/UX details with no T3 surface today — consumed
+      // deliberately so they don't masquerade as unknown-subtype warnings.
+      case "model_refusal_fallback":
+      case "local_command_output":
+      case "plugin_install":
+      case "commands_changed":
+      case "memory_recall":
+      case "elicitation_complete":
+        return;
       case "permission_denied":
         yield* offerRuntimeEvent({
           ...base,
@@ -2797,13 +2865,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           message,
         );
         return;
-      default:
+      default: {
+        // Exhaustiveness guard: every subtype in the SDK's typed union is
+        // handled above, so `message` narrows to never here — a new SDK
+        // release adding a subtype fails this typecheck instead of silently
+        // warning at runtime. The runtime fallback still catches undeclared
+        // wire-only subtypes (like background_tasks_changed used to be).
+        message satisfies never;
+        const unknownMessage = message as never as { subtype: string };
         yield* emitRuntimeWarning(
           context,
-          describeUnknownSdkMessage(`Claude system message '${message.subtype}'`, message),
+          describeUnknownSdkMessage(`Claude system message '${unknownMessage.subtype}'`, message),
           message,
         );
         return;
+      }
     }
   });
 
@@ -2911,13 +2987,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       case "rate_limit_event":
         yield* handleSdkTelemetryMessage(context, message);
         return;
-      default:
+      // Composer prompt suggestions have no T3 surface; consumed deliberately.
+      case "prompt_suggestion":
+        return;
+      default: {
+        // Exhaustiveness guard (see handleSystemMessage): new SDK top-level
+        // message types fail typecheck here instead of warning at runtime.
+        message satisfies never;
+        const unknownMessage = message as never as { type: string };
         yield* emitRuntimeWarning(
           context,
-          describeUnknownSdkMessage(`Claude SDK message '${message.type}'`, message),
+          describeUnknownSdkMessage(`Claude SDK message '${unknownMessage.type}'`, message),
           message,
         );
         return;
+      }
     }
   });
 
@@ -3465,7 +3549,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return {};
       };
 
-      const claudeBinaryPath = claudeSettings.binaryPath;
+      const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
@@ -3963,7 +4047,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const canonicalizeImportCwd = Effect.fn("canonicalizeImportCwd")(function* (
     cwd: string,
-    operation: "listImportableSessions" | "readImportableSession",
+    operation: "listImportableSessions" | "listSkills" | "readImportableSession",
   ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
@@ -3975,6 +4059,70 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           }),
       ),
     );
+  });
+
+  const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = Effect.fn(
+    "ClaudeAdapter.listSkills",
+  )(function* (input) {
+    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
+
+    return yield* Effect.tryPromise({
+      try: async (signal) => {
+        const abortController = new AbortController();
+        let claudeQuery: ClaudeQueryRuntime | undefined;
+        let cleanedUp = false;
+        const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
+          signal.removeEventListener("abort", abortQuery);
+          abortController.abort();
+          claudeQuery?.close();
+        };
+        const abortQuery = () => cleanup();
+        signal.addEventListener("abort", abortQuery, { once: true });
+
+        try {
+          claudeQuery = createQuery({
+            // Never yield because discovery must not send a user message.
+            // oxlint-disable-next-line require-yield
+            prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+              if (!abortController.signal.aborted) {
+                await new Promise<void>((resolve) =>
+                  abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
+                );
+              }
+            })(),
+            options: {
+              cwd: canonicalCwd,
+              persistSession: false,
+              pathToClaudeCodeExecutable: claudeSdkExecutablePath,
+              abortController,
+              settingSources: ["user", "project", "local"],
+              // Project settings must be loaded to see project skills, but a
+              // metadata lookup must not boot the workspace's `.mcp.json`
+              // servers. Strict mode keeps discovery to the skills we asked
+              // for instead of spawning arbitrary project subprocesses.
+              strictMcpConfig: true,
+              allowedTools: [],
+              env: claudeEnvironment,
+              stderr: () => {},
+            },
+          });
+          await claudeQuery.initializationResult();
+          const result = await claudeQuery.reloadSkills();
+          return parseClaudeSkills(result.skills);
+        } finally {
+          cleanup();
+        }
+      },
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "skills/reload",
+          detail: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    });
   });
 
   const importDriverContext = <A, E>(
@@ -4070,6 +4218,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     forkSession,
     listImportableSessions,
+    listSkills,
+    listSkillsTimeoutMillis: CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
     readImportableSession,
     sendTurn,
     interruptTurn,

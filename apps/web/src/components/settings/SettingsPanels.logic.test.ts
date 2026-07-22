@@ -6,9 +6,34 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  archivedThreadMatchesSearch,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
 } from "./SettingsPanels.logic";
+
+describe("archivedThreadMatchesSearch", () => {
+  const candidate = {
+    environmentLabel: "Grey Mac",
+    modelName: "gpt-5.4",
+    projectName: "T3 Code",
+    projectCwd: "/Users/example/repos/t3code",
+    threadTitle: "Add archived thread search",
+  };
+
+  it("matches case-insensitive terms across thread and project metadata", () => {
+    expect(archivedThreadMatchesSearch(candidate, "ARCHIVED t3")).toBe(true);
+    expect(archivedThreadMatchesSearch(candidate, "example search")).toBe(true);
+    expect(archivedThreadMatchesSearch(candidate, "grey 5.4")).toBe(true);
+  });
+
+  it("requires every search term to match", () => {
+    expect(archivedThreadMatchesSearch(candidate, "archived missing")).toBe(false);
+  });
+
+  it("treats blank queries as unfiltered", () => {
+    expect(archivedThreadMatchesSearch(candidate, "   ")).toBe(true);
+  });
+});
 
 describe("formatDiagnosticsDescription", () => {
   it("collapses trace and metric URLs that share the same OTEL base path", () => {

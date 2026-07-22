@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   type ModelSelection,
+  type MessageInputOrigin,
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
@@ -63,6 +64,20 @@ type ProviderIntentEvent = Extract<
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+const VOICE_TRANSCRIPTION_NOTICE =
+  "<voice_transcription_notice>This message was transcribed from speech and may contain recognition errors. If any wording, names, identifiers, or code seem implausible, ask the user a brief follow-up question instead of guessing.</voice_transcription_notice>";
+
+export function withInputOriginNotice(
+  messageText: string,
+  inputOrigin: MessageInputOrigin | undefined,
+): string | undefined {
+  const normalized = toNonEmptyProviderInput(messageText);
+  if (normalized === undefined) return undefined;
+  return inputOrigin === "voice-transcription"
+    ? `${normalized}\n\n${VOICE_TRANSCRIPTION_NOTICE}`
+    : normalized;
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -599,6 +614,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly inputOrigin?: MessageInputOrigin;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
@@ -617,7 +633,7 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -857,6 +873,7 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(message.inputOrigin !== undefined ? { inputOrigin: message.inputOrigin } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),

@@ -6,6 +6,7 @@ import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   ThreadId,
   type ModelSelection,
+  type MessageInputOrigin,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -36,6 +37,7 @@ export function useCreateProjectThread() {
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
       readonly initialMessageText: string;
+      readonly inputOrigin?: MessageInputOrigin;
       readonly initialAttachments: ReadonlyArray<DraftComposerImageAttachment>;
       /** Reuse identifiers from a queued pending task instead of minting new ones. */
       readonly turnMetadata?: TurnCommandMetadata;
@@ -66,6 +68,7 @@ export function useCreateProjectThread() {
           messageId: metadata.messageId,
           createdAt: metadata.createdAt,
           text: initialMessageText,
+          ...(input.inputOrigin !== undefined ? { inputOrigin: input.inputOrigin } : {}),
           attachments: input.initialAttachments,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,

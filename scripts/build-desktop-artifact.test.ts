@@ -133,6 +133,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
       assert.notProperty(config, "publish");
       assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code Dev", schemes: ["t3code-dev"] }]);
+      assert.deepStrictEqual(mac.extendInfo, {
+        NSMicrophoneUsageDescription: "Allow T3 Code to record voice prompts for transcription.",
+      });
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
@@ -431,6 +434,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
+    assert.include(entitlements, "<key>com.apple.security.device.audio-input</key>");
   });
 
   it("rejects incomplete macOS passkey signing configuration", () => {

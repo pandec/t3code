@@ -7,14 +7,6 @@ import * as Result from "effect/Result";
 import { AUTH_PROBE_TIMEOUT_MS } from "./providerSnapshot.ts";
 import type { ProviderInstanceRegistryShape } from "./Services/ProviderInstanceRegistry.ts";
 
-/**
- * Discovery spawns an ephemeral `codex app-server` per request, so it pays the
- * same cold-start cost as the startup snapshot probe. Reuse that budget rather
- * than a tighter one: timing out here silently degrades to the server-cwd
- * snapshot skills, which is exactly the behaviour this lookup exists to avoid.
- */
-const SKILL_LIST_TIMEOUT = Duration.millis(AUTH_PROBE_TIMEOUT_MS);
-
 export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(function* (
   registry: Pick<ProviderInstanceRegistryShape, "getInstance">,
   input: { readonly instanceId: ProviderInstanceId; readonly cwd: string },
@@ -31,7 +23,12 @@ export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(fu
 
   const result = yield* instance.adapter
     .listSkills({ cwd: input.cwd })
-    .pipe(Effect.timeoutOption(SKILL_LIST_TIMEOUT), Effect.result);
+    .pipe(
+      Effect.timeoutOption(
+        Duration.millis(instance.adapter.listSkillsTimeoutMillis ?? AUTH_PROBE_TIMEOUT_MS),
+      ),
+      Effect.result,
+    );
 
   if (Result.isSuccess(result) && Option.isSome(result.success)) {
     return { skills: result.success.value } satisfies ServerProviderSkillsResult;

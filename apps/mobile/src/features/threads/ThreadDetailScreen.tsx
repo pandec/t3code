@@ -28,6 +28,7 @@ import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -75,6 +76,7 @@ export interface ThreadDetailScreenProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
   readonly onChangeDraftMessage: (value: string) => void;
+  readonly onVoiceTranscript: (text: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
@@ -198,7 +200,13 @@ const WorkingDurationPill = memo(function WorkingDurationPill(props: {
       entering={FadeInDown.duration(200)}
       exiting={FadeOut.duration(140)}
     >
-      <View className="self-start rounded-full border border-neutral-200/80 bg-neutral-50/90 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]">
+      <View
+        className={
+          Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
+            ? "self-start rounded-full border border-border bg-card px-3 py-2"
+            : "self-start rounded-full border border-neutral-200/80 bg-neutral-50/90 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+        }
+      >
         <View className="flex-row items-center gap-2">
           <View className="flex-row items-center gap-1">
             <View className="h-1.5 w-1.5 rounded-full bg-neutral-400 dark:bg-neutral-500" />
@@ -409,8 +417,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           onTouchCancel={handleFeedTouchCancel}
         >
           <ThreadFeed
-            key={props.selectedThread.id}
+            key={`${props.environmentId}:${props.selectedThread.id}`}
             environmentId={props.environmentId}
+            textToSpeechAvailable={props.serverConfig?.textToSpeech.available === true}
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
@@ -499,6 +508,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               providerSkills={selectedProviderSkills}
               bottomInset={composerBottomInset}
               onChangeDraftMessage={props.onChangeDraftMessage}
+              onVoiceTranscript={props.onVoiceTranscript}
               onPickDraftImages={props.onPickDraftImages}
               onNativePasteImages={props.onNativePasteImages}
               onRemoveDraftImage={props.onRemoveDraftImage}

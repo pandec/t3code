@@ -7,6 +7,35 @@ import type {
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
+export interface ArchivedThreadSearchCandidate {
+  readonly environmentLabel: string;
+  readonly modelName: string;
+  readonly projectName: string;
+  readonly projectCwd: string;
+  readonly threadTitle: string;
+}
+
+export function archivedThreadMatchesSearch(
+  candidate: ArchivedThreadSearchCandidate,
+  query: string,
+): boolean {
+  const searchTerms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (searchTerms.length === 0) {
+    return true;
+  }
+
+  const searchableText = [
+    candidate.threadTitle,
+    candidate.projectName,
+    candidate.projectCwd,
+    candidate.environmentLabel,
+    candidate.modelName,
+  ]
+    .join("\n")
+    .toLowerCase();
+  return searchTerms.every((term) => searchableText.includes(term));
+}
+
 function collapseOtelSignalsUrl(input: {
   readonly tracesUrl: string;
   readonly metricsUrl: string;

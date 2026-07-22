@@ -223,6 +223,9 @@ export function useThreadOutboxDrain(): void {
             role: "user",
             text: queuedMessage.text,
             attachments: toUploadChatImageAttachments(queuedMessage.attachments),
+            ...(queuedMessage.inputOrigin !== undefined
+              ? { inputOrigin: queuedMessage.inputOrigin }
+              : {}),
           },
           modelSelection: settings.modelSelection,
           runtimeMode: settings.runtimeMode,
@@ -262,6 +265,9 @@ export function useThreadOutboxDrain(): void {
           messageId: queuedMessage.messageId,
           createdAt: queuedMessage.createdAt,
           text: queuedMessage.text.trim(),
+          ...(queuedMessage.inputOrigin !== undefined
+            ? { inputOrigin: queuedMessage.inputOrigin }
+            : {}),
           attachments: queuedMessage.attachments,
           modelSelection,
           runtimeMode: queuedMessage.runtimeMode ?? DEFAULT_RUNTIME_MODE,

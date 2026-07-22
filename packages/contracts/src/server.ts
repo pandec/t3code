@@ -64,6 +64,7 @@ export const ServerProviderModel = Schema.Struct({
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
+  isDefault: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -83,7 +84,9 @@ export type ServerProviderSlashCommand = typeof ServerProviderSlashCommand.Type;
 export const ServerProviderSkill = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
-  path: TrimmedNonEmptyString,
+  // Provider-native discovery may not expose a filesystem origin. Claude's
+  // SDK, for example, reports genuine skills without their backing path.
+  path: Schema.optional(TrimmedNonEmptyString),
   scope: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.Boolean,
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -428,6 +431,16 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
+  speechToText: Schema.Struct({
+    available: Schema.Boolean,
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
+  textToSpeech: Schema.Struct({
+    available: Schema.Boolean,
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
+  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
+  threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

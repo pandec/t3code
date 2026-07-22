@@ -6,6 +6,7 @@ import {
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
   type ModelSelection,
+  MessageInputOrigin,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -39,6 +40,7 @@ export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<Compo
 
 export interface ComposerDraft {
   readonly text: string;
+  readonly inputOrigin?: MessageInputOrigin;
   readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
@@ -74,6 +76,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
 
 const ComposerDraftSchema = Schema.Struct({
   text: Schema.String,
+  inputOrigin: Schema.optional(MessageInputOrigin),
   attachments: Schema.Array(DraftComposerImageAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
@@ -127,6 +130,7 @@ export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
     draft.text.length === 0 &&
+    draft.inputOrigin === undefined &&
     draft.attachments.length === 0 &&
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
@@ -258,11 +262,19 @@ function updateComposerDrafts(
   schedulePersistComposerDrafts(next);
 }
 
-export function setComposerDraftText(draftKey: string, value: string): void {
+export function setComposerDraftText(
+  draftKey: string,
+  value: string,
+  inputOrigin?: MessageInputOrigin,
+): void {
   updateComposerDrafts((current) => {
+    const existing = normalizeDraft(current[draftKey]);
+    const { inputOrigin: existingInputOrigin, ...existingWithoutInputOrigin } = existing;
+    const nextInputOrigin = value.length === 0 ? undefined : (inputOrigin ?? existingInputOrigin);
     const draft = {
-      ...normalizeDraft(current[draftKey]),
+      ...existingWithoutInputOrigin,
       text: value,
+      ...(nextInputOrigin !== undefined ? { inputOrigin: nextInputOrigin } : {}),
     };
     if (isEmptyDraft(draft)) {
       const next = { ...current };
@@ -377,7 +389,7 @@ export function clearComposerDraftContentState(
   if (!existing) {
     return current;
   }
-  const { importedShareIds: _importedShareIds, ...retained } = existing;
+  const { importedShareIds: _importedShareIds, inputOrigin: _inputOrigin, ...retained } = existing;
   const draft = {
     ...retained,
     text: "",

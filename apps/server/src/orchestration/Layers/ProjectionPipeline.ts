@@ -357,6 +357,7 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
   const serverConfig = yield* Effect.service(ServerConfig);
   const fileSystem = yield* Effect.service(FileSystem.FileSystem);
   const path = yield* Effect.service(Path.Path);
+  const sql = yield* SqlClient.SqlClient;
 
   const attachmentsRootDir = serverConfig.attachmentsDir;
   const readAttachmentRootEntries = fileSystem
@@ -402,6 +403,10 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
         concurrency: 1,
       },
     );
+    yield* sql`
+      DELETE FROM projection_message_speech
+      WHERE thread_id = ${threadId}
+    `;
   });
 
   const pruneThreadAttachmentEntry = Effect.fn("pruneThreadAttachmentEntry")(function* (
@@ -411,6 +416,12 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
   ) {
     const relativePath = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
     if (relativePath.length === 0 || relativePath.includes("/")) {
+      return;
+    }
+    // Spoken-message artifacts are tracked separately from chat attachments.
+    // Keep them during checkpoint pruning; full thread deletion still removes
+    // both the files and their projection rows.
+    if (relativePath.endsWith(".mp3")) {
       return;
     }
     const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
@@ -446,6 +457,39 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       yield* Effect.logWarning("skipping attachment prune for unsafe thread id", { threadId });
       return;
     }
+
+    const staleSpeechRows = yield* sql<{ readonly speechId: string }>`
+      SELECT speech_id AS "speechId"
+      FROM projection_message_speech AS speech
+      WHERE speech.thread_id = ${threadId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_messages AS messages
+          WHERE messages.message_id = speech.message_id
+            AND messages.thread_id = speech.thread_id
+        )
+    `;
+    yield* Effect.forEach(
+      staleSpeechRows,
+      ({ speechId }) => {
+        const relativePath = `${speechId}.mp3`;
+        const parsedId = parseAttachmentIdFromRelativePath(relativePath);
+        const parsedThreadSegment = parsedId ? parseThreadSegmentFromAttachmentId(parsedId) : null;
+        if (parsedThreadSegment !== threadSegment) return Effect.void;
+        return fileSystem.remove(path.join(attachmentsRootDir, relativePath), { force: true });
+      },
+      { concurrency: 1 },
+    );
+    yield* sql`
+      DELETE FROM projection_message_speech
+      WHERE thread_id = ${threadId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_messages AS messages
+          WHERE messages.message_id = projection_message_speech.message_id
+            AND messages.thread_id = projection_message_speech.thread_id
+        )
+    `;
 
     const entries = yield* readAttachmentRootEntries;
     yield* Effect.forEach(
@@ -494,6 +538,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             projectId: event.payload.projectId,
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
+            repositoryIdentity: event.payload.repositoryIdentity ?? null,
             defaultModelSelection: event.payload.defaultModelSelection,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
@@ -514,6 +559,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.workspaceRoot !== undefined
               ? { workspaceRoot: event.payload.workspaceRoot }
+              : {}),
+            ...(event.payload.repositoryIdentity !== undefined
+              ? { repositoryIdentity: event.payload.repositoryIdentity }
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
@@ -843,6 +891,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(event.payload.inputOrigin !== undefined
+              ? { inputOrigin: event.payload.inputOrigin }
+              : previousMessage?.inputOrigin !== undefined
+                ? { inputOrigin: previousMessage.inputOrigin }
+                : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -1545,6 +1598,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       );
 
       yield* runAttachmentSideEffects(attachmentSideEffects).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
         Effect.catch((cause) =>
           Effect.logWarning("failed to apply projected attachment side-effects", {
             projector: projector.name,

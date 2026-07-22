@@ -134,6 +134,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./state/voice": {
+      "types": "./src/state/voice.ts",
+      "default": "./src/state/voice.ts"
     }
   },
   "scripts": {

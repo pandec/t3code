@@ -60,6 +60,8 @@ import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 
 type WorkspaceMode = "local" | "worktree";
 
+const EMPTY_BRANCH_REFS: ReadonlyArray<VcsRef> = [];
+
 function pendingTaskDraftKey(messageId: string): string {
   return `pending-task:${messageId}`;
 }
@@ -149,7 +151,7 @@ type NewTaskFlowContextValue = {
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
   readonly buildPendingTaskMessage: (metadata: TurnCommandMetadata) => QueuedThreadMessage | null;
-  readonly setPrompt: (value: string) => void;
+  readonly setPrompt: (value: string, inputOrigin?: "voice-transcription") => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
   readonly appendAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
   readonly removeAttachment: (imageId: string) => void;
@@ -350,7 +352,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? "local";
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
-  const startFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin ?? false;
+  // Keep the user's explicit choice separate from the resolved display value:
+  // only the explicit flag is ever written back to the draft, so the resolved
+  // value keeps tracking the server setting when the config loads late.
+  const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
+  const startFromOrigin =
+    draftStartFromOrigin ??
+    selectedEnvironmentServerConfig?.settings.newWorktreesStartFromOrigin ??
+    true;
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode = selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
 
@@ -370,6 +379,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedModel =
     selectedProjectDraft.modelSelection ??
     selectedProject?.defaultModelSelection ??
+    modelOptions.find((option) => option.isDefault)?.selection ??
     modelOptions[0]?.selection ??
     null;
   const selectedModelKey = selectedModel
@@ -438,11 +448,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const setPrompt = useCallback(
-    (value: string) => {
+    (value: string, inputOrigin?: "voice-transcription") => {
       if (!selectedProjectDraftKey) {
         return;
       }
-      setComposerDraftText(selectedProjectDraftKey, value);
+      setComposerDraftText(selectedProjectDraftKey, value, inputOrigin);
     },
     [selectedProjectDraftKey],
   );
@@ -490,13 +500,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
   const branchState = useBranches(branchTarget);
   const branchesLoading = branchState.isPending;
+  const allBranchRefs = branchState.data?.refs ?? EMPTY_BRANCH_REFS;
   const availableBranches = useMemo(
     () =>
       pipe(
-        branchState.data?.refs ?? [],
+        allBranchRefs,
         Arr.filter((branch) => !branch.isRemote),
       ),
-    [branchState.data?.refs],
+    [allBranchRefs],
   );
 
   const filteredBranches = useMemo(() => {
@@ -558,11 +569,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           mode,
           branch: selectedBranchName,
           worktreePath: selectedWorktreePath,
-          startFromOrigin,
+          ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
     },
-    [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, startFromOrigin],
+    [draftStartFromOrigin, selectedBranchName, selectedProjectDraftKey, selectedWorktreePath],
   );
 
   const selectBranch = useCallback(
@@ -575,11 +586,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           mode: workspaceMode,
           branch: branch.name,
           worktreePath: normalizeSelectedWorktreePath(selectedProject, branch),
-          startFromOrigin,
+          ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
     },
-    [selectedProject, selectedProjectDraftKey, startFromOrigin, workspaceMode],
+    [draftStartFromOrigin, selectedProject, selectedProjectDraftKey, workspaceMode],
   );
 
   const setStartFromOrigin = useCallback(
@@ -612,14 +623,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     if (workspaceMode !== "worktree" || selectedBranchName !== null) {
       return;
     }
+    // The default may only exist as origin/<default> (isRemote), which
+    // availableBranches filters out — search the unfiltered refs for it.
     const preferredBranch =
+      allBranchRefs.find((branch) => branch.isDefault) ??
       availableBranches.find((branch) => branch.current) ??
-      availableBranches.find((branch) => branch.isDefault) ??
       null;
     if (preferredBranch) {
       selectBranch(preferredBranch);
     }
-  }, [availableBranches, selectBranch, selectedBranchName, workspaceMode]);
+  }, [allBranchRefs, availableBranches, selectBranch, selectedBranchName, workspaceMode]);
 
   const setRuntimeMode = useCallback(
     (value: RuntimeMode) => {
@@ -646,7 +659,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     const draftKey = pendingTaskDraftKey(message.messageId);
     // Only hydrate a fresh editing draft; reopening mid-edit keeps newer edits.
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
-      setComposerDraftText(draftKey, message.text);
+      setComposerDraftText(draftKey, message.text, message.inputOrigin);
       replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
         modelSelection: message.modelSelection,
@@ -700,6 +713,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         messageId: MessageId.make(metadata.messageId),
         commandId: CommandId.make(metadata.commandId),
         text,
+        ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
         attachments: draft.attachments,
         modelSelection: draftModelSelection,
         runtimeMode: draft.runtimeMode ?? DEFAULT_RUNTIME_MODE,
@@ -711,7 +725,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           workspaceMode: mode,
           branch: workspaceSelection?.branch ?? null,
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
-          ...(workspaceSelection?.startFromOrigin ? { startFromOrigin: true } : {}),
+          // The draft only carries the flag when the user touched it; fall
+          // back to the resolved default (server settings) so queued tasks
+          // drain with the same origin mode the composer displayed.
+          ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
+            ? { startFromOrigin: true }
+            : {}),
         },
         createdAt: metadata.createdAt,
       };
@@ -722,6 +741,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModel,
       selectedProject,
       selectedProjectDraftKey,
+      startFromOrigin,
     ],
   );
 

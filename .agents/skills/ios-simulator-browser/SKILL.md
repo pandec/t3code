@@ -42,6 +42,8 @@ Keep serve-sim on its default `127.0.0.1` binding. Do not expose its preview to 
 
 If the in-app browser explicitly reports that previews are unavailable, do not install unrelated browser automation. Continue through XcodeBuildMCP, capture a simulator screenshot, report the unavailable live stream, and clean up the owned serve-sim process.
 
+Some in-app preview environments rewrite `127.0.0.1` or `localhost` to an environment-reachable or tailnet address. If that rewritten URL cannot render serve-sim, treat live streaming as unavailable for that session. Do not rebind serve-sim to a LAN interface or weaken its token-gated local-only boundary; continue with XcodeBuildMCP screenshots instead.
+
 ## Finish
 
 Stop the long-running terminal and wait for its cleanup trap to finish. If it disappeared without cleanup, run `npx --yes serve-sim@0.1.45 --kill <simulator-udid>` for that exact simulator. Never run an unscoped `--kill`.

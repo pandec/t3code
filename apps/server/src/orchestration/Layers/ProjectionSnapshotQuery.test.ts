@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -33,7 +34,136 @@ const projectionSnapshotLayer = it.layer(
   ),
 );
 
+const refreshedRepositoryIdentity = {
+  canonicalKey: "github.com/t3tools/t3code",
+  locator: {
+    source: "git-remote" as const,
+    remoteName: "origin",
+    remoteUrl: "git@github.com:t3tools/t3code.git",
+  },
+  rootPath: "/tmp/project-refresh-identity",
+};
+const projectionSnapshotRefreshLayer = it.layer(
+  OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(refreshedRepositoryIdentity),
+      }),
+    ),
+    Layer.provideMerge(SqlitePersistenceMemory),
+  ),
+);
+
+projectionSnapshotRefreshLayer("ProjectionSnapshotQuery repository identity refresh", (it) => {
+  it.effect("refreshes stale persisted identity after successful live resolution", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, repository_identity_json,
+          scripts_json, created_at, updated_at
+        ) VALUES (
+          'project-refresh-identity', 'Refresh Identity', '/tmp/project-refresh-identity',
+          '{"canonicalKey":"github.com/old/repository","locator":{"source":"git-remote","remoteName":"origin","remoteUrl":"git@github.com:old/repository.git"}}',
+          '[]', '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z'
+        )
+      `;
+
+      yield* snapshotQuery.getSnapshot();
+      const rows = yield* sql<{ readonly repositoryIdentity: string }>`
+        SELECT repository_identity_json AS "repositoryIdentity"
+        FROM projection_projects
+        WHERE project_id = 'project-refresh-identity'
+      `;
+      assert.deepEqual(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.parse(rows[0]?.repositoryIdentity ?? "null"),
+        refreshedRepositoryIdentity,
+      );
+    }),
+  );
+
+  it.effect("returns live identity when optional persistence fails", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, repository_identity_json,
+          scripts_json, created_at, updated_at
+        ) VALUES (
+          'project-refresh-failure', 'Refresh Failure', '/tmp/project-refresh-identity',
+          NULL, '[]', '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        CREATE TRIGGER fail_repository_identity_refresh
+        BEFORE UPDATE OF repository_identity_json ON projection_projects
+        BEGIN
+          SELECT RAISE(FAIL, 'identity refresh failed');
+        END
+      `;
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      assert.deepEqual(
+        snapshot.projects.find((project) => project.id === "project-refresh-failure")
+          ?.repositoryIdentity,
+        refreshedRepositoryIdentity,
+      );
+      yield* sql`DROP TRIGGER fail_repository_identity_refresh`;
+    }),
+  );
+});
+
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("falls back to persisted repository identity when live resolution fails", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const repositoryIdentity = {
+        canonicalKey: "github.com/t3tools/t3code",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:t3tools/t3code.git",
+        },
+        rootPath: "/definitely-not-a-git-repository/t3code-test",
+      } as const;
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const encodedRepositoryIdentity = JSON.stringify(repositoryIdentity);
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          repository_identity_json,
+          scripts_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'project-persisted-identity',
+          'Persisted Identity',
+          '/definitely-not-a-git-repository/t3code-test',
+          ${encodedRepositoryIdentity},
+          '[]',
+          '2026-07-22T00:00:00.000Z',
+          '2026-07-22T00:00:00.000Z'
+        )
+      `;
+
+      const project = yield* snapshotQuery.getProjectShellById(
+        asProjectId("project-persisted-identity"),
+      );
+      assert.deepEqual(project.pipe(Option.getOrThrow).repositoryIdentity, repositoryIdentity);
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -113,6 +243,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           turn_id,
           role,
           text,
+          input_origin,
           is_streaming,
           created_at,
           updated_at
@@ -123,6 +254,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'turn-1',
           'assistant',
           'hello from projection',
+          'voice-transcription',
           0,
           '2026-02-24T00:00:04.000Z',
           '2026-02-24T00:00:05.000Z'
@@ -314,6 +446,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               id: asMessageId("message-1"),
               role: "assistant",
               text: "hello from projection",
+              inputOrigin: "voice-transcription",
               turnId: asTurnId("turn-1"),
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",

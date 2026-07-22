@@ -8,6 +8,8 @@ import type {
   Options as ClaudeQueryOptions,
   PermissionMode,
   PermissionResult,
+  SDKControlInitializeResponse,
+  SDKControlReloadSkillsResponse,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -42,6 +44,7 @@ import {
   makeClaudeAdapter,
   type ClaudeAdapterLiveOptions,
 } from "./ClaudeAdapter.ts";
+import { CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS } from "./ClaudeProvider.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -62,6 +65,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public initializationResultOverride: (() => Promise<SDKControlInitializeResponse>) | undefined;
+  public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
+  public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
 
   emit(message: SDKMessage): void {
@@ -112,6 +118,20 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly setMaxThinkingTokens = async (maxThinkingTokens: number | null): Promise<void> => {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
+  };
+
+  readonly initializationResult = async (): Promise<SDKControlInitializeResponse> => {
+    if (this.initializationResultOverride) {
+      return this.initializationResultOverride();
+    }
+    return {} as SDKControlInitializeResponse;
+  };
+
+  readonly reloadSkills = async (): Promise<SDKControlReloadSkillsResponse> => {
+    if (this.reloadSkillsFailure !== undefined) {
+      throw this.reloadSkillsFailure;
+    }
+    return this.reloadSkillsResult;
   };
 
   readonly close = (): void => {
@@ -274,6 +294,114 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("lists genuine Claude skills for the active workspace", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-"));
+    const harness = makeHarness({ cwd });
+    harness.query.reloadSkillsResult = {
+      skills: [
+        {
+          name: "project-review",
+          description: "Review this project",
+          argumentHint: "",
+        },
+        {
+          name: "PROJECT-REVIEW",
+          description: "Duplicate",
+          argumentHint: "",
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      assert.equal(adapter.listSkillsTimeoutMillis, CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS);
+      assert.deepEqual(skills, [
+        {
+          name: "project-review",
+          description: "Review this project",
+          enabled: true,
+        },
+      ]);
+      assert.equal(harness.getLastCreateQueryInput()?.options.cwd, NodeFS.realpathSync(cwd));
+      assert.equal(harness.getLastCreateQueryInput()?.options.persistSession, false);
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.settingSources, [
+        "user",
+        "project",
+        "local",
+      ]);
+      // Project settings are loaded for skills, so discovery must opt out of
+      // the workspace's `.mcp.json` servers rather than booting them.
+      assert.equal(harness.getLastCreateQueryInput()?.options.strictMcpConfig, true);
+      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("closes the discovery query when Claude skill reload fails", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
+    const harness = makeHarness({ cwd });
+    harness.query.reloadSkillsFailure = new Error("reload failed");
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const error = yield* Effect.flip(listSkills({ cwd }));
+
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));
+    const harness = makeHarness({ cwd });
+    let abortObserved = false;
+    let markInitializationStarted: () => void = () => {};
+    const initializationStarted = new Promise<void>((resolve) => {
+      markInitializationStarted = resolve;
+    });
+    harness.query.initializationResultOverride = () =>
+      new Promise<SDKControlInitializeResponse>((_resolve, reject) => {
+        markInitializationStarted();
+        const signal = harness.getLastCreateQueryInput()?.options.abortController?.signal;
+        signal?.addEventListener(
+          "abort",
+          () => {
+            abortObserved = true;
+            reject(new Error("discovery aborted"));
+          },
+          { once: true },
+        );
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+
+      const fiber = yield* Effect.forkChild(listSkills({ cwd }));
+      yield* Effect.promise(() => initializationStarted);
+      yield* Fiber.interrupt(fiber);
+
+      assert.equal(abortObserved, true);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+    );
+  });
+
   it("derives pending work from background tasks and session crons", () => {
     assert.equal(hasPendingClaudeWork({}), false);
     assert.equal(hasPendingClaudeWork({ background_tasks: [] }), false);
@@ -1957,6 +2085,133 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("consumes undeclared and UX-internal system subtypes without warning rows", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // Undeclared wire-only roster snapshot + every typed UX-internal
+      // subtype and top-level type consumed silently: none may surface as
+      // unknown-subtype warnings.
+      for (const message of [
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "t1", task_type: "local_agent", description: "Say hi" }],
+          session_id: "session",
+          uuid: "roster",
+        },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "t1",
+          patch: { status: "running" },
+          session_id: "session",
+          uuid: "tu",
+        },
+        { type: "system", subtype: "commands_changed", session_id: "session", uuid: "cc" },
+        { type: "system", subtype: "model_refusal_fallback", session_id: "session", uuid: "mrf" },
+        { type: "system", subtype: "local_command_output", session_id: "session", uuid: "lco" },
+        { type: "system", subtype: "plugin_install", session_id: "session", uuid: "pi" },
+        { type: "system", subtype: "memory_recall", session_id: "session", uuid: "mr" },
+        { type: "system", subtype: "elicitation_complete", session_id: "session", uuid: "ec" },
+        { type: "prompt_suggestion", suggestion: "try this", session_id: "session", uuid: "ps" },
+        {
+          type: "system",
+          subtype: "notification",
+          key: "context",
+          text: "low priority note",
+          priority: "low",
+          session_id: "session",
+          uuid: "notif",
+        },
+      ]) {
+        harness.query.emit(message as unknown as SDKMessage);
+      }
+      // High-priority notifications DO surface as a warning row.
+      harness.query.emit({
+        type: "system",
+        subtype: "notification",
+        key: "limit",
+        text: "context window nearly full",
+        priority: "high",
+        session_id: "session",
+        uuid: "notif-high",
+      } as unknown as SDKMessage);
+      // session_state_changed maps to the matching session states.
+      for (const [state, uuid] of [
+        ["running", "ssc-run"],
+        ["requires_action", "ssc-req"],
+        ["idle", "ssc-idle"],
+      ]) {
+        harness.query.emit({
+          type: "system",
+          subtype: "session_state_changed",
+          state,
+          session_id: "session",
+          uuid,
+        } as unknown as SDKMessage);
+      }
+      // api_retry maps to a session heartbeat, not a warning row.
+      harness.query.emit({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 3,
+        max_retries: 10,
+        retry_delay_ms: 1000,
+        error_status: 502,
+        error: { type: "api_error" },
+        session_id: "session",
+        uuid: "retry",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const warnings = runtimeEvents.filter((event) => event.type === "runtime.warning");
+      // Exactly one warning: the high-priority notification. Nothing else.
+      assert.deepEqual(
+        warnings.map((event) => event.payload.message),
+        ["context window nearly full"],
+      );
+      const sessionStates = runtimeEvents
+        .filter((event) => event.type === "session.state.changed")
+        .map((event) =>
+          event.type === "session.state.changed"
+            ? `${event.payload.state}:${event.payload.reason ?? ""}`
+            : "",
+        )
+        .filter(
+          (entry) => entry.startsWith("running:session_state") || entry.includes("session_state"),
+        );
+      assert.deepEqual(sessionStates, [
+        "running:session_state:running",
+        "waiting:session_state:requires_action",
+        "ready:session_state:idle",
+      ]);
+      const heartbeat = runtimeEvents.find(
+        (event) =>
+          event.type === "session.state.changed" &&
+          typeof event.payload.reason === "string" &&
+          event.payload.reason.startsWith("api_retry:"),
+      );
+      assert.equal(heartbeat?.type, "session.state.changed");
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits thread token usage updates from Claude task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -3291,7 +3546,7 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6"]);
+      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3389,10 +3644,11 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "hello again",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-opus-4-6",
-        },
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
         attachments: [],
       });
 

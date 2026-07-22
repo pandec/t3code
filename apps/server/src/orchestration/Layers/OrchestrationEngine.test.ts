@@ -8,6 +8,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   ProviderInstanceId,
+  type RepositoryIdentity,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -44,7 +45,7 @@ const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
 
-async function createOrchestrationSystem() {
+async function createOrchestrationSystem(repositoryIdentity?: RepositoryIdentity | null) {
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "t3-orchestration-engine-test-",
   });
@@ -57,7 +58,13 @@ async function createOrchestrationSystem() {
   ).pipe(
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-    Layer.provide(RepositoryIdentityResolver.layer),
+    Layer.provide(
+      repositoryIdentity === undefined
+        ? RepositoryIdentityResolver.layer
+        : Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+            resolve: () => Effect.succeed(repositoryIdentity),
+          }),
+    ),
     Layer.provide(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -89,6 +96,45 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("persists repository identity on project creation events", async () => {
+    const repositoryIdentity: RepositoryIdentity = {
+      canonicalKey: "github.com/t3tools/t3code",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "git@github.com:t3tools/t3code.git",
+      },
+      rootPath: "/tmp/repository-identity",
+      displayName: "t3tools/t3code",
+      provider: "github",
+      owner: "t3tools",
+      name: "t3code",
+    };
+    const system = await createOrchestrationSystem(repositoryIdentity);
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-repository-identity"),
+        projectId: asProjectId("project-repository-identity"),
+        title: "Repository Identity",
+        workspaceRoot: "/tmp/repository-identity",
+        createdAt: now(),
+      }),
+    );
+
+    const events = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    const created = events.find((event) => event.type === "project.created");
+    expect(created?.payload.repositoryIdentity).toEqual(repositoryIdentity);
+    expect((await system.readModel()).projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
+
+    await system.dispose();
+  });
+
   it("bootstraps command handling from persisted projections without reading the full snapshot", async () => {
     let nextSequence = 8;
     const eventStore: OrchestrationEventStoreShape = {
@@ -210,6 +256,11 @@ describe("OrchestrationEngine", () => {
         } satisfies OrchestrationProjectionPipelineShape),
       ),
       Layer.provide(Layer.succeed(OrchestrationEventStore, eventStore)),
+      Layer.provide(
+        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: () => Effect.succeed(null),
+        }),
+      ),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
       Layer.provideMerge(NodeServices.layer),
@@ -218,6 +269,7 @@ describe("OrchestrationEngine", () => {
     const runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    expect(await runtime.runPromise(engine.latestSequence)).toBe(7);
     const result = await runtime.runPromise(
       engine.dispatch({
         type: "thread.meta.update",
@@ -228,6 +280,7 @@ describe("OrchestrationEngine", () => {
     );
 
     expect(result.sequence).toBe(8);
+    expect(await runtime.runPromise(engine.latestSequence)).toBe(8);
     expect(fullSnapshotReadCount).toBe(0);
 
     await runtime.dispose();

@@ -67,6 +67,17 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface SpeechScriptGenerationInput {
+  cwd: string;
+  message: string;
+  maxScriptChars?: number;
+  modelSelection: ModelSelection;
+}
+
+export interface SpeechScriptGenerationResult {
+  script: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -74,6 +85,7 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateSpeechScript(input: SpeechScriptGenerationInput): Promise<SpeechScriptGenerationResult>;
 }
 
 /**
@@ -109,6 +121,10 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    readonly generateSpeechScript: (
+      input: SpeechScriptGenerationInput,
+    ) => Effect.Effect<SpeechScriptGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -119,7 +135,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateSpeechScript";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -158,6 +175,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    generateSpeechScript: (input) =>
+      resolveInstance(registry, "generateSpeechScript", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateSpeechScript(input)),
       ),
   });
 
