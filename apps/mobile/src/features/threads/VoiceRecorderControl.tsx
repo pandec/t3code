@@ -19,6 +19,7 @@ import { AppText as Text } from "../../components/AppText";
 import { ComposerToolbarButton } from "../../components/ComposerToolbarTrigger";
 import { transcribeVoiceRecording } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { setListeningRecordingActive } from "../../state/listeningPlayback";
 
 interface RetainedRecording {
   readonly uri: string;
@@ -47,6 +48,7 @@ export function VoiceRecorderControl(props: {
   const mountedRef = useRef(true);
   const retainedUriRef = useRef<string | null>(null);
   const submissionIdRef = useRef(0);
+  const listeningRecordingOwnerRef = useRef(Symbol("mobile-voice-recorder"));
   phaseRef.current = phase;
 
   const discardFile = useCallback((uri: string | null | undefined) => {
@@ -168,6 +170,7 @@ export function VoiceRecorderControl(props: {
 
   const startRecording = useCallback(async () => {
     if (props.disabled || phaseRef.current !== "idle") return;
+    setListeningRecordingActive(listeningRecordingOwnerRef.current, true);
     releasedBeforeStartRef.current = false;
     cancelStartRef.current = false;
     phaseRef.current = "starting";
@@ -204,6 +207,7 @@ export function VoiceRecorderControl(props: {
       if (releasedBeforeStartRef.current) void finishRecording(false);
     } catch {
       phaseRef.current = "idle";
+      setListeningRecordingActive(listeningRecordingOwnerRef.current, false);
       if (mountedRef.current) setPhase("idle");
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
@@ -213,6 +217,7 @@ export function VoiceRecorderControl(props: {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      setListeningRecordingActive(listeningRecordingOwnerRef.current, false);
       cancelStartRef.current = true;
       submissionIdRef.current += 1;
       const retainedUri = retainedUriRef.current;
@@ -227,6 +232,13 @@ export function VoiceRecorderControl(props: {
       void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     };
   }, [discardFile, recorder]);
+
+  useEffect(() => {
+    setListeningRecordingActive(
+      listeningRecordingOwnerRef.current,
+      phase === "starting" || phase === "recording",
+    );
+  }, [phase]);
 
   // `finishRecording` changes identity on every composer render (its props
   // object is recreated), so subscribe through a ref. Otherwise the ticker

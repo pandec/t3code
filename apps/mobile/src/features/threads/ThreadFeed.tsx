@@ -10,7 +10,15 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import {
+  formatListeningSpeed,
+  LISTENING_SPEED_MAX,
+  LISTENING_SPEED_MIN,
+  LISTENING_SPEED_PRESETS,
+  listeningSpeedSpokenLabel,
+} from "@t3tools/shared/listeningPlayback";
 import { SymbolView } from "../../components/AppSymbol";
+import { ControlPillMenu } from "../../components/ControlPill";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
 import {
@@ -104,6 +112,7 @@ import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -1121,6 +1130,7 @@ function AssistantSpeechPlayer(props: {
   readonly onToggleTranscript: () => void;
   readonly onReset: () => void;
 }) {
+  const { blocked, speed } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
@@ -1130,17 +1140,55 @@ function AssistantSpeechPlayer(props: {
   const status = useAudioPlayerStatus(player);
   const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
 
+  const pausePlayer = useCallback(() => {
+    try {
+      player.pause();
+    } catch {
+      // LegendList may release the row-owned native player during virtualization.
+    }
+  }, [player]);
+
+  const applyPlaybackRate = useCallback(() => {
+    try {
+      player.shouldCorrectPitch = true;
+      player.setPlaybackRate(speed, "high");
+    } catch {
+      // The native player may not be loaded yet; the play path applies it again.
+    }
+  }, [player, speed]);
+
+  useEffect(() => {
+    if (audioUrl !== null) applyPlaybackRate();
+  }, [applyPlaybackRate, audioUrl, status.duration]);
+
+  useEffect(
+    () => () => listeningPlayback.release(props.speech.speechId, pausePlayer),
+    [pausePlayer, props.speech.speechId],
+  );
+
   const onTogglePlayback = useCallback(async () => {
     if (status.playing) {
-      player.pause();
+      pausePlayer();
       return;
     }
+    if (blocked || !listeningPlayback.activate(props.speech.speechId, pausePlayer)) return;
     if (status.duration > 0 && status.currentTime >= status.duration - 0.1) {
       await player.seekTo(0);
     }
     await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    if (listeningPlayback.getSnapshot().blocked) return;
+    applyPlaybackRate();
     player.play();
-  }, [player, status.currentTime, status.duration, status.playing]);
+  }, [
+    applyPlaybackRate,
+    blocked,
+    pausePlayer,
+    player,
+    props.speech.speechId,
+    status.currentTime,
+    status.duration,
+    status.playing,
+  ]);
 
   return (
     <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
@@ -1168,33 +1216,48 @@ function AssistantSpeechPlayer(props: {
           <Text className="text-xs text-foreground-muted">Loading audio…</Text>
         </View>
       ) : (
-        <View className="flex-row items-center gap-3">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              status.playing ? "Pause listening version" : "Play listening version"
-            }
-            className="size-9 items-center justify-center rounded-full bg-foreground active:opacity-75"
-            onPress={() => void onTogglePlayback()}
-          >
-            <SymbolView
-              name={status.playing ? "pause.fill" : "play"}
-              size={15}
-              tintColor="white"
-              type="monochrome"
-            />
-          </Pressable>
-          <View className="flex-1 gap-1.5">
-            <View className="h-1.5 overflow-hidden rounded-full bg-neutral-300 dark:bg-neutral-700">
-              <View
-                className="h-full rounded-full bg-foreground"
-                style={{ width: `${progress * 100}%` }}
+        <View className="gap-2">
+          <View className="flex-row items-center gap-3">
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                blocked
+                  ? "Play listening version unavailable while recording"
+                  : status.playing
+                    ? "Pause listening version"
+                    : "Play listening version"
+              }
+              accessibilityState={{ disabled: blocked }}
+              className={cn(
+                "size-9 items-center justify-center rounded-full bg-foreground active:opacity-75",
+                blocked && "opacity-50",
+              )}
+              disabled={blocked}
+              onPress={() => void onTogglePlayback()}
+            >
+              <SymbolView
+                name={status.playing ? "pause.fill" : "play"}
+                size={15}
+                tintColor="white"
+                type="monochrome"
               />
+            </Pressable>
+            <View className="flex-1 gap-1.5">
+              <View className="h-1.5 overflow-hidden rounded-full bg-neutral-300 dark:bg-neutral-700">
+                <View
+                  className="h-full rounded-full bg-foreground"
+                  style={{ width: `${progress * 100}%` }}
+                />
+              </View>
+              <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
+                {formatPlaybackTime(status.currentTime)} / {formatPlaybackTime(status.duration)}
+              </Text>
             </View>
-            <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
-              {formatPlaybackTime(status.currentTime)} / {formatPlaybackTime(status.duration)}
-            </Text>
           </View>
+          {blocked ? (
+            <Text className="text-xs text-foreground-muted">Finish recording to listen.</Text>
+          ) : null}
+          <ListeningSpeedControl speed={speed} />
         </View>
       )}
       <Pressable
@@ -1216,6 +1279,67 @@ function AssistantSpeechPlayer(props: {
       {props.transcriptExpanded ? (
         <Text className="text-sm leading-5 text-foreground-muted">{props.speech.transcript}</Text>
       ) : null}
+    </View>
+  );
+}
+
+function ListeningSpeedControl(props: { readonly speed: number }) {
+  const speedActions = useMemo(
+    () =>
+      LISTENING_SPEED_PRESETS.map((preset) => ({
+        id: String(preset),
+        title: formatListeningSpeed(preset),
+        state: preset === props.speed ? ("on" as const) : ("off" as const),
+      })),
+    [props.speed],
+  );
+  const spokenSpeed = listeningSpeedSpokenLabel(props.speed);
+
+  return (
+    <View
+      accessibilityLabel="Playback speed"
+      accessibilityRole="none"
+      className="flex-row items-center justify-between gap-3"
+    >
+      <Text className="text-xs text-foreground-muted">Playback speed</Text>
+      <View className="flex-row items-center gap-1">
+        <Pressable
+          accessibilityLabel="Decrease playback speed"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: props.speed <= LISTENING_SPEED_MIN }}
+          className="size-8 items-center justify-center rounded-lg active:bg-neutral-200 disabled:opacity-40 dark:active:bg-neutral-800"
+          disabled={props.speed <= LISTENING_SPEED_MIN}
+          hitSlop={6}
+          onPress={() => listeningPlayback.nudgeSpeed(-1)}
+        >
+          <Text className="text-lg leading-5 text-foreground">−</Text>
+        </Pressable>
+        <ControlPillMenu
+          actions={speedActions}
+          onPressAction={({ nativeEvent }) => listeningPlayback.setSpeed(Number(nativeEvent.event))}
+        >
+          <Pressable
+            accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
+            accessibilityRole="button"
+            className="h-8 min-w-16 items-center justify-center rounded-lg border border-neutral-300 px-2 active:bg-neutral-200 dark:border-neutral-700 dark:active:bg-neutral-800"
+          >
+            <Text className="font-t3-bold text-xs tabular-nums text-foreground">
+              {formatListeningSpeed(props.speed)}
+            </Text>
+          </Pressable>
+        </ControlPillMenu>
+        <Pressable
+          accessibilityLabel="Increase playback speed"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: props.speed >= LISTENING_SPEED_MAX }}
+          className="size-8 items-center justify-center rounded-lg active:bg-neutral-200 disabled:opacity-40 dark:active:bg-neutral-800"
+          disabled={props.speed >= LISTENING_SPEED_MAX}
+          hitSlop={6}
+          onPress={() => listeningPlayback.nudgeSpeed(1)}
+        >
+          <Text className="text-lg leading-5 text-foreground">+</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

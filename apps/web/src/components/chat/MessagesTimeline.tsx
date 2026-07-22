@@ -9,6 +9,13 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
+  formatListeningSpeed,
+  LISTENING_SPEED_MAX,
+  LISTENING_SPEED_MIN,
+  LISTENING_SPEED_PRESETS,
+  listeningSpeedSpokenLabel,
+} from "@t3tools/shared/listeningPlayback";
+import {
   createContext,
   Fragment,
   memo,
@@ -59,6 +66,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  PlusIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -111,6 +119,8 @@ import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
 
 import {
   buildInlineTerminalContextText,
@@ -1158,10 +1168,28 @@ function AssistantSpeechPlayer({
   speech: MessageSpeechSynthesisResult;
   onReset: () => void;
 }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const { blocked, speed } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(environmentId, {
     _tag: "attachment",
     attachmentId: speech.speechId,
   });
+
+  const pauseAudio = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio === null) return;
+    audio.preservesPitch = true;
+    audio.playbackRate = speed;
+  }, [audioUrlState, speed]);
+
+  useEffect(
+    () => () => listeningPlayback.release(speech.speechId, pauseAudio),
+    [pauseAudio, speech.speechId],
+  );
 
   return (
     <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
@@ -1182,7 +1210,30 @@ function AssistantSpeechPlayer({
           <span>Loading audio…</span>
         </div>
       ) : (
-        <audio className="h-9 w-full" controls preload="metadata" src={audioUrlState.url} />
+        <>
+          <audio
+            ref={audioRef}
+            aria-disabled={blocked}
+            className={cn("h-9 w-full", blocked && "pointer-events-none opacity-60")}
+            controls
+            onLoadedMetadata={(event) => {
+              event.currentTarget.preservesPitch = true;
+              event.currentTarget.playbackRate = speed;
+            }}
+            onPlay={(event) => {
+              if (!listeningPlayback.activate(speech.speechId, pauseAudio)) {
+                event.currentTarget.pause();
+              }
+            }}
+            preload="metadata"
+            src={audioUrlState.url}
+            tabIndex={blocked ? -1 : undefined}
+          />
+          {blocked ? (
+            <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
+          ) : null}
+          <ListeningSpeedControl speed={speed} />
+        </>
       )}
       <details className="mt-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer select-none hover:text-foreground">
@@ -1192,6 +1243,58 @@ function AssistantSpeechPlayer({
           {speech.transcript}
         </p>
       </details>
+    </div>
+  );
+}
+
+function ListeningSpeedControl({ speed }: { speed: number }) {
+  const speedLabel = listeningSpeedSpokenLabel(speed);
+
+  return (
+    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <span>Playback speed</span>
+      <div aria-label="Playback speed" className="flex items-center gap-1" role="group">
+        <Button
+          aria-label="Decrease playback speed"
+          disabled={speed <= LISTENING_SPEED_MIN}
+          onClick={() => listeningPlayback.nudgeSpeed(-1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <MinusIcon className="size-3.5" />
+        </Button>
+        <Menu>
+          <MenuTrigger
+            aria-label={`Playback speed, ${speedLabel}`}
+            render={<Button className="min-w-16 tabular-nums" size="xs" variant="outline" />}
+          >
+            <span aria-live="polite">{formatListeningSpeed(speed)}</span>
+          </MenuTrigger>
+          <MenuPopup align="center" side="top" className="min-w-32">
+            <MenuRadioGroup
+              value={String(speed)}
+              onValueChange={(value) => listeningPlayback.setSpeed(Number(value))}
+            >
+              {LISTENING_SPEED_PRESETS.map((preset) => (
+                <MenuRadioItem key={preset} value={String(preset)}>
+                  {formatListeningSpeed(preset)}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
+        <Button
+          aria-label="Increase playback speed"
+          disabled={speed >= LISTENING_SPEED_MAX}
+          onClick={() => listeningPlayback.nudgeSpeed(1)}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }
