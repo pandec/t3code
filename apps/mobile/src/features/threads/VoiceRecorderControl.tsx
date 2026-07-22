@@ -11,9 +11,8 @@ import {
   useAudioRecorder,
 } from "expo-audio";
 import { File } from "expo-file-system";
-import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, PanResponder, Platform, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, AppState, Platform, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { ComposerToolbarButton } from "../../components/ComposerToolbarTrigger";
@@ -37,12 +36,9 @@ export function VoiceRecorderControl(props: {
     "idle",
   );
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [locked, setLocked] = useState(false);
   const [retained, setRetained] = useState<RetainedRecording | null>(null);
   const phaseRef = useRef(phase);
-  const lockedRef = useRef(false);
   const startedAtRef = useRef(0);
-  const releasedBeforeStartRef = useRef(false);
   const cancelStartRef = useRef(false);
   const finishingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -130,8 +126,6 @@ export function VoiceRecorderControl(props: {
           phaseRef.current = "idle";
           return;
         }
-        lockedRef.current = false;
-        if (mountedRef.current) setLocked(false);
         if (mountedRef.current) setElapsedMs(0);
         if (discard || uri === null) {
           discardFile(uri);
@@ -171,7 +165,6 @@ export function VoiceRecorderControl(props: {
   const startRecording = useCallback(async () => {
     if (props.disabled || phaseRef.current !== "idle") return;
     setListeningRecordingActive(listeningRecordingOwnerRef.current, true);
-    releasedBeforeStartRef.current = false;
     cancelStartRef.current = false;
     phaseRef.current = "starting";
     setPhase("starting");
@@ -204,7 +197,6 @@ export function VoiceRecorderControl(props: {
       phaseRef.current = "recording";
       setPhase("recording");
       recorder.record();
-      if (releasedBeforeStartRef.current) void finishRecording(false);
     } catch {
       phaseRef.current = "idle";
       setListeningRecordingActive(listeningRecordingOwnerRef.current, false);
@@ -270,39 +262,6 @@ export function VoiceRecorderControl(props: {
     return () => subscription.remove();
   }, []);
 
-  const lockRecording = useCallback(() => {
-    if (phaseRef.current !== "recording" || lockedRef.current) return;
-    lockedRef.current = true;
-    setLocked(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  }, []);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => phaseRef.current === "idle" && props.disabled !== true,
-        onMoveShouldSetPanResponder: () => phaseRef.current === "recording",
-        onPanResponderGrant: () => void startRecording(),
-        onPanResponderMove: (_event, gesture) => {
-          if (gesture.dy <= -56) lockRecording();
-        },
-        onPanResponderRelease: () => {
-          if (phaseRef.current === "starting") {
-            releasedBeforeStartRef.current = true;
-            return;
-          }
-          if (!lockedRef.current) void finishRecording(false);
-        },
-        onPanResponderTerminate: () => {
-          if (phaseRef.current === "starting") cancelStartRef.current = true;
-          if (phaseRef.current === "recording" && !lockedRef.current) {
-            void finishRecording(true);
-          }
-        },
-      }),
-    [finishRecording, lockRecording, props.disabled, startRecording],
-  );
-
   if (Platform.OS !== "ios") return null;
 
   const content = (() => {
@@ -311,9 +270,6 @@ export function VoiceRecorderControl(props: {
         <View className="h-11 flex-row items-center gap-1 rounded-full bg-danger/10 px-2">
           <Text className="min-w-10 text-center text-xs font-t3-bold text-danger tabular-nums">
             {`${Math.floor(elapsedMs / 60_000)}:${String(Math.floor(elapsedMs / 1_000) % 60).padStart(2, "0")}`}
-          </Text>
-          <Text className="text-2xs text-foreground-muted">
-            {locked ? "Locked" : "Swipe up to lock"}
           </Text>
           <ComposerToolbarButton
             accessibilityLabel="Cancel recording"
@@ -376,7 +332,7 @@ export function VoiceRecorderControl(props: {
 
     return (
       <ComposerToolbarButton
-        accessibilityLabel="Hold to record voice message"
+        accessibilityLabel="Start recording voice message"
         disabled={props.disabled}
         icon="mic"
         showChevron={false}
@@ -385,5 +341,5 @@ export function VoiceRecorderControl(props: {
     );
   })();
 
-  return <View {...panResponder.panHandlers}>{content}</View>;
+  return <View>{content}</View>;
 }
