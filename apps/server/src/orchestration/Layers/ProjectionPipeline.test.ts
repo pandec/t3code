@@ -1101,6 +1101,14 @@ it.layer(
           ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/mpeg', 13,
            'remove-source', 'recipe', 'voice', 'model', ${now})
       `;
+      yield* sql`
+        INSERT INTO projection_message_summary (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_hash, created_at
+        ) VALUES
+          ('message-keep', ${threadId}, 'Keep summary', 'keep-source', 'recipe', 'model', ${now}),
+          ('message-remove', ${threadId}, 'Remove summary', 'remove-source', 'recipe', 'model', ${now})
+      `;
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
@@ -1137,6 +1145,13 @@ it.layer(
         ORDER BY message_id
       `;
       assert.deepEqual(speechRows, [{ messageId: "message-keep" }]);
+      const summaryRows = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_message_summary
+        WHERE thread_id = ${threadId}
+        ORDER BY message_id
+      `;
+      assert.deepEqual(summaryRows, [{ messageId: "message-keep" }]);
     }),
   );
 });

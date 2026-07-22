@@ -22,6 +22,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildMessageSummaryPrompt,
   buildPrContentPrompt,
   buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
@@ -87,7 +88,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript",
+      | "generateSpeechScript"
+      | "generateMessageSummary",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -118,7 +120,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript";
+      | "generateSpeechScript"
+      | "generateMessageSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -172,7 +175,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
-          ...(operation === "generateSpeechScript"
+          ...(operation === "generateSpeechScript" || operation === "generateMessageSummary"
             ? ["--tools", "", "--strict-mcp-config", "--disable-slash-commands"]
             : []),
           "--dangerously-skip-permissions",
@@ -377,11 +380,25 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       return { script: generated.script.trim() };
     });
 
+  const generateMessageSummary: TextGeneration.TextGeneration["Service"]["generateMessageSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateMessageSummary")(function* (input) {
+      const { prompt, outputSchema } = buildMessageSummaryPrompt(input);
+      const generated = yield* runClaudeJson({
+        operation: "generateMessageSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: generated.summary.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateSpeechScript,
+    generateMessageSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

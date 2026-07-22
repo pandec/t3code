@@ -5,6 +5,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
   EnvironmentId,
   MessageId,
+  MessageSummaryResult,
   MessageSpeechSynthesisResult,
   ThreadId,
   TurnId,
@@ -111,6 +112,7 @@ import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
+import { summarizeMessage } from "../../state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   listeningPlayback,
@@ -1001,10 +1003,12 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <AssistantMessageMetaAndSpeech
+          <AssistantMessageMetaAndArtifacts
             environmentId={props.environmentId}
             messageId={message.id}
             messageText={message.text}
+            persistedSummary={message.generatedSummary ?? null}
+            persistedSpeech={message.speech ?? null}
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             textToSpeechAvailable={props.textToSpeechAvailable === true}
@@ -1031,27 +1035,30 @@ function formatPlaybackTime(seconds: number): string {
   return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
-function AssistantMessageMetaAndSpeech(props: {
+function AssistantMessageMetaAndArtifacts(props: {
   readonly environmentId: EnvironmentId;
   readonly messageId: MessageId;
   readonly messageText: string;
+  readonly persistedSummary: MessageSummaryResult | null;
+  readonly persistedSpeech: MessageSpeechSynthesisResult | null;
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly textToSpeechAvailable: boolean;
 }) {
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
-  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
+  const [generatedSpeech, setGeneratedSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [generatedSummary, setGeneratedSummary] = useState<MessageSummaryResult | null>(null);
+  const [summaryPreparing, setSummaryPreparing] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const speech = generatedSpeech ?? props.persistedSpeech;
+  const summary = generatedSummary ?? props.persistedSummary;
 
-  const onPressSpeech = useCallback(async () => {
-    if (speech !== null) {
-      setExpanded((current) => !current);
-      return;
-    }
+  const prepareSpeech = useCallback(async () => {
     if (preparing) return;
-
     setPreparing(true);
     const result = await synthesize({
       environmentId: props.environmentId,
@@ -1059,7 +1066,7 @@ function AssistantMessageMetaAndSpeech(props: {
     });
     setPreparing(false);
     if (result._tag === "Success") {
-      setSpeech(result.value);
+      setGeneratedSpeech(result.value);
       setExpanded(true);
       return;
     }
@@ -1067,7 +1074,38 @@ function AssistantMessageMetaAndSpeech(props: {
       "Listening version unavailable",
       "T3 Code could not prepare audio for this message. Try again in a moment.",
     );
-  }, [preparing, props.environmentId, props.messageId, speech, synthesize]);
+  }, [preparing, props.environmentId, props.messageId, synthesize]);
+
+  const onPressSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setExpanded((current) => !current);
+      return;
+    }
+    await prepareSpeech();
+  }, [prepareSpeech, speech]);
+
+  const onPressSummary = useCallback(async () => {
+    if (summary !== null) {
+      setSummaryExpanded((current) => !current);
+      return;
+    }
+    if (summaryPreparing) return;
+    setSummaryPreparing(true);
+    const result = await summarize({
+      environmentId: props.environmentId,
+      input: { messageId: props.messageId },
+    });
+    setSummaryPreparing(false);
+    if (result._tag === "Success") {
+      setGeneratedSummary(result.value);
+      setSummaryExpanded(true);
+      return;
+    }
+    Alert.alert(
+      "Summary unavailable",
+      "T3 Code could not summarize this message. Try again in a moment.",
+    );
+  }, [props.environmentId, props.messageId, summarize, summary, summaryPreparing]);
 
   return (
     <View>
@@ -1079,7 +1117,29 @@ function AssistantMessageMetaAndSpeech(props: {
           buttonSize={28}
           iconSize={13}
         />
-        {props.textToSpeechAvailable ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
+          accessibilityState={{
+            expanded: summary === null ? undefined : summaryExpanded,
+            busy: summaryPreparing,
+          }}
+          className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+          disabled={summaryPreparing}
+          onPress={() => void onPressSummary()}
+        >
+          {summaryPreparing ? (
+            <ActivityIndicator size="small" color={props.iconSubtleColor} />
+          ) : (
+            <SymbolView
+              name="doc.text"
+              size={14}
+              tintColor={props.iconSubtleColor}
+              type="monochrome"
+            />
+          )}
+        </Pressable>
+        {props.textToSpeechAvailable || speech !== null ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={
@@ -1109,6 +1169,22 @@ function AssistantMessageMetaAndSpeech(props: {
           {props.timestampLabel}
         </Text>
       </View>
+      {summary !== null && summaryExpanded ? (
+        <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
+          <View className="flex-row items-center gap-2">
+            <SymbolView
+              name="doc.text"
+              size={14}
+              tintColor={props.iconSubtleColor}
+              type="monochrome"
+            />
+            <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
+          </View>
+          <Text selectable className="text-sm leading-5 text-foreground/90">
+            {summary.summary}
+          </Text>
+        </View>
+      ) : null}
       {speech !== null && expanded ? (
         <AssistantSpeechPlayer
           environmentId={props.environmentId}
@@ -1116,10 +1192,7 @@ function AssistantMessageMetaAndSpeech(props: {
           iconSubtleColor={props.iconSubtleColor}
           transcriptExpanded={transcriptExpanded}
           onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
-          onReset={() => {
-            setSpeech(null);
-            setExpanded(false);
-          }}
+          onRetry={() => void prepareSpeech()}
         />
       ) : null}
     </View>
@@ -1132,7 +1205,7 @@ function AssistantSpeechPlayer(props: {
   readonly iconSubtleColor: ColorValue;
   readonly transcriptExpanded: boolean;
   readonly onToggleTranscript: () => void;
-  readonly onReset: () => void;
+  readonly onRetry: () => void;
 }) {
   const { blocked, speed } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(props.environmentId, {
@@ -1214,10 +1287,10 @@ function AssistantSpeechPlayer(props: {
       {audioUrlState._tag === "Failure" ? (
         <View className="gap-2 py-1">
           <Text className="text-xs text-foreground-muted">
-            The audio file is unavailable. Dismiss this card and try again.
+            The audio file is unavailable. Regenerate it to listen again.
           </Text>
-          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onReset}>
-            <Text className="font-t3-medium text-xs text-foreground">Dismiss</Text>
+          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onRetry}>
+            <Text className="font-t3-medium text-xs text-foreground">Regenerate</Text>
           </Pressable>
         </View>
       ) : audioUrl === null ? (

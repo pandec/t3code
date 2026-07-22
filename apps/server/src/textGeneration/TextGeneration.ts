@@ -78,6 +78,17 @@ export interface SpeechScriptGenerationResult {
   script: string;
 }
 
+export interface MessageSummaryGenerationInput {
+  cwd: string;
+  message: string;
+  maxSummaryChars?: number;
+  modelSelection: ModelSelection;
+}
+
+export interface MessageSummaryGenerationResult {
+  summary: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -86,6 +97,9 @@ export interface TextGenerationService {
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
   generateSpeechScript(input: SpeechScriptGenerationInput): Promise<SpeechScriptGenerationResult>;
+  generateMessageSummary(
+    input: MessageSummaryGenerationInput,
+  ): Promise<MessageSummaryGenerationResult>;
 }
 
 /**
@@ -125,6 +139,10 @@ export class TextGeneration extends Context.Service<
     readonly generateSpeechScript: (
       input: SpeechScriptGenerationInput,
     ) => Effect.Effect<SpeechScriptGenerationResult, TextGenerationError>;
+
+    readonly generateMessageSummary: (
+      input: MessageSummaryGenerationInput,
+    ) => Effect.Effect<MessageSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -136,7 +154,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateSpeechScript";
+  | "generateSpeechScript"
+  | "generateMessageSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -179,6 +198,10 @@ export const makeTextGenerationFromRegistry = (
     generateSpeechScript: (input) =>
       resolveInstance(registry, "generateSpeechScript", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateSpeechScript(input)),
+      ),
+    generateMessageSummary: (input) =>
+      resolveInstance(registry, "generateMessageSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateMessageSummary(input)),
       ),
   });
 

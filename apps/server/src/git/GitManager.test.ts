@@ -98,6 +98,11 @@ interface FakeGitTextGeneration {
     message: string;
     modelSelection: ModelSelection;
   }) => Effect.Effect<{ script: string }, TextGenerationError>;
+  generateMessageSummary: (input: {
+    cwd: string;
+    message: string;
+    modelSelection: ModelSelection;
+  }) => Effect.Effect<{ summary: string }, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -323,6 +328,10 @@ function createTextGeneration(
       Effect.succeed({
         script: input.message,
       }),
+    generateMessageSummary: (input) =>
+      Effect.succeed({
+        summary: input.message,
+      }),
     ...overrides,
   };
 
@@ -377,6 +386,17 @@ function createTextGeneration(
           (cause) =>
             new TextGenerationError({
               operation: "generateSpeechScript",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateMessageSummary: (input) =>
+      implementation.generateMessageSummary(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateMessageSummary",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

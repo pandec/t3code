@@ -23,6 +23,8 @@ const makeStubTextGeneration = (
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
     generateSpeechScript: () =>
       Effect.die("generateSpeechScript stub not configured for this test"),
+    generateMessageSummary: () =>
+      Effect.die("generateMessageSummary stub not configured for this test"),
     ...overrides,
   });
 

@@ -252,7 +252,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* setSynchronizing;
 
         let current = yield* SubscriptionRef.get(state);
-        if (Option.isNone(current.data) && current.status !== "deleted") {
+        if (current.status !== "deleted") {
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
             Effect.flatMap(
               Option.match({

@@ -262,6 +262,26 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_message_summary (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_hash, created_at
+        ) VALUES (
+          'message-1', 'thread-1', 'A persisted summary.', 'source-hash',
+          'summary-recipe', 'model-selection-hash', '2026-02-24T00:00:05.250Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_message_speech (
+          message_id, thread_id, speech_id, transcript, mime_type, size_bytes,
+          source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
+        ) VALUES (
+          'message-1', 'thread-1', 'speech-1', 'A persisted transcript.',
+          'audio/mpeg', 42, 'source-hash', 'speech-recipe', 'voice-1',
+          'eleven_flash_v2_5', '2026-02-24T00:00:05.500Z'
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_thread_proposed_plans (
           plan_id,
           thread_id,
@@ -451,6 +471,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",
               updatedAt: "2026-02-24T00:00:05.000Z",
+              generatedSummary: {
+                messageId: asMessageId("message-1"),
+                summary: "A persisted summary.",
+                createdAt: "2026-02-24T00:00:05.250Z",
+              },
+              speech: {
+                messageId: asMessageId("message-1"),
+                speechId: "speech-1",
+                transcript: "A persisted transcript.",
+                mimeType: "audio/mpeg",
+                sizeBytes: 42,
+                createdAt: "2026-02-24T00:00:05.500Z",
+              },
             },
           ],
           proposedPlans: [

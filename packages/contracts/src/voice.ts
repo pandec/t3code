@@ -35,6 +35,8 @@ export type VoiceTranscriptionResult = typeof VoiceTranscriptionResult.Type;
 
 export const MESSAGE_SPEECH_MAX_SOURCE_CHARS = 40_000;
 export const MESSAGE_SPEECH_MAX_SCRIPT_CHARS = 40_000;
+export const MESSAGE_SUMMARY_MAX_SOURCE_CHARS = 120_000;
+export const MESSAGE_SUMMARY_MAX_TEXT_CHARS = 12_000;
 
 export const MessageSpeechSynthesisRequest = Schema.Struct({
   messageId: MessageId,
@@ -50,3 +52,15 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.Type;
+
+export const MessageSummaryRequest = Schema.Struct({
+  messageId: MessageId,
+});
+export type MessageSummaryRequest = typeof MessageSummaryRequest.Type;
+
+export const MessageSummaryResult = Schema.Struct({
+  messageId: MessageId,
+  summary: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SUMMARY_MAX_TEXT_CHARS)),
+  createdAt: IsoDateTime,
+});
+export type MessageSummaryResult = typeof MessageSummaryResult.Type;

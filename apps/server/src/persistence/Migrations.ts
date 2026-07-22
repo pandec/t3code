@@ -49,6 +49,7 @@ import Migration0033 from "./Migrations/033_ProviderSessionRuntimeRevision.ts";
 import Migration0034 from "./Migrations/034_ProjectionThreadMessageInputOrigin.ts";
 import Migration0035 from "./Migrations/035_ProjectionProjectRepositoryIdentity.ts";
 import Migration0036 from "./Migrations/036_ProjectionMessageSpeech.ts";
+import Migration0037 from "./Migrations/037_ProjectionMessageSummary.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -97,6 +98,7 @@ export const migrationEntries = [
   [34, "ProjectionThreadMessageInputOrigin", Migration0034],
   [35, "ProjectionProjectRepositoryIdentity", Migration0035],
   [36, "ProjectionMessageSpeech", Migration0036],
+  [37, "ProjectionMessageSummary", Migration0037],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

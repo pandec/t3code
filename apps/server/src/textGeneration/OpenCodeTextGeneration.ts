@@ -21,6 +21,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildMessageSummaryPrompt,
   buildPrContentPrompt,
   buildSpeechScriptPrompt,
   buildThreadTitlePrompt,
@@ -41,6 +42,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateBranchName",
   "generateThreadTitle",
   "generateSpeechScript",
+  "generateMessageSummary",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -256,7 +258,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateSpeechScript";
+      | "generateSpeechScript"
+      | "generateMessageSummary";
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -630,11 +633,25 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       return { script: generated.script.trim() };
     });
 
+  const generateMessageSummary: TextGeneration.TextGeneration["Service"]["generateMessageSummary"] =
+    Effect.fn("OpenCodeTextGeneration.generateMessageSummary")(function* (input) {
+      const { prompt, outputSchema } = buildMessageSummaryPrompt(input);
+      const generated = yield* runOpenCodeJson({
+        operation: "generateMessageSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: generated.summary.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateSpeechScript,
+    generateMessageSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

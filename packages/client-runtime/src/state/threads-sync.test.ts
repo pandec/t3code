@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EventId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -321,7 +322,7 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("resumes a warm cache via afterSequence without an HTTP fetch", () =>
+  it.effect("refreshes a warm cache before resuming from its sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
 
@@ -336,10 +337,53 @@ describe("EnvironmentThreads", () => {
           value.data.value.title === "Live title",
       );
 
-      // The subscription resumed from the cached sequence and never fetched the
-      // full snapshot over HTTP.
+      // The HTTP refresh can hydrate state stored outside orchestration events,
+      // then the subscription still resumes from the cached sequence.
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
+  it.effect("hydrates persisted message artifacts over a same-sequence cache", () =>
+    Effect.gen(function* () {
+      const httpThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        messages: [
+          {
+            id: MessageId.make("message-1"),
+            role: "assistant",
+            text: "Response",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+            generatedSummary: {
+              messageId: MessageId.make("message-1"),
+              summary: "Persisted summary",
+              createdAt: "2026-04-01T00:01:00.000Z",
+            },
+          },
+        ],
+      };
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          thread: httpThread,
+        }),
+      });
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
+      );
+
+      expect(Option.getOrThrow(state.data).messages[0]?.generatedSummary?.summary).toBe(
+        "Persisted summary",
+      );
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
     }),
   );
 
@@ -465,7 +509,7 @@ describe("EnvironmentThreads", () => {
       yield* Queue.offer(harness.inputs, deleted());
       yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
 
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       yield* Queue.offer(harness.wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
         if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
@@ -474,7 +518,9 @@ describe("EnvironmentThreads", () => {
 
       const latest = yield* Ref.get(harness.latest);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      // A deleted thread skips later snapshot refreshes, so the initial load is
+      // the only HTTP request.
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       expect(latest.status).toBe("deleted");
       expect(Option.isNone(latest.data)).toBe(true);
     }),
@@ -684,7 +730,7 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
       expect(yield* Ref.get(harness.lastRequestCompletionMarker)).toBe(true);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
 
       yield* Queue.offer(harness.inputs, synchronized());
       const live = yield* awaitThreadState(

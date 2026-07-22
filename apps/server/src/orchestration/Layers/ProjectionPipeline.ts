@@ -407,6 +407,10 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       DELETE FROM projection_message_speech
       WHERE thread_id = ${threadId}
     `;
+    yield* sql`
+      DELETE FROM projection_message_summary
+      WHERE thread_id = ${threadId}
+    `;
   });
 
   const pruneThreadAttachmentEntry = Effect.fn("pruneThreadAttachmentEntry")(function* (
@@ -488,6 +492,16 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
           FROM projection_thread_messages AS messages
           WHERE messages.message_id = projection_message_speech.message_id
             AND messages.thread_id = projection_message_speech.thread_id
+        )
+    `;
+    yield* sql`
+      DELETE FROM projection_message_summary
+      WHERE thread_id = ${threadId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_messages AS messages
+          WHERE messages.message_id = projection_message_summary.message_id
+            AND messages.thread_id = projection_message_summary.thread_id
         )
     `;
 

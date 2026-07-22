@@ -5,6 +5,8 @@ import {
   MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   type MessageSpeechSynthesisRequest,
   type MessageSpeechSynthesisResult,
+  type MessageSummaryRequest,
+  type MessageSummaryResult,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -26,6 +28,10 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import {
+  make as makeMessageSummary,
+  type MessageSummaryError,
+} from "../messageArtifacts/MessageSummary.ts";
 
 const ELEVENLABS_TEXT_TO_SPEECH_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
@@ -129,6 +135,9 @@ export class MessageSpeech extends Context.Service<
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,
     ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
+    readonly summarize: (
+      request: MessageSummaryRequest,
+    ) => Effect.Effect<MessageSummaryResult, MessageSummaryError>;
   }
 >()("t3/voice/MessageSpeech") {}
 
@@ -197,6 +206,7 @@ export const layer = Layer.effect(
     const serverSettings = yield* ServerSettingsService;
     const textGeneration = yield* TextGeneration;
     const synthesisLocks = yield* makeMessageSpeechLockCoordinator();
+    const messageSummary = yield* makeMessageSummary;
 
     const resolveSpeechPath = (speechId: string) =>
       resolveAttachmentRelativePath({
@@ -459,6 +469,7 @@ export const layer = Layer.effect(
       available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
+      summarize: messageSummary.summarize,
     });
   }),
 );

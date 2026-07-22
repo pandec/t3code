@@ -78,6 +78,16 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     inputOrigin: Schema.NullOr(MessageInputOrigin),
   }),
 );
+const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
+  ...ProjectionThreadMessageDbRowSchema.fields,
+  summaryText: Schema.NullOr(Schema.String),
+  summaryCreatedAt: Schema.NullOr(IsoDateTime),
+  speechId: Schema.NullOr(Schema.String),
+  speechTranscript: Schema.NullOr(Schema.String),
+  speechMimeType: Schema.NullOr(Schema.String),
+  speechSizeBytes: Schema.NullOr(NonNegativeInt),
+  speechCreatedAt: Schema.NullOr(IsoDateTime),
+});
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
@@ -253,6 +263,47 @@ function mapProposedPlanRow(
     planMarkdown: row.planMarkdown,
     implementedAt: row.implementedAt,
     implementationThreadId: row.implementationThreadId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapMessageRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadMessageArtifactDbRowSchema>,
+): OrchestrationMessage {
+  return {
+    id: row.messageId,
+    role: row.role,
+    text: row.text,
+    ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+    ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
+    ...(row.summaryText !== null && row.summaryCreatedAt !== null
+      ? {
+          generatedSummary: {
+            messageId: row.messageId,
+            summary: row.summaryText,
+            createdAt: row.summaryCreatedAt,
+          },
+        }
+      : {}),
+    ...(row.speechId !== null &&
+    row.speechTranscript !== null &&
+    row.speechMimeType === "audio/mpeg" &&
+    row.speechSizeBytes !== null &&
+    row.speechCreatedAt !== null
+      ? {
+          speech: {
+            messageId: row.messageId,
+            speechId: row.speechId,
+            transcript: row.speechTranscript,
+            mimeType: row.speechMimeType,
+            sizeBytes: row.speechSizeBytes,
+            createdAt: row.speechCreatedAt,
+          },
+        }
+      : {}),
+    turnId: row.turnId,
+    streaming: row.isStreaming === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -455,22 +506,35 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const listThreadMessageRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionThreadMessageDbRowSchema,
+    Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: () =>
       sql`
         SELECT
-          message_id AS "messageId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          role,
-          text,
-          attachments_json AS "attachments",
-          input_origin AS "inputOrigin",
-          is_streaming AS "isStreaming",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt"
-        FROM projection_thread_messages
-        ORDER BY thread_id ASC, created_at ASC, message_id ASC
+          messages.message_id AS "messageId",
+          messages.thread_id AS "threadId",
+          messages.turn_id AS "turnId",
+          messages.role,
+          messages.text,
+          messages.attachments_json AS "attachments",
+          messages.input_origin AS "inputOrigin",
+          messages.is_streaming AS "isStreaming",
+          messages.created_at AS "createdAt",
+          messages.updated_at AS "updatedAt",
+          summary.summary AS "summaryText",
+          summary.created_at AS "summaryCreatedAt",
+          speech.speech_id AS "speechId",
+          speech.transcript AS "speechTranscript",
+          speech.mime_type AS "speechMimeType",
+          speech.size_bytes AS "speechSizeBytes",
+          speech.created_at AS "speechCreatedAt"
+        FROM projection_thread_messages AS messages
+        LEFT JOIN projection_message_summary AS summary
+          ON summary.message_id = messages.message_id
+          AND summary.thread_id = messages.thread_id
+        LEFT JOIN projection_message_speech AS speech
+          ON speech.message_id = messages.message_id
+          AND speech.thread_id = messages.thread_id
+        ORDER BY messages.thread_id ASC, messages.created_at ASC, messages.message_id ASC
       `,
   });
 
@@ -821,23 +885,36 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
-    Result: ProjectionThreadMessageDbRowSchema,
+    Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: ({ threadId }) =>
       sql`
         SELECT
-          message_id AS "messageId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          role,
-          text,
-          attachments_json AS "attachments",
-          input_origin AS "inputOrigin",
-          is_streaming AS "isStreaming",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt"
-        FROM projection_thread_messages
-        WHERE thread_id = ${threadId}
-        ORDER BY created_at ASC, message_id ASC
+          messages.message_id AS "messageId",
+          messages.thread_id AS "threadId",
+          messages.turn_id AS "turnId",
+          messages.role,
+          messages.text,
+          messages.attachments_json AS "attachments",
+          messages.input_origin AS "inputOrigin",
+          messages.is_streaming AS "isStreaming",
+          messages.created_at AS "createdAt",
+          messages.updated_at AS "updatedAt",
+          summary.summary AS "summaryText",
+          summary.created_at AS "summaryCreatedAt",
+          speech.speech_id AS "speechId",
+          speech.transcript AS "speechTranscript",
+          speech.mime_type AS "speechMimeType",
+          speech.size_bytes AS "speechSizeBytes",
+          speech.created_at AS "speechCreatedAt"
+        FROM projection_thread_messages AS messages
+        LEFT JOIN projection_message_summary AS summary
+          ON summary.message_id = messages.message_id
+          AND summary.thread_id = messages.thread_id
+        LEFT JOIN projection_message_speech AS speech
+          ON speech.message_id = messages.message_id
+          AND speech.thread_id = messages.thread_id
+        WHERE messages.thread_id = ${threadId}
+        ORDER BY messages.created_at ASC, messages.message_id ASC
       `,
   });
 
@@ -1098,17 +1175,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of messageRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
                 const threadMessages = messagesByThread.get(row.threadId) ?? [];
-                threadMessages.push({
-                  id: row.messageId,
-                  role: row.role,
-                  text: row.text,
-                  ...(row.attachments !== null ? { attachments: row.attachments } : {}),
-                  ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
-                  turnId: row.turnId,
-                  streaming: row.isStreaming === 1,
-                  createdAt: row.createdAt,
-                  updatedAt: row.updatedAt,
-                });
+                threadMessages.push(mapMessageRow(row));
                 messagesByThread.set(row.threadId, threadMessages);
               }
 
@@ -2041,24 +2108,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         updatedAt: threadRow.value.updatedAt,
         archivedAt: threadRow.value.archivedAt,
         deletedAt: null,
-        messages: messageRows.map((row) => {
-          const message = {
-            id: row.messageId,
-            role: row.role,
-            text: row.text,
-            turnId: row.turnId,
-            streaming: row.isStreaming === 1,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-          };
-          if (row.attachments !== null) {
-            Object.assign(message, { attachments: row.attachments });
-          }
-          if (row.inputOrigin !== null) {
-            Object.assign(message, { inputOrigin: row.inputOrigin });
-          }
-          return message;
-        }),
+        messages: messageRows.map(mapMessageRow),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         activities: activityRows.map((row) => {
           const activity = {

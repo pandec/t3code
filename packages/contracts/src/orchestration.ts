@@ -21,6 +21,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { MessageSpeechSynthesisResult, MessageSummaryResult } from "./voice.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -233,6 +234,8 @@ export const OrchestrationMessage = Schema.Struct({
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   inputOrigin: Schema.optional(MessageInputOrigin),
+  generatedSummary: Schema.optional(MessageSummaryResult),
+  speech: Schema.optional(MessageSpeechSynthesisResult),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,

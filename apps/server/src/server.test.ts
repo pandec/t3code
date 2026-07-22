@@ -537,6 +537,7 @@ const buildAppUnderTest = (options?: {
           Layer.mock(MessageSpeech.MessageSpeech)({
             available: false,
             synthesize: () => Effect.die("message speech is not configured for this test"),
+            summarize: () => Effect.die("message summary is not configured for this test"),
           }),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({

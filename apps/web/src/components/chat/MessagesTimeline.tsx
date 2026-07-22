@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type MessageSummaryResult,
   type MessageSpeechSynthesisResult,
   type MessageId,
   type ScopedThreadRef,
@@ -57,6 +58,7 @@ import {
   CircleAlertIcon,
   EyeIcon,
   FileDiffIcon,
+  FileTextIcon,
   GlobeIcon,
   HammerIcon,
   HeadphonesIcon,
@@ -117,6 +119,7 @@ import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
+import { summarizeMessage } from "../../state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
@@ -1044,23 +1047,27 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
-  const [speech, setSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
+  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
+  const [generatedSpeech, setGeneratedSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
   const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
   const [speechExpanded, setSpeechExpanded] = useState(false);
+  const [generatedSummary, setGeneratedSummary] = useState<MessageSummaryResult | null>(null);
+  const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const speech = generatedSpeech ?? row.message.speech ?? null;
+  const summary = generatedSummary ?? row.message.generatedSummary ?? null;
 
-  const canSynthesizeSpeech =
-    ctx.textToSpeechAvailable &&
-    row.showAssistantMeta &&
-    !row.message.streaming &&
-    row.message.text.trim().length > 0;
+  const canShowSpeech =
+    speech !== null ||
+    (ctx.textToSpeechAvailable &&
+      row.showAssistantMeta &&
+      !row.message.streaming &&
+      row.message.text.trim().length > 0);
+  const canShowSummary =
+    row.showAssistantMeta && !row.message.streaming && row.message.text.trim().length > 0;
 
-  const onToggleSpeech = useCallback(async () => {
-    if (speech !== null) {
-      setSpeechExpanded((expanded) => !expanded);
-      return;
-    }
+  const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;
-
     setSpeechPhase("preparing");
     const result = await synthesize({
       environmentId: ctx.activeThreadEnvironmentId,
@@ -1068,7 +1075,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     });
     setSpeechPhase("idle");
     if (result._tag === "Success") {
-      setSpeech(result.value);
+      setGeneratedSpeech(result.value);
       setSpeechExpanded(true);
       return;
     }
@@ -1077,7 +1084,39 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       title: "Listening version unavailable",
       description: "T3 Code could not prepare audio for this message. Try again in a moment.",
     });
-  }, [ctx.activeThreadEnvironmentId, row.message.id, speech, speechPhase, synthesize]);
+  }, [ctx.activeThreadEnvironmentId, row.message.id, speechPhase, synthesize]);
+
+  const onToggleSpeech = useCallback(async () => {
+    if (speech !== null) {
+      setSpeechExpanded((expanded) => !expanded);
+      return;
+    }
+    await prepareSpeech();
+  }, [prepareSpeech, speech]);
+
+  const onToggleSummary = useCallback(async () => {
+    if (summary !== null) {
+      setSummaryExpanded((expanded) => !expanded);
+      return;
+    }
+    if (summaryPhase === "preparing") return;
+    setSummaryPhase("preparing");
+    const result = await summarize({
+      environmentId: ctx.activeThreadEnvironmentId,
+      input: { messageId: row.message.id },
+    });
+    setSummaryPhase("idle");
+    if (result._tag === "Success") {
+      setGeneratedSummary(result.value);
+      setSummaryExpanded(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Summary unavailable",
+      description: "T3 Code could not summarize this message. Try again in a moment.",
+    });
+  }, [ctx.activeThreadEnvironmentId, row.message.id, summarize, summary, summaryPhase]);
 
   return (
     <>
@@ -1098,7 +1137,37 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
-            {canSynthesizeSpeech ? (
+            {canShowSummary ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={summary === null ? "Create summary" : "Toggle summary"}
+                      aria-expanded={summary === null ? undefined : summaryExpanded}
+                      onClick={() => void onToggleSummary()}
+                    />
+                  }
+                >
+                  {summaryPhase === "preparing" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <FileTextIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {summaryPhase === "preparing"
+                    ? "Preparing summary"
+                    : summary === null
+                      ? "Summarize this response"
+                      : summaryExpanded
+                        ? "Hide summary"
+                        : "Show summary"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {canShowSpeech ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1144,14 +1213,25 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           </div>
         ) : null}
+        {summary !== null && summaryExpanded ? (
+          <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+              <FileTextIcon className="size-3.5 text-muted-foreground" />
+              <span>Summary</span>
+            </div>
+            <ChatMarkdown
+              text={summary.summary}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              skills={ctx.skills}
+            />
+          </div>
+        ) : null}
         {speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             speech={speech}
-            onReset={() => {
-              setSpeech(null);
-              setSpeechExpanded(false);
-            }}
+            onRetry={() => void prepareSpeech()}
           />
         ) : null}
       </div>
@@ -1162,11 +1242,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 function AssistantSpeechPlayer({
   environmentId,
   speech,
-  onReset,
+  onRetry,
 }: {
   environmentId: EnvironmentId;
   speech: MessageSpeechSynthesisResult;
-  onReset: () => void;
+  onRetry: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const { blocked, speed } = useListeningPlaybackSnapshot();
@@ -1199,9 +1279,9 @@ function AssistantSpeechPlayer({
       </div>
       {audioUrlState._tag === "Failure" ? (
         <div className="space-y-2 text-xs text-muted-foreground">
-          <p>The audio file is unavailable. Dismiss this card and try again.</p>
-          <Button variant="outline" size="xs" onClick={onReset}>
-            Dismiss
+          <p>The audio file is unavailable. Regenerate it to listen again.</p>
+          <Button variant="outline" size="xs" onClick={onRetry}>
+            Regenerate
           </Button>
         </div>
       ) : audioUrlState._tag === "Loading" ? (
