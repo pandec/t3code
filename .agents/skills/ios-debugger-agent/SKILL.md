@@ -43,9 +43,11 @@ After launch, call `snapshot_ui` or `screenshot` before interacting. An open Sim
 
 1. Call `snapshot_ui` to obtain the current accessibility hierarchy and element references.
 2. Use only current `elementRef` values whose snapshot entries list the intended action. XcodeBuildMCP `2.6.2` does not accept coordinates for `tap`; when the app exposes no actionable reference, prefer a registered deep link or another app-supported route and otherwise report the accessibility blocker.
-3. Refresh with `snapshot_ui` after navigation or layout changes. Element references are snapshot-specific.
+3. Refresh with `snapshot_ui` after navigation, scrolling, virtualized-list recycling, media progress, or any other layout change. Element references are snapshot-specific, and a listed target can still be partly offscreen; make it fully visible before acting.
 4. Use `wait_for_ui` for asynchronous transitions when available rather than fixed sleeps.
 5. Capture a final `screenshot` for the state that proves the affected flow.
+
+Do not batch semantic actions when the first action can update playback state, expand a card, open the composer, or otherwise change accessibility layout. Refresh between those actions. If a resolved tap repeatedly lands on app or developer chrome, return to a known route, center the target in the viewport, and take a new snapshot instead of reusing the reference.
 
 Use `gesture` or scoped swipe actions when needed. If a gesture is unreliable, return to a known route or relaunch rather than switching to generic desktop automation.
 
