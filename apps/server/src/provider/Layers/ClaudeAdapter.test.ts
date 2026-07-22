@@ -44,6 +44,7 @@ import {
   makeClaudeAdapter,
   type ClaudeAdapterLiveOptions,
 } from "./ClaudeAdapter.ts";
+import { CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS } from "./ClaudeProvider.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -317,6 +318,7 @@ describe("ClaudeAdapterLive", () => {
       if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
       const skills = yield* listSkills({ cwd });
 
+      assert.equal(adapter.listSkillsTimeoutMillis, CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS);
       assert.deepEqual(skills, [
         {
           name: "project-review",

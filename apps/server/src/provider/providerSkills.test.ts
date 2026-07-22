@@ -6,7 +6,9 @@ import {
   type ServerProviderSkill,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { ProviderInstance } from "./ProviderDriver.ts";
 import { ProviderAdapterRequestError } from "./Errors.ts";
@@ -40,7 +42,10 @@ const snapshot: ServerProvider = {
   skills: [snapshotSkill],
 };
 
-function makeInstance(listSkills: ProviderInstance["adapter"]["listSkills"]): ProviderInstance {
+function makeInstance(
+  listSkills: ProviderInstance["adapter"]["listSkills"],
+  listSkillsTimeoutMillis?: number,
+): ProviderInstance {
   return {
     instanceId,
     driverKind: ProviderDriverKind.make("codex"),
@@ -59,7 +64,10 @@ function makeInstance(listSkills: ProviderInstance["adapter"]["listSkills"]): Pr
       refresh: Effect.succeed(snapshot),
       streamChanges: Stream.empty,
     },
-    adapter: { listSkills } as ProviderInstance["adapter"],
+    adapter: {
+      listSkills,
+      ...(listSkillsTimeoutMillis === undefined ? {} : { listSkillsTimeoutMillis }),
+    } as ProviderInstance["adapter"],
     textGeneration: {} as ProviderInstance["textGeneration"],
   };
 }
@@ -107,6 +115,27 @@ describe("listProviderSkillsForCwd", () => {
       });
 
       assert.deepEqual(result.skills, [snapshotSkill]);
+    }),
+  );
+
+  it.effect("honors a provider-specific skill discovery timeout", () =>
+    Effect.gen(function* () {
+      const registry = {
+        getInstance: () =>
+          Effect.succeed(
+            makeInstance(() => Effect.sleep("15 seconds").pipe(Effect.as([projectSkill])), 20_000),
+          ),
+      };
+
+      const fiber = yield* listProviderSkillsForCwd(registry, {
+        instanceId,
+        cwd: "/workspace",
+      }).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust("15 seconds");
+      const result = yield* Fiber.join(fiber);
+
+      assert.deepEqual(result.skills, [projectSkill]);
     }),
   );
 });

@@ -507,7 +507,7 @@ function apiProviderAuthMetadata(
 // Bedrock backend and runs the `awsAuthRefresh` credential hook before returning
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
-const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+export const CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS = 25_000;
 
 function nonEmptyProbeString(value: string): string | undefined {
   const candidate = value.trim();
@@ -689,7 +689,7 @@ const probeClaudeCapabilities = (
         if (!abort.signal.aborted) abort.abort();
       }),
     ),
-    Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS),
     Effect.result,
     Effect.map((result) => {
       if (Result.isFailure(result)) return undefined;

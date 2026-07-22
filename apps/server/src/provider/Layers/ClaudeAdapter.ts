@@ -82,6 +82,7 @@ import {
 import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import {
+  CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -4218,6 +4219,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     forkSession,
     listImportableSessions,
     listSkills,
+    listSkillsTimeoutMillis: CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
     readImportableSession,
     sendTurn,
     interruptTurn,
