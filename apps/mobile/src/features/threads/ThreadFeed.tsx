@@ -5,8 +5,8 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
   EnvironmentId,
   MessageId,
-  MessageSummaryResult,
   MessageSpeechSynthesisResult,
+  MessageSummaryResult,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -31,6 +31,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -113,6 +114,12 @@ import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
+import {
+  getMessageArtifactSessionSnapshot,
+  rememberMessageSpeech,
+  rememberMessageSummary,
+  subscribeMessageArtifactSession,
+} from "@t3tools/client-runtime/state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   listeningPlayback,
@@ -1012,6 +1019,9 @@ function renderFeedEntry(
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             textToSpeechAvailable={props.textToSpeechAvailable === true}
+            markdownStyles={styles}
+            skills={props.skills}
+            onLinkPress={props.onMarkdownLinkPress}
           />
         ) : null}
       </Animated.View>
@@ -1044,18 +1054,30 @@ function AssistantMessageMetaAndArtifacts(props: {
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly textToSpeechAvailable: boolean;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress: (href: string) => void;
 }) {
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [generatedSpeech, setGeneratedSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [generatedSummary, setGeneratedSummary] = useState<MessageSummaryResult | null>(null);
   const [summaryPreparing, setSummaryPreparing] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const speech = generatedSpeech ?? props.persistedSpeech;
-  const summary = generatedSummary ?? props.persistedSummary;
+  const sessionArtifacts = useSyncExternalStore(
+    useCallback(
+      (listener) => subscribeMessageArtifactSession(props.environmentId, props.messageId, listener),
+      [props.environmentId, props.messageId],
+    ),
+    useCallback(
+      () =>
+        getMessageArtifactSessionSnapshot(props.environmentId, props.messageId, props.messageText),
+      [props.environmentId, props.messageId, props.messageText],
+    ),
+  );
+  const speech = sessionArtifacts.speech ?? props.persistedSpeech;
+  const summary = sessionArtifacts.summary ?? props.persistedSummary;
 
   const prepareSpeech = useCallback(async () => {
     if (preparing) return;
@@ -1066,7 +1088,7 @@ function AssistantMessageMetaAndArtifacts(props: {
     });
     setPreparing(false);
     if (result._tag === "Success") {
-      setGeneratedSpeech(result.value);
+      rememberMessageSpeech(props.environmentId, props.messageText, result.value);
       setExpanded(true);
       return;
     }
@@ -1074,7 +1096,7 @@ function AssistantMessageMetaAndArtifacts(props: {
       "Listening version unavailable",
       "T3 Code could not prepare audio for this message. Try again in a moment.",
     );
-  }, [preparing, props.environmentId, props.messageId, synthesize]);
+  }, [preparing, props.environmentId, props.messageId, props.messageText, synthesize]);
 
   const onPressSpeech = useCallback(async () => {
     if (speech !== null) {
@@ -1097,7 +1119,7 @@ function AssistantMessageMetaAndArtifacts(props: {
     });
     setSummaryPreparing(false);
     if (result._tag === "Success") {
-      setGeneratedSummary(result.value);
+      rememberMessageSummary(props.environmentId, props.messageText, result.value);
       setSummaryExpanded(true);
       return;
     }
@@ -1105,7 +1127,14 @@ function AssistantMessageMetaAndArtifacts(props: {
       "Summary unavailable",
       "T3 Code could not summarize this message. Try again in a moment.",
     );
-  }, [props.environmentId, props.messageId, summarize, summary, summaryPreparing]);
+  }, [
+    props.environmentId,
+    props.messageId,
+    props.messageText,
+    summarize,
+    summary,
+    summaryPreparing,
+  ]);
 
   return (
     <View>
@@ -1117,28 +1146,31 @@ function AssistantMessageMetaAndArtifacts(props: {
           buttonSize={28}
           iconSize={13}
         />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
-          accessibilityState={{
-            expanded: summary === null ? undefined : summaryExpanded,
-            busy: summaryPreparing,
-          }}
-          className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
-          disabled={summaryPreparing}
-          onPress={() => void onPressSummary()}
-        >
-          {summaryPreparing ? (
-            <ActivityIndicator size="small" color={props.iconSubtleColor} />
-          ) : (
-            <SymbolView
-              name="doc.text"
-              size={14}
-              tintColor={props.iconSubtleColor}
-              type="monochrome"
-            />
-          )}
-        </Pressable>
+        {props.messageText.trim().length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
+            accessibilityState={{
+              expanded: summary === null ? undefined : summaryExpanded,
+              busy: summaryPreparing,
+            }}
+            className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+            disabled={summaryPreparing}
+            hitSlop={8}
+            onPress={() => void onPressSummary()}
+          >
+            {summaryPreparing ? (
+              <ActivityIndicator size="small" color={props.iconSubtleColor} />
+            ) : (
+              <SymbolView
+                name="doc.text"
+                size={14}
+                tintColor={props.iconSubtleColor}
+                type="monochrome"
+              />
+            )}
+          </Pressable>
+        ) : null}
         {props.textToSpeechAvailable || speech !== null ? (
           <Pressable
             accessibilityRole="button"
@@ -1151,6 +1183,7 @@ function AssistantMessageMetaAndArtifacts(props: {
             }}
             className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
             disabled={preparing}
+            hitSlop={8}
             onPress={() => void onPressSpeech()}
           >
             {preparing ? (
@@ -1180,9 +1213,23 @@ function AssistantMessageMetaAndArtifacts(props: {
             />
             <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
           </View>
-          <Text selectable className="text-sm leading-5 text-foreground/90">
-            {summary.summary}
-          </Text>
+          {hasNativeSelectableMarkdownText() ? (
+            <SelectableMarkdownText
+              markdown={summary.summary}
+              skills={props.skills}
+              textStyle={props.markdownStyles.nativeTextStyle}
+              onLinkPress={props.onLinkPress}
+            />
+          ) : (
+            <Markdown
+              options={{ gfm: true }}
+              renderers={props.markdownStyles.renderers}
+              styles={props.markdownStyles.styles}
+              theme={props.markdownStyles.theme}
+            >
+              {summary.summary}
+            </Markdown>
+          )}
         </View>
       ) : null}
       {speech !== null && expanded ? (

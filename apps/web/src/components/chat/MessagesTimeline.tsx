@@ -1,6 +1,5 @@
 import {
   type EnvironmentId,
-  type MessageSummaryResult,
   type MessageSpeechSynthesisResult,
   type MessageId,
   type ScopedThreadRef,
@@ -26,6 +25,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -120,6 +120,12 @@ import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestam
 import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
+import {
+  getMessageArtifactSessionSnapshot,
+  rememberMessageSpeech,
+  rememberMessageSummary,
+  subscribeMessageArtifactSession,
+} from "@t3tools/client-runtime/state/messageArtifacts";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
@@ -1048,14 +1054,28 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [generatedSpeech, setGeneratedSpeech] = useState<MessageSpeechSynthesisResult | null>(null);
   const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
   const [speechExpanded, setSpeechExpanded] = useState(false);
-  const [generatedSummary, setGeneratedSummary] = useState<MessageSummaryResult | null>(null);
   const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
   const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const speech = generatedSpeech ?? row.message.speech ?? null;
-  const summary = generatedSummary ?? row.message.generatedSummary ?? null;
+  const sessionArtifacts = useSyncExternalStore(
+    useCallback(
+      (listener) =>
+        subscribeMessageArtifactSession(ctx.activeThreadEnvironmentId, row.message.id, listener),
+      [ctx.activeThreadEnvironmentId, row.message.id],
+    ),
+    useCallback(
+      () =>
+        getMessageArtifactSessionSnapshot(
+          ctx.activeThreadEnvironmentId,
+          row.message.id,
+          row.message.text,
+        ),
+      [ctx.activeThreadEnvironmentId, row.message.id, row.message.text],
+    ),
+  );
+  const speech = sessionArtifacts.speech ?? row.message.speech ?? null;
+  const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
 
   const canShowSpeech =
     speech !== null ||
@@ -1075,7 +1095,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     });
     setSpeechPhase("idle");
     if (result._tag === "Success") {
-      setGeneratedSpeech(result.value);
+      rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
       setSpeechExpanded(true);
       return;
     }
@@ -1084,7 +1104,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       title: "Listening version unavailable",
       description: "T3 Code could not prepare audio for this message. Try again in a moment.",
     });
-  }, [ctx.activeThreadEnvironmentId, row.message.id, speechPhase, synthesize]);
+  }, [ctx.activeThreadEnvironmentId, row.message.id, row.message.text, speechPhase, synthesize]);
 
   const onToggleSpeech = useCallback(async () => {
     if (speech !== null) {
@@ -1107,7 +1127,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     });
     setSummaryPhase("idle");
     if (result._tag === "Success") {
-      setGeneratedSummary(result.value);
+      rememberMessageSummary(ctx.activeThreadEnvironmentId, row.message.text, result.value);
       setSummaryExpanded(true);
       return;
     }
@@ -1116,7 +1136,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       title: "Summary unavailable",
       description: "T3 Code could not summarize this message. Try again in a moment.",
     });
-  }, [ctx.activeThreadEnvironmentId, row.message.id, summarize, summary, summaryPhase]);
+  }, [
+    ctx.activeThreadEnvironmentId,
+    row.message.id,
+    row.message.text,
+    summarize,
+    summary,
+    summaryPhase,
+  ]);
 
   return (
     <>
@@ -1146,6 +1173,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                       size="icon-xs"
                       aria-label={summary === null ? "Create summary" : "Toggle summary"}
                       aria-expanded={summary === null ? undefined : summaryExpanded}
+                      aria-busy={summaryPhase === "preparing"}
+                      disabled={summaryPhase === "preparing"}
                       onClick={() => void onToggleSummary()}
                     />
                   }
@@ -1178,6 +1207,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                         speech === null ? "Create listening version" : "Toggle listening version"
                       }
                       aria-expanded={speech === null ? undefined : speechExpanded}
+                      aria-busy={speechPhase === "preparing"}
+                      disabled={speechPhase === "preparing"}
                       onClick={() => void onToggleSpeech()}
                     />
                   }

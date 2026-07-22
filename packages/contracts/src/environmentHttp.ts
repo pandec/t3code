@@ -518,14 +518,6 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
 
 export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
   .add(
-    HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
-      headers: OptionalBearerHeaders,
-      payload: MessageSummaryRequest,
-      success: MessageSummaryResult,
-      error: EnvironmentVoiceTranscriptionErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
     HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
       headers: OptionalBearerHeaders,
       payload: VoiceTranscriptionRequest,
@@ -541,6 +533,15 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
       error: EnvironmentVoiceTranscriptionErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
+
+export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
+  HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
+    headers: OptionalBearerHeaders,
+    payload: MessageSummaryRequest,
+    success: MessageSummaryResult,
+    error: EnvironmentVoiceTranscriptionErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
 
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
@@ -607,5 +608,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi) {}

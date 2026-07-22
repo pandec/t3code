@@ -346,8 +346,22 @@ describe("EnvironmentThreads", () => {
 
   it.effect("hydrates persisted message artifacts over a same-sequence cache", () =>
     Effect.gen(function* () {
-      const httpThread: OrchestrationThread = {
+      const cachedThread: OrchestrationThread = {
         ...BASE_THREAD,
+        messages: [
+          {
+            id: MessageId.make("message-1"),
+            role: "assistant",
+            text: "Response",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+          },
+        ],
+      };
+      const httpThread: OrchestrationThread = {
+        ...cachedThread,
         messages: [
           {
             id: MessageId.make("message-1"),
@@ -366,7 +380,7 @@ describe("EnvironmentThreads", () => {
         ],
       };
       const harness = yield* makeHarness({
-        cached: BASE_THREAD,
+        cached: cachedThread,
         httpSnapshot: Option.some({
           snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
           thread: httpThread,
@@ -512,7 +526,11 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       yield* Queue.offer(harness.wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        if (
+          (yield* Ref.get(harness.subscriptionCount)) >= 2 &&
+          (yield* Ref.get(harness.loaderCalls)) >= 2
+        )
+          break;
         yield* Effect.yieldNow;
       }
 
@@ -722,7 +740,11 @@ describe("EnvironmentThreads", () => {
         (value) => value.status === "synchronizing" && Option.isSome(value.data),
       );
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        if (
+          (yield* Ref.get(harness.subscriptionCount)) >= 2 &&
+          (yield* Ref.get(harness.loaderCalls)) >= 2
+        )
+          break;
         yield* Effect.yieldNow;
       }
 

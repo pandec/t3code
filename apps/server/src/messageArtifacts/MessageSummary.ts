@@ -1,6 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
-
 import {
   MESSAGE_SUMMARY_MAX_SOURCE_CHARS,
   MESSAGE_SUMMARY_MAX_TEXT_CHARS,
@@ -10,15 +7,16 @@ import {
   type MessageSummaryResult,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
-import { makeMessageSpeechLockCoordinator } from "../voice/MessageSpeech.ts";
-
-const SUMMARY_RECIPE_VERSION = 1;
+import { makeMessageArtifactLockCoordinator } from "./lock.ts";
+import { MESSAGE_SUMMARY_RECIPE_HASH, messageArtifactTextHash } from "./identity.ts";
 
 interface SummaryRow {
   readonly messageId: string;
@@ -49,7 +47,9 @@ export function withLowSummaryEffort(
       ? "reasoningEffort"
       : driverKind === ProviderDriverKind.make("claudeAgent")
         ? "effort"
-        : null;
+        : driverKind === ProviderDriverKind.make("cursor")
+          ? "reasoning"
+          : null;
   if (effortOptionId === null) return modelSelection;
 
   return {
@@ -80,15 +80,18 @@ export interface MessageSummaryService {
   ) => Effect.Effect<MessageSummaryResult, MessageSummaryError>;
 }
 
+export class MessageSummary extends Context.Service<MessageSummary, MessageSummaryService>()(
+  "t3/messageArtifacts/MessageSummary",
+) {}
+
 const storageError = () => new MessageSummaryError({ reason: "storage_failed" });
-const hash = (value: string) => NodeCrypto.createHash("sha256").update(value, "utf8").digest("hex");
 const decodeModelSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(ModelSelection));
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const textGeneration = yield* TextGeneration;
   const providerInstances = yield* ProviderInstanceRegistry;
-  const locks = yield* makeMessageSpeechLockCoordinator();
+  const locks = yield* makeMessageArtifactLockCoordinator();
 
   const summarizeUnlocked = Effect.fn("MessageSummary.summarizeUnlocked")(function* (
     request: MessageSummaryRequest,
@@ -100,8 +103,15 @@ export const make = Effect.gen(function* () {
           messages.role,
           messages.text,
           messages.is_streaming AS "isStreaming",
-          threads.model_selection_json AS "modelSelection",
-          COALESCE(threads.worktree_path, projects.workspace_root) AS cwd
+          COALESCE(
+            messages.generation_model_selection_json,
+            threads.model_selection_json
+          ) AS "modelSelection",
+          COALESCE(
+            messages.generation_cwd,
+            threads.worktree_path,
+            projects.workspace_root
+          ) AS cwd
         FROM projection_thread_messages AS messages
         INNER JOIN projection_threads AS threads
           ON threads.thread_id = messages.thread_id
@@ -134,10 +144,10 @@ export const make = Effect.gen(function* () {
       return yield* new MessageSummaryError({ reason: "provider_unavailable" });
     }
     const summaryModelSelection = withLowSummaryEffort(modelSelection, instance.driverKind);
-    const sourceTextHash = hash(sourceText);
-    const recipeHash = hash(String(SUMMARY_RECIPE_VERSION));
+    const sourceTextHash = messageArtifactTextHash(sourceText);
+    const recipeHash = MESSAGE_SUMMARY_RECIPE_HASH;
     // @effect-diagnostics-next-line preferSchemaOverJson:off
-    const modelSelectionHash = hash(JSON.stringify(summaryModelSelection));
+    const modelSelectionHash = messageArtifactTextHash(JSON.stringify(summaryModelSelection));
 
     const cachedRows = yield* sql<SummaryRow>`
         SELECT
@@ -240,3 +250,5 @@ export const make = Effect.gen(function* () {
     summarize: (request) => locks.withMessageLock(request.messageId, summarizeUnlocked(request)),
   } satisfies MessageSummaryService;
 });
+
+export const layer = Layer.effect(MessageSummary, make);

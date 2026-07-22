@@ -101,6 +101,8 @@ import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
+import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
+import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -313,7 +315,11 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = Layer.mergeAll(ReactorLayerLive, MessageSpeech.layer).pipe(
+const RuntimeCoreDependenciesLive = Layer.mergeAll(
+  ReactorLayerLive,
+  MessageSpeech.layer,
+  MessageSummary.layer,
+).pipe(
   // Core Services
   Layer.provideMerge(
     Layer.mergeAll(
@@ -386,6 +392,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(messageArtifactsHttpApiLayer),
       Layer.provide(voiceHttpApiLayer.pipe(Layer.provide(VoiceTranscription.layer))),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),

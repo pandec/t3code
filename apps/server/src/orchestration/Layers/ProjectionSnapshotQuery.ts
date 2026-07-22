@@ -52,6 +52,10 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+import {
+  MESSAGE_SUMMARY_RECIPE_HASH,
+  messageArtifactTextHash,
+} from "../../messageArtifacts/identity.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
@@ -82,11 +86,14 @@ const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
   ...ProjectionThreadMessageDbRowSchema.fields,
   summaryText: Schema.NullOr(Schema.String),
   summaryCreatedAt: Schema.NullOr(IsoDateTime),
+  summarySourceTextHash: Schema.NullOr(Schema.String),
+  summaryRecipeHash: Schema.NullOr(Schema.String),
   speechId: Schema.NullOr(Schema.String),
   speechTranscript: Schema.NullOr(Schema.String),
   speechMimeType: Schema.NullOr(Schema.String),
   speechSizeBytes: Schema.NullOr(NonNegativeInt),
   speechCreatedAt: Schema.NullOr(IsoDateTime),
+  speechSourceTextHash: Schema.NullOr(Schema.String),
 });
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -271,13 +278,17 @@ function mapProposedPlanRow(
 function mapMessageRow(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageArtifactDbRowSchema>,
 ): OrchestrationMessage {
+  const currentSourceTextHash = messageArtifactTextHash(row.text.trim());
   return {
     id: row.messageId,
     role: row.role,
     text: row.text,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
-    ...(row.summaryText !== null && row.summaryCreatedAt !== null
+    ...(row.summaryText !== null &&
+    row.summaryCreatedAt !== null &&
+    row.summarySourceTextHash === currentSourceTextHash &&
+    row.summaryRecipeHash === MESSAGE_SUMMARY_RECIPE_HASH
       ? {
           generatedSummary: {
             messageId: row.messageId,
@@ -290,7 +301,8 @@ function mapMessageRow(
     row.speechTranscript !== null &&
     row.speechMimeType === "audio/mpeg" &&
     row.speechSizeBytes !== null &&
-    row.speechCreatedAt !== null
+    row.speechCreatedAt !== null &&
+    row.speechSourceTextHash === currentSourceTextHash
       ? {
           speech: {
             messageId: row.messageId,
@@ -522,11 +534,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           messages.updated_at AS "updatedAt",
           summary.summary AS "summaryText",
           summary.created_at AS "summaryCreatedAt",
+          summary.source_text_hash AS "summarySourceTextHash",
+          summary.recipe_hash AS "summaryRecipeHash",
           speech.speech_id AS "speechId",
           speech.transcript AS "speechTranscript",
           speech.mime_type AS "speechMimeType",
           speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt"
+          speech.created_at AS "speechCreatedAt",
+          speech.source_text_hash AS "speechSourceTextHash"
         FROM projection_thread_messages AS messages
         LEFT JOIN projection_message_summary AS summary
           ON summary.message_id = messages.message_id
@@ -901,11 +916,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           messages.updated_at AS "updatedAt",
           summary.summary AS "summaryText",
           summary.created_at AS "summaryCreatedAt",
+          summary.source_text_hash AS "summarySourceTextHash",
+          summary.recipe_hash AS "summaryRecipeHash",
           speech.speech_id AS "speechId",
           speech.transcript AS "speechTranscript",
           speech.mime_type AS "speechMimeType",
           speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt"
+          speech.created_at AS "speechCreatedAt",
+          speech.source_text_hash AS "speechSourceTextHash"
         FROM projection_thread_messages AS messages
         LEFT JOIN projection_message_summary AS summary
           ON summary.message_id = messages.message_id

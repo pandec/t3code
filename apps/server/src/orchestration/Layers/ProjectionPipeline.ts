@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  type MessageId,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -871,6 +872,42 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const captureAssistantMessageGenerationContext = Effect.fn(
+      "captureAssistantMessageGenerationContext",
+    )(function* (input: { readonly messageId: MessageId; readonly threadId: ThreadId }) {
+      yield* sql`
+        UPDATE projection_thread_messages AS messages
+        SET
+          generation_model_selection_json = COALESCE(
+            messages.generation_model_selection_json,
+            (
+              SELECT threads.model_selection_json
+              FROM projection_threads AS threads
+              WHERE threads.thread_id = ${input.threadId}
+            )
+          ),
+          generation_cwd = COALESCE(
+            messages.generation_cwd,
+            (
+              SELECT COALESCE(threads.worktree_path, projects.workspace_root)
+              FROM projection_threads AS threads
+              INNER JOIN projection_projects AS projects
+                ON projects.project_id = threads.project_id
+              WHERE threads.thread_id = ${input.threadId}
+            )
+          )
+        WHERE messages.message_id = ${input.messageId}
+      `.pipe(
+        Effect.catchTag("SqlError", (sqlError) =>
+          Effect.fail(
+            toPersistenceSqlError("ProjectionPipeline.captureAssistantGenerationContext:query")(
+              sqlError,
+            ),
+          ),
+        ),
+      );
+    });
+
     const applyThreadMessagesProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadMessagesProjection",
     )(function* (event, attachmentSideEffects) {
@@ -914,6 +951,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          if (event.payload.role === "assistant") {
+            yield* captureAssistantMessageGenerationContext({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+            });
+          }
           return;
         }
 
@@ -928,15 +971,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Effect.forEach(
             event.payload.messages,
             (message) =>
-              projectionThreadMessageRepository.upsert({
-                messageId: message.messageId,
-                threadId: event.payload.threadId,
-                turnId: null,
-                role: message.role,
-                text: message.text,
-                isStreaming: false,
-                createdAt: message.createdAt,
-                updatedAt: message.createdAt,
+              Effect.gen(function* () {
+                yield* projectionThreadMessageRepository.upsert({
+                  messageId: message.messageId,
+                  threadId: event.payload.threadId,
+                  turnId: null,
+                  role: message.role,
+                  text: message.text,
+                  isStreaming: false,
+                  createdAt: message.createdAt,
+                  updatedAt: message.createdAt,
+                });
+                if (message.role === "assistant") {
+                  yield* captureAssistantMessageGenerationContext({
+                    messageId: message.messageId,
+                    threadId: event.payload.threadId,
+                  });
+                }
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);

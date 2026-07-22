@@ -176,6 +176,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json,
           input_origin,
+          generation_model_selection_json,
+          generation_cwd,
           is_streaming,
           created_at,
           updated_at
@@ -188,6 +190,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           NULL,
           input_origin,
+          generation_model_selection_json,
+          generation_cwd,
           0,
           created_at,
           updated_at

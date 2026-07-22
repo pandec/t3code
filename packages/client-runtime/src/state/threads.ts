@@ -11,12 +11,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
-import { connectionProjectionPhase } from "../connection/model.ts";
+import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
@@ -46,6 +47,28 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
 function shouldPersistThread(thread: OrchestrationThread): boolean {
   const status = thread.session?.status;
   return status !== "starting" && status !== "running";
+}
+
+function mergeThreadMessageArtifacts(
+  current: OrchestrationThread,
+  refreshed: OrchestrationThread,
+): OrchestrationThread {
+  const refreshedById = new Map(refreshed.messages.map((message) => [message.id, message]));
+  return {
+    ...current,
+    messages: current.messages.map((message) => {
+      const refreshedMessage = refreshedById.get(message.id);
+      if (refreshedMessage === undefined) return message;
+      const { generatedSummary: _summary, speech: _speech, ...base } = message;
+      return {
+        ...base,
+        ...(refreshedMessage.generatedSummary === undefined
+          ? {}
+          : { generatedSummary: refreshedMessage.generatedSummary }),
+        ...(refreshedMessage.speech === undefined ? {} : { speech: refreshedMessage.speech }),
+      };
+    }),
+  };
 }
 
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
@@ -80,7 +103,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const mutationLock = yield* Semaphore.make(1);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
+  const artifactRefreshes = yield* Queue.sliding<PreparedConnection>(1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
@@ -179,7 +204,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
+  const applyItemUnlocked = Effect.fn("EnvironmentThreadState.applyItemUnlocked")(function* (
     item: OrchestrationThreadStreamItem,
   ) {
     if (item.kind === "synchronized") {
@@ -218,6 +243,39 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* setDeleted();
     }
   });
+  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(
+    (item: OrchestrationThreadStreamItem) => mutationLock.withPermits(1)(applyItemUnlocked(item)),
+  );
+
+  const refreshWarmSnapshot = Effect.fn("EnvironmentThreadState.refreshWarmSnapshot")(function* (
+    prepared: PreparedConnection,
+  ) {
+    const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+    if (Option.isNone(httpSnapshot)) return;
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        const currentState = yield* SubscriptionRef.get(state);
+        if (currentState.status === "deleted" || Option.isNone(currentState.data)) return;
+
+        const sequence = yield* SubscriptionRef.get(lastSequence);
+        if (httpSnapshot.value.snapshotSequence > sequence) {
+          yield* SubscriptionRef.set(lastSequence, httpSnapshot.value.snapshotSequence);
+          yield* setThread(httpSnapshot.value.thread);
+          return;
+        }
+        if (httpSnapshot.value.snapshotSequence === sequence) {
+          yield* setThread(
+            mergeThreadMessageArtifacts(currentState.data.value, httpSnapshot.value.thread),
+          );
+        }
+      }),
+    );
+  });
+
+  yield* Stream.fromQueue(artifactRefreshes).pipe(
+    Stream.runForEach(refreshWarmSnapshot),
+    Effect.forkScoped,
+  );
 
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
@@ -267,10 +325,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
-          if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
-            current = yield* SubscriptionRef.get(state);
+          if (Option.isNone(current.data)) {
+            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            if (Option.isSome(httpSnapshot)) {
+              yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+              current = yield* SubscriptionRef.get(state);
+            }
+          } else {
+            yield* Queue.offer(artifactRefreshes, prepared);
           }
         }
 

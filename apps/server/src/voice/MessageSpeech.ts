@@ -5,8 +5,6 @@ import {
   MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   type MessageSpeechSynthesisRequest,
   type MessageSpeechSynthesisResult,
-  type MessageSummaryRequest,
-  type MessageSummaryResult,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -17,9 +15,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -28,10 +24,9 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
-import {
-  make as makeMessageSummary,
-  type MessageSummaryError,
-} from "../messageArtifacts/MessageSummary.ts";
+import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
+
+export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
 
 const ELEVENLABS_TEXT_TO_SPEECH_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
@@ -135,58 +130,10 @@ export class MessageSpeech extends Context.Service<
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,
     ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
-    readonly summarize: (
-      request: MessageSummaryRequest,
-    ) => Effect.Effect<MessageSummaryResult, MessageSummaryError>;
   }
 >()("t3/voice/MessageSpeech") {}
 
 const storageError = () => new MessageSpeechError({ reason: "storage_failed" });
-
-interface MessageSpeechLockEntry {
-  readonly lock: Semaphore.Semaphore;
-  readonly users: number;
-}
-
-export const makeMessageSpeechLockCoordinator = Effect.fn("MessageSpeech.makeLockCoordinator")(
-  function* () {
-    const locksRef = yield* Ref.make<ReadonlyMap<string, MessageSpeechLockEntry>>(new Map());
-
-    const acquire = Effect.fn("MessageSpeech.acquireLock")(function* (messageId: string) {
-      const created = yield* Semaphore.make(1);
-      return yield* Ref.modify(locksRef, (locks) => {
-        const existing = locks.get(messageId);
-        const lock = existing?.lock ?? created;
-        const next = new Map(locks);
-        next.set(messageId, { lock, users: (existing?.users ?? 0) + 1 });
-        return [lock, next] as const;
-      });
-    });
-
-    const release = (messageId: string, lock: Semaphore.Semaphore) =>
-      Ref.update(locksRef, (locks) => {
-        const current = locks.get(messageId);
-        if (!current || current.lock !== lock) return locks;
-        const next = new Map(locks);
-        if (current.users <= 1) {
-          next.delete(messageId);
-        } else {
-          next.set(messageId, { lock, users: current.users - 1 });
-        }
-        return next;
-      });
-
-    return {
-      withMessageLock: <A, E, R>(messageId: string, effect: Effect.Effect<A, E, R>) =>
-        Effect.acquireUseRelease(
-          acquire(messageId),
-          (lock) => lock.withPermit(effect),
-          (lock) => release(messageId, lock),
-        ),
-      activeLockCount: Ref.get(locksRef).pipe(Effect.map((locks) => locks.size)),
-    };
-  },
-);
 
 export const layer = Layer.effect(
   MessageSpeech,
@@ -205,8 +152,7 @@ export const layer = Layer.effect(
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettingsService;
     const textGeneration = yield* TextGeneration;
-    const synthesisLocks = yield* makeMessageSpeechLockCoordinator();
-    const messageSummary = yield* makeMessageSummary;
+    const synthesisLocks = yield* makeMessageArtifactLockCoordinator();
 
     const resolveSpeechPath = (speechId: string) =>
       resolveAttachmentRelativePath({
@@ -469,7 +415,6 @@ export const layer = Layer.effect(
       available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
-      summarize: messageSummary.summarize,
     });
   }),
 );

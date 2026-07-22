@@ -54,12 +54,26 @@ describe("message summary model selection", () => {
 
   it("leaves providers without a low-effort option unchanged", () => {
     const selection: ModelSelection = {
-      instanceId: ProviderInstanceId.make("cursor-work"),
+      instanceId: ProviderInstanceId.make("opencode-work"),
       model: "auto",
       options: [{ id: "custom", value: true }],
     };
 
-    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("cursor"))).toBe(selection);
+    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("opencode"))).toBe(selection);
+  });
+
+  it("uses low reasoning for Cursor", () => {
+    const selection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("cursor-work"),
+      model: "auto",
+      options: [{ id: "reasoning", value: "xhigh" }],
+    };
+
+    expect(withLowSummaryEffort(selection, ProviderDriverKind.make("cursor"))).toEqual({
+      instanceId: ProviderInstanceId.make("cursor-work"),
+      model: "auto",
+      options: [{ id: "reasoning", value: "low" }],
+    });
   });
 });
 
@@ -91,9 +105,12 @@ effectIt.layer(SqlitePersistenceMemory)("message summary persistence", (it) => {
       `;
         yield* sql`
         INSERT INTO projection_thread_messages (
-          message_id, thread_id, role, text, is_streaming, created_at, updated_at
+          message_id, thread_id, role, text, generation_model_selection_json,
+          generation_cwd, is_streaming, created_at, updated_at
         ) VALUES (
-          'summary-message', 'summary-thread', 'assistant', '  Detailed response.  ', 0,
+          'summary-message', 'summary-thread', 'assistant', '  Detailed response.  ',
+          '{"instanceId":"codex-original","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"}]}',
+          '/workspace/original', 0,
           '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z'
         )
       `;
@@ -110,7 +127,7 @@ effectIt.layer(SqlitePersistenceMemory)("message summary persistence", (it) => {
             ),
         });
         const provider = {
-          instanceId: ProviderInstanceId.make("codex-work"),
+          instanceId: ProviderInstanceId.make("codex-original"),
           driverKind: ProviderDriverKind.make("codex"),
           enabled: true,
         } as ProviderInstance;
@@ -135,11 +152,11 @@ effectIt.layer(SqlitePersistenceMemory)("message summary persistence", (it) => {
         assert.deepEqual(second, first);
         assert.deepEqual(yield* Ref.get(calls), [
           {
-            cwd: "/workspace/worktree",
+            cwd: "/workspace/original",
             message: "Detailed response.",
             maxSummaryChars: 12_000,
             modelSelection: {
-              instanceId: ProviderInstanceId.make("codex-work"),
+              instanceId: ProviderInstanceId.make("codex-original"),
               model: "gpt-5.6-sol",
               options: [{ id: "reasoningEffort", value: "low" }],
             },

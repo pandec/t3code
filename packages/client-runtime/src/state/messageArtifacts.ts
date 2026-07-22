@@ -1,4 +1,10 @@
-import type { MessageSummaryRequest } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  MessageId,
+  MessageSpeechSynthesisResult,
+  MessageSummaryRequest,
+  MessageSummaryResult,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -18,6 +24,70 @@ import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./envir
 import { createEnvironmentCommand } from "./runtime.ts";
 
 const MESSAGE_SUMMARY_TIMEOUT_MS = 240_000;
+
+export interface MessageArtifactSessionSnapshot {
+  readonly summary: MessageSummaryResult | null;
+  readonly speech: MessageSpeechSynthesisResult | null;
+}
+
+const EMPTY_ARTIFACTS: MessageArtifactSessionSnapshot = { summary: null, speech: null };
+const sessionArtifacts = new Map<string, MessageArtifactSessionSnapshot & { sourceText: string }>();
+const sessionArtifactListeners = new Map<string, Set<() => void>>();
+const artifactKey = (environmentId: EnvironmentId, messageId: MessageId) =>
+  `${environmentId}\u0000${messageId}`;
+
+export function getMessageArtifactSessionSnapshot(
+  environmentId: EnvironmentId,
+  messageId: MessageId,
+  sourceText: string,
+): MessageArtifactSessionSnapshot {
+  const current = sessionArtifacts.get(artifactKey(environmentId, messageId));
+  return current?.sourceText === sourceText ? current : EMPTY_ARTIFACTS;
+}
+
+export function subscribeMessageArtifactSession(
+  environmentId: EnvironmentId,
+  messageId: MessageId,
+  listener: () => void,
+): () => void {
+  const key = artifactKey(environmentId, messageId);
+  const listeners = sessionArtifactListeners.get(key) ?? new Set();
+  listeners.add(listener);
+  sessionArtifactListeners.set(key, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) sessionArtifactListeners.delete(key);
+  };
+}
+
+function updateMessageArtifactSession(
+  environmentId: EnvironmentId,
+  messageId: MessageId,
+  sourceText: string,
+  update: Partial<MessageArtifactSessionSnapshot>,
+) {
+  const key = artifactKey(environmentId, messageId);
+  const current = sessionArtifacts.get(key);
+  sessionArtifacts.set(key, {
+    sourceText,
+    summary: current?.sourceText === sourceText ? current.summary : null,
+    speech: current?.sourceText === sourceText ? current.speech : null,
+    ...update,
+  });
+  for (const listener of sessionArtifactListeners.get(key) ?? []) listener();
+}
+
+export const rememberMessageSummary = (
+  environmentId: EnvironmentId,
+  sourceText: string,
+  summary: MessageSummaryResult,
+) => updateMessageArtifactSession(environmentId, summary.messageId, sourceText, { summary });
+
+export const rememberMessageSpeech = (
+  environmentId: EnvironmentId,
+  sourceText: string,
+  speech: MessageSpeechSynthesisResult,
+) => updateMessageArtifactSession(environmentId, speech.messageId, sourceText, { speech });
 
 export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summarizeMessage")(
   function* (request: MessageSummaryRequest) {
@@ -47,7 +117,7 @@ export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summar
       MESSAGE_SUMMARY_TIMEOUT_MS,
       withEnvironmentCredentials(
         prepared.value.httpAuthorization,
-        client.voice.summarizeMessage({ payload: request, headers }),
+        client.messageArtifacts.summarizeMessage({ payload: request, headers }),
       ),
     );
   },
