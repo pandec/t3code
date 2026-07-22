@@ -112,7 +112,11 @@ import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
+import {
+  listeningPlayback,
+  startListeningPlayback,
+  useListeningPlaybackSnapshot,
+} from "../../state/listeningPlayback";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -1174,24 +1178,17 @@ function AssistantSpeechPlayer(props: {
       pausePlayer();
       return;
     }
-    if (blocked || !listeningPlayback.activate(props.speech.speechId, pausePlayer)) return;
-    try {
-      if (status.duration > 0 && status.currentTime >= status.duration - 0.1) {
-        await player.seekTo(0);
-      }
-      if (!listeningPlayback.isActive(props.speech.speechId, pausePlayer)) return;
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-      if (
-        listeningPlayback.getSnapshot().blocked ||
-        !listeningPlayback.isActive(props.speech.speechId, pausePlayer)
-      ) {
-        return;
-      }
-      applyPlaybackRate(listeningPlayback.getSnapshot().speed);
-      player.play();
-    } catch {
-      listeningPlayback.release(props.speech.speechId, pausePlayer);
-    }
+    if (blocked) return;
+    await startListeningPlayback({
+      id: props.speech.speechId,
+      pause: pausePlayer,
+      restartFromBeginning: status.duration > 0 && status.currentTime >= status.duration - 0.1,
+      seekToBeginning: () => player.seekTo(0),
+      prepareAudioMode: () =>
+        setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
+      applyPlaybackRate,
+      play: () => player.play(),
+    });
   }, [
     applyPlaybackRate,
     blocked,
@@ -1329,6 +1326,7 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
         </Pressable>
         <ControlPillMenu
           accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
+          androidActionAccessibilityRole="radio"
           actions={speedActions}
           onPressAction={({ nativeEvent }) => listeningPlayback.setSpeed(Number(nativeEvent.event))}
         >
