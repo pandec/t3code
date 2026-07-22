@@ -40,7 +40,10 @@ describe("listening playback coordinator", () => {
     const pauseB = vi.fn();
 
     expect(coordinator.activate("a", pauseA)).toBe(true);
+    expect(coordinator.isActive("a", pauseA)).toBe(true);
     expect(coordinator.activate("b", pauseB)).toBe(true);
+    expect(coordinator.isActive("a", pauseA)).toBe(false);
+    expect(coordinator.isActive("b", pauseB)).toBe(true);
     expect(pauseA).toHaveBeenCalledOnce();
     expect(pauseB).not.toHaveBeenCalled();
   });
@@ -50,6 +53,7 @@ describe("listening playback coordinator", () => {
     const pause = vi.fn();
 
     coordinator.activate("a", pause);
+    coordinator.setBlocked(true);
     coordinator.setBlocked(true);
     expect(pause).toHaveBeenCalledOnce();
     expect(coordinator.activate("b", vi.fn())).toBe(false);
@@ -66,6 +70,7 @@ describe("listening playback coordinator", () => {
     coordinator.activate("a", stalePause);
     coordinator.activate("a", currentPause);
     coordinator.release("a", stalePause);
+    expect(coordinator.isActive("a", currentPause)).toBe(true);
     coordinator.pauseActive();
     expect(currentPause).toHaveBeenCalledOnce();
   });

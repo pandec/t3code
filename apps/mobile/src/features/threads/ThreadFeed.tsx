@@ -1148,18 +1148,21 @@ function AssistantSpeechPlayer(props: {
     }
   }, [player]);
 
-  const applyPlaybackRate = useCallback(() => {
-    try {
-      player.shouldCorrectPitch = true;
-      player.setPlaybackRate(speed, "high");
-    } catch {
-      // The native player may not be loaded yet; the play path applies it again.
-    }
-  }, [player, speed]);
+  const applyPlaybackRate = useCallback(
+    (nextSpeed: number) => {
+      try {
+        player.shouldCorrectPitch = true;
+        player.setPlaybackRate(nextSpeed, "high");
+      } catch {
+        // The native player may not be loaded yet; the play path applies it again.
+      }
+    },
+    [player],
+  );
 
   useEffect(() => {
-    if (audioUrl !== null) applyPlaybackRate();
-  }, [applyPlaybackRate, audioUrl, status.duration]);
+    if (audioUrl !== null) applyPlaybackRate(speed);
+  }, [applyPlaybackRate, audioUrl, speed, status.duration]);
 
   useEffect(
     () => () => listeningPlayback.release(props.speech.speechId, pausePlayer),
@@ -1172,13 +1175,23 @@ function AssistantSpeechPlayer(props: {
       return;
     }
     if (blocked || !listeningPlayback.activate(props.speech.speechId, pausePlayer)) return;
-    if (status.duration > 0 && status.currentTime >= status.duration - 0.1) {
-      await player.seekTo(0);
+    try {
+      if (status.duration > 0 && status.currentTime >= status.duration - 0.1) {
+        await player.seekTo(0);
+      }
+      if (!listeningPlayback.isActive(props.speech.speechId, pausePlayer)) return;
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      if (
+        listeningPlayback.getSnapshot().blocked ||
+        !listeningPlayback.isActive(props.speech.speechId, pausePlayer)
+      ) {
+        return;
+      }
+      applyPlaybackRate(listeningPlayback.getSnapshot().speed);
+      player.play();
+    } catch {
+      listeningPlayback.release(props.speech.speechId, pausePlayer);
     }
-    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-    if (listeningPlayback.getSnapshot().blocked) return;
-    applyPlaybackRate();
-    player.play();
   }, [
     applyPlaybackRate,
     blocked,
@@ -1315,6 +1328,7 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
           <Text className="text-lg leading-5 text-foreground">−</Text>
         </Pressable>
         <ControlPillMenu
+          accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
           actions={speedActions}
           onPressAction={({ nativeEvent }) => listeningPlayback.setSpeed(Number(nativeEvent.event))}
         >

@@ -90,6 +90,7 @@ export function ControlPillMenu(
   props: Omit<ComponentProps<typeof MenuView>, "children" | "themeVariant"> & {
     readonly children: ReactNode;
     readonly className?: string;
+    readonly accessibilityLabel?: string;
   },
 ) {
   const isDarkMode = useColorScheme() === "dark";
@@ -102,6 +103,7 @@ export function ControlPillMenu(
       const child = props.children as ReactElement<{ onLongPress?: () => void }>;
       return (
         <AndroidAnchoredMenu
+          accessibilityLabel={props.accessibilityLabel}
           actions={props.actions}
           className={props.className}
           title={props.title}
@@ -121,6 +123,7 @@ export function ControlPillMenu(
     }
     return (
       <AndroidAnchoredMenu
+        accessibilityLabel={props.accessibilityLabel}
         actions={props.actions}
         className={props.className}
         title={props.title}

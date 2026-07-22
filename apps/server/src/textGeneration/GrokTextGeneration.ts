@@ -82,6 +82,11 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
+      if (operation === "generateSpeechScript") {
+        yield* runtime.handleRequestPermission(() =>
+          Effect.succeed({ outcome: { outcome: "cancelled" as const } }),
+        );
+      }
 
       const promptResult = yield* Effect.gen(function* () {
         const started = yield* runtime.start();

@@ -37,6 +37,7 @@ export interface ListeningPlaybackCoordinator {
   readonly getSnapshot: () => ListeningPlaybackSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly activate: (id: string, pause: PausePlayback) => boolean;
+  readonly isActive: (id: string, pause: PausePlayback) => boolean;
   readonly release: (id: string, pause: PausePlayback) => void;
   readonly pauseActive: () => void;
   readonly setBlocked: (blocked: boolean) => void;
@@ -75,11 +76,13 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
       active = { id, pause };
       return true;
     },
+    isActive: (id, pause) => active?.id === id && active.pause === pause,
     release: (id, pause) => {
       if (active?.id === id && active.pause === pause) active = null;
     },
     pauseActive,
     setBlocked: (blocked) => {
+      if (blocked === snapshot.blocked) return;
       if (blocked) pauseActive();
       publish({ ...snapshot, blocked });
     },

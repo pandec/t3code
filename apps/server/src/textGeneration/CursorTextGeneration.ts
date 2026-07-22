@@ -83,6 +83,11 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
+      if (operation === "generateSpeechScript") {
+        yield* runtime.handleRequestPermission(() =>
+          Effect.succeed({ outcome: { outcome: "cancelled" as const } }),
+        );
+      }
 
       const promptResult = yield* Effect.gen(function* () {
         yield* runtime.start();

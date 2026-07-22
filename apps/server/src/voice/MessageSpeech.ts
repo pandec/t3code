@@ -32,7 +32,7 @@ const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
 const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
 const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
 const SPEECH_MIME_TYPE = "audio/mpeg" as const;
-const SPEECH_SCRIPT_RECIPE_VERSION = 1;
+const SPEECH_SCRIPT_RECIPE_VERSION = 2;
 
 interface MessageSpeechCacheRow {
   readonly messageId: string;
@@ -54,8 +54,6 @@ interface AssistantMessageRow {
   readonly role: string;
   readonly text: string;
   readonly isStreaming: number;
-  readonly workspaceRoot: string;
-  readonly worktreePath: string | null;
 }
 
 export function isMessageSpeechSourceEligible(input: {
@@ -247,15 +245,11 @@ export const layer = Layer.effect(
           messages.thread_id AS "threadId",
           messages.role,
           messages.text,
-          messages.is_streaming AS "isStreaming",
-          projects.workspace_root AS "workspaceRoot",
-          threads.worktree_path AS "worktreePath"
+          messages.is_streaming AS "isStreaming"
         FROM projection_thread_messages AS messages
         INNER JOIN projection_threads AS threads
           ON threads.thread_id = messages.thread_id
           AND threads.deleted_at IS NULL
-        INNER JOIN projection_projects AS projects
-          ON projects.project_id = threads.project_id
         WHERE messages.message_id = ${request.messageId}
         LIMIT 1
       `.pipe(Effect.mapError(storageError));
@@ -317,15 +311,19 @@ export const layer = Layer.effect(
         }
       }
 
-      const cwd = message.worktreePath ?? message.workspaceRoot;
-      const generated = yield* textGeneration
-        .generateSpeechScript({
-          cwd,
-          message: sourceText,
-          maxScriptChars: ttsCharacterLimit,
-          modelSelection: settings.textGenerationModelSelection,
-        })
-        .pipe(Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })));
+      const generated = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const isolatedCwd = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3code-message-speech-",
+          });
+          return yield* textGeneration.generateSpeechScript({
+            cwd: isolatedCwd,
+            message: sourceText,
+            maxScriptChars: ttsCharacterLimit,
+            modelSelection: settings.textGenerationModelSelection,
+          });
+        }),
+      ).pipe(Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })));
       const transcript = generated.script.trim();
       if (transcript.length === 0 || transcript.length > ttsCharacterLimit) {
         return yield* new MessageSpeechError({ reason: "script_failed" });
