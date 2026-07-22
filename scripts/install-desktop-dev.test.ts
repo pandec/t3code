@@ -6,11 +6,35 @@ import {
   escapeProcessNameForExactMatch,
   parseMacDmgMountPoint,
   runDesktopInstallLifecycle,
+  terminateProcessWithEscalation,
 } from "./install-desktop-dev.ts";
 
 it("escapes macOS app names before exact pgrep and pkill matching", () => {
   assert.equal(escapeProcessNameForExactMatch("T3 Code (Dev)"), "T3 Code \\(Dev\\)");
 });
+
+it.effect("escalates process termination from TERM to KILL", () =>
+  Effect.gen(function* () {
+    const events: Array<string> = [];
+    let waitCount = 0;
+
+    yield* terminateProcessWithEscalation(
+      "T3 Code (Dev)",
+      (signal) =>
+        Effect.sync(() => {
+          events.push(signal);
+        }),
+      () =>
+        Effect.sync(() => {
+          events.push("wait");
+          waitCount += 1;
+          return waitCount === 2;
+        }),
+    );
+
+    assert.deepStrictEqual(events, ["TERM", "wait", "KILL", "wait"]);
+  }),
+);
 
 function lifecycle(events: Array<string>, running: boolean, failAt?: "build" | "install") {
   return {

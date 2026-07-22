@@ -117,6 +117,36 @@ const waitForProcessToStop = Effect.fn("installDesktopDev.waitForProcessToStop")
   return !(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]));
 });
 
+export const terminateProcessWithEscalation = Effect.fn(
+  "installDesktopDev.terminateProcessWithEscalation",
+)(function* (
+  processName: string,
+  terminate: (signal: "TERM" | "KILL") => Effect.Effect<void, DesktopInstallError>,
+  waitForStop: () => Effect.Effect<boolean, DesktopInstallError>,
+) {
+  yield* terminate("TERM");
+  if (yield* waitForStop()) return;
+  yield* terminate("KILL");
+  if (!(yield* waitForStop())) {
+    return yield* new DesktopInstallError({
+      message: `${processName} did not stop`,
+      cause: undefined,
+    });
+  }
+});
+
+const terminateProcess = Effect.fn("installDesktopDev.terminateProcess")(function* (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  processName: string,
+  processPattern: string,
+) {
+  yield* terminateProcessWithEscalation(
+    processName,
+    (signal) => runCommand(spawner, "pkill", [`-${signal}`, "-x", processPattern]),
+    () => waitForProcessToStop(spawner, processPattern),
+  );
+});
+
 const findLatestArtifact = Effect.fn("installDesktopDev.findLatestArtifact")(
   function* (
     fs: FileSystem.FileSystem,
@@ -169,13 +199,7 @@ const stopMacApp = Effect.fn("installDesktopDev.stopMacApp")(function* (
     `tell application id "${MAC_APP_ID}" to quit`,
   ]);
   if (yield* waitForProcessToStop(spawner, MAC_APP_PROCESS_PATTERN)) return;
-  yield* runCommand(spawner, "pkill", ["-x", MAC_APP_PROCESS_PATTERN]);
-  if (!(yield* waitForProcessToStop(spawner, MAC_APP_PROCESS_PATTERN))) {
-    return yield* new DesktopInstallError({
-      message: `${MAC_APP_PROCESS} did not stop`,
-      cause: undefined,
-    });
-  }
+  yield* terminateProcess(spawner, MAC_APP_PROCESS, MAC_APP_PROCESS_PATTERN);
 });
 
 const installMacArtifact = Effect.fn("installDesktopDev.installMacArtifact")(
@@ -259,16 +283,7 @@ const stopLinuxApp = Effect.fn("installDesktopDev.stopLinuxApp")(function* (
     yield* runCommand(spawner, "systemctl", ["--user", "stop", LINUX_SERVICE]);
   }
   if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]))) return;
-
-  yield* runCommand(spawner, "pkill", ["-TERM", "-x", LINUX_APP_PROCESS]);
-  if (yield* waitForProcessToStop(spawner, LINUX_APP_PROCESS)) return;
-  yield* runCommand(spawner, "pkill", ["-KILL", "-x", LINUX_APP_PROCESS]);
-  if (!(yield* waitForProcessToStop(spawner, LINUX_APP_PROCESS))) {
-    return yield* new DesktopInstallError({
-      message: `${LINUX_APP_PROCESS} did not stop`,
-      cause: undefined,
-    });
-  }
+  yield* terminateProcess(spawner, LINUX_APP_PROCESS, LINUX_APP_PROCESS);
 });
 
 function linuxDesktopEntry(appPath: string): string {
