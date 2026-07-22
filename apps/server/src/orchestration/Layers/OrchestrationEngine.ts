@@ -216,18 +216,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           ),
         );
         const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
+        const enrichedEventBases = yield* Effect.forEach(eventBases, (event) =>
+          enrichProjectEventForPersistence(event, commandReadModel),
+        );
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
               const committedEvents: OrchestrationEvent[] = [];
               let nextCommandReadModel = commandReadModel;
 
-              for (const nextEvent of eventBases) {
-                const enrichedEvent = yield* enrichProjectEventForPersistence(
-                  nextEvent,
-                  nextCommandReadModel,
-                );
-                const savedEvent = yield* eventStore.append(enrichedEvent);
+              for (const nextEvent of enrichedEventBases) {
+                const savedEvent = yield* eventStore.append(nextEvent);
                 nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
                 yield* projectionPipeline.projectEvent(savedEvent);
                 committedEvents.push(savedEvent);

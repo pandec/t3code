@@ -306,6 +306,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           UPDATE projection_projects
           SET repository_identity_json = ${JSON.stringify(repositoryIdentity)}
           WHERE project_id = ${row.projectId}
+            AND workspace_root = ${row.workspaceRoot}
             AND repository_identity_json IS NULL
         `;
       },

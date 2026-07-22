@@ -620,6 +620,9 @@ const makeWsRpcLayer = (
               }
 
               const repositoryIdentity = yield* repositoryIdentityResolver.resolve(workspaceRoot);
+              if (repositoryIdentity === null && event.payload.workspaceRoot === undefined) {
+                return event;
+              }
               return {
                 ...event,
                 payload: {

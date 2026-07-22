@@ -6385,6 +6385,67 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("preserves omitted repository identity on replay when live resolution fails", () =>
+    Effect.gen(function* () {
+      const updatedAt = "2026-04-05T00:00:00.000Z";
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            readEvents: () =>
+              Stream.make({
+                sequence: 1,
+                eventId: EventId.make("event-meta-without-identity"),
+                aggregateKind: "project",
+                aggregateId: defaultProjectId,
+                occurredAt: updatedAt,
+                commandId: null,
+                causationEventId: null,
+                correlationId: null,
+                metadata: {},
+                type: "project.meta-updated",
+                payload: {
+                  projectId: defaultProjectId,
+                  title: "Updated title",
+                  updatedAt,
+                },
+              } satisfies Extract<OrchestrationEvent, { type: "project.meta-updated" }>),
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  id: defaultProjectId,
+                  title: "Default Project",
+                  workspaceRoot: "/tmp/default-project",
+                  defaultModelSelection,
+                  scripts: [],
+                  createdAt: updatedAt,
+                  updatedAt,
+                }),
+              ),
+          },
+          repositoryIdentityResolver: {
+            resolve: () => Effect.succeed(null),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const replayResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.replayEvents]({ fromSequenceExclusive: 0 }),
+        ),
+      );
+
+      const replayedEvent = replayResult[0];
+      assert.equal(replayedEvent?.type, "project.meta-updated");
+      assert.isFalse(
+        replayedEvent?.type === "project.meta-updated" &&
+          "repositoryIdentity" in replayedEvent.payload,
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("stops the provider session and closes thread terminals after archive", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive");
