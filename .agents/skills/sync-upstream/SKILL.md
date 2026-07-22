@@ -83,8 +83,13 @@ Complete the applicable local verification before pushing `dev`.
    - inspect changes to repository tooling for newly introduced checks that protect code affected by the sync
 6. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
 7. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior. Do not push with a failing applicable gate.
-8. Only after the applicable local gates pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
-9. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
+8. Audit the fork-maintained CLI against the merged behavior. When upstream changes or merge resolutions touch project or thread lifecycle, orchestration commands or contracts, defaults, flags, JSON shapes, error semantics, or related documentation:
+   - compare `apps/server/src/cli/`, its focused tests, and `docs/user/cli-automation.md` with the merged contracts and behavior
+   - update repository-owned CLI implementation, tests, and documentation when alignment requires it, then rerun the affected checks
+   - verify the global `t3-cli` skill at `~/.agents/skills/t3-cli` still describes the implemented command contract; report the exact dotfiles update if it drifted, and edit that separate repository only with explicit authorization
+   - completion criterion: every CLI-affecting upstream or merge change is either reflected in the implementation, tests, and documentation or reported as a concrete unresolved decision
+9. Only after the applicable local gates and CLI audit pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
+10. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
 
 ## Report
 
@@ -93,5 +98,7 @@ Report old and new upstream tips, the `main` update and push, the `dev` merge an
 After a completed sync, summarize what the fork gained from upstream: group the incorporated upstream commits into user-visible features, fixes, and notable internal changes, highlighting anything that affects fork-customized areas. Write it for the fork owner deciding what to try or watch out for, not as a raw commit list.
 
 State whether any conflict resolution could impact functionality. When every resolution was purely mechanical, one sentence saying so is enough — skip per-file detail. Only elaborate on resolutions that touched behavior and could plausibly change how something works.
+
+Report the CLI alignment audit result, including any repository changes made or any required `t3-cli` dotfiles update.
 
 End with a rollout note: based on the protocol/contract, persistence, and update-feed changes in this sync, state whether the installed apps (desktop flavors, iOS) can be updated gradually one by one while older clients keep working against the new server, or whether everything should be closed and updated together, and call out anything that needs a reinstall or data migration.
