@@ -1,93 +1,41 @@
-# T3 Code
+# T3 Code — pandec fork
 
-T3 Code is a minimal web GUI for coding agents (currently Codex, Claude, Cursor, and OpenCode, more coming soon).
+This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Everything about the base project — what T3 Code is, installation, documentation, and contributing — is covered by the [upstream README](https://github.com/pingdotgg/t3code#readme). This file only documents what the fork adds on top.
 
-## Installation
+The fork lives on the `dev` branch; `main` is kept as an untouched mirror of upstream and is merged into `dev` regularly.
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, and OpenCode.
-> Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `cursor-agent login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
+## What the fork adds
 
-### Run without installing
+### Conversations & threads
 
-```bash
-npx t3@latest
-```
+- **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread; forked threads are titled with a 🔱 prefix.
+- **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads, including strict resume/continuation and CLI-assigned session names in the import picker.
+- **Archived-thread search & grouping** — archived chats are searchable and grouped by project, with repository identity persisted so grouping survives project changes.
+- **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
+- **Thread naming & sidebar polish** — split thread naming with refined fork titles, and the thread's provider icon shown on sidebar hover.
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+### Voice
 
-### Desktop app
+- **Voice dictation** — ElevenLabs-powered voice transcription in the composer, including mobile.
+- **Message listening** — optional spoken versions of assistant messages with playback controls; per-turn summaries and speech artifacts are persisted, with mobile playback support.
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+### Agents & skills
 
-#### Windows (`winget`)
+- **Mobile agent steering** — steer an active agent turn directly from the mobile app.
+- **Project-aware Codex skills** — Codex skill discovery respects the active project.
+- **Claude skill picker** — the `$` composer skill picker discovers workspace skills for Claude.
 
-```bash
-winget install T3Tools.T3Code
-```
+### CLI & automation
 
-#### macOS (Homebrew)
+- **`t3` CLI automation** — project and thread automation commands: manage projects by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting.
 
-```bash
-brew install --cask t3-code
-```
+### Reliability
 
-#### Arch Linux (AUR)
+- Bounded catch-up for stale clients reconnecting to the server.
+- The session reaper spares provider sessions that still have pending deliverables.
+- Escalating desktop process termination and an interactive sidebar resize rail.
 
-```bash
-yay -S t3code-bin
-```
+### Fork infrastructure
 
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are not accepting contributions yet.
-
-There's no public docs site yet, checkout the miscellaneous markdown files in [docs](./docs).
-
-## Documentation
-
-- [Getting started](./docs/getting-started/quick-start.md)
-- [Remote access](./docs/user/remote-access.md)
-- [Keeping T3 Code in sync](./docs/user/server-updates.md)
-- [Architecture overview](./docs/architecture/overview.md)
-- [Provider guides](./docs/providers/codex.md)
-- [CLI automation](./docs/user/cli-automation.md)
-- [Operations](./docs/operations/ci.md)
-- [Reference](./docs/reference/encyclopedia.md)
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+- **Dev app flavor** — a separate Dev flavor of the desktop app with isolated state directories (shared provider homes), a Linux Dev AppImage build, and personal-team iOS builds.
+- **Upstream sync workflow** — a scripted `sync-upstream` flow that fast-forwards the `main` mirror from upstream, merges it into `dev`, and runs the required checks before pushing.
