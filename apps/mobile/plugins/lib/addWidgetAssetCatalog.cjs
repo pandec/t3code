@@ -47,6 +47,46 @@ function findByName(map, name) {
 }
 
 /**
+ * Keep the generated widget extension aligned with its containing app.
+ *
+ * expo-widgets currently creates the target with iOS 16.4 and marketing
+ * version 1.0 even when the app uses newer/different values. Besides producing
+ * an extension-version validation warning, that can link iOS 18 objects into a
+ * target advertised as iOS 16.4.
+ *
+ * @param {import('xcode').XcodeProject} proj
+ * @param {{
+ *   targetName: string,
+ *   deploymentTarget: string,
+ *   marketingVersion: string,
+ *   currentProjectVersion: string
+ * }} opts
+ */
+function configureWidgetTarget(proj, opts) {
+  const objects = proj.hash.project.objects;
+  const target = findByName(objects.PBXNativeTarget, opts.targetName);
+  if (!target) {
+    throw new Error(
+      `configureWidgetTarget: target "${opts.targetName}" not found — ` +
+        "withWidgetLogoAsset must run after expo-widgets creates it.",
+    );
+  }
+
+  const configurationList = objects.XCConfigurationList[target.value.buildConfigurationList];
+  if (!configurationList) {
+    throw new Error(`configureWidgetTarget: configuration list missing for "${opts.targetName}".`);
+  }
+
+  for (const reference of configurationList.buildConfigurations || []) {
+    const configuration = objects.XCBuildConfiguration[reference.value];
+    if (!configuration?.buildSettings) continue;
+    configuration.buildSettings.IPHONEOS_DEPLOYMENT_TARGET = opts.deploymentTarget;
+    configuration.buildSettings.MARKETING_VERSION = opts.marketingVersion;
+    configuration.buildSettings.CURRENT_PROJECT_VERSION = opts.currentProjectVersion;
+  }
+}
+
+/**
  * @param {import('xcode').XcodeProject} proj
  * @param {{ targetName: string }} opts
  */
@@ -78,4 +118,4 @@ function addWidgetAssetCatalog(proj, opts) {
   return true;
 }
 
-module.exports = { addWidgetAssetCatalog };
+module.exports = { addWidgetAssetCatalog, configureWidgetTarget };

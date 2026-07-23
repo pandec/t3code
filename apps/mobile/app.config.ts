@@ -17,6 +17,7 @@ const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const IOS_DEPLOYMENT_TARGET = "18.0";
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
@@ -328,7 +329,7 @@ const config: ExpoConfig = {
       "expo-build-properties",
       {
         ios: {
-          deploymentTarget: "18.0",
+          deploymentTarget: IOS_DEPLOYMENT_TARGET,
           // The precompiled Expo module frameworks link against a dynamic
           // React.framework that is not embedded by local Personal Team builds.
           // Build those modules from source so the device binary is self-contained.
@@ -347,7 +348,15 @@ const config: ExpoConfig = {
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which
     // would delete the asset catalog) and its xcodeproj mod creates the widget
     // target (which must exist before the compile phase can be attached).
-    ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
+    ...(!isIosPersonalTeamBuild
+      ? [
+          [
+            "./plugins/withWidgetLogoAsset.cjs",
+            { deploymentTarget: IOS_DEPLOYMENT_TARGET },
+          ] satisfies NonNullable<ExpoConfig["plugins"]>[number],
+          widgetsPlugin,
+        ]
+      : []),
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
