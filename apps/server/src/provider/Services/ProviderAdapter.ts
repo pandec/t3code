@@ -76,6 +76,8 @@ export interface ProviderImportSessionMessage {
 export interface ProviderImportSessionHistory {
   readonly nativeSessionId: string;
   readonly nativeCwd: string;
+  /** Current user-assigned session name at read time, or null when unnamed. */
+  readonly name: string | null;
   readonly messages: ReadonlyArray<ProviderImportSessionMessage>;
   readonly model: string | null;
   /** Resume cursor to persist so the imported thread continues the native session. */

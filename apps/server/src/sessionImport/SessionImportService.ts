@@ -67,12 +67,20 @@ function importMessageId(threadId: ThreadId, index: number) {
   return MessageId.make(`import:${threadId}:${String(index).padStart(5, "0")}`);
 }
 
-function titleFromMessages(messages: ReadonlyArray<{ role: string; text: string }>): string {
-  const firstUser = messages.find((message) => message.role === "user")?.text;
-  const seed = (firstUser ?? messages[0]?.text ?? "Imported session").trim();
-  const singleLine = seed.split("\n")[0]?.trim() ?? "Imported session";
+function normalizedTitle(seed: string): string | null {
+  const singleLine = seed.trim().split("\n")[0]?.trim() ?? "";
   const truncated = singleLine.slice(0, TITLE_MAX_CHARS).trim();
-  return truncated.length > 0 ? truncated : "Imported session";
+  return truncated.length > 0 ? truncated : null;
+}
+
+function titleForImport(
+  name: string | null,
+  messages: ReadonlyArray<{ role: string; text: string }>,
+): string {
+  const nativeTitle = name?.trim();
+  if (nativeTitle) return nativeTitle;
+  const firstUser = messages.find((message) => message.role === "user")?.text;
+  return normalizedTitle(firstUser ?? messages[0]?.text ?? "") ?? "Imported session";
 }
 
 /** Native session ids already attached to a t3 thread via a resume cursor. */
@@ -347,7 +355,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         commandId: CommandId.make(`import:${threadId}`),
         threadId,
         projectId: input.projectId,
-        title: titleFromMessages(history.messages),
+        title: titleForImport(history.name, history.messages),
         modelSelection,
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

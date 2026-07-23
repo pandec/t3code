@@ -24,6 +24,7 @@ interface HarnessOptions {
   readonly importedModel?: string | null;
   readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
   readonly replaceInstanceDuringRead?: boolean;
+  readonly sessionName?: string | null;
   readonly yieldBeforeRead?: boolean;
 }
 
@@ -56,7 +57,7 @@ const makeHarness = (options?: HarnessOptions) => {
         Effect.succeed([
           {
             nativeSessionId: NATIVE_SESSION_ID,
-            name: null,
+            name: options?.sessionName ?? null,
             preview: "Remember the codeword PINEAPPLE-42.",
             messageCount: 2,
             updatedAt: "2026-07-16T10:00:01.000Z",
@@ -73,6 +74,7 @@ const makeHarness = (options?: HarnessOptions) => {
           return {
             nativeSessionId: NATIVE_SESSION_ID,
             nativeCwd: "/private/tmp",
+            name: options?.sessionName ?? null,
             messages: [
               {
                 role: "user" as const,
@@ -226,6 +228,42 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(failing.state.bindings.size).toBe(0);
       const candidates = yield* failingService.listCandidates({ projectId });
       expect(candidates).toHaveLength(1);
+    }),
+  );
+
+  it.effect("uses the current provider-assigned session name as the imported title", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ sessionName: "Payment retry spike" });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      expect(state.dispatched[0]).toMatchObject({ title: "Payment retry spike" });
+    }),
+  );
+
+  it.effect("falls back to the first message when the provider name is blank", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ sessionName: "   " });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      expect(state.dispatched[0]).toMatchObject({
+        title: "Remember the codeword PINEAPPLE-42.",
+      });
+    }),
+  );
+
+  it.effect("preserves a long Unicode provider-assigned session name exactly", () =>
+    Effect.gen(function* () {
+      const sessionName = `${"x".repeat(100)}😀\nsecond line`;
+      const { state, layer } = makeHarness({ sessionName });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      expect(state.dispatched[0]).toMatchObject({ title: sessionName });
     }),
   );
 

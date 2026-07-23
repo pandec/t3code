@@ -4200,6 +4200,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return {
       nativeSessionId: input.nativeSessionId,
       nativeCwd: canonicalCwd,
+      name: transcript.name,
       messages: transcript.messages,
       model: transcript.model,
       resumeCursor: {
