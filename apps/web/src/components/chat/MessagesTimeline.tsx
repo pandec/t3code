@@ -216,6 +216,7 @@ interface MessagesTimelineProps {
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onManualNavigation: () => void;
+  isDetached: boolean;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
 }
@@ -253,6 +254,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetEndAdjustment,
   onIsAtEndChange,
   onManualNavigation,
+  isDetached,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
 }: MessagesTimelineProps) {
@@ -522,7 +524,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+        <div
+          ref={setTimelineViewportElement}
+          className="relative h-full min-h-0"
+          onWheelCapture={onManualNavigation}
+          onTouchMoveCapture={onManualNavigation}
+          onPointerDownCapture={onManualNavigation}
+          onKeyDownCapture={(event) => {
+            if (
+              event.key === "ArrowUp" ||
+              event.key === "ArrowDown" ||
+              event.key === "PageUp" ||
+              event.key === "PageDown" ||
+              event.key === "Home" ||
+              event.key === "End" ||
+              event.key === " "
+            ) {
+              onManualNavigation();
+            }
+          }}
+        >
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
@@ -534,7 +555,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             maintainScrollAtEnd={
-              anchoredEndSpace
+              anchoredEndSpace || isDetached
                 ? false
                 : {
                     animated: false,
@@ -547,7 +568,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
             maintainVisibleContentPosition={{
               data: true,
-              size: false,
+              size: isDetached,
             }}
             onScroll={handleScroll}
             className={cn(
