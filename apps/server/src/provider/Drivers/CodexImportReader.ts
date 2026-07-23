@@ -56,6 +56,7 @@ export interface CodexImportedMessage {
 export interface CodexImportedThread {
   readonly threadId: string;
   readonly cwd: string;
+  readonly name: string | null;
   readonly messages: ReadonlyArray<CodexImportedMessage>;
 }
 
@@ -217,6 +218,7 @@ export const readCodexImportableThread = Effect.fn("readCodexImportableThread")(
       return {
         threadId: thread.id,
         cwd: thread.cwd,
+        name: thread.name ?? null,
         messages,
       } satisfies CodexImportedThread;
     }),

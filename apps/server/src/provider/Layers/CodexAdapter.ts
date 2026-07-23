@@ -1871,6 +1871,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     return {
       nativeSessionId: imported.threadId,
       nativeCwd,
+      name: imported.name,
       messages: imported.messages,
       model: null,
       resumeCursor: { threadId: imported.threadId, strictResume: true },
