@@ -306,4 +306,47 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
       expect(forkError.message).toContain("incomplete conversation fork");
     }),
   );
+
+  it.effect("rejects a turn while provider fork setup is still pending", () =>
+    Effect.gen(function* () {
+      let readModel = yield* seedReadModel;
+      const forkResult = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-pending-fork"),
+          sourceThreadId,
+          threadId: ThreadId.make("destination-pending"),
+          createdAt: now,
+        },
+      });
+      const forkEvents = Array.isArray(forkResult) ? forkResult : [forkResult];
+      for (const [index, event] of forkEvents.entries()) {
+        readModel = yield* projectEvent(readModel, {
+          ...event,
+          sequence: 4 + index,
+        });
+      }
+
+      const turnError = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("command-pending-fork-turn"),
+          threadId: ThreadId.make("destination-pending"),
+          message: {
+            messageId: MessageId.make("message-pending-fork-turn"),
+            role: "user",
+            text: "continue",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      }).pipe(Effect.flip);
+
+      expect(turnError.message).toContain("provider fork is not usable");
+    }),
+  );
 });
