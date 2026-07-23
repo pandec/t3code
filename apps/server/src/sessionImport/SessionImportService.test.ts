@@ -22,6 +22,7 @@ const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 interface HarnessOptions {
   readonly dispatchFails?: boolean;
   readonly importedModel?: string | null;
+  readonly listedSessionName?: string | null;
   readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
   readonly replaceInstanceDuringRead?: boolean;
   readonly sessionName?: string | null;
@@ -57,7 +58,7 @@ const makeHarness = (options?: HarnessOptions) => {
         Effect.succeed([
           {
             nativeSessionId: NATIVE_SESSION_ID,
-            name: options?.sessionName ?? null,
+            name: options?.listedSessionName ?? options?.sessionName ?? null,
             preview: "Remember the codeword PINEAPPLE-42.",
             messageCount: 2,
             updatedAt: "2026-07-16T10:00:01.000Z",
@@ -233,7 +234,10 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
 
   it.effect("uses the current provider-assigned session name as the imported title", () =>
     Effect.gen(function* () {
-      const { state, layer } = makeHarness({ sessionName: "Payment retry spike" });
+      const { state, layer } = makeHarness({
+        listedSessionName: "Old payment title",
+        sessionName: "Payment retry spike",
+      });
       const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
 
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
