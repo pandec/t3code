@@ -69,6 +69,21 @@ type SidebarResolvedResizableOptions = {
   storageKey: string | null;
 };
 
+type SidebarResizeState = {
+  moved: boolean;
+  pointerId: number;
+  pendingWidth: number;
+  rail: HTMLButtonElement;
+  rafId: number | null;
+  sidebarRoot: HTMLElement;
+  side: "left" | "right";
+  startWidth: number;
+  startX: number;
+  transitionTargets: HTMLElement[];
+  width: number;
+  wrapper: HTMLElement;
+};
+
 type SidebarInstanceContextProps = {
   resizable: SidebarResolvedResizableOptions | null;
   side: "left" | "right";
@@ -347,6 +362,29 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
   return Math.max(options.minWidth, Math.min(width, options.maxWidth));
 }
 
+function applyPendingSidebarResize(
+  resizeState: SidebarResizeState,
+  options: SidebarResolvedResizableOptions,
+): boolean {
+  const nextWidth = resizeState.pendingWidth;
+  const accepted =
+    options.shouldAcceptWidth?.({
+      currentWidth: resizeState.width,
+      nextWidth,
+      rail: resizeState.rail,
+      side: resizeState.side,
+      sidebarRoot: resizeState.sidebarRoot,
+      wrapper: resizeState.wrapper,
+    }) ?? true;
+  if (!accepted) {
+    return false;
+  }
+
+  resizeState.wrapper.style.setProperty("--sidebar-width", `${nextWidth}px`);
+  resizeState.width = nextWidth;
+  return true;
+}
+
 function SidebarRail({
   className,
   onClick,
@@ -360,20 +398,7 @@ function SidebarRail({
   const sidebarInstance = React.use(SidebarInstanceContext);
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
-  const resizeStateRef = React.useRef<{
-    moved: boolean;
-    pointerId: number;
-    pendingWidth: number;
-    rail: HTMLButtonElement;
-    rafId: number | null;
-    sidebarRoot: HTMLElement;
-    side: "left" | "right";
-    startWidth: number;
-    startX: number;
-    transitionTargets: HTMLElement[];
-    width: number;
-    wrapper: HTMLElement;
-  } | null>(null);
+  const resizeStateRef = React.useRef<SidebarResizeState | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
@@ -387,6 +412,10 @@ function SidebarRail({
       }
       if (resizeState.rafId !== null) {
         window.cancelAnimationFrame(resizeState.rafId);
+        resizeState.rafId = null;
+      }
+      if (resolvedResizable) {
+        applyPendingSidebarResize(resizeState, resolvedResizable);
       }
       resizeState.transitionTargets.forEach((element) => {
         element.style.removeProperty("transition-duration");
@@ -486,22 +515,7 @@ function SidebarRail({
         if (!activeResizeState || !resolvedResizable) return;
 
         activeResizeState.rafId = null;
-        const nextWidth = activeResizeState.pendingWidth;
-        const accepted =
-          resolvedResizable.shouldAcceptWidth?.({
-            currentWidth: activeResizeState.width,
-            nextWidth,
-            rail: activeResizeState.rail,
-            side: activeResizeState.side,
-            sidebarRoot: activeResizeState.sidebarRoot,
-            wrapper: activeResizeState.wrapper,
-          }) ?? true;
-        if (!accepted) {
-          return;
-        }
-
-        activeResizeState.wrapper.style.setProperty("--sidebar-width", `${nextWidth}px`);
-        activeResizeState.width = nextWidth;
+        applyPendingSidebarResize(activeResizeState, resolvedResizable);
       });
     },
     [onPointerMove, resolvedResizable],
@@ -1001,6 +1015,7 @@ function SidebarMenuSubButton({
 
 export {
   Sidebar,
+  applyPendingSidebarResize,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,

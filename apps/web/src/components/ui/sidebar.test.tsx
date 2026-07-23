@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  applyPendingSidebarResize,
   Sidebar,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -21,6 +22,77 @@ function renderSidebarButton(className?: string) {
 }
 
 describe("sidebar interactive cursors", () => {
+  it("commits the latest pending width before a queued animation frame can run", () => {
+    const appliedWidths: string[] = [];
+    const wrapper = {
+      style: {
+        setProperty: (property: string, value: string) => {
+          if (property === "--sidebar-width") {
+            appliedWidths.push(value);
+          }
+        },
+      },
+    } as unknown as HTMLElement;
+    const resizeState = {
+      moved: true,
+      pointerId: 1,
+      pendingWidth: 320,
+      rail: {} as HTMLButtonElement,
+      rafId: 1,
+      sidebarRoot: {} as HTMLElement,
+      side: "left" as const,
+      startWidth: 208,
+      startX: 208,
+      transitionTargets: [],
+      width: 208,
+      wrapper,
+    };
+
+    expect(
+      applyPendingSidebarResize(resizeState, {
+        maxWidth: 600,
+        minWidth: 208,
+        storageKey: null,
+      }),
+    ).toBe(true);
+    expect(appliedWidths).toEqual(["320px"]);
+    expect(resizeState.width).toBe(320);
+  });
+
+  it("keeps the current width when the pending resize is rejected", () => {
+    const wrapper = {
+      style: {
+        setProperty: () => {
+          throw new Error("Rejected widths must not be applied");
+        },
+      },
+    } as unknown as HTMLElement;
+    const resizeState = {
+      moved: true,
+      pointerId: 1,
+      pendingWidth: 720,
+      rail: {} as HTMLButtonElement,
+      rafId: 1,
+      sidebarRoot: {} as HTMLElement,
+      side: "left" as const,
+      startWidth: 208,
+      startX: 208,
+      transitionTargets: [],
+      width: 320,
+      wrapper,
+    };
+
+    expect(
+      applyPendingSidebarResize(resizeState, {
+        maxWidth: 720,
+        minWidth: 208,
+        shouldAcceptWidth: () => false,
+        storageKey: null,
+      }),
+    ).toBe(false);
+    expect(resizeState.width).toBe(320);
+  });
+
   it("uses mobile sheet visibility for the shared responsive state", () => {
     expect(resolveSidebarState({ isMobile: true, open: true, openMobile: false })).toBe(
       "collapsed",
