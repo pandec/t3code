@@ -2,7 +2,10 @@
 
 This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Everything about the base project — what T3 Code is, installation, documentation, and contributing — is covered by the [upstream README](https://github.com/pingdotgg/t3code#readme). This file only documents what the fork adds on top.
 
-The fork lives on the `dev` branch; `main` is kept as an untouched mirror of upstream and is merged into `dev` regularly.
+## Branches
+
+- **`dev`** — the fork. All fork work lands here; this is the branch you want.
+- **`main`** — a clean mirror of `pingdotgg/t3code`, deliberately kept free of fork commits so it can be fast-forwarded on every upstream sync. This README is the only file that differs from upstream. Synced `main` is merged into `dev` regularly.
 
 ## What the fork adds
 
