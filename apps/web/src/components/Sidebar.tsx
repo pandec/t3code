@@ -209,6 +209,7 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
+import { archivedProjectFilterKey } from "../archivedProjectFilter";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1617,6 +1618,29 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject],
   );
 
+  const openArchivedThreads = useCallback(async () => {
+    const result = await settlePromise(() =>
+      router.navigate({
+        to: "/settings/archived",
+        search: { project: archivedProjectFilterKey(project) },
+      }),
+    );
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not open archived threads",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+      return;
+    }
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  }, [isMobile, project, router, setOpenMobile]);
+
   const handleProjectButtonContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -1702,8 +1726,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("copy-path", "Copy Path"),
             buildTargetedItem("import-session", "Import CLI Session..."),
             {
-              id: "unarchive",
-              label: "Unarchive...",
+              id: "archived-threads",
+              label: "Archived Threads...",
             },
             buildTargetedItem("delete", "Remove", {
               destructive: true,
@@ -1719,14 +1743,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
 
-        if (clicked === "unarchive") {
-          if (isMobile) {
-            setOpenMobile(false);
-          }
-          await router.navigate({
-            to: "/settings/archived",
-            search: { project: project.projectKey },
-          });
+        if (clicked === "archived-threads") {
+          await openArchivedThreads();
           return;
         }
 
@@ -1736,14 +1754,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [
       copyPathToClipboard,
       handleRemoveProject,
-      isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
+      openArchivedThreads,
       project.groupedProjectCount,
       project.memberProjects,
-      project.projectKey,
-      router,
-      setOpenMobile,
       suppressProjectClickForContextMenuRef,
     ],
   );
