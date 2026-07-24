@@ -103,20 +103,11 @@ export function shouldDeferArchivedEmptyState(input: {
   return !input.hasMatchingGroups && (input.isLoading || input.hasError);
 }
 
-export function shouldClearUnknownArchivedProjectFilter(input: {
-  readonly hasArchiveError: boolean;
+export function shouldShowUnresolvedArchivedProjectFilterOption(input: {
   readonly hasProjectFilter: boolean;
   readonly hasResolvedProject: boolean;
-  readonly isArchiveLoading: boolean;
-  readonly sourcesReady: boolean;
 }): boolean {
-  return (
-    input.hasProjectFilter &&
-    !input.hasResolvedProject &&
-    input.sourcesReady &&
-    !input.isArchiveLoading &&
-    !input.hasArchiveError
-  );
+  return input.hasProjectFilter && !input.hasResolvedProject;
 }
 
 export function resolveArchivedProjectFilterGroup<

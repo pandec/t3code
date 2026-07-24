@@ -121,8 +121,8 @@ import {
   buildArchivedProjectFilterOptions,
   parseArchivedProjectSelectValue,
   resolveArchivedProjectFilterGroup,
-  shouldClearUnknownArchivedProjectFilter,
   shouldDeferArchivedEmptyState,
+  shouldShowUnresolvedArchivedProjectFilterOption,
 } from "../../archivedProjectFilter";
 
 const THEME_OPTIONS = [
@@ -1776,27 +1776,10 @@ export function ArchivedThreadsPanel({
     isLoading: isLoadingArchiveSources,
     hasError: archiveError !== null,
   });
-
-  useEffect(() => {
-    if (
-      shouldClearUnknownArchivedProjectFilter({
-        hasArchiveError: archiveError !== null,
-        hasProjectFilter: projectFilterKey !== null,
-        hasResolvedProject: selectedProjectGroup !== null,
-        isArchiveLoading: isLoadingArchive,
-        sourcesReady: archiveSourcesReady,
-      })
-    ) {
-      onProjectFilterChange(null);
-    }
-  }, [
-    archiveError,
-    archiveSourcesReady,
-    isLoadingArchive,
-    onProjectFilterChange,
-    projectFilterKey,
-    selectedProjectGroup,
-  ]);
+  const showUnresolvedProjectFilterOption = shouldShowUnresolvedArchivedProjectFilterOption({
+    hasProjectFilter,
+    hasResolvedProject: selectedProjectGroup !== null,
+  });
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1927,6 +1910,15 @@ export function ArchivedThreadsPanel({
               <SelectItem hideIndicator value={archivedProjectSelectValue(null)}>
                 All projects
               </SelectItem>
+              {showUnresolvedProjectFilterOption && projectFilterKey !== null ? (
+                <SelectItem
+                  disabled
+                  hideIndicator
+                  value={archivedProjectSelectValue(projectFilterKey)}
+                >
+                  Selected project ({isLoadingArchiveSources ? "loading" : "unavailable"})
+                </SelectItem>
+              ) : null}
               {projectFilterOptions.map((option) => (
                 <SelectItem
                   hideIndicator
@@ -1990,7 +1982,10 @@ export function ArchivedThreadsPanel({
           />
         </SettingsSection>
       ) : shouldDeferEmptyState ? (
-        <SettingsSection title="Archived threads" role={archiveError !== null ? "alert" : "status"}>
+        <SettingsSection
+          title="Archived threads"
+          role={archiveError === null ? "status" : undefined}
+        >
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">

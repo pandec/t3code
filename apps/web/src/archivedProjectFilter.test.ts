@@ -9,8 +9,8 @@ import {
   parseArchivedProjectFilterKey,
   parseArchivedProjectSelectValue,
   resolveArchivedProjectFilterGroup,
-  shouldClearUnknownArchivedProjectFilter,
   shouldDeferArchivedEmptyState,
+  shouldShowUnresolvedArchivedProjectFilterOption,
 } from "./archivedProjectFilter";
 
 describe("archived project filter keys", () => {
@@ -133,29 +133,22 @@ describe("shouldDeferArchivedEmptyState", () => {
   });
 });
 
-describe("shouldClearUnknownArchivedProjectFilter", () => {
-  const resolvedArchiveState = {
-    hasArchiveError: false,
-    hasProjectFilter: true,
-    hasResolvedProject: false,
-    isArchiveLoading: false,
-  };
-
-  it("preserves a valid-looking filter until project sources are ready", () => {
+describe("shouldShowUnresolvedArchivedProjectFilterOption", () => {
+  it("keeps an unresolved scoped filter represented in the select", () => {
     expect(
-      shouldClearUnknownArchivedProjectFilter({
-        ...resolvedArchiveState,
-        sourcesReady: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("clears a genuinely unknown filter after all sources settle", () => {
-    expect(
-      shouldClearUnknownArchivedProjectFilter({
-        ...resolvedArchiveState,
-        sourcesReady: true,
+      shouldShowUnresolvedArchivedProjectFilterOption({
+        hasProjectFilter: true,
+        hasResolvedProject: false,
       }),
     ).toBe(true);
+  });
+
+  it("does not add a fallback option after the project resolves", () => {
+    expect(
+      shouldShowUnresolvedArchivedProjectFilterOption({
+        hasProjectFilter: true,
+        hasResolvedProject: true,
+      }),
+    ).toBe(false);
   });
 });
