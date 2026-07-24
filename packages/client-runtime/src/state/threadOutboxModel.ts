@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 
 import { isTransportConnectionErrorMessage } from "../errors/index.ts";
 import {
-  DraftComposerImageAttachmentSchema,
+  PersistedDraftComposerImageAttachmentSchema,
   type DraftComposerImageAttachment,
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
@@ -56,7 +56,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   commandId: CommandId,
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(PersistedDraftComposerImageAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
@@ -149,12 +149,21 @@ export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown
   return encodeStoredQueuedThreadMessage({
     schemaVersion: THREAD_OUTBOX_SCHEMA_VERSION,
     ...message,
+    attachments: message.attachments.map(
+      ({ previewUri: _previewUri, ...attachment }) => attachment,
+    ),
   });
 }
 
 export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
   const { schemaVersion: _, ...message } = decodeStoredQueuedThreadMessage(value);
-  return message;
+  return {
+    ...message,
+    attachments: message.attachments.map((attachment) => ({
+      ...attachment,
+      previewUri: attachment.dataUrl,
+    })),
+  };
 }
 
 export function scopedThreadKey(environmentId: EnvironmentId, threadId: ThreadId): string {

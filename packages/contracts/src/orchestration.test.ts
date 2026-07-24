@@ -190,6 +190,31 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
   }),
 );
 
+it.effect("decodes project.meta.update with an optimistic action snapshot", () =>
+  Effect.gen(function* () {
+    const expectedScripts = [
+      {
+        id: "test",
+        name: "Test",
+        command: "bun test",
+        icon: "test",
+        runOnWorktreeCreate: false,
+      },
+    ] as const;
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-actions",
+      projectId: "project-1",
+      expectedScripts: Array.from(expectedScripts),
+      scripts: [],
+    });
+    assert.strictEqual(parsed.type, "project.meta.update");
+    if (parsed.type === "project.meta.update") {
+      assert.deepStrictEqual(parsed.expectedScripts, expectedScripts);
+    }
+  }),
+);
+
 it.effect("rejects command fields that become empty after trim", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

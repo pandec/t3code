@@ -8,4 +8,4 @@ Each browser tab loads the shared localStorage outbox into an independent in-mem
 
 The shared delivery pipeline removes a queued message after a deterministic start-turn failure, while settings-sync failures remain queued and retry indefinitely. That can either silently discard user-authored content or leave a thread queue permanently blocked, depending on which command stage fails. This was not changed because a safe fix needs a persisted failed state and a product decision for row-level error, retry, edit, and delete behavior. I recommend a focused follow-up rather than changing the established retry/discard contract inside this review pass.
 
-> cy-review complete — 2026-07-24T11:09:29Z — rounds: 1
+> cy-review complete — 2026-07-24T11:32:33Z — rounds: 2

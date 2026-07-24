@@ -1,11 +1,16 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useClientSettings } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
-import { useProjects } from "../state/entities";
+import { readThreadShell, useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
@@ -21,6 +26,49 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import {
+  archiveUndoHistory,
+  hasOpenArchiveUndoBlockingLayer,
+  isArchiveUndoShortcut,
+  isEditableKeyboardTarget,
+  resolveEmptyDraftIdForArchiveUndo,
+} from "../archiveUndo";
+import { hasComposerDraftContent, useComposerDraftStore } from "../composerDraftStore";
+import { draftSubmissionTracker } from "../draftSubmissionState";
+import { useUnarchiveThread } from "../hooks/useThreadActions";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteTarget,
+  type ThreadRouteTarget,
+} from "../threadRoutes";
+
+function readCurrentRouteTarget(router: ReturnType<typeof useRouter>): ThreadRouteTarget | null {
+  const params = router.state.matches[router.state.matches.length - 1]?.params ?? {};
+  return resolveThreadRouteTarget(params);
+}
+
+function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string | null {
+  const target = readCurrentRouteTarget(router);
+  if (target?.kind !== "draft") {
+    return null;
+  }
+  const composerState = useComposerDraftStore.getState();
+  const draftSession = composerState.getDraftSession(target.draftId);
+  const hasObservedThread = Boolean(
+    draftSession &&
+    (draftSession.promotedTo ||
+      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
+  );
+  const hasStartedSubmission = draftSubmissionTracker.hasStarted(target.draftId);
+  if (hasObservedThread) {
+    draftSubmissionTracker.clear(target.draftId);
+  }
+  return resolveEmptyDraftIdForArchiveUndo(
+    target,
+    hasComposerDraftContent(composerState.getComposerDraft(target.draftId)),
+    hasObservedThread || hasStartedSubmission,
+  );
+}
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -32,6 +80,8 @@ function ChatRouteGlobalShortcuts() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const router = useRouter();
+  const unarchiveThread = useUnarchiveThread();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -69,6 +119,71 @@ function ChatRouteGlobalShortcuts() {
 
       if (isCommandPaletteOpen()) {
         return;
+      }
+
+      if (
+        isArchiveUndoShortcut(event) &&
+        !isEditableKeyboardTarget(event.target) &&
+        !hasOpenArchiveUndoBlockingLayer()
+      ) {
+        const candidate = archiveUndoHistory.take();
+        if (candidate) {
+          const emptyDraftId = readEmptyNewThreadDraftId(router);
+
+          event.preventDefault();
+          event.stopPropagation();
+          void (async () => {
+            const result = await unarchiveThread(candidate.threadRef);
+            if (result._tag === "Failure") {
+              archiveUndoHistory.restore(candidate);
+              if (!isAtomCommandInterrupted(result)) {
+                const error = squashAtomCommandFailure(result);
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Failed to restore thread",
+                    description: error instanceof Error ? error.message : "An error occurred.",
+                  }),
+                );
+              }
+              return;
+            }
+
+            if (emptyDraftId && readEmptyNewThreadDraftId(router) === emptyDraftId) {
+              const navigationResult = await Promise.resolve(
+                router.navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(candidate.threadRef),
+                }),
+              ).then(
+                () => ({ _tag: "Success" as const }),
+                (error: unknown) => ({ _tag: "Failure" as const, error }),
+              );
+              if (navigationResult._tag === "Failure") {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Thread restored, but could not open it",
+                    description:
+                      navigationResult.error instanceof Error
+                        ? navigationResult.error.message
+                        : "An error occurred.",
+                  }),
+                );
+              }
+              return;
+            }
+
+            toastManager.add(
+              stackedThreadToast({
+                type: "success",
+                title: "Thread restored",
+                description: candidate.threadTitle,
+              }),
+            );
+          })();
+          return;
+        }
       }
 
       if (event.key === "Escape" && selectedThreadKeysSize > 0) {
@@ -169,6 +284,8 @@ function ChatRouteGlobalShortcuts() {
     selectedThreadKeysSize,
     sidebarV2Enabled,
     terminalOpen,
+    router,
+    unarchiveThread,
   ]);
 
   return null;

@@ -9,7 +9,11 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  EnvironmentId,
+  EnvironmentMetadataHttpApi,
   EnvironmentOrchestrationHttpApi,
+  type ExecutionEnvironmentDescriptor,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -19,7 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
+import { FetchHttpClient, HttpServer } from "effect/unstable/http";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as CliError from "effect/unstable/cli/CliError";
@@ -32,6 +36,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { serverEnvironmentHttpApiLayer } from "./http.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import {
@@ -41,11 +46,23 @@ import {
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import { ThreadCliNoActiveTurnError } from "./cli/thread.ts";
+import {
+  CliOrchestrationConflictError,
+  CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationServerUnavailableError,
+  CliOrchestrationUndeclaredStatusError,
+  dispatchLiveOrchestrationCommand,
+  withCliOrchestrationSession,
+} from "./cli/orchestration.ts";
+import { ProjectActionServerUnsupportedError } from "./cli/project.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
-class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
+class ProjectCliHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentMetadataHttpApi)
+  .add(EnvironmentOrchestrationHttpApi) {}
 
 const connectCli = makeCli({ cloudEnabled: true });
 const noConnectCli = makeCli({ cloudEnabled: false });
@@ -117,13 +134,31 @@ const readPersistedSnapshot = (baseDir: string) =>
     }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
   });
 
-const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Effect<A, E, R>) =>
+const withLiveProjectCliServer = <A, E, R>(
+  baseDir: string,
+  run: (origin: string) => Effect.Effect<A, E, R>,
+  options?: {
+    readonly conditionalProjectScriptUpdates?: boolean;
+  },
+) =>
   Effect.gen(function* () {
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
-      Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(Layer.merge(orchestrationHttpApiLayer, serverEnvironmentHttpApiLayer)),
       Layer.provide(environmentAuthenticatedAuthLayer),
     );
+    const environmentDescriptor: ExecutionEnvironmentDescriptor = {
+      environmentId: EnvironmentId.make("t3-cli-test-environment"),
+      label: "CLI test",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "0.0.0-test",
+      capabilities: {
+        repositoryIdentity: true,
+        ...(options?.conditionalProjectScriptUpdates === false
+          ? {}
+          : { conditionalProjectScriptUpdates: true }),
+      },
+    };
     const appLayer = HttpRouter.serve(routesLayer, {
       disableListenLog: true,
       disableLogger: true,
@@ -135,6 +170,15 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
         ),
       ),
       Layer.provideMerge(makeProjectPersistenceLayer(config)),
+      Layer.provideMerge(
+        Layer.succeed(
+          ServerEnvironment.ServerEnvironment,
+          ServerEnvironment.ServerEnvironment.of({
+            getEnvironmentId: Effect.succeed(environmentDescriptor.environmentId),
+            getDescriptor: Effect.succeed(environmentDescriptor),
+          }),
+        ),
+      ),
       Layer.provideMerge(
         NodeHttpServer.layer(NodeHttp.createServer, {
           host: "127.0.0.1",
@@ -159,7 +203,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
             port: address.port,
           }),
         });
-        return yield* run();
+        return yield* run(`http://127.0.0.1:${address.port}`);
       }).pipe(Effect.provide(Layer.mergeAll(appLayer, NodeServices.layer))),
     );
   });
@@ -574,6 +618,379 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         }),
       );
     }),
+  );
+
+  it.effect("manages project actions through a running server", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-live-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-live-workspace-"),
+      );
+
+      yield* withLiveProjectCliServer(baseDir, (origin) =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "add",
+            workspaceRoot,
+            "--id",
+            "setup",
+            "--name",
+            "Setup",
+            "--command",
+            "bun install",
+            "--run-on-worktree-create",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const afterSetup = yield* projectionSnapshotQuery.getSnapshot();
+          const projectAfterSetup = afterSetup.projects.find(
+            (candidate) => candidate.workspaceRoot === workspaceRoot,
+          );
+          assert.isTrue(projectAfterSetup !== undefined);
+          const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const unguardedCommand = {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-cli-project-actions-unguarded"),
+            projectId: projectAfterSetup!.id,
+            scripts: [],
+          } as const;
+          const staleCommand = {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-cli-project-actions-stale"),
+            projectId: projectAfterSetup!.id,
+            expectedScripts: [],
+            scripts: [],
+          } as const;
+          const conflictResults = yield* withCliOrchestrationSession(
+            environmentAuth,
+            "t3 project action conflict test",
+            (token) =>
+              Effect.gen(function* () {
+                const unguarded = yield* dispatchLiveOrchestrationCommand(
+                  origin,
+                  token,
+                  unguardedCommand,
+                ).pipe(Effect.flip);
+                const first = yield* dispatchLiveOrchestrationCommand(
+                  origin,
+                  token,
+                  staleCommand,
+                ).pipe(Effect.flip);
+                const replay = yield* dispatchLiveOrchestrationCommand(
+                  origin,
+                  token,
+                  staleCommand,
+                ).pipe(Effect.flip);
+                return { unguarded, stale: [first, replay] };
+              }),
+          ).pipe(Effect.provide(FetchHttpClient.layer));
+          assert.instanceOf(conflictResults.unguarded, CliOrchestrationConflictError);
+          assert.equal(
+            conflictResults.unguarded.message,
+            "This client cannot safely update project actions. Update or refresh T3 Code, then retry.",
+          );
+          for (const conflict of conflictResults.stale) {
+            assert.instanceOf(conflict, CliOrchestrationConflictError);
+            assert.equal(
+              conflict.message,
+              "Project actions changed after they were read. List them and retry.",
+            );
+          }
+
+          const addedOutput = yield* captureStdout(
+            runCli([
+              "project",
+              "action",
+              "add",
+              workspaceRoot,
+              "--id",
+              "install-ios",
+              "--name",
+              "Install iOS",
+              "--command",
+              "bun run ios:local:release",
+              "--run-on-worktree-create",
+              "--base-dir",
+              baseDir,
+              "--json",
+            ]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const added = JSON.parse(addedOutput.output) as {
+            readonly projectAction: { readonly id: string };
+            readonly clearedRunOnWorktreeCreate: ReadonlyArray<string>;
+          };
+          assert.equal(added.projectAction.id, "install-ios");
+          assert.deepEqual(added.clearedRunOnWorktreeCreate, ["setup"]);
+
+          const listedOutput = yield* captureStdout(
+            runCli(["project", "action", "list", workspaceRoot, "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const listed = JSON.parse(listedOutput.output) as {
+            readonly mode: string;
+            readonly actions: ReadonlyArray<{
+              readonly id: string;
+              readonly runOnWorktreeCreate: boolean;
+            }>;
+          };
+          assert.equal(listed.mode, "live");
+          assert.deepInclude(
+            listed.actions.find((action) => action.id === "setup"),
+            { runOnWorktreeCreate: false },
+          );
+          assert.deepInclude(
+            listed.actions.find((action) => action.id === "install-ios"),
+            { runOnWorktreeCreate: true },
+          );
+
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "update",
+            workspaceRoot,
+            "install-ios",
+            "--command",
+            "bun run ios:local",
+            "--base-dir",
+            baseDir,
+          ]);
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "remove",
+            workspaceRoot,
+            "install-ios",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const readModel = yield* projectionSnapshotQuery.getSnapshot();
+          const project = readModel.projects.find(
+            (candidate) => candidate.workspaceRoot === workspaceRoot,
+          );
+          assert.deepEqual(
+            project?.scripts.map((action) => action.id),
+            ["setup"],
+          );
+        }),
+      );
+    }),
+  );
+
+  it.effect("rejects action mutations against servers without conditional script updates", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-version-skew-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-version-skew-workspace-"),
+      );
+
+      yield* withLiveProjectCliServer(
+        baseDir,
+        () =>
+          Effect.gen(function* () {
+            yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+            const error = yield* runCliWithRuntime([
+              "project",
+              "action",
+              "add",
+              workspaceRoot,
+              "--name",
+              "Test",
+              "--command",
+              "bun test",
+              "--base-dir",
+              baseDir,
+            ]).pipe(Effect.flip);
+
+            assert.instanceOf(error, ProjectActionServerUnsupportedError);
+            assert.equal(error.serverVersion, "0.0.0-test");
+            const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+            const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+            assert.deepEqual(
+              snapshot.projects.find((project) => project.workspaceRoot === workspaceRoot)?.scripts,
+              [],
+            );
+          }),
+        { conditionalProjectScriptUpdates: false },
+      );
+    }),
+  );
+
+  it.effect("requires a running server for project action mutations", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-offline-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-offline-workspace-"),
+      );
+      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+
+      const error = yield* runCliWithRuntime([
+        "project",
+        "action",
+        "add",
+        workspaceRoot,
+        "--name",
+        "Test",
+        "--command",
+        "bun test",
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.flip);
+
+      assert.instanceOf(error, CliOrchestrationServerUnavailableError);
+      assert.equal(error.message, "No running T3 Code server was found for this data directory.");
+    }),
+  );
+
+  it.effect("waits for live dispatch acknowledgement beyond the read timeout", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = NodeHttp.createServer((_request, response) => {
+          // @effect-diagnostics-next-line globalTimers:off - Node HTTP callback verifies delayed network acknowledgement.
+          setTimeout(() => {
+            response
+              .writeHead(200, { "content-type": "application/json" })
+              .end(JSON.stringify({ sequence: 7 }));
+          }, 1_100);
+        });
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", resolve);
+            }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.closeAllConnections();
+            server.close();
+          }),
+        );
+        const address = server.address();
+        if (typeof address === "string" || address === null) {
+          assert.fail(`Expected TCP address, got ${String(address)}`);
+        }
+
+        const result = yield* dispatchLiveOrchestrationCommand(
+          `http://127.0.0.1:${address.port}`,
+          "test-token",
+          {
+            type: "project.delete",
+            commandId: CommandId.make("cmd-cli-delayed-dispatch"),
+            projectId: ProjectId.make("project-cli-delayed-dispatch"),
+          },
+        );
+
+        assert.equal(result.sequence, 7);
+      }),
+    ).pipe(Effect.provide(FetchHttpClient.layer)),
+  );
+
+  it.effect("reports an unknown outcome when dispatch acknowledgement times out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let pendingResponse: NodeHttp.ServerResponse | undefined;
+        let signalResponseClosed: () => void = () => undefined;
+        const responseClosed = new Promise<void>((resolve) => {
+          signalResponseClosed = resolve;
+        });
+        const server = NodeHttp.createServer((_request, response) => {
+          pendingResponse = response;
+          response.once("close", signalResponseClosed);
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"sequence":');
+        });
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", resolve);
+            }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.closeAllConnections();
+            server.close();
+          }),
+        );
+        const address = server.address();
+        if (typeof address === "string" || address === null) {
+          assert.fail(`Expected TCP address, got ${String(address)}`);
+        }
+
+        const error = yield* dispatchLiveOrchestrationCommand(
+          `http://127.0.0.1:${address.port}`,
+          "test-token",
+          {
+            type: "project.delete",
+            commandId: CommandId.make("cmd-cli-unknown-dispatch"),
+            projectId: ProjectId.make("project-cli-unknown-dispatch"),
+          },
+          { timeoutMilliseconds: 100 },
+        ).pipe(Effect.flip);
+
+        assert.instanceOf(error, CliOrchestrationOutcomeUnknownError);
+        assert.equal(
+          error.message,
+          "The server acknowledgement was lost, so this command may have completed. Inspect the current state before retrying.",
+        );
+        yield* Effect.promise(() => responseClosed);
+        assert.isTrue(pendingResponse?.destroyed === true);
+      }),
+    ).pipe(Effect.provide(FetchHttpClient.layer)),
+  );
+
+  it.effect("preserves the status of a malformed error acknowledgement", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = NodeHttp.createServer((_request, response) => {
+          response.writeHead(500, { "content-type": "application/json" }).end('{"incomplete":');
+        });
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", resolve);
+            }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.closeAllConnections();
+            server.close();
+          }),
+        );
+        const address = server.address();
+        if (typeof address === "string" || address === null) {
+          assert.fail(`Expected TCP address, got ${String(address)}`);
+        }
+
+        const error = yield* dispatchLiveOrchestrationCommand(
+          `http://127.0.0.1:${address.port}`,
+          "test-token",
+          {
+            type: "project.delete",
+            commandId: CommandId.make("cmd-cli-malformed-dispatch-error"),
+            projectId: ProjectId.make("project-cli-malformed-dispatch-error"),
+          },
+          { timeoutMilliseconds: 1_000 },
+        ).pipe(Effect.flip);
+
+        assert.instanceOf(error, CliOrchestrationUndeclaredStatusError);
+        assert.equal(error.status, 500);
+      }),
+    ).pipe(Effect.provide(FetchHttpClient.layer)),
   );
 
   it.effect("lists projects as structured JSON", () =>

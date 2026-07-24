@@ -40,11 +40,10 @@ export function ComposerQueuedMessages({
       <div className="text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
         {messages.length === 1 ? "1 queued" : `${messages.length} queued`}
       </div>
-      <ul className="mt-0.5">
+      <ul className="mt-0.5 max-h-56 overflow-y-auto">
         {messages.map((message) => {
-          const isDispatching =
-            dispatchingMessageId === message.messageId ||
-            queuedThreadMessageIntent(message) === "steer";
+          const isDispatching = dispatchingMessageId === message.messageId;
+          const canSteer = queuedThreadMessageIntent(message) === "queue" && !isDispatching;
           return (
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
               <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
@@ -67,6 +66,7 @@ export function ComposerQueuedMessages({
                           variant="ghost"
                           className="size-6 rounded-full text-muted-foreground hover:text-foreground"
                           aria-label="Send into the running turn now"
+                          disabled={!canSteer}
                           onClick={() => onSteerNow(message)}
                         >
                           <ArrowUpIcon className="size-3.5" aria-hidden />

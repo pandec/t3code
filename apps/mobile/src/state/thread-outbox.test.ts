@@ -115,6 +115,35 @@ describe("thread outbox", () => {
     });
   });
 
+  it("persists image payloads once and rebuilds a durable preview on decode", () => {
+    const message = {
+      ...queuedMessage({
+        messageId: "message-with-image",
+        createdAt: "2026-06-08T10:00:01.000Z",
+      }),
+      attachments: [
+        {
+          id: "image-1",
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          dataUrl: "data:image/png;base64,YWJj",
+          previewUri: "file:///tmp/ephemeral-preview.png",
+        },
+      ],
+    } satisfies QueuedThreadMessage;
+
+    const encoded = encodeQueuedThreadMessage(message);
+    expect(JSON.stringify(encoded)).not.toContain("ephemeral-preview");
+    expect(decodeQueuedThreadMessage(encoded).attachments).toEqual([
+      {
+        ...message.attachments[0],
+        previewUri: message.attachments[0].dataUrl,
+      },
+    ]);
+  });
+
   it("compares model options as part of the queued settings change", () => {
     const base = {
       instanceId: ProviderInstanceId.make("codex"),
@@ -295,7 +324,8 @@ describe("thread outbox", () => {
     });
 
     failRemoval = false;
-    await manager.remove(message);
+    await expect(manager.remove(message)).resolves.toBe(true);
+    await expect(manager.remove(message)).resolves.toBe(false);
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     registry.dispose();
   });

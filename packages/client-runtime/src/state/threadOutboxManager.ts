@@ -135,11 +135,26 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return true;
     });
 
-  const remove = (message: QueuedThreadMessage): Promise<void> =>
+  /**
+   * Atomically claims and removes an extant row. The synchronous in-memory
+   * removal keeps a drain effect from selecting the row while durable removal
+   * is pending; failure restores it so user content is never lost.
+   */
+  const remove = (message: QueuedThreadMessage): Promise<boolean> =>
     serialize(async () => {
+      const exists = currentMessages().some(
+        (candidate) => candidate.messageId === message.messageId,
+      );
+      if (!exists) {
+        return false;
+      }
+      setMessages(
+        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+      );
       try {
         await options.storage.remove(message);
       } catch (cause) {
+        setMessages([...currentMessages(), message]);
         throw new ThreadOutboxManagerError({
           operation: "remove",
           environmentId: message.environmentId,
@@ -148,9 +163,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
-      setMessages(
-        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
-      );
+      return true;
     });
 
   const clearEnvironment = (environmentId: EnvironmentId): Promise<void> =>

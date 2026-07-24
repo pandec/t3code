@@ -7,6 +7,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import type * as PlatformError from "effect/PlatformError";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
@@ -198,11 +199,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
       });
+      if (command.scripts !== undefined && command.expectedScripts === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          code: "project_actions_precondition_required",
+          detail: "Project action updates require the actions that were read.",
+        });
+      }
+      if (
+        command.expectedScripts !== undefined &&
+        !Equal.equals(command.expectedScripts, project.scripts)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          code: "project_actions_changed",
+          detail: `Actions for project '${command.projectId}' changed after they were read.`,
+        });
+      }
       if (command.workspaceRoot !== undefined) {
         yield* requireActiveProjectWorkspaceRootAbsent({
           readModel,

@@ -2,12 +2,14 @@ import {
   CommandId,
   type OrchestrationReadModel,
   ProjectId,
+  ProjectScriptIcon,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -29,15 +31,27 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import {
+  CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationRequestError,
+  CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
+  fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationSnapshot,
   tryResolveLiveOrchestrationServer,
   withCliOrchestrationSession,
 } from "./orchestration.ts";
+import {
+  addProjectAction,
+  ProjectActionAlreadyExistsError,
+  ProjectActionNotFoundError,
+  ProjectActionValidationError,
+  removeProjectAction,
+  updateProjectAction,
+} from "./projectActions.ts";
 import {
   findActiveProjectTarget,
   normalizeWorkspaceRootForProjectCommand,
@@ -95,15 +109,34 @@ export class ProjectAlreadyExistsError extends Schema.TaggedErrorClass<ProjectAl
   }
 }
 
+export class ProjectActionServerUnsupportedError extends Schema.TaggedErrorClass<ProjectActionServerUnsupportedError>()(
+  "ProjectActionServerUnsupportedError",
+  {
+    operation: Schema.Literal("validateProjectActionServerCapability"),
+    serverVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The running T3 Code server (${this.serverVersion}) does not support safe project action updates. Update and restart T3 Code, then retry.`;
+  }
+}
+
 export const ProjectCommandError = Schema.Union([
   ProjectCommandIdGenerationError,
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationUndeclaredStatusError,
   CliOrchestrationRequestError,
+  CliOrchestrationConflictError,
+  CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationServerUnavailableError,
   ProjectTitleEmptyError,
   ProjectIdentifierEmptyError,
   ProjectNotFoundError,
   ProjectAlreadyExistsError,
+  ProjectActionServerUnsupportedError,
+  ProjectActionAlreadyExistsError,
+  ProjectActionNotFoundError,
+  ProjectActionValidationError,
 ]);
 export type ProjectCommandError = typeof ProjectCommandError.Type;
 
@@ -173,6 +206,10 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | Path.Path
     | WorkspacePaths.WorkspacePaths
   >,
+  options?: {
+    readonly requireLive?: boolean;
+    readonly requireConditionalProjectScriptUpdates?: boolean;
+  },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
@@ -187,6 +224,15 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     );
 
     if (Option.isSome(liveMode)) {
+      if (options?.requireConditionalProjectScriptUpdates) {
+        const descriptor = yield* fetchLiveEnvironmentDescriptor(liveMode.value.origin);
+        if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
+          return yield* new ProjectActionServerUnsupportedError({
+            operation: "validateProjectActionServerCapability",
+            serverVersion: descriptor.serverVersion,
+          });
+        }
+      }
       return yield* withCliOrchestrationSession(environmentAuth, "t3 project cli", (token) =>
         Effect.gen(function* () {
           const snapshot = yield* fetchLiveOrchestrationSnapshot(liveMode.value.origin, token);
@@ -201,6 +247,13 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
           yield* Console.log(output);
         }),
       );
+    }
+
+    if (options?.requireLive) {
+      return yield* new CliOrchestrationServerUnavailableError({
+        operation: "resolveLiveServer",
+        statePath: config.serverRuntimeStatePath,
+      });
     }
 
     const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
@@ -411,6 +464,262 @@ const projectListCommand = Command.make("list", {
   ),
 );
 
+const projectActionTargetArgument = Argument.string("project").pipe(
+  Argument.withDescription("Project id or workspace root."),
+);
+
+const projectActionIdArgument = Argument.string("action").pipe(
+  Argument.withDescription("Exact project action id."),
+);
+
+const projectActionIconFlag = Flag.choice("icon", ProjectScriptIcon.literals).pipe(
+  Flag.withDescription("Action icon."),
+);
+
+const clearedSetupActionMessage = (actionIds: ReadonlyArray<string>) =>
+  actionIds.length === 0 ? "" : ` Cleared automatic worktree setup from: ${actionIds.join(", ")}.`;
+
+const findProjectForAction = Effect.fn("findProjectForAction")(function* (
+  snapshot: OrchestrationReadModel,
+  identifier: string,
+) {
+  const target = yield* findActiveProjectTarget({
+    projects: snapshot.projects,
+    identifier,
+  });
+  return snapshot.projects.find((project) => project.id === target.id)!;
+});
+
+const projectActionListCommand = Command.make("list", {
+  ...projectLocationFlags,
+  project: projectActionTargetArgument,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List a project's actions."),
+  Command.withHandler((flags) =>
+    runProjectMutation(flags, flags.json, ({ snapshot, mode }) =>
+      Effect.gen(function* () {
+        const project = yield* findProjectForAction(snapshot, flags.project);
+        return flags.json
+          ? jsonOutput({
+              mode,
+              projectId: project.id,
+              title: project.title,
+              workspaceRoot: project.workspaceRoot,
+              actions: project.scripts,
+            })
+          : project.scripts.length === 0
+            ? `Project ${project.id} has no actions.`
+            : project.scripts
+                .map((action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`)
+                .join("\n");
+      }),
+    ),
+  ),
+);
+
+const projectActionAddCommand = Command.make("add", {
+  ...projectLocationFlags,
+  project: projectActionTargetArgument,
+  id: Flag.string("id").pipe(Flag.withDescription("Optional stable action id."), Flag.optional),
+  name: Flag.string("name").pipe(Flag.withDescription("Action display name.")),
+  command: Flag.string("command").pipe(Flag.withDescription("Shell command to run.")),
+  icon: projectActionIconFlag.pipe(Flag.withDefault("play")),
+  runOnWorktreeCreate: Flag.boolean("run-on-worktree-create").pipe(
+    Flag.withDescription("Run automatically after creating a worktree."),
+    Flag.withDefault(false),
+  ),
+  previewUrl: Flag.string("preview-url").pipe(
+    Flag.withDescription("Optional desktop preview URL."),
+    Flag.optional,
+  ),
+  autoOpenPreview: Flag.boolean("auto-open-preview").pipe(
+    Flag.withDescription("Open the configured preview automatically."),
+    Flag.withDefault(false),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Add a project action."),
+  Command.withHandler((flags) =>
+    runProjectMutation(
+      flags,
+      flags.json,
+      Effect.fn("projectActionAddMutation")(function* ({ snapshot, dispatch }) {
+        const project = yield* findProjectForAction(snapshot, flags.project);
+        const result = addProjectAction({
+          projectId: project.id,
+          scripts: project.scripts,
+          action: {
+            ...(Option.isSome(flags.id) ? { id: flags.id.value } : {}),
+            name: flags.name,
+            command: flags.command,
+            icon: flags.icon,
+            runOnWorktreeCreate: flags.runOnWorktreeCreate,
+            ...(Option.isSome(flags.previewUrl) ? { previewUrl: flags.previewUrl.value } : {}),
+            autoOpenPreview: flags.autoOpenPreview,
+          },
+        });
+        if ("_tag" in result) {
+          return yield* result;
+        }
+        yield* dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make(yield* projectCommandUuid),
+          projectId: project.id,
+          expectedScripts: Array.from(project.scripts),
+          scripts: Array.from(result.scripts),
+        });
+        return flags.json
+          ? jsonOutput({
+              projectId: project.id,
+              action: "added",
+              projectAction: result.action,
+              clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
+            })
+          : `Added action ${result.action.id} (${result.action.name}) to project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`;
+      }),
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
+    ),
+  ),
+);
+
+const projectActionUpdateCommand = Command.make("update", {
+  ...projectLocationFlags,
+  project: projectActionTargetArgument,
+  actionId: projectActionIdArgument,
+  name: Flag.string("name").pipe(Flag.withDescription("New action display name."), Flag.optional),
+  command: Flag.string("command").pipe(Flag.withDescription("New shell command."), Flag.optional),
+  icon: projectActionIconFlag.pipe(Flag.optional),
+  runOnWorktreeCreate: Flag.boolean("run-on-worktree-create").pipe(
+    Flag.withDescription("Enable or disable automatic worktree setup."),
+    Flag.optional,
+  ),
+  previewUrl: Flag.string("preview-url").pipe(
+    Flag.withDescription("New desktop preview URL."),
+    Flag.optional,
+  ),
+  clearPreviewUrl: Flag.boolean("clear-preview-url").pipe(
+    Flag.withDescription("Remove the preview URL and automatic preview setting."),
+    Flag.withDefault(false),
+  ),
+  autoOpenPreview: Flag.boolean("auto-open-preview").pipe(
+    Flag.withDescription("Enable or disable automatic preview opening."),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Update a project action."),
+  Command.withHandler((flags) =>
+    runProjectMutation(
+      flags,
+      flags.json,
+      Effect.fn("projectActionUpdateMutation")(function* ({ snapshot, dispatch }) {
+        const project = yield* findProjectForAction(snapshot, flags.project);
+        if (flags.clearPreviewUrl && Option.isSome(flags.previewUrl)) {
+          return yield* new ProjectActionValidationError({
+            field: "previewUrl",
+            detail: "cannot be set and cleared in the same command",
+          });
+        }
+        const result = updateProjectAction({
+          projectId: project.id,
+          scripts: project.scripts,
+          actionId: flags.actionId,
+          updates: {
+            ...(Option.isSome(flags.name) ? { name: flags.name.value } : {}),
+            ...(Option.isSome(flags.command) ? { command: flags.command.value } : {}),
+            ...(Option.isSome(flags.icon) ? { icon: flags.icon.value } : {}),
+            ...(Option.isSome(flags.runOnWorktreeCreate)
+              ? { runOnWorktreeCreate: flags.runOnWorktreeCreate.value }
+              : {}),
+            ...(flags.clearPreviewUrl
+              ? { previewUrl: null }
+              : Option.isSome(flags.previewUrl)
+                ? { previewUrl: flags.previewUrl.value }
+                : {}),
+            ...(Option.isSome(flags.autoOpenPreview)
+              ? { autoOpenPreview: flags.autoOpenPreview.value }
+              : {}),
+          },
+        });
+        if ("_tag" in result) {
+          return yield* result;
+        }
+        const changed = !Equal.equals(result.scripts, project.scripts);
+        yield* dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make(yield* projectCommandUuid),
+          projectId: project.id,
+          expectedScripts: Array.from(project.scripts),
+          scripts: Array.from(result.scripts),
+        });
+        return flags.json
+          ? jsonOutput({
+              projectId: project.id,
+              action: changed ? "updated" : "unchanged",
+              projectAction: result.action,
+              clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
+            })
+          : changed
+            ? `Updated action ${result.action.id} (${result.action.name}) in project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`
+            : `Action ${result.action.id} is unchanged.`;
+      }),
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
+    ),
+  ),
+);
+
+const projectActionRemoveCommand = Command.make("remove", {
+  ...projectLocationFlags,
+  project: projectActionTargetArgument,
+  actionId: projectActionIdArgument,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Remove a project action."),
+  Command.withHandler((flags) =>
+    runProjectMutation(
+      flags,
+      flags.json,
+      Effect.fn("projectActionRemoveMutation")(function* ({ snapshot, dispatch }) {
+        const project = yield* findProjectForAction(snapshot, flags.project);
+        const result = removeProjectAction({
+          projectId: project.id,
+          scripts: project.scripts,
+          actionId: flags.actionId,
+        });
+        if ("_tag" in result) {
+          return yield* result;
+        }
+        yield* dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make(yield* projectCommandUuid),
+          projectId: project.id,
+          expectedScripts: Array.from(project.scripts),
+          scripts: Array.from(result.scripts),
+        });
+        return flags.json
+          ? jsonOutput({
+              projectId: project.id,
+              action: "removed",
+              projectAction: result.action,
+            })
+          : `Removed action ${result.action.id} (${result.action.name}) from project ${project.id}.`;
+      }),
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
+    ),
+  ),
+);
+
+const projectActionCommand = Command.make("action").pipe(
+  Command.withDescription("Manage project actions."),
+  Command.withSubcommands([
+    projectActionListCommand,
+    projectActionAddCommand,
+    projectActionUpdateCommand,
+    projectActionRemoveCommand,
+  ]),
+);
+
 export const projectCommand = Command.make("project").pipe(
   Command.withDescription("Manage projects."),
   Command.withSubcommands([
@@ -418,5 +727,6 @@ export const projectCommand = Command.make("project").pipe(
     projectAddCommand,
     projectRemoveCommand,
     projectRenameCommand,
+    projectActionCommand,
   ]),
 );

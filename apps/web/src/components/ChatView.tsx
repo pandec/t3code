@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInstanceId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
@@ -164,6 +165,8 @@ import {
   buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
+  normalizeProjectSetupScript,
+  projectActionMutationUnavailableMessage,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
@@ -174,6 +177,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import { draftSubmissionTracker } from "../draftSubmissionState";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
@@ -182,6 +186,7 @@ import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  hasComposerDraftContent,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
   type DraftId,
@@ -1447,6 +1452,11 @@ function ChatViewContent(props: ChatViewProps) {
   // server thread (same pre-allocated ref) starts, so live state must not
   // depend on which route is mounted.
   const isServerThread = serverThread !== null;
+  useEffect(() => {
+    if (draftId && isServerThread) {
+      draftSubmissionTracker.clear(draftId);
+    }
+  }, [draftId, isServerThread]);
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
@@ -2836,11 +2846,19 @@ function ChatViewContent(props: ChatViewProps) {
       keybinding?: string | null;
       keybindingCommand: KeybindingCommand;
     }): Promise<AtomCommandResult<void, unknown>> => {
+      const actionServerConfig = serverConfigs.get(environmentId);
+      const unavailableMessage = projectActionMutationUnavailableMessage(
+        actionServerConfig?.environment,
+      );
+      if (unavailableMessage !== null) {
+        return AsyncResult.failure(Cause.fail(new Error(unavailableMessage)));
+      }
       const updateResult = mapAtomCommandResult(
         await updateProject({
           environmentId,
           input: {
             projectId: input.projectId,
+            expectedScripts: input.previousScripts,
             scripts: input.nextScripts,
           },
         }),
@@ -2866,7 +2884,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return updateResult;
     },
-    [environmentId, updateProject, upsertKeybinding],
+    [environmentId, serverConfigs, updateProject, upsertKeybinding],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
@@ -2878,14 +2896,10 @@ function ChatViewContent(props: ChatViewProps) {
         activeProject.scripts.map((script) => script.id),
       );
       const nextScript = buildProjectScript(nextId, input);
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
+      const nextScripts = normalizeProjectSetupScript(
+        [...activeProject.scripts, nextScript],
+        nextScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,
@@ -2912,13 +2926,10 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const updatedScript = buildProjectScript(existingScript.id, input);
-      const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
+      const nextScripts = normalizeProjectSetupScript(
+        activeProject.scripts.map((script) => (script.id === scriptId ? updatedScript : script)),
+        updatedScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,
@@ -3921,16 +3932,7 @@ function ChatViewContent(props: ChatViewProps) {
   // forces a re-render so the banner leaves immediately.
   const [, setBranchMismatchDismissTick] = useState(0);
   const composerHasDraftContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return Boolean(
-      draft &&
-      (draft.prompt.trim().length > 0 ||
-        draft.images.length > 0 ||
-        draft.terminalContexts.length > 0 ||
-        draft.elementContexts.length > 0 ||
-        draft.previewAnnotations.length > 0 ||
-        draft.reviewComments.length > 0),
-    );
+    return hasComposerDraftContent(store.getComposerDraft(composerDraftTarget));
   });
   const activeBranchMismatchKey = branchMismatchKey(
     activeThread?.id ?? null,
@@ -4734,6 +4736,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     sendInFlightRef.current = true;
+    if (draftId) {
+      draftSubmissionTracker.begin(draftId);
+    }
     if (isDraftHeroState && activeThreadKey) {
       let resolveDockStarted: (() => void) | undefined;
       const dockStarted = new Promise<void>((resolve) => {
@@ -4981,6 +4986,9 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
+    if (draftId) {
+      draftSubmissionTracker.finish(draftId, turnStartSucceeded);
+    }
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
@@ -5030,13 +5038,23 @@ function ChatViewContent(props: ChatViewProps) {
   const onEditQueuedMessage = useCallback(
     async (message: QueuedThreadMessage) => {
       if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+      const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
+      if (currentImageCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        toastManager.add({
+          type: "error",
+          title: `A message can contain up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images`,
+          description: "Remove images from the composer before editing this queued message.",
+        });
+        return;
+      }
       // Hold the message so the drain cannot deliver it while its content is
       // being moved back into the composer.
       holdEditingQueuedMessage(message.messageId);
       try {
         // Remove first: if this fails the message simply stays queued, whereas
         // appending first could leave the content both queued and in the draft.
-        await removeThreadOutboxMessage(message);
+        const removed = await removeThreadOutboxMessage(message);
+        if (!removed) return;
         const currentPrompt = promptRef.current;
         const nextPrompt =
           currentPrompt.trim().length > 0

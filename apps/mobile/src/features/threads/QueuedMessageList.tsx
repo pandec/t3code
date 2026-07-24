@@ -141,7 +141,11 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
       exiting={FadeOut.duration(140)}
     >
       <View className="overflow-hidden rounded-[20px] border border-neutral-200 bg-neutral-100/80 py-1 dark:border-white/6 dark:bg-neutral-900/80">
-        <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled>
+        <ScrollView
+          style={{ maxHeight: 220 }}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="always"
+        >
           {messages.map((message, index) => (
             <QueuedMessageRow
               key={message.messageId}

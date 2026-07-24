@@ -3099,6 +3099,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         type: "project.meta.update",
         commandId: CommandId.make("cmd-scripts-project-update"),
         projectId: ProjectId.make("project-scripts"),
+        expectedScripts: [],
         scripts: [
           {
             id: "script-1",

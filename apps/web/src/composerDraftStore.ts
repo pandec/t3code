@@ -280,6 +280,19 @@ export interface ComposerThreadDraftState {
   interactionMode: ProviderInteractionMode | null;
 }
 
+export function hasComposerDraftContent(draft: ComposerThreadDraftState | null): boolean {
+  return Boolean(
+    draft &&
+    (draft.prompt.trim().length > 0 ||
+      draft.images.length > 0 ||
+      draft.persistedAttachments.length > 0 ||
+      draft.terminalContexts.length > 0 ||
+      draft.elementContexts.length > 0 ||
+      draft.previewAnnotations.length > 0 ||
+      draft.reviewComments.length > 0),
+  );
+}
+
 /**
  * Mutable routing and execution context for a pre-thread draft session.
  *

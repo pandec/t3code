@@ -1,9 +1,10 @@
 import { assert, it } from "@effect/vitest";
 
-import { EnvironmentInternalError } from "@t3tools/contracts";
+import { EnvironmentHttpConflictError, EnvironmentInternalError } from "@t3tools/contracts";
 
 import { projectCommandErrorFromLiveServerRequest } from "./project.ts";
 import {
+  CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationRequestError,
 } from "./orchestration.ts";
@@ -33,5 +34,21 @@ it("preserves unexpected server failures without deriving the message from them"
   assert.instanceOf(error, CliOrchestrationRequestError);
   assert.strictEqual(error.operation, "callLiveServer");
   assert.strictEqual(error.message, "Failed to call the running server.");
+  assert.strictEqual(error.cause, cause);
+});
+
+it("preserves actionable project action conflicts from the live server", () => {
+  const cause = new EnvironmentHttpConflictError({
+    message: "Project actions changed after they were read. List them and retry.",
+  });
+
+  const error = projectCommandErrorFromLiveServerRequest(cause);
+
+  assert.instanceOf(error, CliOrchestrationConflictError);
+  assert.strictEqual(error.operation, "callLiveServer");
+  assert.strictEqual(
+    error.message,
+    "Project actions changed after they were read. List them and retry.",
+  );
   assert.strictEqual(error.cause, cause);
 });

@@ -1,8 +1,11 @@
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { Alert } from "react-native";
+
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
-import { updateComposerDraftSettings } from "./use-composer-drafts";
+import { getComposerDraftSnapshot, updateComposerDraftSettings } from "./use-composer-drafts";
 import { appendContentToThreadDraft } from "./use-thread-composer-state";
 import {
   editingQueuedMessageIdsAtom,
@@ -51,18 +54,27 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
   if (!isActionableQueuedMessage(message)) {
     return;
   }
+  const threadKey = scopedThreadKey(message.environmentId, message.threadId);
+  const currentAttachmentCount = getComposerDraftSnapshot(threadKey).attachments.length;
+  if (currentAttachmentCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+    Alert.alert(
+      `A message can contain up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images`,
+      "Remove images from the composer before editing this queued message.",
+    );
+    return;
+  }
   holdEditingQueuedMessage(message.messageId);
   try {
     // Remove first: if this fails the message simply stays queued, whereas
     // appending first could leave the content both queued and in the draft.
-    await removeThreadOutboxMessage(message);
+    const removed = await removeThreadOutboxMessage(message);
+    if (!removed) return;
     appendContentToThreadDraft({
       environmentId: message.environmentId,
       threadId: message.threadId,
       text: message.text,
       attachments: message.attachments,
     });
-    const threadKey = scopedThreadKey(message.environmentId, message.threadId);
     updateComposerDraftSettings(threadKey, {
       ...(message.modelSelection !== undefined ? { modelSelection: message.modelSelection } : {}),
       ...(message.runtimeMode !== undefined ? { runtimeMode: message.runtimeMode } : {}),

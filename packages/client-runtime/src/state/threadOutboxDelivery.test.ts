@@ -38,7 +38,7 @@ const threadSettings: ThreadSettingsSnapshot = {
 };
 
 describe("thread outbox delivery", () => {
-  it("syncs a queued branch snapshot and model selection in one metadata command", async () => {
+  it("syncs queued branch and model snapshots with payload-stable command ids", async () => {
     const calls: string[] = [];
     const updateMetadata = vi.fn(async () => {
       calls.push("metadata");
@@ -71,18 +71,25 @@ describe("thread outbox delivery", () => {
     });
 
     await expect(delivery.sendQueuedMessage(message, threadSettings)).resolves.toBe(true);
-    expect(updateMetadata).toHaveBeenCalledOnce();
-    expect(updateMetadata).toHaveBeenCalledWith({
+    expect(updateMetadata).toHaveBeenCalledTimes(2);
+    expect(updateMetadata).toHaveBeenNthCalledWith(1, {
       environmentId: message.environmentId,
       input: {
         commandId: CommandId.make("command-1:model-selection"),
         threadId: message.threadId,
         modelSelection: nextModelSelection,
+      },
+    });
+    expect(updateMetadata).toHaveBeenNthCalledWith(2, {
+      environmentId: message.environmentId,
+      input: {
+        commandId: CommandId.make("command-1:branch"),
+        threadId: message.threadId,
         branch: "feature/queued-message",
         worktreePath: null,
       },
     });
-    expect(calls).toEqual(["metadata", "start-turn", "remove"]);
+    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove"]);
   });
 
   it("does not update branch metadata for legacy messages without a snapshot", async () => {

@@ -34,7 +34,7 @@ export interface ThreadOutboxDeliveryCommands {
 export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
-  readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<void>;
+  readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<unknown>;
   readonly warn: (message: string, attributes: Record<string, unknown>) => void;
 }
 
@@ -110,14 +110,28 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       thread.modelSelection,
     );
     const branchChanged = settings.branch !== thread.branch;
-    if (modelSelectionChanged || branchChanged) {
+    if (modelSelectionChanged) {
       const updateResult = await options.commands.updateMetadata({
         environmentId: queuedMessage.environmentId,
         input: {
           commandId: settingsCommandId(queuedMessage, "model-selection"),
           threadId: queuedMessage.threadId,
-          ...(modelSelectionChanged ? { modelSelection: settings.modelSelection } : {}),
-          ...(branchChanged ? { branch: settings.branch, worktreePath: null } : {}),
+          modelSelection: settings.modelSelection,
+        },
+      });
+      if (AsyncResult.isFailure(updateResult)) {
+        reportFailure(updateResult, "settings-sync");
+        return false;
+      }
+    }
+    if (branchChanged) {
+      const updateResult = await options.commands.updateMetadata({
+        environmentId: queuedMessage.environmentId,
+        input: {
+          commandId: settingsCommandId(queuedMessage, "branch"),
+          threadId: queuedMessage.threadId,
+          branch: settings.branch,
+          worktreePath: null,
         },
       });
       if (AsyncResult.isFailure(updateResult)) {

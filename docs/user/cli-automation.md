@@ -20,6 +20,47 @@ t3 project remove /absolute/path/to/repository --json
 Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME`. Mutations
 are sent to its running server when available; otherwise project metadata is updated offline.
 
+### Project actions
+
+Project actions can also be managed by project id or exact workspace-root path:
+
+```bash
+t3 project action list /absolute/path/to/repository --json
+
+t3 project action add /absolute/path/to/repository \
+  --name "Install iOS" \
+  --command "pnpm ios:local:release" \
+  --icon build \
+  --json
+
+t3 project action update /absolute/path/to/repository install-ios \
+  --command "pnpm ios:local" \
+  --json
+
+t3 project action remove /absolute/path/to/repository install-ios --json
+```
+
+`add` derives a stable action id from the name unless `--id` is supplied. Use the exact id returned
+by `add` or `list` for later updates and removals. The optional action fields exposed by the desktop
+UI are available as `--run-on-worktree-create`, `--preview-url`, and `--auto-open-preview`;
+boolean update flags also accept the `--no-...` form, and `--clear-preview-url` removes both preview
+settings. Keybindings are user-level settings rather than project action data and are not changed by
+these commands.
+
+Action listing works with or without a running T3 server. Adding, updating, and removing actions
+requires the server so concurrent UI and CLI edits can be serialized safely. If another client
+changed the actions after the CLI read them, the mutation fails with a conflict; list the actions
+again and retry. The CLI also verifies that the running server supports conditional action updates
+before writing; update and restart T3 Code if it reports an incompatible server.
+
+Mutation acknowledgement is bounded. If the connection is lost after dispatch, the CLI reports that
+the outcome is unknown because the server may still have committed the command. List the actions and
+reconcile their current state before retrying; do not blindly repeat the mutation.
+
+Only one action can run automatically when a worktree is created. Adding or updating an action with
+`--run-on-worktree-create` disables that setting on the previous setup action and reports its id in
+human and JSON output.
+
 ## Threads
 
 ```bash

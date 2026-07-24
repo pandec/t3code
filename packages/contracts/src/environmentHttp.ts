@@ -320,6 +320,7 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
+  EnvironmentHttpConflictError,
   EnvironmentInternalError,
 ] as const;
 const EnvironmentVoiceTranscriptionErrors = [
