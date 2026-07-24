@@ -15,3 +15,5 @@ by the live client reducer because the event carries no prior turn outcome. The 
 is authoritative and the next snapshot converges the navigator. A fully live fix requires a server-authored
 final-response delta or per-message finality field; add that only if this provider ordering occurs in
 practice, because it broadens the event protocol for a transient convergence edge case.
+
+> cy-review complete — 2026-07-24T11:23:45Z — rounds: 5
