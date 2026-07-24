@@ -988,6 +988,60 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
       }
     });
+
+    it("reconciles a late prior-turn checkpoint without replacing the newer latest turn", () => {
+      const previousMessageId = MessageId.make("msg-turn-1-commentary");
+      const newerTurn = {
+        turnId: TurnId.make("turn-2"),
+        state: "running" as const,
+        requestedAt: "2026-04-01T12:00:01.000Z",
+        startedAt: "2026-04-01T12:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      };
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          completedTurnAssistantMessageIds: [previousMessageId],
+          checkpoints: [
+            {
+              turnId: TurnId.make("turn-1"),
+              checkpointTurnCount: 1,
+              checkpointRef: CheckpointRef.make("ref-missing"),
+              status: "missing",
+              files: [],
+              assistantMessageId: previousMessageId,
+              completedAt: "2026-04-01T12:00:00.000Z",
+            },
+          ],
+          latestTurn: newerTurn,
+        },
+        {
+          ...baseEventFields,
+          sequence: 16,
+          occurredAt: "2026-04-01T12:00:02.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.turn-diff-completed",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            turnId: TurnId.make("turn-1"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("ref-ready"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("msg-turn-1-final"),
+            completedAt: "2026-04-01T12:00:02.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.latestTurn).toEqual(newerTurn);
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual(["msg-turn-1-final"]);
+      }
+    });
   });
 
   describe("thread.reverted", () => {

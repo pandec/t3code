@@ -192,8 +192,9 @@ import {
   type DraftId,
 } from "../composerDraftStore";
 import {
-  dispatchingQueuedMessageIdAtom,
+  dispatchingQueuedMessageAtom,
   enqueueThreadOutboxMessage,
+  hasPendingThreadOutboxWork,
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
   removeThreadOutboxMessage,
@@ -4658,6 +4659,8 @@ function ChatViewContent(props: ChatViewProps) {
       shouldQueueMessageWhileBusy({
         isServerThread,
         sessionStatus: activeThread.session?.status ?? null,
+        hasPendingOutboxWork:
+          activeThreadRef !== null && hasPendingThreadOutboxWork(activeThreadRef),
       })
     ) {
       sendInFlightRef.current = true;
@@ -5021,10 +5024,11 @@ function ChatViewContent(props: ChatViewProps) {
     () => allQueuedThreadMessages.filter((message) => message.creation === undefined),
     [allQueuedThreadMessages],
   );
-  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const dispatchingQueuedMessage = useAtomValue(dispatchingQueuedMessageAtom);
+  const dispatchingQueuedMessageId = dispatchingQueuedMessage?.messageId ?? null;
 
   const onSteerQueuedMessage = useCallback((message: QueuedThreadMessage) => {
-    if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+    if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
     // The drain is the only delivery path; flipping the intent lets it send
     // this message into the running turn on its next pass.
     void updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" }).catch((error) => {
@@ -5033,7 +5037,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, []);
 
   const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
-    if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+    if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
     void removeThreadOutboxMessage(message).catch((error) => {
       console.warn("[thread-outbox] failed to delete queued message", error);
     });
@@ -5041,7 +5045,8 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onEditQueuedMessage = useCallback(
     async (message: QueuedThreadMessage) => {
-      if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+      if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId)
+        return;
       const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
       if (currentImageCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         toastManager.add({

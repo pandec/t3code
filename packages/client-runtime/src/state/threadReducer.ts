@@ -456,23 +456,39 @@ export function applyThreadDetailEvent(
       const diffTurnStillRunning =
         thread.session?.status === "running" &&
         thread.session.activeTurnId === event.payload.turnId;
+      const checkpointTurn = !diffTurnStillRunning
+        ? {
+            turnId: event.payload.turnId,
+            state:
+              thread.latestTurn?.turnId === event.payload.turnId &&
+              thread.latestTurn.state === "interrupted"
+                ? ("interrupted" as const)
+                : thread.latestTurn?.turnId === event.payload.turnId &&
+                    thread.latestTurn.state === "error"
+                  ? ("error" as const)
+                  : checkpointStatusToTurnState(event.payload.status),
+            requestedAt:
+              thread.latestTurn?.turnId === event.payload.turnId
+                ? thread.latestTurn.requestedAt
+                : event.payload.completedAt,
+            startedAt:
+              thread.latestTurn?.turnId === event.payload.turnId
+                ? (thread.latestTurn.startedAt ?? event.payload.completedAt)
+                : event.payload.completedAt,
+            completedAt: event.payload.completedAt,
+            assistantMessageId: event.payload.assistantMessageId,
+          }
+        : null;
       const latestTurn =
-        !diffTurnStillRunning &&
+        checkpointTurn !== null &&
         (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
-          ? {
-              turnId: event.payload.turnId,
-              state:
-                thread.latestTurn?.state === "interrupted"
-                  ? "interrupted"
-                  : thread.latestTurn?.state === "error"
-                    ? "error"
-                    : checkpointStatusToTurnState(event.payload.status),
-              requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
-              startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
-              completedAt: event.payload.completedAt,
-              assistantMessageId: event.payload.assistantMessageId,
-            }
+          ? checkpointTurn
           : thread.latestTurn;
+      const previousCheckpointAssistantMessageId =
+        existing?.assistantMessageId ??
+        (thread.latestTurn?.turnId === event.payload.turnId
+          ? thread.latestTurn.assistantMessageId
+          : null);
 
       return {
         kind: "updated",
@@ -480,13 +496,14 @@ export function applyThreadDetailEvent(
           ...thread,
           checkpoints,
           latestTurn,
-          completedTurnAssistantMessageIds: reconcileCompletedTurnAssistantMessageIds(
-            thread.completedTurnAssistantMessageIds,
-            latestTurn,
-            thread.latestTurn?.turnId === event.payload.turnId
-              ? thread.latestTurn.assistantMessageId
-              : null,
-          ),
+          completedTurnAssistantMessageIds:
+            checkpointTurn === null
+              ? thread.completedTurnAssistantMessageIds
+              : reconcileCompletedTurnAssistantMessageIds(
+                  thread.completedTurnAssistantMessageIds,
+                  checkpointTurn,
+                  previousCheckpointAssistantMessageId,
+                ),
           updatedAt: event.occurredAt,
         },
       };

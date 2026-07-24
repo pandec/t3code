@@ -38,10 +38,30 @@ export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise
 }
 
 /** The queued message the drain is currently delivering, if any. */
-export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
+export const dispatchingQueuedMessageAtom = Atom.make<QueuedThreadMessage | null>(null).pipe(
   Atom.keepAlive,
-  Atom.withLabel("web:thread-outbox:dispatching-message-id"),
+  Atom.withLabel("web:thread-outbox:dispatching-message"),
 );
+
+/**
+ * A composer send must join the outbox while its thread already has pending
+ * work. The live registry read closes the completion-to-next-turn race where
+ * React still renders an idle shell while the drain owns the previous row.
+ */
+export function hasPendingThreadOutboxWork(threadRef: ScopedThreadRef): boolean {
+  const dispatching = appAtomRegistry.get(dispatchingQueuedMessageAtom);
+  if (
+    dispatching?.environmentId === threadRef.environmentId &&
+    dispatching.threadId === threadRef.threadId
+  ) {
+    return true;
+  }
+  const threadKey = outboxScopedThreadKey(threadRef.environmentId, threadRef.threadId);
+  return (
+    (appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom)[threadKey]?.length ??
+      0) > 0
+  );
+}
 
 /**
  * Queued messages the outbox drain must not deliver right now because an

@@ -123,10 +123,13 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
 export function shouldQueueMessageWhileBusy(input: {
   isServerThread: boolean;
   sessionStatus: OrchestrationSessionStatus | null;
+  hasPendingOutboxWork?: boolean;
 }): boolean {
   return (
     input.isServerThread &&
-    (input.sessionStatus === "running" || input.sessionStatus === "starting")
+    (input.hasPendingOutboxWork === true ||
+      input.sessionStatus === "running" ||
+      input.sessionStatus === "starting")
   );
 }
 

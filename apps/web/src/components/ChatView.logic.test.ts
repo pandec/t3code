@@ -652,9 +652,23 @@ describe("shouldQueueMessageWhileBusy", () => {
     );
   });
 
+  it("queues idle sends behind existing outbox work", () => {
+    expect(
+      shouldQueueMessageWhileBusy({
+        isServerThread: true,
+        sessionStatus: "ready",
+        hasPendingOutboxWork: true,
+      }),
+    ).toBe(true);
+  });
+
   it("never queues local draft threads (they still need bootstrap)", () => {
-    expect(shouldQueueMessageWhileBusy({ isServerThread: false, sessionStatus: "running" })).toBe(
-      false,
-    );
+    expect(
+      shouldQueueMessageWhileBusy({
+        isServerThread: false,
+        sessionStatus: "running",
+        hasPendingOutboxWork: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -23,7 +23,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
 import { environmentShell } from "./shell";
 import {
-  dispatchingQueuedMessageIdAtom,
+  dispatchingQueuedMessageAtom,
   editingQueuedMessageIdsAtom,
   ensureThreadOutboxLoaded,
   removeThreadOutboxMessage,
@@ -63,13 +63,16 @@ const threadOutboxEnvironmentConnectivityAtom = Atom.make(
   },
 ).pipe(Atom.withLabel("web:thread-outbox:environment-connectivity"));
 
-function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
+function beginDispatchingQueuedMessage(queuedMessage: QueuedThreadMessage): void {
+  appAtomRegistry.set(dispatchingQueuedMessageAtom, queuedMessage);
 }
 
 function finishDispatchingQueuedMessage(queuedMessageId: MessageId): void {
-  const current = appAtomRegistry.get(dispatchingQueuedMessageIdAtom);
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, current === queuedMessageId ? null : current);
+  const current = appAtomRegistry.get(dispatchingQueuedMessageAtom);
+  appAtomRegistry.set(
+    dispatchingQueuedMessageAtom,
+    current?.messageId === queuedMessageId ? null : current,
+  );
 }
 
 function findThread(
@@ -99,7 +102,7 @@ export function useThreadOutboxDrain(): void {
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
-  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const dispatchingQueuedMessage = useAtomValue(dispatchingQueuedMessageAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useAtomValue(threadOutboxShellStatusesAtom);
@@ -139,7 +142,7 @@ export function useThreadOutboxDrain(): void {
   );
 
   useEffect(() => {
-    if (dispatchingQueuedMessageId !== null) {
+    if (dispatchingQueuedMessage !== null) {
       return;
     }
 
@@ -172,7 +175,7 @@ export function useThreadOutboxDrain(): void {
       const nextQueuedMessage = candidate.message;
       const thread = findThread(threads, nextQueuedMessage);
 
-      beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+      beginDispatchingQueuedMessage(nextQueuedMessage);
       const dispatch =
         candidate.action === "remove"
           ? removeThreadOutboxMessage(nextQueuedMessage).then(
@@ -224,7 +227,7 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     delivery,
-    dispatchingQueuedMessageId,
+    dispatchingQueuedMessage,
     editingQueuedMessageIds,
     environmentConnectivity,
     queuedMessagesByThreadKey,
