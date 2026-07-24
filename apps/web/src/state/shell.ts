@@ -1,12 +1,14 @@
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
+  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
   createEnvironmentShellSummaryAtom,
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
+  type EnvironmentShellState,
 } from "@t3tools/client-runtime/state/shell";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -22,6 +24,25 @@ export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   shellStateValueAtom: environmentShell.stateValueAtom,
 });
 
+function disconnectedEnvironmentIsSettled(connection: SupervisorConnectionState): boolean {
+  if (connectionProjectionPhase(connection) !== "disconnected") {
+    return false;
+  }
+  // A retrying environment is only transiently disconnected; give it its
+  // first retries before treating its current shell as settled.
+  return !(connection.phase === "backoff" && connection.desired && connection.attempt <= 2);
+}
+
+export function isEnvironmentShellReadyForTurnCompletion(
+  shell: EnvironmentShellState,
+  connection: Option.Option<SupervisorConnectionState>,
+): boolean {
+  if (shell.status === "live") {
+    return true;
+  }
+  return Option.isSome(connection) && disconnectedEnvironmentIsSettled(connection.value);
+}
+
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
@@ -35,14 +56,24 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
       AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
       () => AVAILABLE_CONNECTION_STATE,
     );
-    if (connectionProjectionPhase(connection) !== "disconnected") {
-      return false;
-    }
-    // A retrying environment is only transiently disconnected; give it its
-    // first retries before letting the landing settle without its snapshot.
-    if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
+    if (!disconnectedEnvironmentIsSettled(connection)) {
       return false;
     }
   }
   return true;
 }).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+
+export const allEnvironmentShellsReadyForTurnCompletionAtom = Atom.make((get) => {
+  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
+  if (Option.isNone(catalog)) {
+    return false;
+  }
+  for (const environmentId of catalog.value.entries.keys()) {
+    const shell = get(environmentShell.stateValueAtom(environmentId));
+    const connection = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
+    if (!isEnvironmentShellReadyForTurnCompletion(shell, connection)) {
+      return false;
+    }
+  }
+  return true;
+}).pipe(Atom.withLabel("web-all-environment-shells-ready-for-turn-completion"));

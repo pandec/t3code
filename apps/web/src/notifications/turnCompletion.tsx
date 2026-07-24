@@ -1,4 +1,3 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { DesktopNotificationThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
@@ -6,9 +5,14 @@ import { useEffect, useEffectEvent, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
 import { useClientSettings } from "../hooks/useSettings";
-import { useAllEnvironmentShellsBootstrapped, useThreadShells } from "../state/entities";
+import { useAllEnvironmentShellsReadyForTurnCompletion, useThreadShells } from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { buildTurnCompletionCopy, collectTurnCompletionCandidates } from "./turnCompletion.logic";
+import {
+  advanceTurnCompletionSnapshot,
+  buildTurnCompletionCopy,
+  seedTurnCompletionSnapshot,
+  type TurnCompletionSnapshot,
+} from "./turnCompletion.logic";
 
 export type BrowserNotificationPermissionState =
   | NotificationPermission
@@ -16,7 +20,7 @@ export type BrowserNotificationPermissionState =
   | "insecure";
 
 export function readBrowserNotificationPermissionState(): BrowserNotificationPermissionState {
-  if (typeof window === "undefined" || !("Notification" in window)) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
     return "unsupported";
   }
   if (!window.isSecureContext) {
@@ -112,8 +116,8 @@ export function TurnCompletionNotifications() {
     (settings) => settings.enableTurnCompletionSystemNotifications,
   );
   const threadShells = useThreadShells();
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const previousShellsRef = useRef<ReadonlyArray<EnvironmentThreadShell> | null>(null);
+  const readyForNotifications = useAllEnvironmentShellsReadyForTurnCompletion();
+  const snapshotRef = useRef<TurnCompletionSnapshot | null>(null);
 
   const navigateToThread = useEffectEvent((threadRef: DesktopNotificationThreadRef) => {
     void navigate({
@@ -133,20 +137,29 @@ export function TurnCompletionNotifications() {
   }, [navigateToThread]);
 
   useEffect(() => {
-    // Seed only from a fully bootstrapped shell list: everything present at
-    // startup — including already-completed turns replayed from cache or the
-    // server snapshot — is history, not news.
-    if (previousShellsRef.current === null) {
-      if (bootstrapped) {
-        previousShellsRef.current = threadShells;
-      }
+    if (!readyForNotifications) {
+      // Any environment beginning a synchronization invalidates the aggregate
+      // baseline. Seed again only after every environment is authoritative (or
+      // has settled disconnected) so reconnect replay can never look live.
+      snapshotRef.current = null;
       return;
     }
 
-    const candidates = collectTurnCompletionCandidates(previousShellsRef.current, threadShells);
+    // Seed only from a fully authoritative shell list: everything present at
+    // startup — including already-completed turns replayed from cache or the
+    // server snapshot — is history, not news.
+    if (snapshotRef.current === null) {
+      snapshotRef.current = seedTurnCompletionSnapshot(threadShells);
+      return;
+    }
+
+    const { snapshot, candidates } = advanceTurnCompletionSnapshot(
+      snapshotRef.current,
+      threadShells,
+    );
     // Always advance, even with both toggles off — re-enabling a toggle must
     // not burst out a backlog of stale completions.
-    previousShellsRef.current = threadShells;
+    snapshotRef.current = snapshot;
 
     if (candidates.length === 0 || (!toastsEnabled && !systemEnabled)) {
       return;
@@ -179,7 +192,7 @@ export function TurnCompletionNotifications() {
         });
       }
     }
-  }, [bootstrapped, threadShells, toastsEnabled, systemEnabled, navigateToThread]);
+  }, [readyForNotifications, threadShells, toastsEnabled, systemEnabled, navigateToThread]);
 
   return null;
 }

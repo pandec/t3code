@@ -2,7 +2,12 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import type { EnvironmentId, OrchestrationLatestTurn, ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildTurnCompletionCopy, collectTurnCompletionCandidates } from "./turnCompletion.logic";
+import {
+  advanceTurnCompletionSnapshot,
+  buildTurnCompletionCopy,
+  collectTurnCompletionCandidates,
+  seedTurnCompletionSnapshot,
+} from "./turnCompletion.logic";
 
 function makeTurn(input: {
   turnId: string;
@@ -44,14 +49,28 @@ const completed = (id: string, turnId = `${id}-turn`) =>
 describe("collectTurnCompletionCandidates", () => {
   it("fires when a known thread's turn transitions to completed", () => {
     const candidates = collectTurnCompletionCandidates([running("a")], [completed("a")]);
-    expect(candidates).toEqual([{ environmentId: "env-1", threadId: "a", title: "Thread a" }]);
+    expect(candidates).toEqual([
+      {
+        environmentId: "env-1",
+        threadId: "a",
+        turnId: "a-turn",
+        title: "Thread a",
+      },
+    ]);
   });
 
   it("does not fire for threads absent from the previous list (initial sync, reconnect)", () => {
     expect(collectTurnCompletionCandidates([], [completed("a")])).toEqual([]);
     expect(
       collectTurnCompletionCandidates([running("a")], [completed("a"), completed("b")]),
-    ).toEqual([{ environmentId: "env-1", threadId: "a", title: "Thread a" }]);
+    ).toEqual([
+      {
+        environmentId: "env-1",
+        threadId: "a",
+        turnId: "a-turn",
+        title: "Thread a",
+      },
+    ]);
   });
 
   it("does not fire again for an unchanged completed turn (dedupe)", () => {
@@ -116,12 +135,49 @@ describe("collectTurnCompletionCandidates", () => {
   });
 });
 
+describe("turn completion snapshot", () => {
+  it("seeds completed turns as history and ignores an unchanged settings-triggered rerun", () => {
+    const shells = [completed("a")];
+    const seeded = seedTurnCompletionSnapshot(shells);
+    expect(advanceTurnCompletionSnapshot(seeded, shells).candidates).toEqual([]);
+  });
+
+  it("never re-fires a turn id that temporarily leaves the completed state", () => {
+    const initial = seedTurnCompletionSnapshot([running("a")]);
+    const firstCompletion = advanceTurnCompletionSnapshot(initial, [completed("a")]);
+    expect(firstCompletion.candidates).toHaveLength(1);
+
+    const runningAgain = advanceTurnCompletionSnapshot(firstCompletion.snapshot, [running("a")]);
+    const sameTurnCompletesAgain = advanceTurnCompletionSnapshot(runningAgain.snapshot, [
+      completed("a"),
+    ]);
+    expect(sameTurnCompletesAgain.candidates).toEqual([]);
+  });
+
+  it("remembers silent completions for threads newly introduced by a snapshot", () => {
+    const initial = seedTurnCompletionSnapshot([running("a")]);
+    const introduced = advanceTurnCompletionSnapshot(initial, [running("a"), completed("b")]);
+    expect(introduced.candidates).toEqual([]);
+
+    const runningAgain = advanceTurnCompletionSnapshot(introduced.snapshot, [
+      running("a"),
+      running("b"),
+    ]);
+    const sameTurnCompletesAgain = advanceTurnCompletionSnapshot(runningAgain.snapshot, [
+      running("a"),
+      completed("b"),
+    ]);
+    expect(sameTurnCompletesAgain.candidates).toEqual([]);
+  });
+});
+
 describe("buildTurnCompletionCopy", () => {
   it("uses the thread title as the body", () => {
     expect(
       buildTurnCompletionCopy({
         environmentId: "env-1" as EnvironmentId,
         threadId: "a" as ThreadId,
+        turnId: "turn-a",
         title: "Fix the flaky test",
       }),
     ).toEqual({ title: "Agent finished", body: "Fix the flaky test" });
@@ -132,6 +188,7 @@ describe("buildTurnCompletionCopy", () => {
       buildTurnCompletionCopy({
         environmentId: "env-1" as EnvironmentId,
         threadId: "a" as ThreadId,
+        turnId: "turn-a",
         title: "  ",
       }).body,
     ).toBe("A thread finished working.");

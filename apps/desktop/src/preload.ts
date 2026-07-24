@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopNotificationThreadRef,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -10,6 +11,27 @@ import { contextBridge, ipcRenderer } from "electron";
 import * as IpcChannels from "./ipc/channels.ts";
 
 exposeClerkBridge({ passkeys: true });
+
+const notificationClickListeners = new Set<(threadRef: DesktopNotificationThreadRef) => void>();
+const pendingNotificationClicks: DesktopNotificationThreadRef[] = [];
+const MAX_PENDING_NOTIFICATION_CLICKS = 20;
+
+ipcRenderer.on(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, (_event, threadRef: unknown) => {
+  if (typeof threadRef !== "object" || threadRef === null) {
+    return;
+  }
+  const typedThreadRef = threadRef as DesktopNotificationThreadRef;
+  if (notificationClickListeners.size === 0) {
+    pendingNotificationClicks.push(typedThreadRef);
+    if (pendingNotificationClicks.length > MAX_PENDING_NOTIFICATION_CLICKS) {
+      pendingNotificationClicks.shift();
+    }
+    return;
+  }
+  for (const listener of notificationClickListeners) {
+    listener(typedThreadRef);
+  }
+});
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
@@ -132,14 +154,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   notifications: {
     show: (input) => ipcRenderer.invoke(IpcChannels.NOTIFICATIONS_SHOW_CHANNEL, input),
     onNotificationClicked: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, threadRef: unknown) => {
-        if (typeof threadRef !== "object" || threadRef === null) return;
-        listener(threadRef as Parameters<typeof listener>[0]);
-      };
-
-      ipcRenderer.on(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, wrappedListener);
+      notificationClickListeners.add(listener);
+      for (const threadRef of pendingNotificationClicks.splice(0)) {
+        listener(threadRef);
+      }
       return () => {
-        ipcRenderer.removeListener(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, wrappedListener);
+        notificationClickListeners.delete(listener);
       };
     },
   },
