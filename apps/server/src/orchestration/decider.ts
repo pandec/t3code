@@ -424,7 +424,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      const historyImportedEvent: PlannedOrchestrationEvent = {
+      // SessionImportService persists the matching stopped provider binding
+      // before dispatching this command. Project that same state atomically so
+      // the imported thread can resume or fork without first starting a turn.
+      const importSessionEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -432,6 +435,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         causationEventId: importCreatedEvent.eventId,
+        type: "thread.session-set",
+        payload: {
+          threadId: command.threadId,
+          session: {
+            threadId: command.threadId,
+            status: "stopped",
+            providerName: command.source.provider,
+            providerInstanceId: command.modelSelection.instanceId,
+            runtimeMode: command.runtimeMode,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+      const historyImportedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: importSessionEvent.eventId,
         type: "thread.history-imported",
         payload: {
           threadId: command.threadId,
@@ -440,7 +466,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
-      return [importCreatedEvent, historyImportedEvent];
+      return [importCreatedEvent, importSessionEvent, historyImportedEvent];
     }
 
     case "thread.delete": {

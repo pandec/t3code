@@ -79,7 +79,7 @@ const importCommand = {
 } as const;
 
 it.layer(NodeServices.layer)("thread import decider", (it) => {
-  it.effect("emits thread.created and thread.history-imported with verbatim messages", () =>
+  it.effect("emits a stopped provider session and imported history", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
         readModel: yield* seedReadModel,
@@ -88,6 +88,7 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
       const events = Array.isArray(result) ? result : [result];
       expect(events.map((event) => event.type)).toEqual([
         "thread.created",
+        "thread.session-set",
         "thread.history-imported",
       ]);
       const created = events[0];
@@ -100,10 +101,25 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
           worktreePath: null,
         });
       }
-      const imported = events[1];
+      const sessionSet = events[1];
+      expect(sessionSet?.type).toBe("thread.session-set");
+      if (sessionSet?.type === "thread.session-set") {
+        expect(sessionSet.causationEventId).toBe(created?.eventId);
+        expect(sessionSet.payload.session).toEqual({
+          threadId: importThreadId,
+          status: "stopped",
+          providerName: importCommand.source.provider,
+          providerInstanceId: importCommand.modelSelection.instanceId,
+          runtimeMode: importCommand.runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        });
+      }
+      const imported = events[2];
       expect(imported?.type).toBe("thread.history-imported");
       if (imported?.type === "thread.history-imported") {
-        expect(imported.causationEventId).toBe(created?.eventId);
+        expect(imported.causationEventId).toBe(sessionSet?.eventId);
         expect(imported.payload.source).toEqual(importCommand.source);
         expect(imported.payload.messages).toEqual(importCommand.messages);
       }
@@ -181,6 +197,16 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
       const projected = yield* applyAll(readModel);
       const thread = projected.threads.find((entry) => entry.id === importThreadId);
       expect(thread).toBeDefined();
+      expect(thread?.session).toEqual({
+        threadId: importThreadId,
+        status: "stopped",
+        providerName: importCommand.source.provider,
+        providerInstanceId: importCommand.modelSelection.instanceId,
+        runtimeMode: importCommand.runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      });
       expect(
         thread?.messages.map((message) => ({
           id: message.id,
@@ -211,6 +237,48 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
       expect(replayed.threads.find((entry) => entry.id === importThreadId)?.messages).toEqual(
         thread?.messages,
       );
+    }),
+  );
+
+  it.effect("allows an imported thread to fork before starting a turn", () =>
+    Effect.gen(function* () {
+      let readModel = yield* seedReadModel;
+      const importEvents = yield* decideOrchestrationCommand({
+        readModel,
+        command: importCommand,
+      }).pipe(Effect.map((result) => (Array.isArray(result) ? result : [result])));
+      for (const [index, event] of importEvents.entries()) {
+        readModel = yield* projectEvent(readModel, {
+          ...event,
+          sequence: 10 + index,
+        });
+      }
+
+      const forkResult = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-fork-import"),
+          sourceThreadId: importThreadId,
+          threadId: ThreadId.make("forked-import"),
+          createdAt: now,
+        },
+      });
+      const forkEvents = Array.isArray(forkResult) ? forkResult : [forkResult];
+      expect(forkEvents.map((event) => event.type)).toEqual([
+        "thread.created",
+        "thread.session-set",
+        "thread.fork-requested",
+      ]);
+      const forkSession = forkEvents[1];
+      expect(forkSession?.type).toBe("thread.session-set");
+      if (forkSession?.type === "thread.session-set") {
+        expect(forkSession.payload.session).toMatchObject({
+          status: "starting",
+          providerName: importCommand.source.provider,
+          providerInstanceId: importCommand.modelSelection.instanceId,
+        });
+      }
     }),
   );
 });
