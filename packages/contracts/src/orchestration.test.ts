@@ -190,6 +190,22 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
   }),
 );
 
+it.effect("decodes project.meta.update with an optimistic concurrency timestamp", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-actions",
+      projectId: "project-1",
+      expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+      scripts: [],
+    });
+    assert.strictEqual(parsed.type, "project.meta.update");
+    if (parsed.type === "project.meta.update") {
+      assert.strictEqual(parsed.expectedUpdatedAt, "2026-01-01T00:00:00.000Z");
+    }
+  }),
+);
+
 it.effect("rejects command fields that become empty after trim", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

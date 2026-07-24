@@ -20,6 +20,36 @@ t3 project remove /absolute/path/to/repository --json
 Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME`. Mutations
 are sent to its running server when available; otherwise project metadata is updated offline.
 
+### Project actions
+
+Project actions can also be managed by project id or exact workspace-root path:
+
+```bash
+t3 project action list /absolute/path/to/repository --json
+
+t3 project action add /absolute/path/to/repository \
+  --name "Install iOS" \
+  --command "pnpm ios:local:release" \
+  --icon build \
+  --json
+
+t3 project action update /absolute/path/to/repository install-ios \
+  --command "pnpm ios:local" \
+  --json
+
+t3 project action remove /absolute/path/to/repository install-ios --json
+```
+
+`add` derives a stable action id from the name unless `--id` is supplied. Use the exact id returned
+by `add` or `list` for later updates and removals. The optional action fields exposed by the desktop
+UI are available as `--run-on-worktree-create`, `--preview-url`, and `--auto-open-preview`;
+boolean update flags also accept the `--no-...` form, and `--clear-preview-url` removes both preview
+settings. Keybindings are user-level settings rather than project action data and are not changed by
+these commands.
+
+Action mutations reject a stale project snapshot instead of overwriting a simultaneous edit. List
+the actions again and retry if another client changed the project at the same time.
+
 ## Threads
 
 ```bash

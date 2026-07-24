@@ -30,7 +30,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### CLI & automation
 
-- **`t3` CLI automation** — project and thread automation commands: manage projects by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting.
+- **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting.
 
 ### Reliability
 

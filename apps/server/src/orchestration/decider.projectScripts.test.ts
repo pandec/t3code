@@ -94,6 +94,49 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
     }),
   );
 
+  it.effect("rejects project.meta.update against a stale project snapshot", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-stale"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-stale"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-stale"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-stale"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-stale"),
+          title: "Stale",
+          workspaceRoot: "/tmp/stale",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-update-stale"),
+            projectId: asProjectId("project-stale"),
+            expectedUpdatedAt: "2026-01-02T00:00:00.000Z",
+            scripts: [],
+          },
+          readModel,
+        }),
+      );
+
+      expect(failure.message).toContain("Project 'project-stale' changed after it was read.");
+    }),
+  );
+
   it.effect("rejects project.create for an active workspace root that already exists", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";

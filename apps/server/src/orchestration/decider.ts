@@ -198,11 +198,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
       });
+      if (
+        command.expectedUpdatedAt !== undefined &&
+        command.expectedUpdatedAt !== project.updatedAt
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' changed after it was read.`,
+        });
+      }
       if (command.workspaceRoot !== undefined) {
         yield* requireActiveProjectWorkspaceRootAbsent({
           readModel,
