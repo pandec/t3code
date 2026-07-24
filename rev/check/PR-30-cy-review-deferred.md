@@ -8,4 +8,4 @@ Command+Z events from the Electron preview webview do not reach the host-window 
 
 The sidebar presents archiving multiple selected threads as one action, while the requested undo contract and current implementation retain only the most recently archived thread. Restoring the whole batch would require batch and partial-failure semantics; exposing repeated single-thread undo would change the latest-only contract. Revisit if Command+Z should undo bulk archives as a unit.
 
-> cy-review complete — 2026-07-24T10:37:13Z — rounds: 2
+> cy-review complete — 2026-07-24T10:50:11Z — rounds: 5
