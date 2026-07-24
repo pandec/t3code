@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { getAnchoredTurnMetrics, getRowBottom } from "./timelineScrollAnchoring";
+import {
+  getAnchoredTurnMetrics,
+  getRowBottom,
+  isTimelineDetachedForThread,
+  resolveTimelineFollowDecision,
+} from "./timelineScrollAnchoring";
 
 function buildState({
   positions,
@@ -22,6 +27,21 @@ function buildState({
 }
 
 describe("timeline scroll anchoring", () => {
+  it("changes follow ownership only for confirmed user navigation", () => {
+    expect(resolveTimelineFollowDecision({ isAtEnd: false, isUserNavigation: false })).toBe(
+      "preserve",
+    );
+    expect(resolveTimelineFollowDecision({ isAtEnd: false, isUserNavigation: true })).toBe(
+      "detach",
+    );
+    expect(resolveTimelineFollowDecision({ isAtEnd: true, isUserNavigation: true })).toBe("follow");
+  });
+
+  it("scopes detached state to the thread where the user left the live edge", () => {
+    expect(isTimelineDetachedForThread("thread-a", "thread-a")).toBe(true);
+    expect(isTimelineDetachedForThread("thread-a", "thread-b")).toBe(false);
+  });
+
   it("measures row bottoms from LegendList row position and size", () => {
     const state = buildState({
       positions: [0, 120],

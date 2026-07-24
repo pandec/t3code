@@ -211,8 +211,9 @@ interface MessagesTimelineProps {
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
   contentInsetEndAdjustment: number;
-  onIsAtEndChange: (isAtEnd: boolean) => void;
+  onIsAtEndChange: (isAtEnd: boolean, isUserNavigation: boolean) => void;
   onManualNavigation: () => void;
+  isDetached: boolean;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
 }
@@ -250,12 +251,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetEndAdjustment,
   onIsAtEndChange,
   onManualNavigation,
+  isDetached,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
+  const userNavigationIntentUntilRef = useRef(0);
+  const markUserNavigationIntent = useCallback(() => {
+    userNavigationIntentUntilRef.current = performance.now() + 750;
+  }, []);
 
   const onToggleTurnFold = useCallback((turnId: TurnId) => {
     setExpandedTurnIds((existing) => {
@@ -388,38 +394,46 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       : undefined;
   }, [anchorMessageId, handleAnchorReady, handleAnchorSizeChanged, rows]);
 
-  const handleScroll = useCallback(() => {
-    const state = listRef.current?.getState?.();
-    const isAtEnd = resolveTimelineIsAtEnd(state);
-    if (isAtEnd !== undefined) {
-      onIsAtEndChange(isAtEnd);
-    }
-    if (!state || minimapItems.length === 0) {
-      return;
-    }
-
-    const scrollTop = state.scroll ?? 0;
-    const scrollBottom = scrollTop + (state.scrollLength ?? 0);
-
-    for (const item of minimapItems) {
-      const strip = minimapStripMap.get(item.id);
-      if (!strip) {
-        continue;
+  const handleScroll = useCallback(
+    (fromScrollEvent: boolean) => {
+      const state = listRef.current?.getState?.();
+      const isAtEnd = resolveTimelineIsAtEnd(state);
+      if (isAtEnd !== undefined) {
+        const now = performance.now();
+        const isUserNavigation = fromScrollEvent && now <= userNavigationIntentUntilRef.current;
+        if (isUserNavigation) {
+          userNavigationIntentUntilRef.current = now + 750;
+        }
+        onIsAtEndChange(isAtEnd, isUserNavigation);
+      }
+      if (!state || minimapItems.length === 0) {
+        return;
       }
 
-      const rowTop = resolveTimelineRowTop(state, item.rowIndex);
-      const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
-      const inView =
-        rowTop !== null &&
-        rowTop < scrollBottom &&
-        rowTop + Math.max(1, rowHeight ?? 1) > scrollTop;
+      const scrollTop = state.scroll ?? 0;
+      const scrollBottom = scrollTop + (state.scrollLength ?? 0);
 
-      strip.dataset.inView = inView ? "true" : "false";
-    }
-  }, [listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
+      for (const item of minimapItems) {
+        const strip = minimapStripMap.get(item.id);
+        if (!strip) {
+          continue;
+        }
+
+        const rowTop = resolveTimelineRowTop(state, item.rowIndex);
+        const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
+        const inView =
+          rowTop !== null &&
+          rowTop < scrollBottom &&
+          rowTop + Math.max(1, rowHeight ?? 1) > scrollTop;
+
+        strip.dataset.inView = inView ? "true" : "false";
+      }
+    },
+    [listRef, minimapItems, minimapStripMap, onIsAtEndChange],
+  );
 
   useEffect(() => {
-    const frame = requestAnimationFrame(handleScroll);
+    const frame = requestAnimationFrame(() => handleScroll(false));
     return () => cancelAnimationFrame(frame);
   }, [handleScroll, rows.length]);
 
@@ -520,11 +534,45 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+        <div
+          ref={setTimelineViewportElement}
+          className="relative h-full min-h-0"
+          onWheelCapture={(event) => {
+            if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+              markUserNavigationIntent();
+            }
+          }}
+          onTouchMoveCapture={markUserNavigationIntent}
+          onPointerDownCapture={(event) => {
+            if (event.target === listRef.current?.getScrollableNode()) {
+              markUserNavigationIntent();
+            }
+          }}
+          onPointerMoveCapture={(event) => {
+            if (event.buttons !== 0 && event.target === listRef.current?.getScrollableNode()) {
+              markUserNavigationIntent();
+            }
+          }}
+          onKeyDownCapture={(event) => {
+            if (
+              event.target === listRef.current?.getScrollableNode() &&
+              (event.key === "ArrowUp" ||
+                event.key === "ArrowDown" ||
+                event.key === "PageUp" ||
+                event.key === "PageDown" ||
+                event.key === "Home" ||
+                event.key === "End" ||
+                event.key === " ")
+            ) {
+              markUserNavigationIntent();
+            }
+          }}
+        >
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
             keyExtractor={keyExtractor}
+            key={routeThreadKey}
             getItemType={getItemType}
             renderItem={renderItem}
             estimatedItemSize={90}
@@ -532,7 +580,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             maintainScrollAtEnd={
-              anchoredEndSpace
+              anchoredEndSpace || isDetached
                 ? false
                 : {
                     animated: false,
@@ -545,9 +593,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
             maintainVisibleContentPosition={{
               data: true,
-              size: false,
+              size: isDetached,
             }}
-            onScroll={handleScroll}
+            onScroll={() => handleScroll(true)}
             className={cn(
               "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
               topFadeEnabled && "chat-timeline-scroll-fade",

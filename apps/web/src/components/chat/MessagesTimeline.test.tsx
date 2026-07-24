@@ -196,6 +196,7 @@ function buildProps() {
     contentInsetEndAdjustment: 0,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
+    isDetached: false,
   };
 }
 
@@ -362,7 +363,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
-  it("uses LegendList isNearEnd when deciding whether the live edge is visible", async () => {
+  it("uses strict LegendList end state when deciding whether to follow the live edge", async () => {
     const {
       resolveTimelineIsAtEnd,
       resolveTimelineMinimapHasPersistentGutter,
@@ -373,8 +374,7 @@ describe("MessagesTimeline", () => {
       resolveTimelineMinimapTopPercent,
     } = await import("./MessagesTimeline.logic");
 
-    expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
-    expect(resolveTimelineIsAtEnd({ isNearEnd: false, isAtEnd: true })).toBe(false);
+    expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
     expect(resolveTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
     expect(resolveTimelineIsAtEnd(undefined)).toBeUndefined();
 
@@ -488,6 +488,20 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-collapsed="true"');
     expect(markup).toContain('data-user-message-fade="true"');
     expect(markup).toContain('data-user-message-footer="true"');
+  });
+
+  it("disables tail following and preserves measured content position when detached", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isDetached
+        timelineEntries={[buildUserTimelineEntry("Reading an earlier message.")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(markup).toContain('data-maintain-visible-content-position-data="true"');
+    expect(markup).toContain('data-maintain-visible-content-position-size="true"');
   });
 
   it("does not render collapse controls for short user messages", () => {
