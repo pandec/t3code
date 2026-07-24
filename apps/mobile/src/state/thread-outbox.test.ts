@@ -94,6 +94,7 @@ describe("thread outbox", () => {
       },
       runtimeMode: "approval-required",
       interactionMode: "plan",
+      localCheckoutBranch: "feature/queued-message",
     } satisfies QueuedThreadMessage;
 
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(selectedMessage))).toEqual(
@@ -102,11 +103,13 @@ describe("thread outbox", () => {
     expect(
       resolveQueuedThreadSettings(legacyMessage, {
         modelSelection: selectedMessage.modelSelection,
+        branch: "dev",
         runtimeMode: selectedMessage.runtimeMode,
         interactionMode: selectedMessage.interactionMode,
       }),
     ).toEqual({
       modelSelection: selectedMessage.modelSelection,
+      branch: "dev",
       runtimeMode: selectedMessage.runtimeMode,
       interactionMode: selectedMessage.interactionMode,
     });

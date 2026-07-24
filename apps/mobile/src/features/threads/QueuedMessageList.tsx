@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
-import { ActivityIndicator, Alert, Pressable, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -140,15 +140,17 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
       entering={FadeInDown.duration(220)}
       exiting={FadeOut.duration(140)}
     >
-      <View className="rounded-[20px] border border-neutral-200 bg-neutral-100/80 py-1 dark:border-white/6 dark:bg-neutral-900/80">
-        {messages.map((message, index) => (
-          <QueuedMessageRow
-            key={message.messageId}
-            message={message}
-            isDispatching={dispatchingQueuedMessageId === message.messageId}
-            isFirst={index === 0}
-          />
-        ))}
+      <View className="overflow-hidden rounded-[20px] border border-neutral-200 bg-neutral-100/80 py-1 dark:border-white/6 dark:bg-neutral-900/80">
+        <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled>
+          {messages.map((message, index) => (
+            <QueuedMessageRow
+              key={message.messageId}
+              message={message}
+              isDispatching={dispatchingQueuedMessageId === message.messageId}
+              isFirst={index === 0}
+            />
+          ))}
+        </ScrollView>
       </View>
     </Animated.View>
   );

@@ -105,13 +105,19 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     const settings = resolveQueuedThreadSettings(queuedMessage, thread);
     const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
 
-    if (!modelSelectionsEqual(settings.modelSelection, thread.modelSelection)) {
+    const modelSelectionChanged = !modelSelectionsEqual(
+      settings.modelSelection,
+      thread.modelSelection,
+    );
+    const branchChanged = settings.branch !== thread.branch;
+    if (modelSelectionChanged || branchChanged) {
       const updateResult = await options.commands.updateMetadata({
         environmentId: queuedMessage.environmentId,
         input: {
           commandId: settingsCommandId(queuedMessage, "model-selection"),
           threadId: queuedMessage.threadId,
-          modelSelection: settings.modelSelection,
+          ...(modelSelectionChanged ? { modelSelection: settings.modelSelection } : {}),
+          ...(branchChanged ? { branch: settings.branch, worktreePath: null } : {}),
         },
       });
       if (AsyncResult.isFailure(updateResult)) {

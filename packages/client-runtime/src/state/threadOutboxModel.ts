@@ -61,6 +61,9 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   deliveryIntent: Schema.optional(ThreadOutboxDeliveryIntent),
+  // Web-only snapshot of the checked-out branch when it differs from the
+  // thread metadata. Delivery applies it before starting the queued turn.
+  localCheckoutBranch: Schema.optional(Schema.String),
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
@@ -92,6 +95,7 @@ export interface QueuedThreadMessage {
   readonly runtimeMode?: RuntimeModeType | undefined;
   readonly interactionMode?: ProviderInteractionModeType | undefined;
   readonly deliveryIntent?: ThreadOutboxDeliveryIntent | undefined;
+  readonly localCheckoutBranch?: string | undefined;
   readonly creation?: QueuedThreadCreation | undefined;
   readonly createdAt: string;
 }
@@ -116,6 +120,7 @@ export function queuedThreadMessagePreview(
 
 export interface ThreadSettingsSnapshot {
   readonly modelSelection: ModelSelectionType;
+  readonly branch: string | null;
   readonly runtimeMode: RuntimeModeType;
   readonly interactionMode: ProviderInteractionModeType;
 }
@@ -126,6 +131,7 @@ export function resolveQueuedThreadSettings(
 ): ThreadSettingsSnapshot {
   return {
     modelSelection: message.modelSelection ?? thread.modelSelection,
+    branch: message.localCheckoutBranch ?? thread.branch,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
     interactionMode: message.interactionMode ?? thread.interactionMode,
   };

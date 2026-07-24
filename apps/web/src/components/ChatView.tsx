@@ -211,6 +211,7 @@ import {
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -396,6 +397,12 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   }, [isDraftHeroState]);
 
   return [attachTransitionGroupRef, attachComposerAnchorRef, captureComposerRect] as const;
+}
+
+function hasSameComposerItems(current: readonly unknown[], submitted: readonly unknown[]): boolean {
+  return (
+    current.length === submitted.length && current.every((item, index) => item === submitted[index])
+  );
 }
 const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -4498,18 +4505,15 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const currentSendCtx = composerRef.current?.getSendContext();
-      const hasSameItems = (current: readonly unknown[], submitted: readonly unknown[]) =>
-        current.length === submitted.length &&
-        current.every((item, index) => item === submitted[index]);
       if (
         routeThreadKeyRef.current === routeThreadKey &&
         promptRef.current === promptForSend &&
         currentSendCtx &&
-        hasSameItems(currentSendCtx.images, composerImages) &&
-        hasSameItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
-        hasSameItems(currentSendCtx.elementContexts, composerElementContexts) &&
-        hasSameItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
-        hasSameItems(currentSendCtx.reviewComments, composerReviewComments)
+        hasSameComposerItems(currentSendCtx.images, composerImages) &&
+        hasSameComposerItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
+        hasSameComposerItems(currentSendCtx.elementContexts, composerElementContexts) &&
+        hasSameComposerItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
+        hasSameComposerItems(currentSendCtx.reviewComments, composerReviewComments)
       ) {
         promptRef.current = "";
         if (pendingAnswerTarget) {
@@ -4678,6 +4682,9 @@ function ChatViewContent(props: ChatViewProps) {
           runtimeMode,
           interactionMode,
           deliveryIntent: "queue",
+          ...(localCheckoutBranchMismatch
+            ? { localCheckoutBranch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
           createdAt: messageCreatedAt,
         });
         setThreadError(threadIdForSend, null);
@@ -4694,9 +4701,27 @@ function ChatViewContent(props: ChatViewProps) {
             }),
           );
         }
-        promptRef.current = "";
-        clearComposerDraftContent(composerDraftTarget);
-        composerRef.current?.resetCursorState();
+        const currentSendCtx = composerRef.current?.getSendContext();
+        if (
+          routeThreadKeyRef.current === routeThreadKey &&
+          promptRef.current === promptForSend &&
+          currentSendCtx &&
+          hasSameComposerItems(currentSendCtx.images, composerImagesSnapshot) &&
+          hasSameComposerItems(currentSendCtx.terminalContexts, composerTerminalContextsSnapshot) &&
+          hasSameComposerItems(currentSendCtx.elementContexts, composerElementContextsSnapshot) &&
+          hasSameComposerItems(
+            currentSendCtx.previewAnnotations,
+            composerPreviewAnnotationsSnapshot,
+          ) &&
+          hasSameComposerItems(currentSendCtx.reviewComments, composerReviewCommentsSnapshot)
+        ) {
+          promptRef.current = "";
+          clearComposerDraftContent(composerDraftTarget);
+          for (const image of composerImagesSnapshot) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+          composerRef.current?.resetCursorState();
+        }
       } catch (error) {
         setThreadError(
           threadIdForSend,
@@ -4979,34 +5004,32 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
-  const queuedThreadMessages = useQueuedThreadMessages(isServerThread ? activeThreadRef : null);
+  const allQueuedThreadMessages = useQueuedThreadMessages(isServerThread ? activeThreadRef : null);
+  const queuedThreadMessages = useMemo(
+    () => allQueuedThreadMessages.filter((message) => message.creation === undefined),
+    [allQueuedThreadMessages],
+  );
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
 
-  const onSteerQueuedMessage = useCallback(
-    (message: QueuedThreadMessage) => {
-      if (dispatchingQueuedMessageId === message.messageId) return;
-      // The drain is the only delivery path; flipping the intent lets it send
-      // this message into the running turn on its next pass.
-      void updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" }).catch((error) => {
-        console.warn("[thread-outbox] failed to mark queued message for steering", error);
-      });
-    },
-    [dispatchingQueuedMessageId],
-  );
+  const onSteerQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+    // The drain is the only delivery path; flipping the intent lets it send
+    // this message into the running turn on its next pass.
+    void updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" }).catch((error) => {
+      console.warn("[thread-outbox] failed to mark queued message for steering", error);
+    });
+  }, []);
 
-  const onDeleteQueuedMessage = useCallback(
-    (message: QueuedThreadMessage) => {
-      if (dispatchingQueuedMessageId === message.messageId) return;
-      void removeThreadOutboxMessage(message).catch((error) => {
-        console.warn("[thread-outbox] failed to delete queued message", error);
-      });
-    },
-    [dispatchingQueuedMessageId],
-  );
+  const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
+    void removeThreadOutboxMessage(message).catch((error) => {
+      console.warn("[thread-outbox] failed to delete queued message", error);
+    });
+  }, []);
 
   const onEditQueuedMessage = useCallback(
     async (message: QueuedThreadMessage) => {
-      if (dispatchingQueuedMessageId === message.messageId) return;
+      if (appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId) return;
       // Hold the message so the drain cannot deliver it while its content is
       // being moved back into the composer.
       holdEditingQueuedMessage(message.messageId);
@@ -5055,7 +5078,6 @@ function ChatViewContent(props: ChatViewProps) {
       addComposerDraftImages,
       composerDraftTarget,
       composerRef,
-      dispatchingQueuedMessageId,
       focusComposer,
       promptRef,
       setComposerDraftPrompt,
