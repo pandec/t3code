@@ -1,7 +1,9 @@
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -20,11 +22,13 @@ const instanceId = ProviderInstanceId.make("claude-main");
 const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
 interface HarnessOptions {
+  readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
   readonly importedModel?: string | null;
   readonly listedSessionName?: string | null;
   readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
   readonly replaceInstanceDuringRead?: boolean;
+  readonly releaseDispatch?: Deferred.Deferred<void>;
   readonly sessionName?: string | null;
   readonly yieldBeforeRead?: boolean;
 }
@@ -155,7 +159,15 @@ const makeHarness = (options?: HarnessOptions) => {
         return Effect.die(new Error("dispatch failed"));
       }
       state.dispatched.push(command as unknown as HarnessState["dispatched"][number]);
-      return Effect.succeed({ sequence: state.dispatched.length });
+      return Effect.gen(function* () {
+        if (options?.dispatchStarted) {
+          yield* Deferred.succeed(options.dispatchStarted, undefined);
+        }
+        if (options?.releaseDispatch) {
+          yield* Deferred.await(options.releaseDispatch);
+        }
+        return { sequence: state.dispatched.length };
+      });
     },
   });
 
@@ -229,6 +241,29 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(failing.state.bindings.size).toBe(0);
       const candidates = yield* failingService.listCandidates({ projectId });
       expect(candidates).toHaveLength(1);
+    }),
+  );
+
+  it.effect("does not compensate a queued import when its caller is interrupted", () =>
+    Effect.gen(function* () {
+      const dispatchStarted = yield* Deferred.make<void>();
+      const releaseDispatch = yield* Deferred.make<void>();
+      const { state, layer } = makeHarness({ dispatchStarted, releaseDispatch });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const fiber = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(dispatchStarted);
+
+      fiber.interruptUnsafe();
+      expect(state.bindings.size).toBe(1);
+      yield* Deferred.succeed(releaseDispatch, undefined);
+      yield* Fiber.await(fiber);
+
+      expect(state.dispatched).toHaveLength(1);
+      expect(state.callOrder).toEqual(["binding-upsert", "dispatch"]);
+      expect(state.bindings.size).toBe(1);
     }),
   );
 

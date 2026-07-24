@@ -51,7 +51,7 @@ layer("040_BackfillImportedThreadSessions", (it) => {
             'eligible-import', 'project', 'Eligible import',
             '{"instanceId":"claude-work","model":"claude-opus-4-8"}',
             'full-access', 'default',
-            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:02:00.000Z'
           ),
           (
             'missing-binding', 'project', 'Missing binding',
@@ -73,6 +73,24 @@ layer("040_BackfillImportedThreadSessions", (it) => {
           ),
           (
             'non-resumable-import', 'project', 'Non-resumable import',
+            '{"instanceId":"claude-work","model":"claude-opus-4-8"}',
+            'full-access', 'default',
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'mismatched-cursor', 'project', 'Mismatched cursor',
+            '{"instanceId":"claude-work","model":"claude-opus-4-8"}',
+            'full-access', 'default',
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'mismatched-instance', 'project', 'Mismatched instance',
+            '{"instanceId":"claude-other","model":"claude-opus-4-8"}',
+            'full-access', 'default',
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'canonical-import', 'project', 'Canonical import',
             '{"instanceId":"claude-work","model":"claude-opus-4-8"}',
             'full-access', 'default',
             '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
@@ -102,6 +120,21 @@ layer("040_BackfillImportedThreadSessions", (it) => {
             'non-resumable-import', 'claudeAgent', 'claude-work', 'claudeAgent',
             'full-access', 'stopped', '2026-07-23T00:01:00.000Z',
             NULL
+          ),
+          (
+            'mismatched-cursor', 'claudeAgent', 'claude-work', 'claudeAgent',
+            'full-access', 'stopped', '2026-07-23T00:01:00.000Z',
+            '{"resume":"different-session"}'
+          ),
+          (
+            'mismatched-instance', 'claudeAgent', 'claude-work', 'claudeAgent',
+            'full-access', 'stopped', '2026-07-23T00:01:00.000Z',
+            '{"resume":"mismatched-instance-session"}'
+          ),
+          (
+            'canonical-import', 'claudeAgent', 'claude-work', 'claudeAgent',
+            'full-access', 'stopped', '2026-07-23T00:01:00.000Z',
+            '{"resume":"canonical-session"}'
           )
       `;
       yield* sql`
@@ -132,6 +165,30 @@ layer("040_BackfillImportedThreadSessions", (it) => {
             'thread.history-imported', '2026-07-23T00:00:00.000Z', 'client',
             '{"threadId":"non-resumable-import","source":{"provider":"claudeAgent","nativeSessionId":"non-resumable-session","nativeCwd":"/workspace/root"},"messages":[],"createdAt":"2026-07-23T00:00:00.000Z"}',
             '{}'
+          ),
+          (
+            'mismatched-cursor-history', 'thread', 'mismatched-cursor', 1,
+            'thread.history-imported', '2026-07-23T00:00:00.000Z', 'client',
+            '{"threadId":"mismatched-cursor","source":{"provider":"claudeAgent","nativeSessionId":"mismatched-cursor-session","nativeCwd":"/workspace/root"},"messages":[],"createdAt":"2026-07-23T00:00:00.000Z"}',
+            '{}'
+          ),
+          (
+            'mismatched-instance-history', 'thread', 'mismatched-instance', 1,
+            'thread.history-imported', '2026-07-23T00:00:00.000Z', 'client',
+            '{"threadId":"mismatched-instance","source":{"provider":"claudeAgent","nativeSessionId":"mismatched-instance-session","nativeCwd":"/workspace/root"},"messages":[],"createdAt":"2026-07-23T00:00:00.000Z"}',
+            '{}'
+          ),
+          (
+            'canonical-history', 'thread', 'canonical-import', 1,
+            'thread.history-imported', '2026-07-23T00:00:00.000Z', 'client',
+            '{"threadId":"canonical-import","source":{"provider":"claudeAgent","nativeSessionId":"canonical-session","nativeCwd":"/workspace/root"},"messages":[],"createdAt":"2026-07-23T00:00:00.000Z"}',
+            '{}'
+          ),
+          (
+            'canonical-session-set', 'thread', 'canonical-import', 2,
+            'thread.session-set', '2026-07-23T00:01:00.000Z', 'client',
+            '{"threadId":"canonical-import","session":{"threadId":"canonical-import","status":"stopped","providerName":"claudeAgent","providerInstanceId":"claude-work","runtimeMode":"full-access","activeTurnId":null,"lastError":null,"updatedAt":"2026-07-23T00:01:00.000Z"}}',
+            '{}'
           )
       `;
 
@@ -156,6 +213,13 @@ layer("040_BackfillImportedThreadSessions", (it) => {
       `;
       assert.deepStrictEqual(sessions, [
         {
+          threadId: "canonical-import",
+          status: "stopped",
+          providerName: "claudeAgent",
+          providerInstanceId: "claude-work",
+          runtimeMode: "full-access",
+        },
+        {
           threadId: "eligible-import",
           status: "stopped",
           providerName: "claudeAgent",
@@ -167,11 +231,15 @@ layer("040_BackfillImportedThreadSessions", (it) => {
       const migrationEvents = yield* sql<{
         readonly eventType: string;
         readonly actorKind: string;
+        readonly occurredAt: string;
+        readonly sessionUpdatedAt: string;
         readonly streamVersion: number;
       }>`
         SELECT
           event_type AS "eventType",
           actor_kind AS "actorKind",
+          occurred_at AS "occurredAt",
+          json_extract(payload_json, '$.session.updatedAt') AS "sessionUpdatedAt",
           stream_version AS "streamVersion"
         FROM orchestration_events
         WHERE event_id = 'migration-040-import-session:eligible-import'
@@ -180,9 +248,21 @@ layer("040_BackfillImportedThreadSessions", (it) => {
         {
           eventType: "thread.session-set",
           actorKind: "server",
+          occurredAt: "2026-07-23T00:02:00.000Z",
+          sessionUpdatedAt: "2026-07-23T00:01:00.000Z",
           streamVersion: 2,
         },
       ]);
+
+      assert.deepStrictEqual(
+        yield* sql`
+          SELECT event_id AS "eventId"
+          FROM orchestration_events
+          WHERE event_id LIKE 'migration-040-import-session:%'
+          ORDER BY event_id
+        `,
+        [{ eventId: "migration-040-import-session:eligible-import" }],
+      );
 
       yield* sql`DELETE FROM projection_thread_sessions`;
       yield* sql`
@@ -197,7 +277,10 @@ layer("040_BackfillImportedThreadSessions", (it) => {
         FROM projection_thread_sessions
         ORDER BY thread_id
       `,
-        [{ threadId: "eligible-import", status: "stopped" }],
+        [
+          { threadId: "canonical-import", status: "stopped" },
+          { threadId: "eligible-import", status: "stopped" },
+        ],
       );
     }),
   );

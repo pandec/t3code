@@ -368,7 +368,10 @@ export const makeSessionImportService = Effect.gen(function* () {
         createdAt,
       })
       // `exit` (not `result`) so defects also trigger binding compensation.
-      .pipe(Effect.exit);
+      // Once queued, wait for the authoritative command result even if the
+      // importing client disconnects. Otherwise a pending interrupt can delete
+      // the binding after the worker commits the visible imported thread.
+      .pipe(Effect.exit, Effect.uninterruptible);
 
     if (Exit.isFailure(dispatchResult)) {
       // Compensation: remove the binding so the candidate reappears.

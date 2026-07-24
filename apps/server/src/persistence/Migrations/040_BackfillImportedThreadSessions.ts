@@ -36,7 +36,10 @@ export default Effect.gen(function* () {
           AND existing.stream_id = threads.thread_id
       ),
       'thread.session-set',
-      runtime.last_seen_at,
+      CASE
+        WHEN runtime.last_seen_at > threads.updated_at THEN runtime.last_seen_at
+        ELSE threads.updated_at
+      END,
       NULL,
       NULL,
       NULL,
@@ -61,23 +64,43 @@ export default Effect.gen(function* () {
     FROM projection_threads AS threads
     INNER JOIN provider_session_runtime AS runtime
       ON runtime.thread_id = threads.thread_id
+    INNER JOIN orchestration_events AS imported
+      ON imported.sequence = (
+        SELECT MAX(history.sequence)
+        FROM orchestration_events AS history
+        WHERE history.aggregate_kind = 'thread'
+          AND history.stream_id = threads.thread_id
+          AND history.event_type = 'thread.history-imported'
+      )
     LEFT JOIN projection_thread_sessions AS sessions
       ON sessions.thread_id = threads.thread_id
     WHERE sessions.thread_id IS NULL
       AND threads.deleted_at IS NULL
       AND runtime.status = 'stopped'
       AND runtime.resume_cursor_json IS NOT NULL
-      AND COALESCE(
-        runtime.provider_instance_id,
-        json_extract(threads.model_selection_json, '$.instanceId')
-      ) IS NOT NULL
-      AND EXISTS (
+      AND runtime.provider_instance_id = json_extract(
+        threads.model_selection_json,
+        '$.instanceId'
+      )
+      AND json_extract(imported.payload_json, '$.source.provider') = runtime.provider_name
+      AND (
+        (
+          runtime.provider_name = 'claudeAgent'
+          AND json_extract(runtime.resume_cursor_json, '$.resume') =
+            json_extract(imported.payload_json, '$.source.nativeSessionId')
+        )
+        OR (
+          runtime.provider_name = 'codex'
+          AND json_extract(runtime.resume_cursor_json, '$.threadId') =
+            json_extract(imported.payload_json, '$.source.nativeSessionId')
+        )
+      )
+      AND NOT EXISTS (
         SELECT 1
         FROM orchestration_events AS events
         WHERE events.aggregate_kind = 'thread'
           AND events.stream_id = threads.thread_id
-          AND events.event_type = 'thread.history-imported'
-          AND json_extract(events.payload_json, '$.source.provider') = runtime.provider_name
+          AND events.event_type = 'thread.session-set'
       )
   `;
 });
