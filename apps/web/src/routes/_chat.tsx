@@ -127,64 +127,63 @@ function ChatRouteGlobalShortcuts() {
         !hasOpenArchiveUndoBlockingLayer()
       ) {
         const candidate = archiveUndoHistory.take();
-        if (!candidate) {
+        if (candidate) {
+          const emptyDraftId = readEmptyNewThreadDraftId(router);
+
+          event.preventDefault();
+          event.stopPropagation();
+          void (async () => {
+            const result = await unarchiveThread(candidate.threadRef);
+            if (result._tag === "Failure") {
+              archiveUndoHistory.restore(candidate);
+              if (!isAtomCommandInterrupted(result)) {
+                const error = squashAtomCommandFailure(result);
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Failed to restore thread",
+                    description: error instanceof Error ? error.message : "An error occurred.",
+                  }),
+                );
+              }
+              return;
+            }
+
+            if (emptyDraftId && readEmptyNewThreadDraftId(router) === emptyDraftId) {
+              const navigationResult = await Promise.resolve(
+                router.navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(candidate.threadRef),
+                }),
+              ).then(
+                () => ({ _tag: "Success" as const }),
+                (error: unknown) => ({ _tag: "Failure" as const, error }),
+              );
+              if (navigationResult._tag === "Failure") {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Thread restored, but could not open it",
+                    description:
+                      navigationResult.error instanceof Error
+                        ? navigationResult.error.message
+                        : "An error occurred.",
+                  }),
+                );
+              }
+              return;
+            }
+
+            toastManager.add(
+              stackedThreadToast({
+                type: "success",
+                title: "Thread restored",
+                description: candidate.threadTitle,
+              }),
+            );
+          })();
           return;
         }
-        const emptyDraftId = readEmptyNewThreadDraftId(router);
-
-        event.preventDefault();
-        event.stopPropagation();
-        void (async () => {
-          const result = await unarchiveThread(candidate.threadRef);
-          if (result._tag === "Failure") {
-            archiveUndoHistory.restore(candidate);
-            if (!isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Failed to restore thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
-            return;
-          }
-
-          if (emptyDraftId && readEmptyNewThreadDraftId(router) === emptyDraftId) {
-            const navigationResult = await Promise.resolve(
-              router.navigate({
-                to: "/$environmentId/$threadId",
-                params: buildThreadRouteParams(candidate.threadRef),
-              }),
-            ).then(
-              () => ({ _tag: "Success" as const }),
-              (error: unknown) => ({ _tag: "Failure" as const, error }),
-            );
-            if (navigationResult._tag === "Failure") {
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Thread restored, but could not open it",
-                  description:
-                    navigationResult.error instanceof Error
-                      ? navigationResult.error.message
-                      : "An error occurred.",
-                }),
-              );
-            }
-            return;
-          }
-
-          toastManager.add(
-            stackedThreadToast({
-              type: "success",
-              title: "Thread restored",
-              description: candidate.threadTitle,
-            }),
-          );
-        })();
-        return;
       }
 
       if (event.key === "Escape" && selectedThreadKeysSize > 0) {

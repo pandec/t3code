@@ -93,4 +93,18 @@ describe("archive undo shortcut", () => {
     expect(hasOpenArchiveUndoBlockingLayer(closedRoot)).toBe(false);
     expect(hasOpenArchiveUndoBlockingLayer(null)).toBe(false);
   });
+
+  it("blocks generic aria-modal dialogs", () => {
+    let queriedSelector = "";
+    const root = {
+      querySelector: (selector: string) => {
+        queriedSelector = selector;
+        return null;
+      },
+    } as unknown as Pick<Document, "querySelector">;
+
+    hasOpenArchiveUndoBlockingLayer(root);
+
+    expect(queriedSelector).toContain('[aria-modal="true"]');
+  });
 });

@@ -90,6 +90,7 @@ const ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR = [
   '[data-slot="autocomplete-popup"]',
   '[data-slot="command-dialog-popup"]',
   "[data-model-picker-content]",
+  '[aria-modal="true"]',
 ].join(", ");
 
 export function hasOpenArchiveUndoBlockingLayer(

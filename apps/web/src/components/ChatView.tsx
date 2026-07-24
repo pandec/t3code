@@ -1431,6 +1431,11 @@ function ChatViewContent(props: ChatViewProps) {
   // server thread (same pre-allocated ref) starts, so live state must not
   // depend on which route is mounted.
   const isServerThread = serverThread !== null;
+  useEffect(() => {
+    if (draftId && isServerThread) {
+      draftSubmissionTracker.clear(draftId);
+    }
+  }, [draftId, isServerThread]);
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
