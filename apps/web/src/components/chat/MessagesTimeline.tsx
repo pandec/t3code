@@ -989,7 +989,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="relative max-w-[80%] rounded-2xl bg-secondary p-3">
+      <div className="relative max-w-[80%] rounded-2xl bg-accent p-3">
         {row.message.inputOrigin === "voice-transcription" ? (
           <div className="mb-1.5 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
             <MicIcon className="size-3" />

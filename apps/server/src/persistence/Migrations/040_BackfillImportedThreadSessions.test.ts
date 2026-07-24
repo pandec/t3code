@@ -206,7 +206,7 @@ layer("040_BackfillImportedThreadSessions", (it) => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations({ toMigrationInclusive: 41 });
       yield* projectionPipeline.bootstrap;
 
       const sessions = yield* sql<{
