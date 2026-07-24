@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { TestClock } from "effect/testing";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import type * as Electron from "electron";
@@ -11,7 +13,7 @@ import { showNotification } from "./notifications.ts";
 
 const electronMocks = vi.hoisted(() => ({
   supported: true,
-  showResult: "show" as "show" | "failed" | "throw",
+  showResult: "show" as "show" | "failed" | "none" | "throw",
   instances: [] as Array<{
     readonly options: Electron.NotificationConstructorOptions;
     readonly show: ReturnType<typeof vi.fn>;
@@ -32,6 +34,9 @@ vi.mock("electron", () => {
       }
       if (electronMocks.showResult === "failed") {
         this.emit("failed", {}, "native show failed");
+        return;
+      }
+      if (electronMocks.showResult === "none") {
         return;
       }
       this.emit("show", {});
@@ -192,6 +197,27 @@ describe("showNotification", () => {
         ensureMain: Effect.succeed(window),
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     );
+  });
+
+  it.effect("times out when the native backend emits neither show nor failed", () => {
+    electronMocks.showResult = "none";
+    const { window } = makeWindow(false);
+    return Effect.gen(function* () {
+      const fiber = yield* showNotification.handler({ title: "Agent finished" }).pipe(
+        Effect.provideService(ElectronWindow.ElectronWindow, {
+          reveal: () => Effect.void,
+          sendAll: () => Effect.void,
+        } as unknown as ElectronWindow.ElectronWindow["Service"]),
+        Effect.provideService(DesktopWindow.DesktopWindow, {
+          ensureMain: Effect.succeed(window),
+        } as unknown as DesktopWindow.DesktopWindow["Service"]),
+        Effect.forkChild,
+      );
+
+      yield* TestClock.adjust(5_000);
+      assert.isFalse(yield* Fiber.join(fiber));
+      expect(electronMocks.instances[0]?.close).toHaveBeenCalledOnce();
+    });
   });
 
   it.effect("recreates the main window, waits for its renderer, then delivers the click", () => {

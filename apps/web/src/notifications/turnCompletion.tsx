@@ -4,18 +4,16 @@ import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
-import { useClientSettings } from "../hooks/useSettings";
-import {
-  useAllEnvironmentShellsBootstrapped,
-  useEnvironmentIdsReadyForTurnCompletion,
-  useThreadShells,
-} from "../state/entities";
+import { useClientSettings, useClientSettingsHydrated } from "../hooks/useSettings";
+import { useEnvironmentIdsReadyForTurnCompletion, useThreadShells } from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   advanceTurnCompletionSnapshot,
   buildTurnCompletionCopy,
   filterShellsForTurnCompletion,
+  resolveTurnCompletionCandidatesForDelivery,
   seedTurnCompletionSnapshot,
+  type TurnCompletionCandidate,
   type TurnCompletionSnapshot,
 } from "./turnCompletion.logic";
 
@@ -124,14 +122,15 @@ export function TurnCompletionNotifications() {
   const systemEnabled = useClientSettings(
     (settings) => settings.enableTurnCompletionSystemNotifications,
   );
+  const settingsHydrated = useClientSettingsHydrated();
   const threadShells = useThreadShells();
-  const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const readyEnvironmentIds = useEnvironmentIdsReadyForTurnCompletion();
   const authoritativeThreadShells = useMemo(
     () => filterShellsForTurnCompletion(threadShells, readyEnvironmentIds),
     [readyEnvironmentIds, threadShells],
   );
   const snapshotRef = useRef<TurnCompletionSnapshot | null>(null);
+  const pendingCandidatesRef = useRef<TurnCompletionCandidate[]>([]);
 
   const navigateToThread = useEffectEvent((threadRef: DesktopNotificationThreadRef) => {
     void navigate({
@@ -151,18 +150,9 @@ export function TurnCompletionNotifications() {
   }, [navigateToThread]);
 
   useEffect(() => {
-    if (!shellsBootstrapped) {
-      if (snapshotRef.current !== null) {
-        // Invalidate comparison baselines without forgetting lifetime turn-ID
-        // history if the environment catalog itself reloads.
-        snapshotRef.current = { ...snapshotRef.current, shells: [] };
-      }
-      return;
-    }
-
-    // Seed only after the environment catalog has bootstrapped. Each
-    // environment is independently filtered out while synchronizing, then
-    // re-enters as unseen history without suppressing healthy environments.
+    // Only authoritative environments enter the baseline. Each environment
+    // independently enters as unseen history, so initial sync, additions, and
+    // reconnect replay stay silent without pausing healthy environments.
     if (snapshotRef.current === null) {
       snapshotRef.current = seedTurnCompletionSnapshot(authoritativeThreadShells);
       return;
@@ -176,7 +166,15 @@ export function TurnCompletionNotifications() {
     // not burst out a backlog of stale completions.
     snapshotRef.current = snapshot;
 
-    if (candidates.length === 0 || (!toastsEnabled && !systemEnabled)) {
+    const resolvedCandidates = resolveTurnCompletionCandidatesForDelivery(
+      pendingCandidatesRef.current,
+      candidates,
+      settingsHydrated,
+    );
+    pendingCandidatesRef.current = [...resolvedCandidates.pending];
+    const candidatesToDeliver = resolvedCandidates.deliver;
+
+    if (candidatesToDeliver.length === 0 || (!toastsEnabled && !systemEnabled)) {
       return;
     }
 
@@ -185,7 +183,7 @@ export function TurnCompletionNotifications() {
       visibilityState: document.visibilityState,
       hasFocus: document.hasFocus(),
     });
-    for (const candidate of candidates) {
+    for (const candidate of candidatesToDeliver) {
       const threadRef: DesktopNotificationThreadRef = {
         environmentId: candidate.environmentId,
         threadId: candidate.threadId,
@@ -211,13 +209,7 @@ export function TurnCompletionNotifications() {
         });
       }
     }
-  }, [
-    authoritativeThreadShells,
-    shellsBootstrapped,
-    toastsEnabled,
-    systemEnabled,
-    navigateToThread,
-  ]);
+  }, [authoritativeThreadShells, settingsHydrated, toastsEnabled, systemEnabled, navigateToThread]);
 
   return null;
 }

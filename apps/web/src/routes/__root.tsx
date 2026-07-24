@@ -88,6 +88,10 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const hasEnvironmentShell =
+    primaryEnvironmentAuthenticated || authGateState.status === "hosted-static";
+  const isStandaloneRoute =
+    pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/");
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -98,47 +102,31 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
-    return (
-      <>
-        <DocumentTitleSync />
-        <Outlet />
-      </>
-    );
-  }
-
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
-    return (
-      <>
-        <DocumentTitleSync />
-        <Outlet />
-      </>
-    );
-  }
-
-  const appShell = (
-    <CommandPalette>
-      <AppSidebarLayout>
-        <Outlet />
-      </AppSidebarLayout>
-    </CommandPalette>
-  );
-
   return (
     <ToastProvider>
       <AnchoredToastProvider>
         <DocumentTitleSync />
-        <GlassAppearanceSync />
-        {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
-        <SshPasswordPromptDialog />
-        <SlowRpcRequestToastCoordinator />
-        <HostedStaticEnvironmentBootstrap />
-        {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        <TurnCompletionNotifications />
-        {appShell}
+        {hasEnvironmentShell ? <TurnCompletionNotifications /> : null}
+        {isStandaloneRoute || !hasEnvironmentShell ? (
+          <Outlet />
+        ) : (
+          <>
+            <GlassAppearanceSync />
+            {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+            <RelayClientInstallDialog />
+            <ConnectOnboardingDialog />
+            <SshPasswordPromptDialog />
+            <SlowRpcRequestToastCoordinator />
+            <HostedStaticEnvironmentBootstrap />
+            {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+            {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+            <CommandPalette>
+              <AppSidebarLayout>
+                <Outlet />
+              </AppSidebarLayout>
+            </CommandPalette>
+          </>
+        )}
       </AnchoredToastProvider>
     </ToastProvider>
   );

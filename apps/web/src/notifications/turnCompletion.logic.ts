@@ -14,6 +14,18 @@ export interface TurnCompletionSnapshot {
   readonly seenCompletedTurnIds: ReadonlySet<string>;
 }
 
+export function resolveTurnCompletionCandidatesForDelivery(
+  pending: ReadonlyArray<TurnCompletionCandidate>,
+  current: ReadonlyArray<TurnCompletionCandidate>,
+  settingsHydrated: boolean,
+): {
+  readonly pending: ReadonlyArray<TurnCompletionCandidate>;
+  readonly deliver: ReadonlyArray<TurnCompletionCandidate>;
+} {
+  const combined = pending.length === 0 ? current : [...pending, ...current];
+  return settingsHydrated ? { pending: [], deliver: combined } : { pending: combined, deliver: [] };
+}
+
 export function filterShellsForTurnCompletion(
   shells: ReadonlyArray<EnvironmentThreadShell>,
   readyEnvironmentIds: ReadonlySet<string>,
@@ -102,10 +114,15 @@ export function advanceTurnCompletionSnapshot(
   readonly snapshot: TurnCompletionSnapshot;
   readonly candidates: ReadonlyArray<TurnCompletionCandidate>;
 } {
-  const candidates = collectTurnCompletionCandidates(previous.shells, nextShells).filter(
-    (candidate) => !previous.seenCompletedTurnIds.has(candidate.turnId),
-  );
   const seenCompletedTurnIds = new Set(previous.seenCompletedTurnIds);
+  const candidates: TurnCompletionCandidate[] = [];
+  for (const candidate of collectTurnCompletionCandidates(previous.shells, nextShells)) {
+    if (seenCompletedTurnIds.has(candidate.turnId)) {
+      continue;
+    }
+    seenCompletedTurnIds.add(candidate.turnId);
+    candidates.push(candidate);
+  }
   for (const turnId of collectCompletedTurnIds(nextShells)) {
     seenCompletedTurnIds.add(turnId);
   }

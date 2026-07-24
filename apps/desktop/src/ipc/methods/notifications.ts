@@ -11,7 +11,17 @@ import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
 const MAX_RETAINED_NOTIFICATIONS = 100;
+const NOTIFICATION_SHOW_TIMEOUT_MS = 5_000;
 const activeNotifications = new Set<Electron.Notification>();
+
+function closeNotificationBestEffort(notification: Electron.Notification): void {
+  try {
+    notification.close();
+  } catch {
+    // Retention is a best-effort safety net; notification cleanup must not
+    // make another platform operation fail.
+  }
+}
 
 function retainNotification(notification: Electron.Notification): () => void {
   activeNotifications.add(notification);
@@ -19,14 +29,9 @@ function retainNotification(notification: Electron.Notification): () => void {
     const oldest = activeNotifications.values().next().value;
     if (oldest !== undefined) {
       activeNotifications.delete(oldest);
-      try {
-        // Do not leave an Action Center entry visible after dropping the
-        // instance that owns its click listener.
-        oldest.close();
-      } catch {
-        // Retention is a best-effort safety net; showing the new notification
-        // must not fail because an older platform entry could not be removed.
-      }
+      // Do not leave an Action Center entry visible after dropping the
+      // instance that owns its click listener.
+      closeNotificationBestEffort(oldest);
     }
   }
   return () => {
@@ -151,7 +156,17 @@ export const showNotification = DesktopIpc.makeIpcMethod({
         notification.removeListener("show", onShow);
         notification.removeListener("failed", onFailed);
       });
-    });
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: NOTIFICATION_SHOW_TIMEOUT_MS,
+        orElse: () =>
+          Effect.sync(() => {
+            releaseNotification();
+            closeNotificationBestEffort(notification);
+            return false;
+          }),
+      }),
+    );
     return shown;
   }),
 });

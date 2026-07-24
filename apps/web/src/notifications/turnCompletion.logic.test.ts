@@ -7,6 +7,7 @@ import {
   buildTurnCompletionCopy,
   collectTurnCompletionCandidates,
   filterShellsForTurnCompletion,
+  resolveTurnCompletionCandidatesForDelivery,
   seedTurnCompletionSnapshot,
 } from "./turnCompletion.logic";
 
@@ -204,6 +205,23 @@ describe("turn completion snapshot", () => {
     expect(env2Returns.candidates).toEqual([]);
   });
 
+  it("keeps a healthy environment live while a brand-new environment bootstraps", () => {
+    const initial = seedTurnCompletionSnapshot([running("a")]);
+    const authoritativeWhileEnv2Bootstraps = filterShellsForTurnCompletion(
+      [
+        completed("a"),
+        makeShell({
+          ...running("b"),
+          environmentId: "env-2",
+        }),
+      ],
+      new Set(["env-1"]),
+    );
+
+    const result = advanceTurnCompletionSnapshot(initial, authoritativeWhileEnv2Bootstraps);
+    expect(result.candidates.map((candidate) => candidate.turnId)).toEqual(["a-turn"]);
+  });
+
   it("keeps lifetime turn dedupe when an environment leaves and re-enters the baseline", () => {
     const initial = seedTurnCompletionSnapshot([running("a")]);
     const firstCompletion = advanceTurnCompletionSnapshot(initial, [completed("a")]);
@@ -215,6 +233,50 @@ describe("turn completion snapshot", () => {
       completed("a"),
     ]);
     expect(sameTurnCompletesAgain.candidates).toEqual([]);
+  });
+
+  it("deduplicates the same turn id within one snapshot", () => {
+    const env1Running = running("a");
+    const env2Running = makeShell({
+      ...running("b"),
+      environmentId: "env-2",
+    });
+    const env1Completed = completed("a", "shared-turn");
+    const env2Completed = makeShell({
+      id: "b",
+      environmentId: "env-2",
+      latestTurn: makeTurn({ turnId: "shared-turn", state: "completed" }),
+    });
+
+    const result = advanceTurnCompletionSnapshot(
+      seedTurnCompletionSnapshot([env1Running, env2Running]),
+      [env1Completed, env2Completed],
+    );
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.turnId).toBe("shared-turn");
+  });
+});
+
+describe("turn completion settings hydration", () => {
+  const candidate = {
+    environmentId: "env-1" as EnvironmentId,
+    threadId: "a" as ThreadId,
+    turnId: "turn-a",
+    title: "Thread a",
+  };
+
+  it("holds observed candidates until persisted settings hydrate", () => {
+    const beforeHydration = resolveTurnCompletionCandidatesForDelivery([], [candidate], false);
+    expect(beforeHydration.deliver).toEqual([]);
+    expect(beforeHydration.pending).toEqual([candidate]);
+
+    const afterHydration = resolveTurnCompletionCandidatesForDelivery(
+      beforeHydration.pending,
+      [],
+      true,
+    );
+    expect(afterHydration.pending).toEqual([]);
+    expect(afterHydration.deliver).toEqual([candidate]);
   });
 });
 
