@@ -1,11 +1,3 @@
-import * as Schema from "effect/Schema";
-
-export const DraftComposerImageAttachmentSchema = Schema.Struct({
-  id: Schema.String,
-  previewUri: Schema.String,
-  type: Schema.Literal("image"),
-  name: Schema.String,
-  mimeType: Schema.String,
-  sizeBytes: Schema.Number,
-  dataUrl: Schema.String,
-});
+// Shared with web via client-runtime; this module remains as the mobile
+// import path.
+export { DraftComposerImageAttachmentSchema } from "@t3tools/client-runtime/state/composer-attachment";

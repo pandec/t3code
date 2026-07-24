@@ -15,9 +15,11 @@ import {
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
+  queuedThreadMessageIntent,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
+  selectNextQueuedThreadDispatch,
   shouldRetryThreadOutboxDelivery,
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
@@ -141,6 +143,7 @@ describe("thread outbox", () => {
         write: async () => undefined,
         remove: async () => undefined,
       },
+      warn: () => undefined,
     });
     const order: string[] = [];
     let releaseFirst!: () => void;
@@ -192,7 +195,7 @@ describe("thread outbox", () => {
         stored.delete(candidate.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage });
+    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
 
     const loading = manager.load();
     await Promise.resolve();
@@ -264,7 +267,7 @@ describe("thread outbox", () => {
         stored.delete(message.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage });
+    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
     const message = queuedMessage({
       messageId: "message-1",
       createdAt: "2026-06-08T10:00:01.000Z",
@@ -303,6 +306,7 @@ describe("thread outbox", () => {
         write: async () => undefined,
         remove: async () => undefined,
       },
+      warn: () => undefined,
     });
     const message = queuedMessage({
       messageId: "message-1",
@@ -331,7 +335,7 @@ describe("thread outbox", () => {
         stored.delete(message.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage });
+    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
     const message = queuedMessage({
       messageId: "message-1",
       createdAt: "2026-06-08T10:00:01.000Z",
@@ -360,6 +364,7 @@ describe("thread outbox", () => {
         shellStatus: "synchronizing",
         environmentConnected: true,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("wait");
     expect(
@@ -369,6 +374,7 @@ describe("thread outbox", () => {
         shellStatus: "live",
         environmentConnected: true,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("remove");
     expect(
@@ -378,6 +384,7 @@ describe("thread outbox", () => {
         shellStatus: "live",
         environmentConnected: true,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("send");
   });
@@ -390,6 +397,7 @@ describe("thread outbox", () => {
         shellStatus: "cached",
         environmentConnected: false,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -401,6 +409,7 @@ describe("thread outbox", () => {
         shellStatus: "synchronizing",
         environmentConnected: true,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("wait");
     expect(
@@ -410,6 +419,7 @@ describe("thread outbox", () => {
         shellStatus: "live",
         environmentConnected: true,
         threadStatus: null,
+        deliveryIntent: "steer",
       }),
     ).toBe("send");
     expect(
@@ -419,6 +429,7 @@ describe("thread outbox", () => {
         shellStatus: "live",
         environmentConnected: true,
         threadStatus: "starting",
+        deliveryIntent: "steer",
       }),
     ).toBe("remove");
   });
@@ -439,6 +450,7 @@ describe("thread outbox", () => {
           shellStatus: "live",
           environmentConnected: true,
           threadStatus,
+          deliveryIntent: "steer",
         }),
       ).toBe("send");
     }
@@ -449,6 +461,7 @@ describe("thread outbox", () => {
         shellStatus: "live",
         environmentConnected: true,
         threadStatus: "starting",
+        deliveryIntent: "steer",
       }),
     ).toBe("wait");
   });
@@ -523,5 +536,113 @@ describe("thread outbox", () => {
         interrupted: false,
       }),
     ).toBe("discard");
+  });
+
+  it("holds queue-intent messages while a turn is running and releases them after", () => {
+    const base = {
+      isCreation: false,
+      threadExists: true,
+      shellStatus: "live",
+      environmentConnected: true,
+    } as const;
+
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        ...base,
+        threadStatus: "running",
+        deliveryIntent: "queue",
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        ...base,
+        threadStatus: "running",
+        deliveryIntent: "steer",
+      }),
+    ).toBe("send");
+    for (const threadStatus of ["idle", "ready", "interrupted", "stopped", "error"] as const) {
+      expect(
+        resolveThreadOutboxDeliveryAction({
+          ...base,
+          threadStatus,
+          deliveryIntent: "queue",
+        }),
+      ).toBe("send");
+    }
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        ...base,
+        threadStatus: "starting",
+        deliveryIntent: "queue",
+      }),
+    ).toBe("wait");
+  });
+
+  it("round-trips the delivery intent and defaults legacy payloads to queue", () => {
+    const base = queuedMessage({
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    const steered = { ...base, deliveryIntent: "steer" } satisfies QueuedThreadMessage;
+
+    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(steered))).toEqual(steered);
+    // Payloads persisted before schema version 5 carry no intent.
+    const legacy = decodeQueuedThreadMessage({ schemaVersion: 4, ...base });
+    expect(legacy.deliveryIntent).toBeUndefined();
+    expect(queuedThreadMessageIntent(legacy)).toBe("queue");
+    expect(queuedThreadMessageIntent(steered)).toBe("steer");
+  });
+
+  it("lets a steer message overtake held messages but never a backoff or edit", () => {
+    const held = queuedMessage({ messageId: "message-1", createdAt: "2026-06-08T10:00:01.000Z" });
+    const alsoHeld = {
+      ...queuedMessage({ messageId: "message-2", createdAt: "2026-06-08T10:00:02.000Z" }),
+      deliveryIntent: "queue",
+    } satisfies QueuedThreadMessage;
+    const steered = {
+      ...queuedMessage({ messageId: "message-3", createdAt: "2026-06-08T10:00:03.000Z" }),
+      deliveryIntent: "steer",
+    } satisfies QueuedThreadMessage;
+    const queue = [held, alsoHeld, steered];
+    const whileRunning = (message: QueuedThreadMessage) =>
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus: "running",
+        deliveryIntent: queuedThreadMessageIntent(message),
+      });
+
+    expect(
+      selectNextQueuedThreadDispatch(queue, {
+        isHeld: () => false,
+        resolveAction: whileRunning,
+      }),
+    ).toEqual({ message: steered, action: "send" });
+
+    // A message in retry backoff or being edited blocks everything behind it.
+    expect(
+      selectNextQueuedThreadDispatch(queue, {
+        isHeld: (message) => message.messageId === held.messageId,
+        resolveAction: whileRunning,
+      }),
+    ).toBeNull();
+
+    // Once the turn completes, delivery resumes in FIFO order.
+    expect(
+      selectNextQueuedThreadDispatch(queue, {
+        isHeld: () => false,
+        resolveAction: () => "send",
+      }),
+    ).toEqual({ message: held, action: "send" });
+
+    // A queue-intent message never overtakes another held message.
+    expect(
+      selectNextQueuedThreadDispatch([held, alsoHeld], {
+        isHeld: () => false,
+        resolveAction: whileRunning,
+      }),
+    ).toBeNull();
   });
 });

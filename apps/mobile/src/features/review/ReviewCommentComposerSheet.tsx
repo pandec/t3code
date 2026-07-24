@@ -24,7 +24,7 @@ import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useNativePaste } from "../../lib/useNativePaste";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
-import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
+import { appendContentToThreadDraft } from "../../state/use-thread-composer-state";
 import {
   clearReviewCommentTarget,
   formatReviewCommentContext,
@@ -151,7 +151,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
       return;
     }
 
-    appendReviewCommentToDraft({
+    appendContentToThreadDraft({
       environmentId,
       threadId,
       text: formatReviewCommentContext(target, commentText),
