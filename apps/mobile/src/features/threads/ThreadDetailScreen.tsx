@@ -36,6 +36,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
+import { QueuedMessageList } from "./QueuedMessageList";
 import {
   COMPOSER_COLLAPSED_CHROME,
   COMPOSER_EXPANDED_CHROME,
@@ -432,6 +433,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   ) : null}
                 </Animated.View>
               ) : null}
+
+              <QueuedMessageList
+                environmentId={props.environmentId}
+                threadId={props.selectedThread.id}
+              />
             </View>
 
             <ThreadComposer

@@ -26,6 +26,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldQueueMessageWhileBusy,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -625,5 +626,49 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("shouldQueueMessageWhileBusy", () => {
+  it("queues sends into a server thread with a running or starting session", () => {
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: "running" })).toBe(
+      true,
+    );
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: "starting" })).toBe(
+      true,
+    );
+  });
+
+  it("keeps the direct send path for idle sessions", () => {
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: null })).toBe(false);
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: "idle" })).toBe(
+      false,
+    );
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: "ready" })).toBe(
+      false,
+    );
+    expect(shouldQueueMessageWhileBusy({ isServerThread: true, sessionStatus: "stopped" })).toBe(
+      false,
+    );
+  });
+
+  it("queues idle sends behind existing outbox work", () => {
+    expect(
+      shouldQueueMessageWhileBusy({
+        isServerThread: true,
+        sessionStatus: "ready",
+        hasPendingOutboxWork: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("never queues local draft threads (they still need bootstrap)", () => {
+    expect(
+      shouldQueueMessageWhileBusy({
+        isServerThread: false,
+        sessionStatus: "running",
+        hasPendingOutboxWork: true,
+      }),
+    ).toBe(false);
   });
 });

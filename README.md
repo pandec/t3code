@@ -15,6 +15,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads, including strict resume/continuation and CLI-assigned session names in the import picker.
 - **Archived-thread search & grouping** — archived chats are searchable and grouped by project, with repository identity persisted so grouping survives project changes.
 - **Archive undo** — press Command+Z outside the composer after archiving to restore the latest thread; an empty new-thread screen reopens it, while another active conversation stays in place.
+- **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes.
 - **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
 - **Thread naming & sidebar polish** — split thread naming with refined fork titles, and the thread's provider icon shown on sidebar hover.
 - **Conversation navigation rails** — desktop threads keep the existing left-side user-message navigator and add a mirrored right-side navigator for completed agent responses, with hover previews and click-to-jump navigation.

@@ -53,16 +53,19 @@ import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
-export function appendReviewCommentToDraft(input: {
+/** Appends text and attachments to a thread's composer draft (review comments, queued-message edits). */
+export function appendContentToThreadDraft(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly text: string;
   readonly attachments?: ReadonlyArray<DraftComposerImageAttachment>;
 }): void {
   const threadKey = scopedThreadKey(input.environmentId, input.threadId);
-  const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
-  const separator = existing.trim().length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
-  setComposerDraftText(threadKey, `${existing}${separator}${input.text}`);
+  if (input.text.length > 0) {
+    const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
+    const separator = existing.trim().length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
+    setComposerDraftText(threadKey, `${existing}${separator}${input.text}`);
+  }
   if (input.attachments && input.attachments.length > 0) {
     appendComposerDraftAttachments(threadKey, input.attachments);
   }
@@ -216,6 +219,7 @@ export function useThreadComposerState() {
           modelSelection: draft.modelSelection ?? thread.modelSelection,
           runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
           interactionMode: draft.interactionMode ?? thread.interactionMode,
+          deliveryIntent: "queue",
           createdAt: metadata.createdAt,
         });
         clearComposerDraftContentIfUnchanged(threadKey, draft);

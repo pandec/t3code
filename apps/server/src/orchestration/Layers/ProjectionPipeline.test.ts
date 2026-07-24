@@ -2324,6 +2324,12 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             assistantMessageId: "assistant-interrupted",
           },
         ]);
+        const threadRows = yield* sql<{ readonly latestTurnId: string | null }>`
+          SELECT latest_turn_id AS "latestTurnId"
+          FROM projection_threads
+          WHERE thread_id = 'thread-conflict'
+        `;
+        assert.deepEqual(threadRows, [{ latestTurnId: "turn-interrupted" }]);
       }),
   );
 

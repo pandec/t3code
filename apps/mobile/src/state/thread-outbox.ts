@@ -10,6 +10,10 @@ export * from "./thread-outbox-model";
 export const threadOutboxManager = createThreadOutboxManager({
   registry: appAtomRegistry,
   storage: expoThreadOutboxStorage,
+  atomLabel: "mobile:thread-outbox:queued-messages",
+  warn: (message, error) => {
+    console.warn(message, error);
+  },
 });
 
 export function ensureThreadOutboxLoaded(): void {
@@ -25,7 +29,8 @@ export function updateThreadOutboxMessage(message: QueuedThreadMessage): Promise
   return threadOutboxManager.update(message);
 }
 
-export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
+/** Removes an extant message and reports whether this caller owned the removal. */
+export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
   return threadOutboxManager.remove(message);
 }
 

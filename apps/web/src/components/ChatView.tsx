@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInstanceId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
@@ -168,7 +169,7 @@ import {
   projectActionMutationUnavailableMessage,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
@@ -186,9 +187,22 @@ import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   hasComposerDraftContent,
+  hydrateImagesFromPersisted,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import {
+  dispatchingQueuedMessageAtom,
+  enqueueThreadOutboxMessage,
+  hasPendingThreadOutboxWork,
+  holdEditingQueuedMessage,
+  releaseEditingQueuedMessage,
+  removeThreadOutboxMessage,
+  updateThreadOutboxMessage,
+  useQueuedThreadMessages,
+} from "../state/threadOutbox";
+import type { QueuedThreadMessage } from "@t3tools/client-runtime/state/thread-outbox-model";
+import { ComposerQueuedMessages } from "./chat/ComposerQueuedMessages";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -203,6 +217,7 @@ import {
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -280,6 +295,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldQueueMessageWhileBusy,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -387,6 +403,12 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   }, [isDraftHeroState]);
 
   return [attachTransitionGroupRef, attachComposerAnchorRef, captureComposerRect] as const;
+}
+
+function hasSameComposerItems(current: readonly unknown[], submitted: readonly unknown[]): boolean {
+  return (
+    current.length === submitted.length && current.every((item, index) => item === submitted[index])
+  );
 }
 const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -4490,18 +4512,15 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const currentSendCtx = composerRef.current?.getSendContext();
-      const hasSameItems = (current: readonly unknown[], submitted: readonly unknown[]) =>
-        current.length === submitted.length &&
-        current.every((item, index) => item === submitted[index]);
       if (
         routeThreadKeyRef.current === routeThreadKey &&
         promptRef.current === promptForSend &&
         currentSendCtx &&
-        hasSameItems(currentSendCtx.images, composerImages) &&
-        hasSameItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
-        hasSameItems(currentSendCtx.elementContexts, composerElementContexts) &&
-        hasSameItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
-        hasSameItems(currentSendCtx.reviewComments, composerReviewComments)
+        hasSameComposerItems(currentSendCtx.images, composerImages) &&
+        hasSameComposerItems(currentSendCtx.terminalContexts, composerTerminalContexts) &&
+        hasSameComposerItems(currentSendCtx.elementContexts, composerElementContexts) &&
+        hasSameComposerItems(currentSendCtx.previewAnnotations, composerPreviewAnnotations) &&
+        hasSameComposerItems(currentSendCtx.reviewComments, composerReviewComments)
       ) {
         promptRef.current = "";
         if (pendingAnswerTarget) {
@@ -4601,27 +4620,6 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
-    sendInFlightRef.current = true;
-    if (draftId) {
-      draftSubmissionTracker.begin(draftId);
-    }
-    if (isDraftHeroState && activeThreadKey) {
-      let resolveDockStarted: (() => void) | undefined;
-      const dockStarted = new Promise<void>((resolve) => {
-        resolveDockStarted = resolve;
-      });
-      const dockTransition = runMobileComposerTransition(() => {
-        flushSync(() => {
-          captureDraftHeroComposerRect();
-          setDockedDraftHeroThreadKey(activeThreadKey);
-        });
-        resolveDockStarted?.();
-      });
-      void dockTransition.catch(() => resolveDockStarted?.());
-      await dockStarted;
-    }
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
-
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerElementContextsSnapshot = [...composerElementContexts];
@@ -4651,6 +4649,120 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
+
+    // A running or starting session means the server thread already has an
+    // active turn: park the message in the thread outbox (delivered by the
+    // drain, steerable from the queued-messages strip) instead of steering
+    // immediately. This path must not touch the optimistic timeline or the
+    // local dispatch latch — those belong to real dispatches.
+    if (
+      shouldQueueMessageWhileBusy({
+        isServerThread,
+        sessionStatus: activeThread.session?.status ?? null,
+        hasPendingOutboxWork:
+          activeThreadRef !== null && hasPendingThreadOutboxWork(activeThreadRef),
+      })
+    ) {
+      sendInFlightRef.current = true;
+      try {
+        const queuedAttachments = await Promise.all(
+          composerImagesSnapshot.map(async (image) => {
+            const dataUrl = await readFileAsDataUrl(image.file);
+            return {
+              id: image.id,
+              previewUri: dataUrl,
+              type: "image" as const,
+              name: image.name,
+              mimeType: image.mimeType,
+              sizeBytes: image.sizeBytes,
+              dataUrl,
+            };
+          }),
+        );
+        await enqueueThreadOutboxMessage({
+          environmentId: activeThread.environmentId,
+          threadId: threadIdForSend,
+          messageId: messageIdForSend,
+          commandId: newCommandId(),
+          text: outgoingMessageText,
+          ...(inputOriginForSend !== undefined ? { inputOrigin: inputOriginForSend } : {}),
+          attachments: queuedAttachments,
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          deliveryIntent: "queue",
+          ...(localCheckoutBranchMismatch
+            ? { localCheckoutBranch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
+          createdAt: messageCreatedAt,
+        });
+        setThreadError(threadIdForSend, null);
+        if (expiredTerminalContextCount > 0) {
+          const toastCopy = buildExpiredTerminalContextToastCopy(
+            expiredTerminalContextCount,
+            "omitted",
+          );
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: toastCopy.title,
+              description: toastCopy.description,
+            }),
+          );
+        }
+        const currentSendCtx = composerRef.current?.getSendContext();
+        if (
+          routeThreadKeyRef.current === routeThreadKey &&
+          promptRef.current === promptForSend &&
+          currentSendCtx &&
+          hasSameComposerItems(currentSendCtx.images, composerImagesSnapshot) &&
+          hasSameComposerItems(currentSendCtx.terminalContexts, composerTerminalContextsSnapshot) &&
+          hasSameComposerItems(currentSendCtx.elementContexts, composerElementContextsSnapshot) &&
+          hasSameComposerItems(
+            currentSendCtx.previewAnnotations,
+            composerPreviewAnnotationsSnapshot,
+          ) &&
+          hasSameComposerItems(currentSendCtx.reviewComments, composerReviewCommentsSnapshot)
+        ) {
+          promptRef.current = "";
+          clearComposerDraftContent(composerDraftTarget);
+          for (const image of composerImagesSnapshot) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+          composerRef.current?.resetCursorState();
+        }
+      } catch (error) {
+        setThreadError(
+          threadIdForSend,
+          error instanceof Error ? error.message : "Failed to queue message.",
+        );
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
+
+    sendInFlightRef.current = true;
+    if (draftId) {
+      draftSubmissionTracker.begin(draftId);
+    }
+    if (isDraftHeroState && activeThreadKey) {
+      let resolveDockStarted: (() => void) | undefined;
+      const dockStarted = new Promise<void>((resolve) => {
+        resolveDockStarted = resolve;
+      });
+      const dockTransition = runMobileComposerTransition(() => {
+        flushSync(() => {
+          captureDraftHeroComposerRect();
+          setDockedDraftHeroThreadKey(activeThreadKey);
+        });
+        resolveDockStarted?.();
+      });
+      void dockTransition.catch(() => resolveDockStarted?.());
+      await dockStarted;
+    }
+    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -4906,6 +5018,98 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   };
+
+  const allQueuedThreadMessages = useQueuedThreadMessages(isServerThread ? activeThreadRef : null);
+  const queuedThreadMessages = useMemo(
+    () => allQueuedThreadMessages.filter((message) => message.creation === undefined),
+    [allQueuedThreadMessages],
+  );
+  const dispatchingQueuedMessage = useAtomValue(dispatchingQueuedMessageAtom);
+  const dispatchingQueuedMessageId = dispatchingQueuedMessage?.messageId ?? null;
+
+  const onSteerQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
+    // The drain is the only delivery path; flipping the intent lets it send
+    // this message into the running turn on its next pass.
+    void updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" }).catch((error) => {
+      console.warn("[thread-outbox] failed to mark queued message for steering", error);
+    });
+  }, []);
+
+  const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
+    void removeThreadOutboxMessage(message).catch((error) => {
+      console.warn("[thread-outbox] failed to delete queued message", error);
+    });
+  }, []);
+
+  const onEditQueuedMessage = useCallback(
+    async (message: QueuedThreadMessage) => {
+      if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId)
+        return;
+      const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
+      if (currentImageCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        toastManager.add({
+          type: "error",
+          title: `A message can contain up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images`,
+          description: "Remove images from the composer before editing this queued message.",
+        });
+        return;
+      }
+      // Hold the message so the drain cannot deliver it while its content is
+      // being moved back into the composer.
+      holdEditingQueuedMessage(message.messageId);
+      try {
+        // Remove first: if this fails the message simply stays queued, whereas
+        // appending first could leave the content both queued and in the draft.
+        const removed = await removeThreadOutboxMessage(message);
+        if (!removed) return;
+        const currentPrompt = promptRef.current;
+        const nextPrompt =
+          currentPrompt.trim().length > 0
+            ? `${currentPrompt.trimEnd()}\n\n${message.text}`
+            : message.text;
+        promptRef.current = nextPrompt;
+        setComposerDraftPrompt(composerDraftTarget, nextPrompt, message.inputOrigin);
+        if (message.attachments.length > 0) {
+          addComposerDraftImages(
+            composerDraftTarget,
+            hydrateImagesFromPersisted(message.attachments),
+          );
+        }
+        const draftStore = useComposerDraftStore.getState();
+        if (message.modelSelection !== undefined) {
+          draftStore.setModelSelection(composerDraftTarget, message.modelSelection, {
+            replaceOptions: true,
+          });
+        }
+        if (message.runtimeMode !== undefined) {
+          draftStore.setRuntimeMode(composerDraftTarget, message.runtimeMode);
+        }
+        if (message.interactionMode !== undefined) {
+          draftStore.setInteractionMode(composerDraftTarget, message.interactionMode);
+        }
+        composerRef.current?.resetCursorState({
+          cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+          prompt: nextPrompt,
+          detectTrigger: false,
+        });
+        focusComposer();
+      } catch (error) {
+        console.warn("[thread-outbox] failed to load queued message into the composer", error);
+      } finally {
+        releaseEditingQueuedMessage(message.messageId);
+      }
+    },
+    [
+      addComposerDraftImages,
+      composerDraftTarget,
+      composerRef,
+      focusComposer,
+      promptRef,
+      setComposerDraftPrompt,
+    ],
+  );
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -5841,6 +6045,13 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  <ComposerQueuedMessages
+                    messages={queuedThreadMessages}
+                    dispatchingMessageId={dispatchingQueuedMessageId}
+                    onSteerNow={onSteerQueuedMessage}
+                    onEdit={(message) => void onEditQueuedMessage(message)}
+                    onDelete={onDeleteQueuedMessage}
+                  />
                   <div
                     className="relative"
                     style={

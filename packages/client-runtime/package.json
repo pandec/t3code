@@ -131,6 +131,26 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
+    "./state/composer-attachment": {
+      "types": "./src/state/composerAttachment.ts",
+      "default": "./src/state/composerAttachment.ts"
+    },
+    "./state/thread-outbox-model": {
+      "types": "./src/state/threadOutboxModel.ts",
+      "default": "./src/state/threadOutboxModel.ts"
+    },
+    "./state/thread-outbox-manager": {
+      "types": "./src/state/threadOutboxManager.ts",
+      "default": "./src/state/threadOutboxManager.ts"
+    },
+    "./state/thread-outbox-storage": {
+      "types": "./src/state/threadOutboxStorage.ts",
+      "default": "./src/state/threadOutboxStorage.ts"
+    },
+    "./state/thread-outbox-delivery": {
+      "types": "./src/state/threadOutboxDelivery.ts",
+      "default": "./src/state/threadOutboxDelivery.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

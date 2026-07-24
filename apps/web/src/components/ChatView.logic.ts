@@ -3,6 +3,7 @@ import {
   isProviderDriverKind,
   ProjectId,
   type ModelSelection,
+  type OrchestrationSessionStatus,
   type ProviderDriverKind,
   type ServerProvider,
   type ScopedThreadRef,
@@ -113,6 +114,23 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+// A send targeting an existing server thread whose session is starting or
+// running is queued (delivered by the outbox drain once the turn settles, or
+// steered when the user asks) instead of racing the active turn. Idle sends —
+// and local drafts, which still need thread bootstrap — keep the direct path.
+export function shouldQueueMessageWhileBusy(input: {
+  isServerThread: boolean;
+  sessionStatus: OrchestrationSessionStatus | null;
+  hasPendingOutboxWork?: boolean;
+}): boolean {
+  return (
+    input.isServerThread &&
+    (input.hasPendingOutboxWork === true ||
+      input.sessionStatus === "running" ||
+      input.sessionStatus === "starting")
+  );
 }
 
 export function reconcileMountedTerminalThreadIds(input: {
