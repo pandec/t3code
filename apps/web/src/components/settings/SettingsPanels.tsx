@@ -73,7 +73,7 @@ import {
   serverEnvironment,
 } from "../../state/server";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped, useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -118,8 +118,10 @@ import {
   archivedProjectFilterKey,
   archivedProjectSelectValue,
   archivedThreadMatchesProject,
+  buildArchivedProjectFilterOptions,
   parseArchivedProjectSelectValue,
   resolveArchivedProjectFilterGroup,
+  shouldClearUnknownArchivedProjectFilter,
   shouldDeferArchivedEmptyState,
 } from "../../archivedProjectFilter";
 
@@ -1610,7 +1612,8 @@ export function ArchivedThreadsPanel({
   readonly projectFilterKey: string | null;
   readonly onProjectFilterChange: (projectKey: string | null) => void;
 }) {
-  const { environments } = useEnvironments();
+  const { environments, isReady: environmentsReady } = useEnvironments();
+  const environmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const primaryEnvironment = usePrimaryEnvironment();
   const projects = useProjects();
   const groupingSettings = usePrimarySettings(selectProjectGroupingSettings);
@@ -1686,40 +1689,52 @@ export function ArchivedThreadsPanel({
   );
   const selectedLogicalProjectKey = selectedProjectGroup?.projectKey ?? null;
   const projectFilterOptions = useMemo(() => {
-    const displayNameCounts = new Map<string, number>();
-    for (const group of archivedGroups) {
-      displayNameCounts.set(group.displayName, (displayNameCounts.get(group.displayName) ?? 0) + 1);
-    }
-    const options = archivedGroups.map((group) => {
+    const candidates = archivedGroups.map((group) => {
       const routeProjectKey =
         group.key === selectedLogicalProjectKey && projectFilterKey !== null
           ? projectFilterKey
           : archivedProjectFilterKey(group.representativeProject);
       return {
+        displayName: group.displayName,
+        environmentLabel:
+          environmentLabelById.get(group.representativeProject.environmentId) ??
+          (group.representativeProject.environmentId === primaryEnvironment?.environmentId
+            ? "Local"
+            : "Remote"),
         logicalKey: group.key,
         projectKey: routeProjectKey,
-        label:
-          (displayNameCounts.get(group.displayName) ?? 0) > 1
-            ? `${group.displayName} — ${group.representativeProject.workspaceRoot}`
-            : group.displayName,
+        workspaceRoot: group.representativeProject.workspaceRoot,
       };
     });
     if (
       projectFilterKey !== null &&
       selectedProjectGroup !== null &&
-      !options.some((option) => option.logicalKey === selectedProjectGroup.projectKey)
+      !candidates.some((option) => option.logicalKey === selectedProjectGroup.projectKey)
     ) {
-      options.push({
+      candidates.push({
+        displayName: selectedProjectGroup.displayName,
+        environmentLabel:
+          environmentLabelById.get(selectedProjectGroup.environmentId) ??
+          (selectedProjectGroup.environmentId === primaryEnvironment?.environmentId
+            ? "Local"
+            : "Remote"),
         logicalKey: selectedProjectGroup.projectKey,
         projectKey: projectFilterKey,
-        label: selectedProjectGroup.displayName,
+        workspaceRoot: selectedProjectGroup.workspaceRoot,
       });
     }
-    return options.toSorted(
+    return buildArchivedProjectFilterOptions(candidates).toSorted(
       (left, right) =>
         left.label.localeCompare(right.label) || left.logicalKey.localeCompare(right.logicalKey),
     );
-  }, [archivedGroups, projectFilterKey, selectedLogicalProjectKey, selectedProjectGroup]);
+  }, [
+    archivedGroups,
+    environmentLabelById,
+    primaryEnvironment?.environmentId,
+    projectFilterKey,
+    selectedLogicalProjectKey,
+    selectedProjectGroup,
+  ]);
   const selectedProjectLabel =
     projectFilterOptions.find((option) => option.logicalKey === selectedLogicalProjectKey)?.label ??
     selectedProjectGroup?.displayName ??
@@ -1754,23 +1769,29 @@ export function ArchivedThreadsPanel({
   const hasSearchQuery = searchQuery.trim().length > 0;
   const hasProjectFilter = projectFilterKey !== null;
   const hasActiveFilter = hasSearchQuery || hasProjectFilter;
+  const archiveSourcesReady = environmentsReady && environmentShellsBootstrapped;
+  const isLoadingArchiveSources = !archiveSourcesReady || isLoadingArchive;
   const shouldDeferEmptyState = shouldDeferArchivedEmptyState({
     hasMatchingGroups: filteredArchivedGroups.length > 0,
-    isLoading: isLoadingArchive,
+    isLoading: isLoadingArchiveSources,
     hasError: archiveError !== null,
   });
 
   useEffect(() => {
     if (
-      projectFilterKey !== null &&
-      selectedProjectGroup === null &&
-      !isLoadingArchive &&
-      archiveError === null
+      shouldClearUnknownArchivedProjectFilter({
+        hasArchiveError: archiveError !== null,
+        hasProjectFilter: projectFilterKey !== null,
+        hasResolvedProject: selectedProjectGroup !== null,
+        isArchiveLoading: isLoadingArchive,
+        sourcesReady: archiveSourcesReady,
+      })
     ) {
       onProjectFilterChange(null);
     }
   }, [
     archiveError,
+    archiveSourcesReady,
     isLoadingArchive,
     onProjectFilterChange,
     projectFilterKey,
@@ -1921,9 +1942,9 @@ export function ArchivedThreadsPanel({
         <p
           id="archived-thread-search-status"
           className="min-h-4 px-1 text-[11px] text-muted-foreground"
-          aria-live="polite"
+          aria-live={isLoadingArchiveSources || archiveError !== null ? "off" : "polite"}
         >
-          {isLoadingArchive
+          {isLoadingArchiveSources
             ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}…`
             : archiveError !== null && filteredArchivedGroups.length === 0
               ? `Archived thread results${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be incomplete`
@@ -1949,12 +1970,12 @@ export function ArchivedThreadsPanel({
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
-                {isLoadingArchive ? (
+                {isLoadingArchiveSources ? (
                   <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
-                {isLoadingArchive
+                {isLoadingArchiveSources
                   ? "Loading archived threads"
                   : archiveError
                     ? "Could not load archived threads"
@@ -1962,7 +1983,7 @@ export function ArchivedThreadsPanel({
               </span>
             }
             description={
-              isLoadingArchive
+              isLoadingArchiveSources
                 ? "Checking connected environments."
                 : (archiveError ?? "Archived threads will appear here.")
             }
@@ -1973,18 +1994,18 @@ export function ArchivedThreadsPanel({
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
-                {isLoadingArchive ? (
+                {isLoadingArchiveSources ? (
                   <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
-                {isLoadingArchive
+                {isLoadingArchiveSources
                   ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
                   : `Archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be unavailable`}
               </span>
             }
             description={
-              isLoadingArchive
+              isLoadingArchiveSources
                 ? "Checking connected environments."
                 : "One or more environments could not be loaded, so this result may be incomplete."
             }

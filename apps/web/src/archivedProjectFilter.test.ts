@@ -5,9 +5,11 @@ import {
   archivedProjectFilterKey,
   archivedProjectSelectValue,
   archivedThreadMatchesProject,
+  buildArchivedProjectFilterOptions,
   parseArchivedProjectFilterKey,
   parseArchivedProjectSelectValue,
   resolveArchivedProjectFilterGroup,
+  shouldClearUnknownArchivedProjectFilter,
   shouldDeferArchivedEmptyState,
 } from "./archivedProjectFilter";
 
@@ -57,6 +59,40 @@ describe("archived project filter keys", () => {
   });
 });
 
+describe("buildArchivedProjectFilterOptions", () => {
+  it("disambiguates the complete option set by path and environment", () => {
+    const options = buildArchivedProjectFilterOptions([
+      {
+        displayName: "T3 Code",
+        environmentLabel: "Mac",
+        logicalKey: "local:/workspace/t3code",
+        projectKey: "local:project",
+        workspaceRoot: "/workspace/t3code",
+      },
+      {
+        displayName: "T3 Code",
+        environmentLabel: "Ubuntu",
+        logicalKey: "remote:/workspace/t3code",
+        projectKey: "remote:project",
+        workspaceRoot: "/workspace/t3code",
+      },
+      {
+        displayName: "T3 Code",
+        environmentLabel: "Grey Mac",
+        logicalKey: "remote:/workspace/other",
+        projectKey: "grey:project",
+        workspaceRoot: "/workspace/other",
+      },
+    ]);
+
+    expect(options.map((option) => option.label)).toEqual([
+      "T3 Code — /workspace/t3code · Mac",
+      "T3 Code — /workspace/t3code · Ubuntu",
+      "T3 Code — /workspace/other",
+    ]);
+  });
+});
+
 describe("archivedThreadMatchesProject", () => {
   it("matches every group without a project filter", () => {
     expect(archivedThreadMatchesProject("project-a", null)).toBe(true);
@@ -94,5 +130,32 @@ describe("shouldDeferArchivedEmptyState", () => {
         hasError: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldClearUnknownArchivedProjectFilter", () => {
+  const resolvedArchiveState = {
+    hasArchiveError: false,
+    hasProjectFilter: true,
+    hasResolvedProject: false,
+    isArchiveLoading: false,
+  };
+
+  it("preserves a valid-looking filter until project sources are ready", () => {
+    expect(
+      shouldClearUnknownArchivedProjectFilter({
+        ...resolvedArchiveState,
+        sourcesReady: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("clears a genuinely unknown filter after all sources settle", () => {
+    expect(
+      shouldClearUnknownArchivedProjectFilter({
+        ...resolvedArchiveState,
+        sourcesReady: true,
+      }),
+    ).toBe(true);
   });
 });
