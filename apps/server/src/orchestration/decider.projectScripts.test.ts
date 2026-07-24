@@ -83,6 +83,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           type: "project.meta.update",
           commandId: CommandId.make("cmd-project-update-scripts"),
           projectId: asProjectId("project-scripts"),
+          expectedScripts: [],
           scripts: Array.from(scripts),
         },
         readModel,
@@ -91,6 +92,110 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("project.meta-updated");
       expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
+    }),
+  );
+
+  it.effect("requires an action snapshot for project script updates", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-precondition"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-precondition"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-precondition"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-precondition"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-precondition"),
+          title: "Precondition",
+          workspaceRoot: "/tmp/precondition",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-update-without-precondition"),
+            projectId: asProjectId("project-precondition"),
+            scripts: [],
+          },
+          readModel,
+        }),
+      );
+
+      expect(failure._tag).toBe("OrchestrationCommandInvariantError");
+      if (failure._tag === "OrchestrationCommandInvariantError") {
+        expect(failure.code).toBe("project_actions_precondition_required");
+      }
+    }),
+  );
+
+  it.effect("rejects project.meta.update against a stale project snapshot", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const currentScripts = [
+        {
+          id: "test",
+          name: "Test",
+          command: "bun test",
+          icon: "test" as const,
+          runOnWorktreeCreate: false,
+        },
+      ];
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-stale"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-stale"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-stale"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-stale"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-stale"),
+          title: "Stale",
+          workspaceRoot: "/tmp/stale",
+          defaultModelSelection: null,
+          scripts: currentScripts,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-update-stale"),
+            projectId: asProjectId("project-stale"),
+            expectedScripts: [],
+            scripts: [],
+          },
+          readModel,
+        }),
+      );
+
+      expect(failure._tag).toBe("OrchestrationCommandInvariantError");
+      if (failure._tag !== "OrchestrationCommandInvariantError") {
+        return;
+      }
+      expect(failure.code).toBe("project_actions_changed");
+      expect(failure.message).toContain(
+        "Actions for project 'project-stale' changed after they were read.",
+      );
     }),
   );
 

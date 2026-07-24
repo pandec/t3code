@@ -164,6 +164,8 @@ import {
   buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
+  normalizeProjectSetupScript,
+  projectActionMutationUnavailableMessage,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
@@ -2816,11 +2818,19 @@ function ChatViewContent(props: ChatViewProps) {
       keybinding?: string | null;
       keybindingCommand: KeybindingCommand;
     }): Promise<AtomCommandResult<void, unknown>> => {
+      const actionServerConfig = serverConfigs.get(environmentId);
+      const unavailableMessage = projectActionMutationUnavailableMessage(
+        actionServerConfig?.environment,
+      );
+      if (unavailableMessage !== null) {
+        return AsyncResult.failure(Cause.fail(new Error(unavailableMessage)));
+      }
       const updateResult = mapAtomCommandResult(
         await updateProject({
           environmentId,
           input: {
             projectId: input.projectId,
+            expectedScripts: input.previousScripts,
             scripts: input.nextScripts,
           },
         }),
@@ -2846,7 +2856,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return updateResult;
     },
-    [environmentId, updateProject, upsertKeybinding],
+    [environmentId, serverConfigs, updateProject, upsertKeybinding],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
@@ -2858,14 +2868,10 @@ function ChatViewContent(props: ChatViewProps) {
         activeProject.scripts.map((script) => script.id),
       );
       const nextScript = buildProjectScript(nextId, input);
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
+      const nextScripts = normalizeProjectSetupScript(
+        [...activeProject.scripts, nextScript],
+        nextScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,
@@ -2892,13 +2898,10 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const updatedScript = buildProjectScript(existingScript.id, input);
-      const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
+      const nextScripts = normalizeProjectSetupScript(
+        activeProject.scripts.map((script) => (script.id === scriptId ? updatedScript : script)),
+        updatedScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,

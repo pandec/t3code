@@ -142,6 +142,7 @@ export const make = Effect.gen(function* () {
       connectionProbe: true,
       messageSummaries: true,
       threadSettlement: true,
+      conditionalProjectScriptUpdates: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
     },
   };
