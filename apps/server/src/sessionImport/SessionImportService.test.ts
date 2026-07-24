@@ -22,12 +22,14 @@ const instanceId = ProviderInstanceId.make("claude-main");
 const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
 interface HarnessOptions {
+  readonly bindingStarted?: Deferred.Deferred<void>;
   readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
   readonly importedModel?: string | null;
   readonly listedSessionName?: string | null;
   readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
   readonly replaceInstanceDuringRead?: boolean;
+  readonly releaseBinding?: Deferred.Deferred<void>;
   readonly releaseDispatch?: Deferred.Deferred<void>;
   readonly sessionName?: string | null;
   readonly yieldBeforeRead?: boolean;
@@ -135,7 +137,7 @@ const makeHarness = (options?: HarnessOptions) => {
 
   const directoryLayer = Layer.mock(ProviderSessionDirectory)({
     upsert: (binding) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         state.callOrder.push("binding-upsert");
         state.bindings.set(binding.threadId, {
           threadId: binding.threadId,
@@ -149,16 +151,18 @@ const makeHarness = (options?: HarnessOptions) => {
           runtimePayload: binding.runtimePayload ?? null,
           revision: 1,
         });
+        if (options?.bindingStarted) {
+          yield* Deferred.succeed(options.bindingStarted, undefined);
+        }
+        if (options?.releaseBinding) {
+          yield* Deferred.await(options.releaseBinding);
+        }
       }),
   });
 
   const engineLayer = Layer.mock(OrchestrationEngineService)({
     dispatch: (command) => {
       state.callOrder.push("dispatch");
-      if (options?.dispatchFails === true) {
-        return Effect.die(new Error("dispatch failed"));
-      }
-      state.dispatched.push(command as unknown as HarnessState["dispatched"][number]);
       return Effect.gen(function* () {
         if (options?.dispatchStarted) {
           yield* Deferred.succeed(options.dispatchStarted, undefined);
@@ -166,6 +170,10 @@ const makeHarness = (options?: HarnessOptions) => {
         if (options?.releaseDispatch) {
           yield* Deferred.await(options.releaseDispatch);
         }
+        if (options?.dispatchFails === true) {
+          return yield* Effect.die(new Error("dispatch failed"));
+        }
+        state.dispatched.push(command as unknown as HarnessState["dispatched"][number]);
         return { sequence: state.dispatched.length };
       });
     },
@@ -264,6 +272,53 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(state.dispatched).toHaveLength(1);
       expect(state.callOrder).toEqual(["binding-upsert", "dispatch"]);
       expect(state.bindings.size).toBe(1);
+    }),
+  );
+
+  it.effect("finishes dispatch when interrupted after binding persistence", () =>
+    Effect.gen(function* () {
+      const bindingStarted = yield* Deferred.make<void>();
+      const releaseBinding = yield* Deferred.make<void>();
+      const { state, layer } = makeHarness({ bindingStarted, releaseBinding });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const fiber = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(bindingStarted);
+
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(releaseBinding, undefined);
+      yield* Fiber.await(fiber);
+
+      expect(state.dispatched).toHaveLength(1);
+      expect(state.callOrder).toEqual(["binding-upsert", "dispatch"]);
+      expect(state.bindings.size).toBe(1);
+    }),
+  );
+
+  it.effect("compensates when an interrupted queued dispatch fails", () =>
+    Effect.gen(function* () {
+      const dispatchStarted = yield* Deferred.make<void>();
+      const releaseDispatch = yield* Deferred.make<void>();
+      const { state, layer } = makeHarness({
+        dispatchFails: true,
+        dispatchStarted,
+        releaseDispatch,
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const fiber = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(dispatchStarted);
+
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(releaseDispatch, undefined);
+      yield* Fiber.await(fiber);
+
+      expect(state.callOrder).toEqual(["binding-upsert", "dispatch", "binding-delete"]);
+      expect(state.bindings.size).toBe(0);
     }),
   );
 

@@ -318,77 +318,79 @@ export const makeSessionImportService = Effect.gen(function* () {
     }));
     const createdAt = yield* nowIso;
 
-    // Binding first: a failed dispatch leaves only a hidden candidate (safe,
-    // compensated below), never a visible thread without continuation.
-    yield* sessionDirectory
-      .upsert({
-        threadId,
-        provider: instance.driverKind,
-        providerInstanceId: instance.instanceId,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        status: "stopped",
-        resumeCursor: history.resumeCursor,
-        runtimePayload: {
-          cwd: workspaceRoot,
+    // Keep binding persistence, accepted dispatch, and failure compensation in
+    // one critical section. Caller interruption must not leave either a visible
+    // thread without its binding or a binding-only orphan.
+    yield* Effect.gen(function* () {
+      // Binding first: a failed dispatch leaves only a hidden candidate (safe,
+      // compensated below), never a visible thread without continuation.
+      yield* sessionDirectory
+        .upsert({
+          threadId,
+          provider: instance.driverKind,
+          providerInstanceId: instance.instanceId,
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          status: "stopped",
+          resumeCursor: history.resumeCursor,
+          runtimePayload: {
+            cwd: workspaceRoot,
+            modelSelection,
+            activeTurnId: null,
+            lastRuntimeEvent: "provider.importConversation",
+            lastRuntimeEventAt: createdAt,
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SessionImportError({
+                reason: "import-failed",
+                detail: "Failed to persist the provider binding for the imported session.",
+                cause,
+              }),
+          ),
+        );
+
+      const dispatchResult = yield* orchestrationEngine
+        .dispatch({
+          type: "thread.import",
+          // A compensated failed import must be retryable even when the
+          // orchestration engine persisted a rejected command receipt.
+          commandId: CommandId.make(`import:${threadId}`),
+          threadId,
+          projectId: input.projectId,
+          title: titleForImport(history.name, history.messages),
           modelSelection,
-          activeTurnId: null,
-          lastRuntimeEvent: "provider.importConversation",
-          lastRuntimeEventAt: createdAt,
-        },
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new SessionImportError({
-              reason: "import-failed",
-              detail: "Failed to persist the provider binding for the imported session.",
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          source: {
+            provider: instance.driverKind,
+            nativeSessionId: input.nativeSessionId,
+            nativeCwd: history.nativeCwd,
+          },
+          messages,
+          createdAt,
+        })
+        // `exit` (not `result`) so defects also trigger binding compensation.
+        .pipe(Effect.exit);
+
+      if (Exit.isFailure(dispatchResult)) {
+        // Compensation: remove the binding so the candidate reappears.
+        yield* runtimeRepository.deleteByThreadId({ threadId }).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("Failed to compensate the import provider binding.", {
+              threadId,
               cause,
             }),
-        ),
-      );
-
-    const dispatchResult = yield* orchestrationEngine
-      .dispatch({
-        type: "thread.import",
-        // A compensated failed import must be retryable even when the
-        // orchestration engine persisted a rejected command receipt.
-        commandId: CommandId.make(`import:${threadId}`),
-        threadId,
-        projectId: input.projectId,
-        title: titleForImport(history.name, history.messages),
-        modelSelection,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        source: {
-          provider: instance.driverKind,
-          nativeSessionId: input.nativeSessionId,
-          nativeCwd: history.nativeCwd,
-        },
-        messages,
-        createdAt,
-      })
-      // `exit` (not `result`) so defects also trigger binding compensation.
-      // Once queued, wait for the authoritative command result even if the
-      // importing client disconnects. Otherwise a pending interrupt can delete
-      // the binding after the worker commits the visible imported thread.
-      .pipe(Effect.exit, Effect.uninterruptible);
-
-    if (Exit.isFailure(dispatchResult)) {
-      // Compensation: remove the binding so the candidate reappears.
-      yield* runtimeRepository.deleteByThreadId({ threadId }).pipe(
-        Effect.catch((cause) =>
-          Effect.logError("Failed to compensate the import provider binding.", {
-            threadId,
-            cause,
-          }),
-        ),
-      );
-      return yield* new SessionImportError({
-        reason: "import-failed",
-        detail: `Importing session '${input.nativeSessionId}' failed while persisting the thread.`,
-        cause: dispatchResult.cause,
-      });
-    }
+          ),
+        );
+        return yield* new SessionImportError({
+          reason: "import-failed",
+          detail: `Importing session '${input.nativeSessionId}' failed while persisting the thread.`,
+          cause: dispatchResult.cause,
+        });
+      }
+    }).pipe(Effect.uninterruptible);
 
     return { threadId };
   });

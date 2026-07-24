@@ -192,6 +192,20 @@ layer("040_BackfillImportedThreadSessions", (it) => {
           )
       `;
 
+      const [preMigrationJournal] = yield* sql<{ readonly sequence: number }>`
+        SELECT MAX(sequence) AS sequence
+        FROM orchestration_events
+      `;
+      yield* sql`
+        INSERT INTO projection_state (
+          projector, last_applied_sequence, updated_at
+        ) VALUES (
+          ${ORCHESTRATION_PROJECTOR_NAMES.threadSessions},
+          ${preMigrationJournal?.sequence ?? 0},
+          '2026-07-23T00:01:00.000Z'
+        )
+      `;
+
       yield* runMigrations({ toMigrationInclusive: 40 });
       yield* projectionPipeline.bootstrap;
 
@@ -213,13 +227,6 @@ layer("040_BackfillImportedThreadSessions", (it) => {
       `;
       assert.deepStrictEqual(sessions, [
         {
-          threadId: "canonical-import",
-          status: "stopped",
-          providerName: "claudeAgent",
-          providerInstanceId: "claude-work",
-          runtimeMode: "full-access",
-        },
-        {
           threadId: "eligible-import",
           status: "stopped",
           providerName: "claudeAgent",
@@ -232,6 +239,7 @@ layer("040_BackfillImportedThreadSessions", (it) => {
         readonly eventType: string;
         readonly actorKind: string;
         readonly occurredAt: string;
+        readonly sequence: number;
         readonly sessionUpdatedAt: string;
         readonly streamVersion: number;
       }>`
@@ -239,6 +247,7 @@ layer("040_BackfillImportedThreadSessions", (it) => {
           event_type AS "eventType",
           actor_kind AS "actorKind",
           occurred_at AS "occurredAt",
+          sequence,
           json_extract(payload_json, '$.session.updatedAt') AS "sessionUpdatedAt",
           stream_version AS "streamVersion"
         FROM orchestration_events
@@ -249,6 +258,7 @@ layer("040_BackfillImportedThreadSessions", (it) => {
           eventType: "thread.session-set",
           actorKind: "server",
           occurredAt: "2026-07-23T00:02:00.000Z",
+          sequence: (preMigrationJournal?.sequence ?? 0) + 1,
           sessionUpdatedAt: "2026-07-23T00:01:00.000Z",
           streamVersion: 2,
         },
@@ -262,6 +272,14 @@ layer("040_BackfillImportedThreadSessions", (it) => {
           ORDER BY event_id
         `,
         [{ eventId: "migration-040-import-session:eligible-import" }],
+      );
+      assert.deepStrictEqual(
+        yield* sql`
+          SELECT last_applied_sequence AS "lastAppliedSequence"
+          FROM projection_state
+          WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}
+        `,
+        [{ lastAppliedSequence: (preMigrationJournal?.sequence ?? 0) + 1 }],
       );
 
       yield* sql`DELETE FROM projection_thread_sessions`;
