@@ -44,6 +44,8 @@ Verify these facts from live Git state before changing anything. Stop if the rem
 
 ## 3. Review behavioral overlap
 
+Read `LEDGER.md` next to this skill first. Apply its standing decisions instead of re-deliberating them. For each ledger watchpoint whose path is touched by the incoming upstream range, spawn one targeted sub-agent to answer that entry's question (whether the fork change there is still needed and compatible); untouched watchpoints need no check.
+
 Before changing `dev`, compare:
 
 - upstream changes from old `main` to new `main`
@@ -86,10 +88,11 @@ Complete the applicable local verification before pushing `dev`.
 8. Audit the fork-maintained CLI against the merged behavior. When upstream changes or merge resolutions touch project or thread lifecycle, orchestration commands or contracts, defaults, flags, JSON shapes, error semantics, or related documentation:
    - compare `apps/server/src/cli/`, its focused tests, and `docs/user/cli-automation.md` with the merged contracts and behavior
    - update repository-owned CLI implementation, tests, and documentation when alignment requires it, then rerun the affected checks
-   - verify the global `t3-cli` skill at `~/.agents/skills/t3-cli` still describes the implemented command contract; report the exact dotfiles update if it drifted, and edit that separate repository only with explicit authorization
+   - verify the global `t3-cli` skill at `~/.agents/skills/t3-cli` still describes the implemented command contract; when it has drifted, update it by default to match the merged contract (the user has standing authorization for these keep-in-sync edits), then report the exact change made. Note `~/.agents/skills/t3-cli` and `~/.claude/skills/t3-cli` are hardlinked copies, so editing one updates both. Still ask before any change beyond mechanical contract alignment (renames, removals, behavioral rewrites)
    - completion criterion: every CLI-affecting upstream or merge change is either reflected in the implementation, tests, and documentation or reported as a concrete unresolved decision
-9. Only after the applicable local gates and CLI audit pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
-10. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
+9. Update `LEDGER.md` as part of the sync commit: record new standing decisions made during this sync, add watchpoints for newly observed fork/upstream friction files, resolve watchpoint checks that ran, and apply the ledger's self-cleaning rules. Keep it scoped to what changes future syncs — never a fork feature list.
+10. Only after the applicable local gates and CLI audit pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
+11. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
 
 ## Report
 
@@ -102,3 +105,5 @@ State whether any conflict resolution could impact functionality. When every res
 Report the CLI alignment audit result, including any repository changes made or any required `t3-cli` dotfiles update.
 
 End with a rollout note: based on the protocol/contract, persistence, and update-feed changes in this sync, state whether the installed apps (desktop flavors, iOS) can be updated gradually one by one while older clients keep working against the new server, or whether everything should be closed and updated together, and call out anything that needs a reinstall or data migration.
+
+After the summary, check the full-audit due date in `LEDGER.md`. If it has passed (or this sync merged an unusually large upstream drop), ask the user whether to run the cross-feature fork-vs-upstream audit now or postpone; record the answer by updating the ledger's audit marker. Do not block or delay the sync itself on this.
