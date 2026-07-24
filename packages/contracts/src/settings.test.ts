@@ -33,6 +33,26 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings turn completion notifications", () => {
+  it("defaults both independent notification settings off", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.enableTurnCompletionToasts).toBe(false);
+    expect(settings.enableTurnCompletionSystemNotifications).toBe(false);
+  });
+
+  it("accepts each notification setting independently in patches", () => {
+    expect(
+      decodeClientSettingsPatch({
+        enableTurnCompletionToasts: true,
+        enableTurnCompletionSystemNotifications: false,
+      }),
+    ).toEqual({
+      enableTurnCompletionToasts: true,
+      enableTurnCompletionSystemNotifications: false,
+    });
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

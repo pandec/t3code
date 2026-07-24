@@ -97,7 +97,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
@@ -972,6 +972,19 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+export const DesktopNotificationThreadRefSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type DesktopNotificationThreadRef = typeof DesktopNotificationThreadRefSchema.Type;
+
+export const DesktopNotificationShowInputSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.optionalKey(Schema.String),
+  threadRef: Schema.optionalKey(DesktopNotificationThreadRefSchema),
+});
+export type DesktopNotificationShowInput = typeof DesktopNotificationShowInputSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   // One bootstrap per pool instance currently registered with bootstrap
@@ -1030,6 +1043,19 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /**
+   * OS-level notifications routed through the Electron main process.
+   * Optional so a renderer bundle newer than its desktop shell degrades
+   * quietly; web builds have `notifications === undefined`.
+   */
+  notifications?: {
+    /** Resolves false when the OS reports notifications unsupported. */
+    show: (input: DesktopNotificationShowInput) => Promise<boolean>;
+    /** Fires after a notification click has restored + focused the window. */
+    onNotificationClicked: (
+      listener: (threadRef: DesktopNotificationThreadRef) => void,
+    ) => () => void;
+  };
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.

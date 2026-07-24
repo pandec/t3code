@@ -15,6 +15,7 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
+export const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
@@ -36,6 +37,19 @@ export function resolveTimelineMinimapTopPercent(index: number, itemCount: numbe
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
 }
 
+export function resolveTimelineMinimapTooltipTranslate(
+  positionIndex: number,
+  positionCount: number,
+): string {
+  if (positionIndex === 0) {
+    return "0%";
+  }
+  if (positionIndex === positionCount - 1) {
+    return "-100%";
+  }
+  return "-50%";
+}
+
 export function resolveTimelineMinimapIndexFromPointer(input: {
   readonly itemCount: number;
   readonly railTop: number;
@@ -51,6 +65,35 @@ export function resolveTimelineMinimapIndexFromPointer(input: {
 
   const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
   return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
+}
+
+export function resolveTimelineMinimapItemIndexFromPointer(input: {
+  readonly items: ReadonlyArray<Pick<TimelineMinimapItem, "positionCount" | "positionIndex">>;
+  readonly railTop: number;
+  readonly railHeight: number;
+  readonly pointerY: number;
+}): number | null {
+  const firstItem = input.items[0];
+  if (!firstItem || input.railHeight <= 0) {
+    return null;
+  }
+  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
+  const targetPosition = progress * Math.max(0, firstItem.positionCount - 1);
+
+  let nearestItemIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < input.items.length; index += 1) {
+    const item = input.items[index];
+    if (!item) {
+      continue;
+    }
+    const distance = Math.abs(item.positionIndex - targetPosition);
+    if (distance < nearestDistance) {
+      nearestItemIndex = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearestItemIndex;
 }
 
 export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number): boolean {
@@ -163,6 +206,7 @@ export type MessagesTimelineRow =
       message: ChatMessage;
       durationStart: string;
       showAssistantMeta: boolean;
+      isFinalAssistantResponse: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -179,6 +223,108 @@ export type MessagesTimelineRow =
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];
+}
+
+export type TimelineMinimapKind = "user-turn" | "final-assistant";
+
+export interface TimelineMinimapItem {
+  readonly id: string;
+  readonly rowIndex: number;
+  readonly positionIndex: number;
+  readonly positionCount: number;
+  readonly primaryText: string | null;
+  readonly secondaryText: string | null;
+}
+
+export function deriveTimelineMinimapItems(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  kind: TimelineMinimapKind,
+): TimelineMinimapItem[] {
+  const items: TimelineMinimapItem[] = [];
+  const positionCount = Math.max(
+    1,
+    rows.filter((row) => row.kind === "message" && row.message.role === "user").length,
+  );
+  let positionIndex = -1;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind !== "message") {
+      continue;
+    }
+    if (row.message.role === "user") {
+      positionIndex += 1;
+    }
+
+    if (kind === "final-assistant") {
+      if (row.message.role !== "assistant" || !row.isFinalAssistantResponse) {
+        continue;
+      }
+      items.push({
+        id: row.id,
+        rowIndex: index,
+        positionIndex: Math.max(0, positionIndex),
+        positionCount,
+        primaryText: compactMinimapPreview(row.message.text),
+        secondaryText: null,
+      });
+      continue;
+    }
+
+    if (row.message.role !== "user") {
+      continue;
+    }
+    items.push({
+      id: row.id,
+      rowIndex: index,
+      positionIndex: Math.max(0, positionIndex),
+      positionCount,
+      primaryText: compactMinimapPreview(row.message.text),
+      secondaryText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
+    });
+  }
+  return items;
+}
+
+function resolveFinalAssistantTextForTurn(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  userRowIndex: number,
+) {
+  let finalAssistantText: string | null = null;
+  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind !== "message") {
+      continue;
+    }
+    if (row.message.role === "user") {
+      break;
+    }
+    if (row.message.role === "assistant") {
+      finalAssistantText = row.message.text ?? null;
+    }
+  }
+  return finalAssistantText;
+}
+
+function compactMinimapPreview(text: string | null | undefined) {
+  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
+  return compact.length > 0 ? compact : null;
+}
+
+export function resolveTimelineMinimapAriaLabel(input: {
+  readonly activeIndex: number | null;
+  readonly itemCount: number;
+  readonly primaryText: string | null;
+  readonly side: "left" | "right";
+}): string {
+  const fallback = input.side === "left" ? "User message" : "Agent response";
+  if (input.activeIndex === null) {
+    return `Jump to message: ${fallback}`;
+  }
+
+  const role = input.side === "left" ? "user message" : "agent response";
+  const position = `${input.activeIndex + 1} of ${input.itemCount}`;
+  const excerpt = input.primaryText?.slice(0, TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH) ?? null;
+  return excerpt ? `Jump to ${role} ${position}: ${excerpt}` : `Jump to ${role} ${position}`;
 }
 
 export function computeMessageDurationStart(
@@ -409,6 +555,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedWorkGroupIds?: ReadonlySet<string>;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
+  completedTurnAssistantMessageIds?: ReadonlySet<MessageId>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
@@ -541,6 +688,10 @@ export function deriveMessagesTimelineRows(input: {
       timelineEntry.message.role === "assistant" &&
       terminalAssistantMessageIds.has(timelineEntry.message.id) &&
       !assistantTurnStillInProgress;
+    const assistantTurnDiffSummary =
+      timelineEntry.message.role === "assistant"
+        ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+        : undefined;
 
     nextRows.push({
       kind: "message",
@@ -549,12 +700,12 @@ export function deriveMessagesTimelineRows(input: {
       message: timelineEntry.message,
       durationStart,
       showAssistantMeta,
+      isFinalAssistantResponse:
+        showAssistantMeta &&
+        input.completedTurnAssistantMessageIds?.has(timelineEntry.message.id) === true,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
-      assistantTurnDiffSummary:
-        timelineEntry.message.role === "assistant"
-          ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
-          : undefined,
+      assistantTurnDiffSummary,
       revertTurnCount:
         timelineEntry.message.role === "user"
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
@@ -629,6 +780,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.message === bm.message &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

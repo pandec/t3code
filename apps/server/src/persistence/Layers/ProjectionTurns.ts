@@ -10,6 +10,7 @@ import * as Struct from "effect/Struct";
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearCheckpointTurnConflictInput,
+  CopyCompletedProjectionTurnsForForkInput,
   DeleteProjectionTurnsByThreadInput,
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
@@ -254,6 +255,60 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const copyCompletedProjectionTurnsForFork = SqlSchema.void({
+    Request: CopyCompletedProjectionTurnsForForkInput,
+    execute: ({ sourceThreadId, destinationThreadId }) =>
+      sql`
+        INSERT INTO projection_turns (
+          thread_id,
+          turn_id,
+          pending_message_id,
+          source_proposed_plan_thread_id,
+          source_proposed_plan_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_turn_count,
+          checkpoint_ref,
+          checkpoint_status,
+          checkpoint_files_json
+        )
+        SELECT
+          ${destinationThreadId},
+          turn_id,
+          NULL,
+          source_proposed_plan_thread_id,
+          source_proposed_plan_id,
+          'fork:' || ${destinationThreadId} || ':' || assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          NULL,
+          NULL,
+          NULL,
+          '[]'
+        FROM projection_turns
+        WHERE thread_id = ${sourceThreadId}
+          AND turn_id IS NOT NULL
+          AND state = 'completed'
+          AND assistant_message_id IS NOT NULL
+        ON CONFLICT (thread_id, turn_id)
+        DO UPDATE SET
+          assistant_message_id = excluded.assistant_message_id,
+          state = excluded.state,
+          requested_at = excluded.requested_at,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          checkpoint_turn_count = NULL,
+          checkpoint_ref = NULL,
+          checkpoint_status = NULL,
+          checkpoint_files_json = '[]'
+      `,
+  });
+
   const upsertByTurnId: ProjectionTurnRepositoryShape["upsertByTurnId"] = (row) =>
     upsertProjectionTurnById(row).pipe(
       Effect.mapError(
@@ -332,6 +387,15 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const copyCompletedTurnsForFork: ProjectionTurnRepositoryShape["copyCompletedTurnsForFork"] = (
+    input,
+  ) =>
+    copyCompletedProjectionTurnsForFork(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionTurnRepository.copyCompletedTurnsForFork:query"),
+      ),
+    );
+
   const deleteByThreadId: ProjectionTurnRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionTurnsByThread(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionTurnRepository.deleteByThreadId:query")),
@@ -345,6 +409,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     listByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,
+    copyCompletedTurnsForFork,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;
 });
