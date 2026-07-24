@@ -15,6 +15,7 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
+export const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
@@ -130,7 +131,8 @@ export interface TimelineDurationMessage {
 export type TimelineLatestTurn = Pick<
   OrchestrationLatestTurn,
   "turnId" | "state" | "startedAt" | "completedAt"
->;
+> &
+  Partial<Pick<OrchestrationLatestTurn, "assistantMessageId">>;
 
 export type MessagesTimelineRow =
   | {
@@ -163,6 +165,7 @@ export type MessagesTimelineRow =
       message: ChatMessage;
       durationStart: string;
       showAssistantMeta: boolean;
+      isFinalAssistantResponse: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -202,7 +205,7 @@ export function deriveTimelineMinimapItems(
     }
 
     if (kind === "final-assistant") {
-      if (row.message.role !== "assistant" || !row.showAssistantMeta) {
+      if (row.message.role !== "assistant" || !row.isFinalAssistantResponse) {
         continue;
       }
       items.push({
@@ -250,6 +253,23 @@ function resolveFinalAssistantTextForTurn(
 function compactMinimapPreview(text: string | null | undefined) {
   const compact = text?.replace(/\s+/g, " ").trim() ?? "";
   return compact.length > 0 ? compact : null;
+}
+
+export function resolveTimelineMinimapAriaLabel(input: {
+  readonly activeIndex: number | null;
+  readonly itemCount: number;
+  readonly primaryText: string | null;
+  readonly side: "left" | "right";
+}): string {
+  const fallback = input.side === "left" ? "User message" : "Agent response";
+  if (input.activeIndex === null) {
+    return `Jump to message: ${fallback}`;
+  }
+
+  const role = input.side === "left" ? "user message" : "agent response";
+  const position = `${input.activeIndex + 1} of ${input.itemCount}`;
+  const excerpt = input.primaryText?.slice(0, TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH) ?? null;
+  return excerpt ? `Jump to ${role} ${position}: ${excerpt}` : `Jump to ${role} ${position}`;
 }
 
 export function computeMessageDurationStart(
@@ -345,6 +365,57 @@ function deriveUnsettledTurnId(
   }
   const isSettled = latestTurn.completedAt !== null && latestTurn.state !== "running";
   return isSettled ? null : latestTurn.turnId;
+}
+
+function timelineEntryHasTrailingTurnActivity(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  entryIndex: number,
+  turnId: TurnId | null,
+): boolean {
+  if (turnId === null) {
+    return false;
+  }
+  for (let index = entryIndex + 1; index < timelineEntries.length; index += 1) {
+    const entry = timelineEntries[index];
+    if (!entry || (entry.kind === "message" && entry.message.role === "user")) {
+      return false;
+    }
+    if (entry.kind === "work" && entry.entry.turnId === turnId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveIsFinalAssistantResponse(input: {
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+  entryIndex: number;
+  message: ChatMessage;
+  latestTurn: TimelineLatestTurn | null;
+  turnDiffSummary: TurnDiffSummary | undefined;
+}): boolean {
+  if (input.message.role !== "assistant") {
+    return false;
+  }
+
+  if (input.latestTurn?.turnId === input.message.turnId) {
+    return (
+      input.latestTurn.state === "completed" &&
+      input.latestTurn.completedAt !== null &&
+      (input.latestTurn.assistantMessageId === undefined ||
+        input.latestTurn.assistantMessageId === input.message.id)
+    );
+  }
+
+  if (input.turnDiffSummary) {
+    return input.turnDiffSummary.status === "ready";
+  }
+
+  return !timelineEntryHasTrailingTurnActivity(
+    input.timelineEntries,
+    input.entryIndex,
+    input.message.turnId,
+  );
 }
 
 /**
@@ -612,6 +683,10 @@ export function deriveMessagesTimelineRows(input: {
       timelineEntry.message.role === "assistant" &&
       terminalAssistantMessageIds.has(timelineEntry.message.id) &&
       !assistantTurnStillInProgress;
+    const assistantTurnDiffSummary =
+      timelineEntry.message.role === "assistant"
+        ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+        : undefined;
 
     nextRows.push({
       kind: "message",
@@ -620,12 +695,18 @@ export function deriveMessagesTimelineRows(input: {
       message: timelineEntry.message,
       durationStart,
       showAssistantMeta,
+      isFinalAssistantResponse:
+        showAssistantMeta &&
+        resolveIsFinalAssistantResponse({
+          timelineEntries: input.timelineEntries,
+          entryIndex: index,
+          message: timelineEntry.message,
+          latestTurn: input.latestTurn ?? null,
+          turnDiffSummary: assistantTurnDiffSummary,
+        }),
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
-      assistantTurnDiffSummary:
-        timelineEntry.message.role === "assistant"
-          ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
-          : undefined,
+      assistantTurnDiffSummary,
       revertTurnCount:
         timelineEntry.message.role === "user"
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
@@ -700,6 +781,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.message === bm.message &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

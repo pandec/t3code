@@ -91,6 +91,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  resolveTimelineMinimapAriaLabel,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -782,9 +783,12 @@ function TimelineMinimap({
     >
       <div className="relative h-full w-full select-none">
         <button
-          aria-label={`Jump to message: ${
-            activeItem?.primaryText ?? (side === "left" ? "User message" : "Agent response")
-          }`}
+          aria-label={resolveTimelineMinimapAriaLabel({
+            activeIndex: resolvedActiveIndex,
+            itemCount: items.length,
+            primaryText: activeItem?.primaryText ?? null,
+            side,
+          })}
           className={cn(
             "absolute top-1/2 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
             side === "left" ? "left-3" : "right-3",
