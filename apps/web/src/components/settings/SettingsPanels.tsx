@@ -68,6 +68,12 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
+  buildNotificationSettingsSupportText,
+  readBrowserNotificationPermissionState,
+  requestBrowserNotificationPermission,
+  showSystemNotification,
+} from "../../notifications/turnCompletion";
+import {
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
   serverEnvironment,
@@ -471,6 +477,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
+      ...(settings.enableTurnCompletionToasts !==
+      DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts
+        ? ["Completion toasts"]
+        : []),
+      ...(settings.enableTurnCompletionSystemNotifications !==
+      DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications
+        ? ["System notifications"]
+        : []),
       ...(isGitWritingModelDirty ? ["Git writing model"] : []),
     ],
     [
@@ -478,6 +492,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.enableTurnCompletionToasts,
+      settings.enableTurnCompletionSystemNotifications,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -521,6 +537,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
+      enableTurnCompletionSystemNotifications:
+        DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
@@ -1099,6 +1118,8 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
+      <NotificationsSettingsSection />
+
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
           <AboutVersionSection />
@@ -1119,6 +1140,112 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function NotificationsSettingsSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const [browserPermissionState, setBrowserPermissionState] = useState(
+    readBrowserNotificationPermissionState,
+  );
+
+  const handleSystemNotificationsChange = useCallback(
+    async (checked: boolean) => {
+      if (!checked || isElectron) {
+        updateSettings({ enableTurnCompletionSystemNotifications: checked });
+        return;
+      }
+      const permissionState = await requestBrowserNotificationPermission();
+      setBrowserPermissionState(permissionState);
+      if (permissionState === "granted") {
+        updateSettings({ enableTurnCompletionSystemNotifications: true });
+        return;
+      }
+      updateSettings({ enableTurnCompletionSystemNotifications: false });
+      toastManager.add({
+        type: "warning",
+        title: "System notifications unavailable",
+        description: buildNotificationSettingsSupportText(permissionState),
+      });
+    },
+    [updateSettings],
+  );
+
+  const handleTestNotification = useCallback(async () => {
+    const shown = await showSystemNotification({
+      title: "Test notification",
+      body: "This is how a finished agent turn will be announced.",
+    });
+    if (!shown) {
+      toastManager.add({
+        type: "warning",
+        title: "Could not show a test notification",
+        description: buildNotificationSettingsSupportText(readBrowserNotificationPermissionState()),
+      });
+    }
+  }, []);
+
+  return (
+    <SettingsSection title="Notifications">
+      <SettingsRow
+        title="Completion toasts"
+        description="Show an in-app toast when an agent turn finishes."
+        resetAction={
+          settings.enableTurnCompletionToasts !==
+          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts ? (
+            <SettingResetButton
+              label="completion toasts"
+              onClick={() =>
+                updateSettings({
+                  enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.enableTurnCompletionToasts}
+            onCheckedChange={(checked) =>
+              updateSettings({ enableTurnCompletionToasts: Boolean(checked) })
+            }
+            aria-label="Show completion toasts"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="System notifications"
+        description={`Notify through the operating system when an agent turn finishes while the app is in the background. ${buildNotificationSettingsSupportText(browserPermissionState)}`}
+        resetAction={
+          settings.enableTurnCompletionSystemNotifications !==
+          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications ? (
+            <SettingResetButton
+              label="system notifications"
+              onClick={() =>
+                updateSettings({
+                  enableTurnCompletionSystemNotifications:
+                    DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-3">
+            <Button size="xs" variant="outline" onClick={() => void handleTestNotification()}>
+              Test
+            </Button>
+            <Switch
+              checked={settings.enableTurnCompletionSystemNotifications}
+              onCheckedChange={(checked) => void handleSystemNotificationsChange(Boolean(checked))}
+              aria-label="Show system notifications"
+            />
+          </div>
+        }
+      />
+    </SettingsSection>
   );
 }
 
