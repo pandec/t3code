@@ -1,6 +1,10 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useClientSettings } from "../hooks/useSettings";
@@ -21,6 +25,37 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import {
+  archiveUndoHistory,
+  isArchiveUndoShortcut,
+  isEditableKeyboardTarget,
+  resolveEmptyDraftIdForArchiveUndo,
+} from "../archiveUndo";
+import { hasComposerDraftContent, useComposerDraftStore } from "../composerDraftStore";
+import { useUnarchiveThread } from "../hooks/useThreadActions";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteTarget,
+  type ThreadRouteTarget,
+} from "../threadRoutes";
+
+function readCurrentRouteTarget(router: ReturnType<typeof useRouter>): ThreadRouteTarget | null {
+  const params = router.state.matches[router.state.matches.length - 1]?.params ?? {};
+  return resolveThreadRouteTarget(params);
+}
+
+function isStillEmptyDraftRoute(
+  router: ReturnType<typeof useRouter>,
+  expectedDraftId: string,
+): boolean {
+  const target = readCurrentRouteTarget(router);
+  if (target?.kind !== "draft" || target.draftId !== expectedDraftId) {
+    return false;
+  }
+  return !hasComposerDraftContent(
+    useComposerDraftStore.getState().getComposerDraft(target.draftId),
+  );
+}
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -32,6 +67,8 @@ function ChatRouteGlobalShortcuts() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const router = useRouter();
+  const unarchiveThread = useUnarchiveThread();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -68,6 +105,76 @@ function ChatRouteGlobalShortcuts() {
       });
 
       if (isCommandPaletteOpen()) {
+        return;
+      }
+
+      if (isArchiveUndoShortcut(event) && !isEditableKeyboardTarget(event.target)) {
+        const candidate = archiveUndoHistory.take();
+        if (!candidate) {
+          return;
+        }
+        const targetAtStart = readCurrentRouteTarget(router);
+        const emptyDraftId = resolveEmptyDraftIdForArchiveUndo(
+          targetAtStart,
+          targetAtStart?.kind === "draft"
+            ? hasComposerDraftContent(
+                useComposerDraftStore.getState().getComposerDraft(targetAtStart.draftId),
+              )
+            : false,
+        );
+
+        event.preventDefault();
+        event.stopPropagation();
+        void (async () => {
+          const result = await unarchiveThread(candidate.threadRef);
+          if (result._tag === "Failure") {
+            archiveUndoHistory.restore(candidate);
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to restore thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+
+          if (emptyDraftId && isStillEmptyDraftRoute(router, emptyDraftId)) {
+            const navigationResult = await Promise.resolve(
+              router.navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(candidate.threadRef),
+              }),
+            ).then(
+              () => ({ _tag: "Success" as const }),
+              (error: unknown) => ({ _tag: "Failure" as const, error }),
+            );
+            if (navigationResult._tag === "Failure") {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Thread restored, but could not open it",
+                  description:
+                    navigationResult.error instanceof Error
+                      ? navigationResult.error.message
+                      : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: "Thread restored",
+              description: candidate.threadTitle,
+            }),
+          );
+        })();
         return;
       }
 
@@ -169,6 +276,8 @@ function ChatRouteGlobalShortcuts() {
     selectedThreadKeysSize,
     sidebarV2Enabled,
     terminalOpen,
+    router,
+    unarchiveThread,
   ]);
 
   return null;

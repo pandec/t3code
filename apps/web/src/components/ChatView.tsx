@@ -184,6 +184,7 @@ import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  hasComposerDraftContent,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -3904,16 +3905,7 @@ function ChatViewContent(props: ChatViewProps) {
   // forces a re-render so the banner leaves immediately.
   const [, setBranchMismatchDismissTick] = useState(0);
   const composerHasDraftContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return Boolean(
-      draft &&
-      (draft.prompt.trim().length > 0 ||
-        draft.images.length > 0 ||
-        draft.terminalContexts.length > 0 ||
-        draft.elementContexts.length > 0 ||
-        draft.previewAnnotations.length > 0 ||
-        draft.reviewComments.length > 0),
-    );
+    return hasComposerDraftContent(store.getComposerDraft(composerDraftTarget));
   });
   const activeBranchMismatchKey = branchMismatchKey(
     activeThread?.id ?? null,
