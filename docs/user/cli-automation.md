@@ -47,8 +47,14 @@ boolean update flags also accept the `--no-...` form, and `--clear-preview-url` 
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
 
-Action mutations reject a stale project snapshot instead of overwriting a simultaneous edit. List
-the actions again and retry if another client changed the project at the same time.
+Action listing works with or without a running T3 server. Adding, updating, and removing actions
+requires the server so concurrent UI and CLI edits can be serialized safely. If another client
+changed the actions after the CLI read them, the mutation fails with a conflict; list the actions
+again and retry.
+
+Only one action can run automatically when a worktree is created. Adding or updating an action with
+`--run-on-worktree-create` disables that setting on the previous setup action and reports its id in
+human and JSON output.
 
 ## Threads
 

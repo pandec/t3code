@@ -9,6 +9,7 @@ import {
   buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
+  normalizeProjectSetupScript,
   primaryProjectScript,
   projectScriptIdFromCommand,
 } from "./projectScripts";
@@ -87,6 +88,30 @@ describe("projectScripts helpers", () => {
 
     expect(primaryProjectScript(scripts)?.id).toBe("test");
     expect(setupProjectScript(scripts)?.id).toBe("setup");
+  });
+
+  it("keeps only one automatic worktree setup action", () => {
+    const scripts = [
+      {
+        id: "old-setup",
+        name: "Old setup",
+        command: "bun install",
+        icon: "configure" as const,
+        runOnWorktreeCreate: true,
+      },
+      {
+        id: "new-setup",
+        name: "New setup",
+        command: "bun install --frozen-lockfile",
+        icon: "configure" as const,
+        runOnWorktreeCreate: true,
+      },
+    ];
+
+    const normalized = normalizeProjectSetupScript(scripts, "new-setup");
+
+    expect(normalized.scripts).toEqual([{ ...scripts[0], runOnWorktreeCreate: false }, scripts[1]]);
+    expect(normalized.clearedActionIds).toEqual(["old-setup"]);
   });
 
   it("builds default runtime env for scripts", () => {

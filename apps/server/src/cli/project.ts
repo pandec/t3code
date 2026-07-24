@@ -31,8 +31,10 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import {
+  CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationRequestError,
+  CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
@@ -110,6 +112,8 @@ export const ProjectCommandError = Schema.Union([
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationUndeclaredStatusError,
   CliOrchestrationRequestError,
+  CliOrchestrationConflictError,
+  CliOrchestrationServerUnavailableError,
   ProjectTitleEmptyError,
   ProjectIdentifierEmptyError,
   ProjectNotFoundError,
@@ -186,6 +190,9 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | Path.Path
     | WorkspacePaths.WorkspacePaths
   >,
+  options?: {
+    readonly requireLive?: boolean;
+  },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
@@ -214,6 +221,13 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
           yield* Console.log(output);
         }),
       );
+    }
+
+    if (options?.requireLive) {
+      return yield* new CliOrchestrationServerUnavailableError({
+        operation: "resolveLiveServer",
+        statePath: config.serverRuntimeStatePath,
+      });
     }
 
     const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
@@ -436,6 +450,9 @@ const projectActionIconFlag = Flag.choice("icon", ProjectScriptIcon.literals).pi
   Flag.withDescription("Action icon."),
 );
 
+const clearedSetupActionMessage = (actionIds: ReadonlyArray<string>) =>
+  actionIds.length === 0 ? "" : ` Cleared automatic worktree setup from: ${actionIds.join(", ")}.`;
+
 const findProjectForAction = Effect.fn("findProjectForAction")(function* (
   snapshot: OrchestrationReadModel,
   identifier: string,
@@ -523,7 +540,7 @@ const projectActionAddCommand = Command.make("add", {
           type: "project.meta.update",
           commandId: CommandId.make(yield* projectCommandUuid),
           projectId: project.id,
-          expectedUpdatedAt: project.updatedAt,
+          expectedScripts: Array.from(project.scripts),
           scripts: Array.from(result.scripts),
         });
         return flags.json
@@ -533,8 +550,9 @@ const projectActionAddCommand = Command.make("add", {
               projectAction: result.action,
               clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
             })
-          : `Added action ${result.action.id} (${result.action.name}) to project ${project.id}.`;
+          : `Added action ${result.action.id} (${result.action.name}) to project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`;
       }),
+      { requireLive: true },
     ),
   ),
 );
@@ -602,15 +620,13 @@ const projectActionUpdateCommand = Command.make("update", {
           return yield* result;
         }
         const changed = !Equal.equals(result.scripts, project.scripts);
-        if (changed) {
-          yield* dispatch({
-            type: "project.meta.update",
-            commandId: CommandId.make(yield* projectCommandUuid),
-            projectId: project.id,
-            expectedUpdatedAt: project.updatedAt,
-            scripts: Array.from(result.scripts),
-          });
-        }
+        yield* dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make(yield* projectCommandUuid),
+          projectId: project.id,
+          expectedScripts: Array.from(project.scripts),
+          scripts: Array.from(result.scripts),
+        });
         return flags.json
           ? jsonOutput({
               projectId: project.id,
@@ -619,9 +635,10 @@ const projectActionUpdateCommand = Command.make("update", {
               clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
             })
           : changed
-            ? `Updated action ${result.action.id} (${result.action.name}) in project ${project.id}.`
+            ? `Updated action ${result.action.id} (${result.action.name}) in project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`
             : `Action ${result.action.id} is unchanged.`;
       }),
+      { requireLive: true },
     ),
   ),
 );
@@ -651,7 +668,7 @@ const projectActionRemoveCommand = Command.make("remove", {
           type: "project.meta.update",
           commandId: CommandId.make(yield* projectCommandUuid),
           projectId: project.id,
-          expectedUpdatedAt: project.updatedAt,
+          expectedScripts: Array.from(project.scripts),
           scripts: Array.from(result.scripts),
         });
         return flags.json
@@ -662,6 +679,7 @@ const projectActionRemoveCommand = Command.make("remove", {
             })
           : `Removed action ${result.action.id} (${result.action.name}) from project ${project.id}.`;
       }),
+      { requireLive: true },
     ),
   ),
 );

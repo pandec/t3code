@@ -2,11 +2,14 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  EnvironmentHttpConflictError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
@@ -17,6 +20,8 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+
+const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -80,13 +85,21 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          return yield* orchestrationEngine
-            .dispatch(normalizedCommand)
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+            Effect.catch((cause) =>
+              Effect.gen(function* () {
+                if (
+                  isOrchestrationCommandInvariantError(cause) &&
+                  cause.code === "project_actions_changed"
+                ) {
+                  return yield* new EnvironmentHttpConflictError({
+                    message: "Project actions changed after they were read. List them and retry.",
+                  });
+                }
+                return yield* failEnvironmentInternal("orchestration_dispatch_failed", cause);
+              }),
+            ),
+          );
         }),
       );
   }),

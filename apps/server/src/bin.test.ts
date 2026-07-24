@@ -43,6 +43,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import { ThreadCliNoActiveTurnError } from "./cli/thread.ts";
+import { CliOrchestrationServerUnavailableError } from "./cli/orchestration.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
@@ -573,6 +574,144 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           assert.equal(addedProject?.title, "Live Project");
         }),
       );
+    }),
+  );
+
+  it.effect("manages project actions through a running server", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-live-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-live-workspace-"),
+      );
+
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "add",
+            workspaceRoot,
+            "--id",
+            "setup",
+            "--name",
+            "Setup",
+            "--command",
+            "bun install",
+            "--run-on-worktree-create",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const addedOutput = yield* captureStdout(
+            runCli([
+              "project",
+              "action",
+              "add",
+              workspaceRoot,
+              "--id",
+              "install-ios",
+              "--name",
+              "Install iOS",
+              "--command",
+              "bun run ios:local:release",
+              "--run-on-worktree-create",
+              "--base-dir",
+              baseDir,
+              "--json",
+            ]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const added = JSON.parse(addedOutput.output) as {
+            readonly projectAction: { readonly id: string };
+            readonly clearedRunOnWorktreeCreate: ReadonlyArray<string>;
+          };
+          assert.equal(added.projectAction.id, "install-ios");
+          assert.deepEqual(added.clearedRunOnWorktreeCreate, ["setup"]);
+
+          const listedOutput = yield* captureStdout(
+            runCli(["project", "action", "list", workspaceRoot, "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const listed = JSON.parse(listedOutput.output) as {
+            readonly mode: string;
+            readonly actions: ReadonlyArray<{
+              readonly id: string;
+              readonly runOnWorktreeCreate: boolean;
+            }>;
+          };
+          assert.equal(listed.mode, "live");
+          assert.deepInclude(
+            listed.actions.find((action) => action.id === "setup"),
+            { runOnWorktreeCreate: false },
+          );
+          assert.deepInclude(
+            listed.actions.find((action) => action.id === "install-ios"),
+            { runOnWorktreeCreate: true },
+          );
+
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "update",
+            workspaceRoot,
+            "install-ios",
+            "--command",
+            "bun run ios:local",
+            "--base-dir",
+            baseDir,
+          ]);
+          yield* runCliWithRuntime([
+            "project",
+            "action",
+            "remove",
+            workspaceRoot,
+            "install-ios",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const readModel = yield* projectionSnapshotQuery.getSnapshot();
+          const project = readModel.projects.find(
+            (candidate) => candidate.workspaceRoot === workspaceRoot,
+          );
+          assert.deepEqual(
+            project?.scripts.map((action) => action.id),
+            ["setup"],
+          );
+        }),
+      );
+    }),
+  );
+
+  it.effect("requires a running server for project action mutations", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-offline-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-offline-workspace-"),
+      );
+      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+
+      const error = yield* runCliWithRuntime([
+        "project",
+        "action",
+        "add",
+        workspaceRoot,
+        "--name",
+        "Test",
+        "--command",
+        "bun test",
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.flip);
+
+      assert.instanceOf(error, CliOrchestrationServerUnavailableError);
+      assert.equal(error.message, "No running T3 Code server was found for this data directory.");
     }),
   );
 

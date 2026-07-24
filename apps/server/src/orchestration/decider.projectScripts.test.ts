@@ -97,6 +97,15 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
   it.effect("rejects project.meta.update against a stale project snapshot", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
+      const currentScripts = [
+        {
+          id: "test",
+          name: "Test",
+          command: "bun test",
+          icon: "test" as const,
+          runOnWorktreeCreate: false,
+        },
+      ];
       const initial = createEmptyReadModel(now);
       const readModel = yield* projectEvent(initial, {
         sequence: 1,
@@ -114,7 +123,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Stale",
           workspaceRoot: "/tmp/stale",
           defaultModelSelection: null,
-          scripts: [],
+          scripts: currentScripts,
           createdAt: now,
           updatedAt: now,
         },
@@ -126,14 +135,21 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
             type: "project.meta.update",
             commandId: CommandId.make("cmd-project-update-stale"),
             projectId: asProjectId("project-stale"),
-            expectedUpdatedAt: "2026-01-02T00:00:00.000Z",
+            expectedScripts: [],
             scripts: [],
           },
           readModel,
         }),
       );
 
-      expect(failure.message).toContain("Project 'project-stale' changed after it was read.");
+      expect(failure._tag).toBe("OrchestrationCommandInvariantError");
+      if (failure._tag !== "OrchestrationCommandInvariantError") {
+        return;
+      }
+      expect(failure.code).toBe("project_actions_changed");
+      expect(failure.message).toContain(
+        "Actions for project 'project-stale' changed after they were read.",
+      );
     }),
   );
 

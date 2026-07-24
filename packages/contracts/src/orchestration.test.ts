@@ -190,18 +190,27 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
   }),
 );
 
-it.effect("decodes project.meta.update with an optimistic concurrency timestamp", () =>
+it.effect("decodes project.meta.update with an optimistic action snapshot", () =>
   Effect.gen(function* () {
+    const expectedScripts = [
+      {
+        id: "test",
+        name: "Test",
+        command: "bun test",
+        icon: "test",
+        runOnWorktreeCreate: false,
+      },
+    ] as const;
     const parsed = yield* decodeOrchestrationCommand({
       type: "project.meta.update",
       commandId: "cmd-project-actions",
       projectId: "project-1",
-      expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+      expectedScripts: Array.from(expectedScripts),
       scripts: [],
     });
     assert.strictEqual(parsed.type, "project.meta.update");
     if (parsed.type === "project.meta.update") {
-      assert.strictEqual(parsed.expectedUpdatedAt, "2026-01-01T00:00:00.000Z");
+      assert.deepStrictEqual(parsed.expectedScripts, expectedScripts);
     }
   }),
 );

@@ -164,6 +164,7 @@ import {
   buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
+  normalizeProjectSetupScript,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
@@ -2858,14 +2859,10 @@ function ChatViewContent(props: ChatViewProps) {
         activeProject.scripts.map((script) => script.id),
       );
       const nextScript = buildProjectScript(nextId, input);
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
+      const nextScripts = normalizeProjectSetupScript(
+        [...activeProject.scripts, nextScript],
+        nextScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,
@@ -2892,13 +2889,10 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const updatedScript = buildProjectScript(existingScript.id, input);
-      const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
+      const nextScripts = normalizeProjectSetupScript(
+        activeProject.scripts.map((script) => (script.id === scriptId ? updatedScript : script)),
+        updatedScript.id,
+      ).scripts;
 
       return persistProjectScripts({
         projectId: activeProject.id,

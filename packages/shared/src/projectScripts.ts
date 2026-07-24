@@ -1,12 +1,4 @@
-import {
-  MAX_SCRIPT_ID_LENGTH,
-  SCRIPT_RUN_COMMAND_PATTERN,
-  type KeybindingCommand,
-  type ProjectScript,
-} from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
-
-const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+import { MAX_SCRIPT_ID_LENGTH, type ProjectScript } from "@t3tools/contracts";
 
 export interface ProjectScriptInput {
   readonly name: ProjectScript["name"];
@@ -48,18 +40,6 @@ function normalizeScriptId(value: string): string {
   return cleaned.slice(0, MAX_SCRIPT_ID_LENGTH).replace(/-+$/g, "") || "script";
 }
 
-export const commandForProjectScript = (scriptId: string): KeybindingCommand =>
-  SCRIPT_RUN_COMMAND_PATTERN.make(`script.${scriptId}.run`);
-
-export function projectScriptIdFromCommand(command: string): string | null {
-  const trimmed = command.trim();
-  if (!isScriptRunCommand(trimmed)) {
-    return null;
-  }
-  const [prefix, , suffix] = SCRIPT_RUN_COMMAND_PATTERN.parts;
-  return trimmed.slice(prefix.literal.length, -suffix.literal.length);
-}
-
 export function nextProjectScriptId(name: string, existingIds: Iterable<string>): string {
   const taken = new Set(Array.from(existingIds));
   const baseId = normalizeScriptId(name);
@@ -80,6 +60,31 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
   const regular = scripts.find((script) => !script.runOnWorktreeCreate);
   return regular ?? scripts[0] ?? null;
+}
+
+export function normalizeProjectSetupScript(
+  scripts: ReadonlyArray<ProjectScript>,
+  actionId: string,
+): {
+  readonly scripts: ReadonlyArray<ProjectScript>;
+  readonly clearedActionIds: ReadonlyArray<string>;
+} {
+  const action = scripts.find((candidate) => candidate.id === actionId);
+  if (!action?.runOnWorktreeCreate) {
+    return { scripts, clearedActionIds: [] };
+  }
+
+  const clearedActionIds: string[] = [];
+  return {
+    scripts: scripts.map((candidate) => {
+      if (candidate.id === actionId || candidate.runOnWorktreeCreate === false) {
+        return candidate;
+      }
+      clearedActionIds.push(candidate.id);
+      return { ...candidate, runOnWorktreeCreate: false };
+    }),
+    clearedActionIds,
+  };
 }
 
 interface ProjectScriptRuntimeEnvInput {

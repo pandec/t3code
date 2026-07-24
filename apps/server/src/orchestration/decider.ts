@@ -7,6 +7,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import type * as PlatformError from "effect/PlatformError";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
@@ -204,12 +205,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       if (
-        command.expectedUpdatedAt !== undefined &&
-        command.expectedUpdatedAt !== project.updatedAt
+        command.expectedScripts !== undefined &&
+        !Equal.equals(command.expectedScripts, project.scripts)
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Project '${command.projectId}' changed after it was read.`,
+          code: "project_actions_changed",
+          detail: `Actions for project '${command.projectId}' changed after they were read.`,
         });
       }
       if (command.workspaceRoot !== undefined) {

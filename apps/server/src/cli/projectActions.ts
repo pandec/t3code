@@ -4,7 +4,11 @@ import {
   SCRIPT_RUN_COMMAND_PATTERN,
   type ProjectScript,
 } from "@t3tools/contracts";
-import { buildProjectScript, nextProjectScriptId } from "@t3tools/shared/projectScripts";
+import {
+  buildProjectScript,
+  nextProjectScriptId,
+  normalizeProjectSetupScript,
+} from "@t3tools/shared/projectScripts";
 import * as Schema from "effect/Schema";
 
 const isProjectScriptCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
@@ -122,29 +126,6 @@ function findAction(
   );
 }
 
-function normalizeSetupAction(
-  scripts: ReadonlyArray<ProjectScript>,
-  action: ProjectScript,
-): {
-  readonly scripts: ReadonlyArray<ProjectScript>;
-  readonly clearedRunOnWorktreeCreate: ReadonlyArray<string>;
-} {
-  if (!action.runOnWorktreeCreate) {
-    return { scripts, clearedRunOnWorktreeCreate: [] };
-  }
-  const clearedRunOnWorktreeCreate: string[] = [];
-  return {
-    scripts: scripts.map((candidate) => {
-      if (candidate.id === action.id || candidate.runOnWorktreeCreate === false) {
-        return candidate;
-      }
-      clearedRunOnWorktreeCreate.push(candidate.id);
-      return { ...candidate, runOnWorktreeCreate: false };
-    }),
-    clearedRunOnWorktreeCreate,
-  };
-}
-
 export function addProjectAction(input: {
   readonly projectId: ProjectId;
   readonly scripts: ReadonlyArray<ProjectScript>;
@@ -183,11 +164,11 @@ export function addProjectAction(input: {
     previewUrl,
     autoOpenPreview: input.action.autoOpenPreview,
   });
-  const normalized = normalizeSetupAction([...input.scripts, action], action);
+  const normalized = normalizeProjectSetupScript([...input.scripts, action], action.id);
   return {
     action,
     scripts: normalized.scripts,
-    clearedRunOnWorktreeCreate: normalized.clearedRunOnWorktreeCreate,
+    clearedRunOnWorktreeCreate: normalized.clearedActionIds,
   };
 }
 
@@ -238,11 +219,11 @@ export function updateProjectAction(input: {
   const nextScripts = input.scripts.map((candidate) =>
     candidate.id === action.id ? action : candidate,
   );
-  const normalized = normalizeSetupAction(nextScripts, action);
+  const normalized = normalizeProjectSetupScript(nextScripts, action.id);
   return {
     action,
     scripts: normalized.scripts,
-    clearedRunOnWorktreeCreate: normalized.clearedRunOnWorktreeCreate,
+    clearedRunOnWorktreeCreate: normalized.clearedActionIds,
   };
 }
 

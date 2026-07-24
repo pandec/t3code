@@ -3,6 +3,7 @@ import {
   type ClientOrchestrationCommand,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
+  EnvironmentHttpConflictError,
   type OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -20,6 +21,7 @@ import {
 } from "../serverRuntimeState.ts";
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
+const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
 
 export class CliOrchestrationDeclaredResponseError extends Schema.TaggedErrorClass<CliOrchestrationDeclaredResponseError>()(
   "CliOrchestrationDeclaredResponseError",
@@ -60,6 +62,19 @@ export class CliOrchestrationRequestError extends Schema.TaggedErrorClass<CliOrc
   }
 }
 
+export class CliOrchestrationConflictError extends Schema.TaggedErrorClass<CliOrchestrationConflictError>()(
+  "CliOrchestrationConflictError",
+  {
+    operation: Schema.Literal("callLiveServer"),
+    detail: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorClass<CliOrchestrationServerUnavailableError>()(
   "CliOrchestrationServerUnavailableError",
   {
@@ -75,9 +90,17 @@ export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorCl
 export type CliOrchestrationCallError =
   | CliOrchestrationDeclaredResponseError
   | CliOrchestrationUndeclaredStatusError
-  | CliOrchestrationRequestError;
+  | CliOrchestrationRequestError
+  | CliOrchestrationConflictError;
 
 export function cliOrchestrationErrorFromRequest(cause: unknown): CliOrchestrationCallError {
+  if (isEnvironmentHttpConflictError(cause)) {
+    return new CliOrchestrationConflictError({
+      operation: "callLiveServer",
+      detail: cause.message,
+      cause,
+    });
+  }
   if (isEnvironmentHttpCommonError(cause)) {
     return new CliOrchestrationDeclaredResponseError({
       operation: "callLiveServer",
