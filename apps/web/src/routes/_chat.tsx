@@ -54,16 +54,19 @@ function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string
   }
   const composerState = useComposerDraftStore.getState();
   const draftSession = composerState.getDraftSession(target.draftId);
-  const hasMaterializedThread =
-    Boolean(
-      draftSession &&
-      (draftSession.promotedTo ||
-        readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
-    ) || draftSubmissionTracker.isInFlight(target.draftId);
+  const hasObservedThread = Boolean(
+    draftSession &&
+    (draftSession.promotedTo ||
+      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
+  );
+  const hasStartedSubmission = draftSubmissionTracker.hasStarted(target.draftId);
+  if (hasObservedThread) {
+    draftSubmissionTracker.clear(target.draftId);
+  }
   return resolveEmptyDraftIdForArchiveUndo(
     target,
     hasComposerDraftContent(composerState.getComposerDraft(target.draftId)),
-    hasMaterializedThread,
+    hasObservedThread || hasStartedSubmission,
   );
 }
 

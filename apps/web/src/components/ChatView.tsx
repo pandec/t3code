@@ -4873,7 +4873,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     sendInFlightRef.current = false;
     if (draftId) {
-      draftSubmissionTracker.end(draftId);
+      draftSubmissionTracker.finish(draftId, turnStartSucceeded);
     }
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>

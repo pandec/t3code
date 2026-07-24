@@ -3,14 +3,22 @@ import { describe, expect, it } from "vite-plus/test";
 import { createDraftSubmissionTracker } from "./draftSubmissionState";
 
 describe("draft submission tracker", () => {
-  it("tracks draft submission lifetime independently by draft id", () => {
+  it("keeps successful submissions materialized until their shell is observed", () => {
     const tracker = createDraftSubmissionTracker();
 
     tracker.begin("draft-1");
-    expect(tracker.isInFlight("draft-1")).toBe(true);
-    expect(tracker.isInFlight("draft-2")).toBe(false);
+    expect(tracker.hasStarted("draft-1")).toBe(true);
+    tracker.finish("draft-1", true);
+    expect(tracker.hasStarted("draft-1")).toBe(true);
+    tracker.clear("draft-1");
+    expect(tracker.hasStarted("draft-1")).toBe(false);
+  });
 
-    tracker.end("draft-1");
-    expect(tracker.isInFlight("draft-1")).toBe(false);
+  it("clears failed submissions so their restored composer remains a draft", () => {
+    const tracker = createDraftSubmissionTracker();
+
+    tracker.begin("draft-1");
+    tracker.finish("draft-1", false);
+    expect(tracker.hasStarted("draft-1")).toBe(false);
   });
 });

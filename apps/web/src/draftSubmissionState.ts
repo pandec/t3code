@@ -1,20 +1,26 @@
 export interface DraftSubmissionTracker {
   begin: (draftId: string) => void;
-  end: (draftId: string) => void;
-  isInFlight: (draftId: string) => boolean;
+  finish: (draftId: string, succeeded: boolean) => void;
+  hasStarted: (draftId: string) => boolean;
+  clear: (draftId: string) => void;
 }
 
 export function createDraftSubmissionTracker(): DraftSubmissionTracker {
-  const inFlightDraftIds = new Set<string>();
+  const startedDraftIds = new Set<string>();
 
   return {
     begin: (draftId) => {
-      inFlightDraftIds.add(draftId);
+      startedDraftIds.add(draftId);
     },
-    end: (draftId) => {
-      inFlightDraftIds.delete(draftId);
+    finish: (draftId, succeeded) => {
+      if (!succeeded) {
+        startedDraftIds.delete(draftId);
+      }
     },
-    isInFlight: (draftId) => inFlightDraftIds.has(draftId),
+    hasStarted: (draftId) => startedDraftIds.has(draftId),
+    clear: (draftId) => {
+      startedDraftIds.delete(draftId);
+    },
   };
 }
 
