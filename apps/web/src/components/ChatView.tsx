@@ -176,6 +176,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import { draftSubmissionTracker } from "../draftSubmissionState";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
@@ -184,6 +185,7 @@ import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  hasComposerDraftContent,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -1429,6 +1431,11 @@ function ChatViewContent(props: ChatViewProps) {
   // server thread (same pre-allocated ref) starts, so live state must not
   // depend on which route is mounted.
   const isServerThread = serverThread !== null;
+  useEffect(() => {
+    if (draftId && isServerThread) {
+      draftSubmissionTracker.clear(draftId);
+    }
+  }, [draftId, isServerThread]);
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
@@ -3904,16 +3911,7 @@ function ChatViewContent(props: ChatViewProps) {
   // forces a re-render so the banner leaves immediately.
   const [, setBranchMismatchDismissTick] = useState(0);
   const composerHasDraftContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return Boolean(
-      draft &&
-      (draft.prompt.trim().length > 0 ||
-        draft.images.length > 0 ||
-        draft.terminalContexts.length > 0 ||
-        draft.elementContexts.length > 0 ||
-        draft.previewAnnotations.length > 0 ||
-        draft.reviewComments.length > 0),
-    );
+    return hasComposerDraftContent(store.getComposerDraft(composerDraftTarget));
   });
   const activeBranchMismatchKey = branchMismatchKey(
     activeThread?.id ?? null,
@@ -4600,6 +4598,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     sendInFlightRef.current = true;
+    if (draftId) {
+      draftSubmissionTracker.begin(draftId);
+    }
     if (isDraftHeroState && activeThreadKey) {
       let resolveDockStarted: (() => void) | undefined;
       const dockStarted = new Promise<void>((resolve) => {
@@ -4876,6 +4877,9 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
+    if (draftId) {
+      draftSubmissionTracker.finish(draftId, turnStartSucceeded);
+    }
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,

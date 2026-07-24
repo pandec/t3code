@@ -8,6 +8,7 @@
   - Use `vp test run <test-files>` for focused built-in Vite+ tests. Use `vp run test` only when the affected package specifically requires its `test` script.
   - Backend changes must include and run focused tests for the changed behavior.
   - Run targeted formatting, lint, and type checks for the affected scope when available.
+- When adding or materially changing a fork feature, update the root README's “What the fork adds” section with a concise user-facing description.
 - Integrated client verification is normally skipped for private-fork changes when focused automated checks adequately cover the affected behavior. Before launching a local web or mobile environment, assess whether the change has meaningful runtime-only risk. For changes involving cross-client behavior, native UI integration, authentication, environment or working-directory selection, or other behavior difficult to verify statically, explain why integrated verification would be especially valuable and suggest it to the user. Run it when requested or approved, and limit it to the affected client surfaces.
   - Web: use the `test-t3-app` skill.
   - Mobile: use the `test-t3-mobile` skill and one representative iOS Simulator or Android Emulator available on the host.
