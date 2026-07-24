@@ -54,13 +54,15 @@ export function isArchiveUndoShortcut(event: {
   readonly ctrlKey: boolean;
   readonly altKey: boolean;
   readonly shiftKey: boolean;
+  readonly repeat: boolean;
 }): boolean {
   return (
     event.key.toLowerCase() === "z" &&
     event.metaKey &&
     !event.ctrlKey &&
     !event.altKey &&
-    !event.shiftKey
+    !event.shiftKey &&
+    !event.repeat
   );
 }
 
@@ -70,8 +72,30 @@ export function resolveEmptyDraftIdForArchiveUndo(
     | { readonly kind: "server" }
     | null,
   hasDraftContent: boolean,
+  hasMaterializedThread: boolean,
 ): string | null {
-  return routeTarget?.kind === "draft" && !hasDraftContent ? routeTarget.draftId : null;
+  return routeTarget?.kind === "draft" && !hasDraftContent && !hasMaterializedThread
+    ? routeTarget.draftId
+    : null;
+}
+
+const ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR = [
+  '[data-slot="dialog-popup"]',
+  '[data-slot="alert-dialog-popup"]',
+  '[data-slot="sheet-popup"]',
+  '[data-slot="menu-popup"]',
+  '[data-slot="popover-popup"]',
+  '[data-slot="select-popup"]',
+  '[data-slot="combobox-popup"]',
+  '[data-slot="autocomplete-popup"]',
+  '[data-slot="command-dialog-popup"]',
+  "[data-model-picker-content]",
+].join(", ");
+
+export function hasOpenArchiveUndoBlockingLayer(
+  root: Pick<Document, "querySelector"> | null = typeof document === "undefined" ? null : document,
+): boolean {
+  return root !== null && root.querySelector(ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR) !== null;
 }
 
 export function isEditableKeyboardTarget(target: EventTarget | null): boolean {

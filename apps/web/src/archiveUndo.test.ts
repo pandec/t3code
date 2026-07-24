@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createArchiveUndoHistory,
+  hasOpenArchiveUndoBlockingLayer,
   isArchiveUndoShortcut,
   isEditableKeyboardTarget,
   resolveEmptyDraftIdForArchiveUndo,
@@ -52,11 +53,13 @@ describe("archive undo shortcut", () => {
       ctrlKey: false,
       altKey: false,
       shiftKey: false,
+      repeat: false,
     };
 
     expect(isArchiveUndoShortcut(commandZ)).toBe(true);
     expect(isArchiveUndoShortcut({ ...commandZ, shiftKey: true })).toBe(false);
     expect(isArchiveUndoShortcut({ ...commandZ, metaKey: false, ctrlKey: true })).toBe(false);
+    expect(isArchiveUndoShortcut({ ...commandZ, repeat: true })).toBe(false);
   });
 
   it("recognizes targets contained by editable elements", () => {
@@ -75,9 +78,19 @@ describe("archive undo shortcut", () => {
   it("opens restored threads only from an empty draft route", () => {
     const draftRoute = { kind: "draft" as const, draftId: "draft-1" };
 
-    expect(resolveEmptyDraftIdForArchiveUndo(draftRoute, false)).toBe("draft-1");
-    expect(resolveEmptyDraftIdForArchiveUndo(draftRoute, true)).toBeNull();
-    expect(resolveEmptyDraftIdForArchiveUndo({ kind: "server" }, false)).toBeNull();
-    expect(resolveEmptyDraftIdForArchiveUndo(null, false)).toBeNull();
+    expect(resolveEmptyDraftIdForArchiveUndo(draftRoute, false, false)).toBe("draft-1");
+    expect(resolveEmptyDraftIdForArchiveUndo(draftRoute, true, false)).toBeNull();
+    expect(resolveEmptyDraftIdForArchiveUndo(draftRoute, false, true)).toBeNull();
+    expect(resolveEmptyDraftIdForArchiveUndo({ kind: "server" }, false, false)).toBeNull();
+    expect(resolveEmptyDraftIdForArchiveUndo(null, false, false)).toBeNull();
+  });
+
+  it("blocks archive undo while a floating interaction layer is open", () => {
+    const openRoot = { querySelector: () => ({}) } as unknown as Pick<Document, "querySelector">;
+    const closedRoot = { querySelector: () => null } as unknown as Pick<Document, "querySelector">;
+
+    expect(hasOpenArchiveUndoBlockingLayer(openRoot)).toBe(true);
+    expect(hasOpenArchiveUndoBlockingLayer(closedRoot)).toBe(false);
+    expect(hasOpenArchiveUndoBlockingLayer(null)).toBe(false);
   });
 });

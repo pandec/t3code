@@ -228,6 +228,7 @@ export function useThreadActions() {
           input: { threadId: target.threadId },
         });
         if (result._tag === "Success") {
+          archiveUndoHistory.discard(target);
           refreshArchivedThreadsForEnvironment(target.environmentId);
         }
         return result;
@@ -311,6 +312,7 @@ export function useThreadActions() {
       if (deleteResult._tag === "Failure") {
         return deleteResult;
       }
+      archiveUndoHistory.discard(threadRef);
       refreshArchivedThreadsForEnvironment(threadRef.environmentId);
       clearComposerDraftForThread(threadRef);
       clearProjectDraftThreadById(

@@ -5,11 +5,12 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useClientSettings } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
-import { useProjects } from "../state/entities";
+import { readThreadShell, useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
@@ -27,6 +28,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import {
   archiveUndoHistory,
+  hasOpenArchiveUndoBlockingLayer,
   isArchiveUndoShortcut,
   isEditableKeyboardTarget,
   resolveEmptyDraftIdForArchiveUndo,
@@ -44,16 +46,22 @@ function readCurrentRouteTarget(router: ReturnType<typeof useRouter>): ThreadRou
   return resolveThreadRouteTarget(params);
 }
 
-function isStillEmptyDraftRoute(
-  router: ReturnType<typeof useRouter>,
-  expectedDraftId: string,
-): boolean {
+function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string | null {
   const target = readCurrentRouteTarget(router);
-  if (target?.kind !== "draft" || target.draftId !== expectedDraftId) {
-    return false;
+  if (target?.kind !== "draft") {
+    return null;
   }
-  return !hasComposerDraftContent(
-    useComposerDraftStore.getState().getComposerDraft(target.draftId),
+  const composerState = useComposerDraftStore.getState();
+  const draftSession = composerState.getDraftSession(target.draftId);
+  const hasMaterializedThread = Boolean(
+    draftSession &&
+    (draftSession.promotedTo ||
+      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
+  );
+  return resolveEmptyDraftIdForArchiveUndo(
+    target,
+    hasComposerDraftContent(composerState.getComposerDraft(target.draftId)),
+    hasMaterializedThread,
   );
 }
 
@@ -108,20 +116,16 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (isArchiveUndoShortcut(event) && !isEditableKeyboardTarget(event.target)) {
+      if (
+        isArchiveUndoShortcut(event) &&
+        !isEditableKeyboardTarget(event.target) &&
+        !hasOpenArchiveUndoBlockingLayer()
+      ) {
         const candidate = archiveUndoHistory.take();
         if (!candidate) {
           return;
         }
-        const targetAtStart = readCurrentRouteTarget(router);
-        const emptyDraftId = resolveEmptyDraftIdForArchiveUndo(
-          targetAtStart,
-          targetAtStart?.kind === "draft"
-            ? hasComposerDraftContent(
-                useComposerDraftStore.getState().getComposerDraft(targetAtStart.draftId),
-              )
-            : false,
-        );
+        const emptyDraftId = readEmptyNewThreadDraftId(router);
 
         event.preventDefault();
         event.stopPropagation();
@@ -142,7 +146,7 @@ function ChatRouteGlobalShortcuts() {
             return;
           }
 
-          if (emptyDraftId && isStillEmptyDraftRoute(router, emptyDraftId)) {
+          if (emptyDraftId && readEmptyNewThreadDraftId(router) === emptyDraftId) {
             const navigationResult = await Promise.resolve(
               router.navigate({
                 to: "/$environmentId/$threadId",
