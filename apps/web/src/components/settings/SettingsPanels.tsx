@@ -23,7 +23,7 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { scopeProject, type EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -73,7 +73,7 @@ import {
   serverEnvironment,
 } from "../../state/server";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped, useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -113,6 +113,17 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { buildArchivedThreadGroups } from "../../archivedThreadGrouping";
 import { selectProjectGroupingSettings } from "../../logicalProject";
+import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
+import {
+  archivedProjectFilterKey,
+  archivedProjectSelectValue,
+  archivedThreadMatchesProject,
+  buildArchivedProjectFilterOptions,
+  parseArchivedProjectSelectValue,
+  resolveArchivedProjectFilterGroup,
+  shouldDeferArchivedEmptyState,
+  shouldShowUnresolvedArchivedProjectFilterOption,
+} from "../../archivedProjectFilter";
 
 const THEME_OPTIONS = [
   {
@@ -1594,8 +1605,15 @@ function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThrea
   );
 }
 
-export function ArchivedThreadsPanel() {
-  const { environments } = useEnvironments();
+export function ArchivedThreadsPanel({
+  projectFilterKey,
+  onProjectFilterChange,
+}: {
+  readonly projectFilterKey: string | null;
+  readonly onProjectFilterChange: (projectKey: string | null) => void;
+}) {
+  const { environments, isReady: environmentsReady } = useEnvironments();
+  const environmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const primaryEnvironment = usePrimaryEnvironment();
   const projects = useProjects();
   const groupingSettings = usePrimarySettings(selectProjectGroupingSettings);
@@ -1642,30 +1660,126 @@ export function ArchivedThreadsPanel() {
       projects,
     ],
   );
-  const filteredArchivedGroups = useMemo(
+  const allProjectGroups = useMemo(
     () =>
-      archivedGroups.flatMap((group) => {
-        const matchingThreads = group.threads.filter(({ environmentLabel, project, thread }) =>
-          archivedThreadMatchesSearch(
-            {
-              environmentLabel,
-              modelName: thread.modelSelection.model,
-              projectName: `${group.displayName} ${project.title}`,
-              projectCwd: project.workspaceRoot,
-              threadTitle: thread.title,
-            },
-            searchQuery,
+      buildSidebarProjectSnapshots({
+        projects: [
+          ...projects,
+          ...archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+            snapshot.projects.map((project) => scopeProject(environmentId, project)),
           ),
-        );
-        return matchingThreads.length > 0 ? [{ ...group, threads: matchingThreads }] : [];
+        ],
+        settings: groupingSettings,
+        primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
+        resolveEnvironmentLabel: (environmentId) =>
+          environmentLabelById.get(environmentId) ??
+          (environmentId === primaryEnvironment?.environmentId ? "Local" : "Remote"),
       }),
-    [archivedGroups, searchQuery],
+    [
+      archivedSnapshots,
+      environmentLabelById,
+      groupingSettings,
+      primaryEnvironment?.environmentId,
+      projects,
+    ],
   );
+  const selectedProjectGroup = resolveArchivedProjectFilterGroup(
+    allProjectGroups,
+    projectFilterKey,
+  );
+  const selectedLogicalProjectKey = selectedProjectGroup?.projectKey ?? null;
+  const projectFilterOptions = useMemo(() => {
+    const candidates = archivedGroups.map((group) => {
+      const routeProjectKey =
+        group.key === selectedLogicalProjectKey && projectFilterKey !== null
+          ? projectFilterKey
+          : archivedProjectFilterKey(group.representativeProject);
+      return {
+        displayName: group.displayName,
+        environmentLabel:
+          environmentLabelById.get(group.representativeProject.environmentId) ??
+          (group.representativeProject.environmentId === primaryEnvironment?.environmentId
+            ? "Local"
+            : "Remote"),
+        logicalKey: group.key,
+        projectKey: routeProjectKey,
+        workspaceRoot: group.representativeProject.workspaceRoot,
+      };
+    });
+    if (
+      projectFilterKey !== null &&
+      selectedProjectGroup !== null &&
+      !candidates.some((option) => option.logicalKey === selectedProjectGroup.projectKey)
+    ) {
+      candidates.push({
+        displayName: selectedProjectGroup.displayName,
+        environmentLabel:
+          environmentLabelById.get(selectedProjectGroup.environmentId) ??
+          (selectedProjectGroup.environmentId === primaryEnvironment?.environmentId
+            ? "Local"
+            : "Remote"),
+        logicalKey: selectedProjectGroup.projectKey,
+        projectKey: projectFilterKey,
+        workspaceRoot: selectedProjectGroup.workspaceRoot,
+      });
+    }
+    return buildArchivedProjectFilterOptions(candidates).toSorted(
+      (left, right) =>
+        left.label.localeCompare(right.label) || left.logicalKey.localeCompare(right.logicalKey),
+    );
+  }, [
+    archivedGroups,
+    environmentLabelById,
+    primaryEnvironment?.environmentId,
+    projectFilterKey,
+    selectedLogicalProjectKey,
+    selectedProjectGroup,
+  ]);
+  const selectedProjectLabel =
+    projectFilterOptions.find((option) => option.logicalKey === selectedLogicalProjectKey)?.label ??
+    selectedProjectGroup?.displayName ??
+    "selected project";
+  const filteredArchivedGroups = useMemo(() => {
+    if (projectFilterKey !== null && selectedLogicalProjectKey === null) {
+      return [];
+    }
+    return archivedGroups.flatMap((group) => {
+      if (!archivedThreadMatchesProject(group.key, selectedLogicalProjectKey)) {
+        return [];
+      }
+      const matchingThreads = group.threads.filter(({ environmentLabel, project, thread }) =>
+        archivedThreadMatchesSearch(
+          {
+            environmentLabel,
+            modelName: thread.modelSelection.model,
+            projectName: `${group.displayName} ${project.title}`,
+            projectCwd: project.workspaceRoot,
+            threadTitle: thread.title,
+          },
+          searchQuery,
+        ),
+      );
+      return matchingThreads.length > 0 ? [{ ...group, threads: matchingThreads }] : [];
+    });
+  }, [archivedGroups, projectFilterKey, searchQuery, selectedLogicalProjectKey]);
   const matchingThreadCount = useMemo(
     () => filteredArchivedGroups.reduce((count, group) => count + group.threads.length, 0),
     [filteredArchivedGroups],
   );
   const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasProjectFilter = projectFilterKey !== null;
+  const hasActiveFilter = hasSearchQuery || hasProjectFilter;
+  const archiveSourcesReady = environmentsReady && environmentShellsBootstrapped;
+  const isLoadingArchiveSources = !archiveSourcesReady || isLoadingArchive;
+  const shouldDeferEmptyState = shouldDeferArchivedEmptyState({
+    hasMatchingGroups: filteredArchivedGroups.length > 0,
+    isLoading: isLoadingArchiveSources,
+    hasError: archiveError !== null,
+  });
+  const showUnresolvedProjectFilterOption = shouldShowUnresolvedArchivedProjectFilterOption({
+    hasProjectFilter,
+    hasResolvedProject: selectedProjectGroup !== null,
+  });
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1743,52 +1857,94 @@ export function ArchivedThreadsPanel() {
   return (
     <SettingsPageContainer>
       <div className="space-y-1.5">
-        <div className="relative">
-          <SearchIcon
-            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <input
-            ref={searchInputRef}
-            type="search"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && searchQuery.length > 0) {
-                event.preventDefault();
-                event.stopPropagation();
-                setSearchQuery("");
-              }
-            }}
-            placeholder="Search archived threads"
-            aria-label="Search archived threads"
-            aria-describedby="archived-thread-search-status"
-            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
-          />
-          {searchQuery.length > 0 ? (
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="absolute top-1/2 right-2 size-6 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setSearchQuery("");
-                searchInputRef.current?.focus({ preventScroll: true });
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)]">
+          <div className="relative">
+            <SearchIcon
+              className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && searchQuery.length > 0) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSearchQuery("");
+                }
               }}
-              aria-label="Clear archived thread search"
-            >
-              <XIcon className="size-3.5" />
-            </Button>
-          ) : null}
+              placeholder="Search archived threads"
+              aria-label="Search archived threads"
+              aria-describedby="archived-thread-search-status"
+              className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+            />
+            {searchQuery.length > 0 ? (
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="absolute top-1/2 right-2 size-6 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setSearchQuery("");
+                  searchInputRef.current?.focus({ preventScroll: true });
+                }}
+                aria-label="Clear archived thread search"
+              >
+                <XIcon className="size-3.5" />
+              </Button>
+            ) : null}
+          </div>
+          <Select
+            value={archivedProjectSelectValue(projectFilterKey)}
+            onValueChange={(value) => {
+              if (!value) return;
+              onProjectFilterChange(parseArchivedProjectSelectValue(value));
+            }}
+          >
+            <SelectTrigger className="h-9" aria-label="Filter archived threads by project">
+              <SelectValue>{hasProjectFilter ? selectedProjectLabel : "All projects"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="start" alignItemWithTrigger={false}>
+              <SelectItem hideIndicator value={archivedProjectSelectValue(null)}>
+                All projects
+              </SelectItem>
+              {showUnresolvedProjectFilterOption && projectFilterKey !== null ? (
+                <SelectItem
+                  disabled
+                  hideIndicator
+                  value={archivedProjectSelectValue(projectFilterKey)}
+                >
+                  Selected project ({isLoadingArchiveSources ? "loading" : "unavailable"})
+                </SelectItem>
+              ) : null}
+              {projectFilterOptions.map((option) => (
+                <SelectItem
+                  hideIndicator
+                  key={option.logicalKey}
+                  value={archivedProjectSelectValue(option.projectKey)}
+                >
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
         </div>
         <p
           id="archived-thread-search-status"
           className="min-h-4 px-1 text-[11px] text-muted-foreground"
-          aria-live="polite"
+          aria-live={isLoadingArchiveSources || archiveError !== null ? "off" : "polite"}
         >
-          {hasSearchQuery
-            ? `${matchingThreadCount} ${matchingThreadCount === 1 ? "thread" : "threads"} found`
-            : "Press Command+F or Ctrl+F to focus search."}
+          {isLoadingArchiveSources
+            ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}…`
+            : archiveError !== null && filteredArchivedGroups.length === 0
+              ? `Archived thread results${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be incomplete`
+              : hasActiveFilter
+                ? `${matchingThreadCount} ${matchingThreadCount === 1 ? "thread" : "threads"}${
+                    hasSearchQuery ? " found" : ""
+                  }${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
+                : "Press Command+F or Ctrl+F to focus search."}
         </p>
       </div>
 
@@ -1806,12 +1962,12 @@ export function ArchivedThreadsPanel() {
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
-                {isLoadingArchive ? (
+                {isLoadingArchiveSources ? (
                   <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
-                {isLoadingArchive
+                {isLoadingArchiveSources
                   ? "Loading archived threads"
                   : archiveError
                     ? "Could not load archived threads"
@@ -1819,29 +1975,62 @@ export function ArchivedThreadsPanel() {
               </span>
             }
             description={
-              isLoadingArchive
+              isLoadingArchiveSources
                 ? "Checking connected environments."
                 : (archiveError ?? "Archived threads will appear here.")
+            }
+          />
+        </SettingsSection>
+      ) : shouldDeferEmptyState ? (
+        <SettingsSection
+          title="Archived threads"
+          role={archiveError === null ? "status" : undefined}
+        >
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-2">
+                {isLoadingArchiveSources ? (
+                  <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+                ) : (
+                  <ArchiveIcon className="size-3.5 text-muted-foreground" />
+                )}
+                {isLoadingArchiveSources
+                  ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
+                  : `Archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be unavailable`}
+              </span>
+            }
+            description={
+              isLoadingArchiveSources
+                ? "Checking connected environments."
+                : "One or more environments could not be loaded, so this result may be incomplete."
             }
           />
         </SettingsSection>
       ) : filteredArchivedGroups.length === 0 ? (
         <SettingsSection title="Archived threads">
           <SettingsRow
-            title="No matching archived threads"
-            description="Try a different thread title, project, or workspace path."
+            title={
+              hasProjectFilter
+                ? `No archived threads in ${selectedProjectLabel}`
+                : "No matching archived threads"
+            }
+            description={
+              hasProjectFilter && !hasSearchQuery
+                ? "Choose another project or show all projects."
+                : "Try a different thread title, project, or workspace path."
+            }
           />
         </SettingsSection>
       ) : (
         filteredArchivedGroups.map((group) => {
-          const isCollapsed = !hasSearchQuery && collapsedProjectKeys.has(group.key);
+          const isCollapsed = !hasActiveFilter && collapsedProjectKeys.has(group.key);
           return (
             <SettingsSection
               key={group.key}
               title={group.displayName}
               collapsed={isCollapsed}
               onToggleCollapsed={
-                hasSearchQuery
+                hasActiveFilter
                   ? undefined
                   : () => {
                       setCollapsedProjectKeys((current) => {

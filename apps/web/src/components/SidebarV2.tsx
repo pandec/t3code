@@ -9,6 +9,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
+  ArchiveIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -133,6 +134,7 @@ import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./u
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { archivedProjectFilterKey } from "../archivedProjectFilter";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -857,6 +859,32 @@ export default function SidebarV2() {
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
+  );
+  const openArchivedThreads = useCallback(
+    async (project: SidebarProjectSnapshot) => {
+      const result = await settlePromise(() =>
+        router.navigate({
+          to: "/settings/archived",
+          search: { project: archivedProjectFilterKey(project) },
+        }),
+      );
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not open archived threads",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+        return;
+      }
+      setProjectActionsTarget(null);
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+    },
+    [isMobile, router, setOpenMobile],
   );
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -2243,6 +2271,16 @@ export default function SidebarV2() {
             ) : null}
           </DialogPanel>
           <DialogFooter variant="bare">
+            {projectActionsTarget ? (
+              <Button
+                variant="outline"
+                className="mr-auto"
+                onClick={() => void openArchivedThreads(projectActionsTarget)}
+              >
+                <ArchiveIcon />
+                Archived threads
+              </Button>
+            ) : null}
             <Button onClick={() => setProjectActionsTarget(null)}>Done</Button>
           </DialogFooter>
         </DialogPopup>
