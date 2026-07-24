@@ -96,6 +96,48 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           },
         });
         yield* eventStore.append({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("copy-checkpoint-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-checkpoint-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-checkpoint-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            turnId: TurnId.make("source-turn"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/copy-source/turn/1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("source-assistant"),
+            completedAt: now,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("copy-assistant-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-assistant-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-assistant-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            messageId: MessageId.make("source-assistant"),
+            role: "assistant",
+            text: "final response",
+            turnId: TurnId.make("source-turn"),
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* eventStore.append({
           type: "thread.fork-requested",
           eventId: EventId.make("copy-fork-event"),
           aggregateKind: "thread",
@@ -114,19 +156,56 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
 
         yield* projectionPipeline.bootstrap;
         const rows = yield* sql<{
+          readonly messageId: string;
           readonly threadId: string;
           readonly text: string;
           readonly attachmentsJson: string | null;
         }>`
         SELECT
+          message_id AS "messageId",
           thread_id AS "threadId",
           text,
           attachments_json AS "attachmentsJson"
         FROM projection_thread_messages
         WHERE thread_id = ${destinationThreadId}
+        ORDER BY message_id
       `;
         assert.deepEqual(rows, [
-          { threadId: destinationThreadId, text: "keep this text", attachmentsJson: null },
+          {
+            messageId: `fork:${destinationThreadId}:source-assistant`,
+            threadId: destinationThreadId,
+            text: "final response",
+            attachmentsJson: null,
+          },
+          {
+            messageId: `fork:${destinationThreadId}:source-message`,
+            threadId: destinationThreadId,
+            text: "keep this text",
+            attachmentsJson: null,
+          },
+        ]);
+
+        const turnRows = yield* sql<{
+          readonly state: string;
+          readonly assistantMessageId: string | null;
+          readonly checkpointTurnCount: number | null;
+          readonly checkpointRef: string | null;
+        }>`
+        SELECT
+          state,
+          assistant_message_id AS "assistantMessageId",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef"
+        FROM projection_turns
+        WHERE thread_id = ${destinationThreadId}
+      `;
+        assert.deepEqual(turnRows, [
+          {
+            state: "completed",
+            assistantMessageId: `fork:${destinationThreadId}:source-assistant`,
+            checkpointTurnCount: null,
+            checkpointRef: null,
+          },
         ]);
       }),
     );
@@ -1791,7 +1870,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
-  it.effect("settles a superseded running turn when a new turn becomes active", () =>
+  it.effect("interrupts a superseded running turn when a new turn becomes active", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
@@ -1853,6 +1932,27 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         });
 
       yield* appendRunningSessionSet("evt-ts2", oldTurnId, "2026-01-01T00:00:01.000Z");
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-ts-commentary"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:15.000Z",
+        commandId: CommandId.make("cmd-ts-commentary"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-ts-commentary"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("assistant-steer-commentary"),
+          role: "assistant",
+          text: "Still working.",
+          turnId: oldTurnId,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:15.000Z",
+          updatedAt: "2026-01-01T00:00:15.000Z",
+        },
+      });
       // A steer: a new turn becomes active without the provider ever
       // completing the previous one.
       yield* appendRunningSessionSet("evt-ts3", newTurnId, "2026-01-01T00:00:30.000Z");
@@ -1863,15 +1963,25 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         readonly turnId: string;
         readonly state: string;
         readonly completedAt: string | null;
+        readonly assistantMessageId: string | null;
       }>`
-        SELECT turn_id AS "turnId", state, completed_at AS "completedAt"
+        SELECT
+          turn_id AS "turnId",
+          state,
+          completed_at AS "completedAt",
+          assistant_message_id AS "assistantMessageId"
         FROM projection_turns
         WHERE thread_id = ${threadId}
         ORDER BY requested_at
       `;
       assert.deepEqual(rows, [
-        { turnId: oldTurnId, state: "completed", completedAt: "2026-01-01T00:00:30.000Z" },
-        { turnId: newTurnId, state: "running", completedAt: null },
+        {
+          turnId: oldTurnId,
+          state: "interrupted",
+          completedAt: "2026-01-01T00:00:30.000Z",
+          assistantMessageId: "assistant-steer-commentary",
+        },
+        { turnId: newTurnId, state: "running", completedAt: null, assistantMessageId: null },
       ]);
     }),
   );
@@ -2131,15 +2241,63 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           },
         });
 
+        yield* appendAndProject({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("evt-conflict-6"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-conflict"),
+          occurredAt: "2026-02-26T13:00:05.000Z",
+          commandId: CommandId.make("cmd-conflict-6"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-conflict-6"),
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-conflict"),
+            turnId: TurnId.make("turn-interrupted"),
+            checkpointTurnCount: 2,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-conflict/turn/2"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("assistant-interrupted"),
+            completedAt: "2026-02-26T13:00:05.000Z",
+          },
+        });
+
+        yield* appendAndProject({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("evt-conflict-7"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-conflict"),
+          occurredAt: "2026-02-26T13:00:06.000Z",
+          commandId: CommandId.make("cmd-conflict-7"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-conflict-7"),
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-conflict"),
+            turnId: TurnId.make("turn-completed"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-conflict/missing"),
+            status: "missing",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-02-26T13:00:06.000Z",
+          },
+        });
+
         const turnRows = yield* sql<{
           readonly turnId: string;
           readonly checkpointTurnCount: number | null;
           readonly status: string;
+          readonly checkpointStatus: string | null;
+          readonly assistantMessageId: string | null;
         }>`
         SELECT
           turn_id AS "turnId",
           checkpoint_turn_count AS "checkpointTurnCount",
-          state AS "status"
+          state AS "status",
+          checkpoint_status AS "checkpointStatus",
+          assistant_message_id AS "assistantMessageId"
         FROM projection_turns
         WHERE thread_id = 'thread-conflict'
         ORDER BY
@@ -2151,8 +2309,20 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           requested_at ASC
       `;
         assert.deepEqual(turnRows, [
-          { turnId: "turn-completed", checkpointTurnCount: 1, status: "completed" },
-          { turnId: "turn-interrupted", checkpointTurnCount: null, status: "interrupted" },
+          {
+            turnId: "turn-completed",
+            checkpointTurnCount: 1,
+            status: "completed",
+            checkpointStatus: "ready",
+            assistantMessageId: "assistant-conflict",
+          },
+          {
+            turnId: "turn-interrupted",
+            checkpointTurnCount: 2,
+            status: "interrupted",
+            checkpointStatus: "ready",
+            assistantMessageId: "assistant-interrupted",
+          },
         ]);
       }),
   );

@@ -68,6 +68,7 @@ const BASE_THREAD: OrchestrationThread = {
   branch: "main",
   worktreePath: null,
   latestTurn: null,
+  completedTurnAssistantMessageIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,
@@ -371,6 +372,7 @@ describe("EnvironmentThreads", () => {
       };
       const httpThread: OrchestrationThread = {
         ...cachedThread,
+        completedTurnAssistantMessageIds: [MessageId.make("message-1")],
         messages: [
           {
             id: MessageId.make("message-1"),
@@ -406,6 +408,7 @@ describe("EnvironmentThreads", () => {
       expect(Option.getOrThrow(state.data).messages[0]?.generatedSummary?.summary).toBe(
         "Persisted summary",
       );
+      expect(Option.getOrThrow(state.data).completedTurnAssistantMessageIds).toEqual(["message-1"]);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
     }),
   );
@@ -421,7 +424,11 @@ describe("EnvironmentThreads", () => {
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z",
       };
-      const cachedThread: OrchestrationThread = { ...BASE_THREAD, messages: [message] };
+      const cachedThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        messages: [message],
+        completedTurnAssistantMessageIds: [message.id],
+      };
       const snapshotLoadGate = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
         cached: cachedThread,
@@ -430,6 +437,7 @@ describe("EnvironmentThreads", () => {
           snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
           thread: {
             ...cachedThread,
+            completedTurnAssistantMessageIds: [],
             messages: [
               {
                 ...message,
@@ -459,6 +467,9 @@ describe("EnvironmentThreads", () => {
           value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
       );
       expect(Option.getOrThrow(hydrated.data).title).toBe("Live title");
+      expect(Option.getOrThrow(hydrated.data).completedTurnAssistantMessageIds).toEqual([
+        message.id,
+      ]);
     }),
   );
 

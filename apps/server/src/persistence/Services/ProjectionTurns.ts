@@ -106,6 +106,13 @@ export const ClearCheckpointTurnConflictInput = Schema.Struct({
 });
 export type ClearCheckpointTurnConflictInput = typeof ClearCheckpointTurnConflictInput.Type;
 
+export const CopyCompletedProjectionTurnsForForkInput = Schema.Struct({
+  sourceThreadId: ThreadId,
+  destinationThreadId: ThreadId,
+});
+export type CopyCompletedProjectionTurnsForForkInput =
+  typeof CopyCompletedProjectionTurnsForForkInput.Type;
+
 export interface ProjectionTurnRepositoryShape {
   /**
    * Inserts or updates the canonical row for a concrete `{threadId, turnId}` turn lifecycle state.
@@ -154,6 +161,14 @@ export interface ProjectionTurnRepositoryShape {
    */
   readonly clearCheckpointTurnConflict: (
     input: ClearCheckpointTurnConflictInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Copies completed turn identity into a fork, rebinding assistant message IDs
+   * to the destination's fork-prefixed message IDs.
+   */
+  readonly copyCompletedTurnsForFork: (
+    input: CopyCompletedProjectionTurnsForForkInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

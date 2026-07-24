@@ -3,9 +3,118 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  deriveTimelineMinimapItems,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveTimelineMinimapAriaLabel,
+  resolveTimelineMinimapItemIndexFromPointer,
+  resolveTimelineMinimapTooltipTranslate,
 } from "./MessagesTimeline.logic";
+
+describe("resolveTimelineMinimapAriaLabel", () => {
+  it("uses a concise role and position label with a capped excerpt", () => {
+    const longResponse = "A".repeat(180);
+
+    expect(
+      resolveTimelineMinimapAriaLabel({
+        activeIndex: null,
+        itemCount: 3,
+        primaryText: null,
+        side: "right",
+      }),
+    ).toBe("Jump to message: Agent response");
+    expect(
+      resolveTimelineMinimapAriaLabel({
+        activeIndex: 1,
+        itemCount: 3,
+        primaryText: longResponse,
+        side: "right",
+      }),
+    ).toBe(`Jump to agent response 2 of 3: ${"A".repeat(120)}`);
+  });
+});
+
+describe("resolveTimelineMinimapItemIndexFromPointer", () => {
+  it("selects the nearest rendered reply in the full turn-position space", () => {
+    const items = [
+      { positionIndex: 0, positionCount: 4 },
+      { positionIndex: 3, positionCount: 4 },
+    ];
+
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items,
+        railTop: 100,
+        railHeight: 300,
+        pointerY: 360,
+      }),
+    ).toBe(1);
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items,
+        railTop: 100,
+        railHeight: 300,
+        pointerY: 160,
+      }),
+    ).toBe(0);
+  });
+
+  it("compares sparse markers against the continuous pointer position", () => {
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items: [
+          { positionIndex: 0, positionCount: 4 },
+          { positionIndex: 2, positionCount: 4 },
+        ],
+        railTop: 0,
+        railHeight: 24,
+        pointerY: 11,
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("resolveTimelineMinimapTooltipTranslate", () => {
+  it("only edge-clamps markers at the endpoints of the full turn space", () => {
+    expect(resolveTimelineMinimapTooltipTranslate(0, 5)).toBe("0%");
+    expect(resolveTimelineMinimapTooltipTranslate(1, 5)).toBe("-50%");
+    expect(resolveTimelineMinimapTooltipTranslate(3, 5)).toBe("-50%");
+    expect(resolveTimelineMinimapTooltipTranslate(4, 5)).toBe("-100%");
+  });
+});
+
+describe("deriveTimelineMinimapItems", () => {
+  it("keeps sparse agent replies aligned with their user-turn positions", () => {
+    const messageRow = (
+      id: string,
+      role: "user" | "assistant",
+      isFinalAssistantResponse: boolean,
+    ) =>
+      ({
+        kind: "message",
+        id,
+        message: { id, role, text: id },
+        isFinalAssistantResponse,
+      }) as never;
+    const rows = [
+      messageRow("user-1", "user", false),
+      messageRow("assistant-1", "assistant", true),
+      messageRow("user-2", "user", false),
+      messageRow("assistant-commentary", "assistant", false),
+      messageRow("user-3", "user", false),
+      messageRow("assistant-3", "assistant", true),
+    ];
+
+    expect(
+      deriveTimelineMinimapItems(rows, "final-assistant").map(
+        ({ id, positionIndex, positionCount }) => ({ id, positionIndex, positionCount }),
+      ),
+    ).toEqual([
+      { id: "assistant-1", positionIndex: 0, positionCount: 3 },
+      { id: "assistant-3", positionIndex: 2, positionCount: 3 },
+    ]);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -636,6 +745,7 @@ describe("deriveMessagesTimelineRows", () => {
     // User message (00:00:00) → trailing work entry (00:00:12).
     expect(foldRow?.turnId).toBe("turn-1");
     expect(foldRow?.label).toBe("Worked for 12s");
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([]);
   });
 
   it("uses latest-turn timings and the stopped label for an interrupted latest turn", () => {
@@ -859,6 +969,20 @@ describe("deriveMessagesTimelineRows", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
+          id: "user-prompt-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-prompt" as never,
+            role: "user",
+            text: "Please check this.",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
           id: "assistant-thought-entry",
           kind: "message",
           createdAt: "2026-01-01T00:00:10Z",
@@ -888,6 +1012,7 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       expandedTurnIds: new Set(["turn-1" as never]),
+      completedTurnAssistantMessageIds: new Set(["assistant-final" as never]),
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
@@ -900,6 +1025,26 @@ describe("deriveMessagesTimelineRows", () => {
     );
 
     expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(deriveTimelineMinimapItems(rows, "user-turn")).toEqual([
+      {
+        id: "user-prompt-entry",
+        rowIndex: 0,
+        positionIndex: 0,
+        positionCount: 1,
+        primaryText: "Please check this.",
+        secondaryText: "Done.",
+      },
+    ]);
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([
+      {
+        id: "assistant-final-entry",
+        rowIndex: 3,
+        positionIndex: 0,
+        positionCount: 1,
+        primaryText: "Done.",
+        secondaryText: null,
+      },
+    ]);
   });
 
   it("withholds assistant metadata while the active turn is still in progress", () => {
@@ -938,7 +1083,48 @@ describe("deriveMessagesTimelineRows", () => {
     );
 
     expect(assistantRow?.showAssistantMeta).toBe(false);
+    expect(assistantRow?.isFinalAssistantResponse).toBe(false);
     expect(assistantRow?.showAssistantCopyButton).toBe(false);
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([]);
+  });
+
+  it("does not treat an interrupted turn's terminal commentary as a final response", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-commentary-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-commentary" as never,
+            role: "assistant",
+            text: "Still working.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            updatedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "interrupted",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:12Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const assistantRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+    expect(assistantRow?.showAssistantMeta).toBe(true);
+    expect(assistantRow?.isFinalAssistantResponse).toBe(false);
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([]);
   });
 
   it("models work log overflow expansion as inserted list rows", () => {

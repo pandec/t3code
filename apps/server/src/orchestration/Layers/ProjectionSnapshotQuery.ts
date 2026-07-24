@@ -125,6 +125,10 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
 });
+const ProjectionCompletedTurnAssistantMessageDbRowSchema = Schema.Struct({
+  threadId: ProjectionThread.fields.threadId,
+  assistantMessageId: MessageId,
+});
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
@@ -723,6 +727,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listCompletedTurnAssistantMessageRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionCompletedTurnAssistantMessageDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          assistant_message_id AS "assistantMessageId"
+        FROM projection_turns
+        WHERE state = 'completed'
+          AND assistant_message_id IS NOT NULL
+        ORDER BY thread_id ASC, requested_at ASC
+      `,
+  });
+
   const listActiveLatestTurnRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionLatestTurnDbRowSchema,
@@ -1041,6 +1060,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listCompletedTurnAssistantMessageRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionCompletedTurnAssistantMessageDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          assistant_message_id AS "assistantMessageId"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND state = 'completed'
+          AND assistant_message_id IS NOT NULL
+        ORDER BY requested_at ASC
+      `,
+  });
+
   const listCheckpointRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionCheckpointDbRowSchema,
@@ -1162,6 +1197,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listCompletedTurnAssistantMessageRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listCompletedTurnAssistantMessages:query",
+                "ProjectionSnapshotQuery.getSnapshot:listCompletedTurnAssistantMessages:decodeRows",
+              ),
+            ),
+          ),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1183,6 +1226,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             sessionRows,
             checkpointRows,
             latestTurnRows,
+            completedTurnAssistantMessageRows,
             stateRows,
           ]) =>
             Effect.gen(function* () {
@@ -1192,6 +1236,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
               const sessionsByThread = new Map<string, OrchestrationSession>();
               const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
+              const completedTurnAssistantMessageIdsByThread = new Map<string, Array<MessageId>>();
 
               let updatedAt: string | null = null;
 
@@ -1294,6 +1339,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 });
               }
 
+              for (const row of completedTurnAssistantMessageRows) {
+                const messageIds = completedTurnAssistantMessageIdsByThread.get(row.threadId) ?? [];
+                messageIds.push(row.assistantMessageId);
+                completedTurnAssistantMessageIdsByThread.set(row.threadId, messageIds);
+              }
+
               for (const row of sessionRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
                 sessionsByThread.set(row.threadId, {
@@ -1344,6 +1395,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 settledAt: row.settledAt,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
+                completedTurnAssistantMessageIds:
+                  completedTurnAssistantMessageIdsByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
@@ -1544,6 +1597,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   settledAt: row.settledAt,
                   deletedAt: row.deletedAt,
                   messages: [],
+                  completedTurnAssistantMessageIds: [],
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                   activities: [],
                   checkpoints: [],
@@ -2073,6 +2127,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         activityRows,
         checkpointRows,
         latestTurnRow,
+        completedTurnAssistantMessageRows,
         sessionRow,
       ] = yield* Effect.all([
         getActiveThreadRowById({ threadId }).pipe(
@@ -2123,6 +2178,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
+        listCompletedTurnAssistantMessageRowsByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:listCompletedTurnAssistantMessages:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listCompletedTurnAssistantMessages:decodeRows",
+            ),
+          ),
+        ),
         getThreadSessionRowByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
@@ -2154,6 +2217,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         settledAt: threadRow.value.settledAt,
         deletedAt: null,
         messages: messageRows.map(mapMessageRow),
+        completedTurnAssistantMessageIds: completedTurnAssistantMessageRows.map(
+          (row) => row.assistantMessageId,
+        ),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         activities: activityRows.map((row) => {
           const activity = {

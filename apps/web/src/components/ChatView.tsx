@@ -2304,6 +2304,10 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return byMessageId;
   }, [turnDiffSummaries]);
+  const completedTurnAssistantMessageIds = useMemo(
+    () => new Set(activeThread?.completedTurnAssistantMessageIds ?? []),
+    [activeThread?.completedTurnAssistantMessageIds],
+  );
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -5748,6 +5752,7 @@ function ChatViewContent(props: ChatViewProps) {
                     ? activeThread.session.activeTurnId
                     : null
                 }
+                completedTurnAssistantMessageIds={completedTurnAssistantMessageIds}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 textToSpeechAvailable={
