@@ -1,15 +1,20 @@
 import type { DesktopNotificationThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
 import { useClientSettings } from "../hooks/useSettings";
-import { useAllEnvironmentShellsReadyForTurnCompletion, useThreadShells } from "../state/entities";
+import {
+  useAllEnvironmentShellsBootstrapped,
+  useEnvironmentIdsReadyForTurnCompletion,
+  useThreadShells,
+} from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   advanceTurnCompletionSnapshot,
   buildTurnCompletionCopy,
+  filterShellsForTurnCompletion,
   seedTurnCompletionSnapshot,
   type TurnCompletionSnapshot,
 } from "./turnCompletion.logic";
@@ -61,8 +66,12 @@ export function buildNotificationSettingsSupportText(
   }
 }
 
-function isWindowForeground(): boolean {
-  return document.visibilityState === "visible" && document.hasFocus();
+export function shouldShowTurnCompletionSystemNotification(input: {
+  readonly enabled: boolean;
+  readonly visibilityState: DocumentVisibilityState;
+  readonly hasFocus: boolean;
+}): boolean {
+  return input.enabled && !(input.visibilityState === "visible" && input.hasFocus);
 }
 
 type ShowSystemNotificationInput = {
@@ -116,7 +125,12 @@ export function TurnCompletionNotifications() {
     (settings) => settings.enableTurnCompletionSystemNotifications,
   );
   const threadShells = useThreadShells();
-  const readyForNotifications = useAllEnvironmentShellsReadyForTurnCompletion();
+  const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  const readyEnvironmentIds = useEnvironmentIdsReadyForTurnCompletion();
+  const authoritativeThreadShells = useMemo(
+    () => filterShellsForTurnCompletion(threadShells, readyEnvironmentIds),
+    [readyEnvironmentIds, threadShells],
+  );
   const snapshotRef = useRef<TurnCompletionSnapshot | null>(null);
 
   const navigateToThread = useEffectEvent((threadRef: DesktopNotificationThreadRef) => {
@@ -137,25 +151,26 @@ export function TurnCompletionNotifications() {
   }, [navigateToThread]);
 
   useEffect(() => {
-    if (!readyForNotifications) {
-      // Any environment beginning a synchronization invalidates the aggregate
-      // baseline. Seed again only after every environment is authoritative (or
-      // has settled disconnected) so reconnect replay can never look live.
-      snapshotRef.current = null;
+    if (!shellsBootstrapped) {
+      if (snapshotRef.current !== null) {
+        // Invalidate comparison baselines without forgetting lifetime turn-ID
+        // history if the environment catalog itself reloads.
+        snapshotRef.current = { ...snapshotRef.current, shells: [] };
+      }
       return;
     }
 
-    // Seed only from a fully authoritative shell list: everything present at
-    // startup — including already-completed turns replayed from cache or the
-    // server snapshot — is history, not news.
+    // Seed only after the environment catalog has bootstrapped. Each
+    // environment is independently filtered out while synchronizing, then
+    // re-enters as unseen history without suppressing healthy environments.
     if (snapshotRef.current === null) {
-      snapshotRef.current = seedTurnCompletionSnapshot(threadShells);
+      snapshotRef.current = seedTurnCompletionSnapshot(authoritativeThreadShells);
       return;
     }
 
     const { snapshot, candidates } = advanceTurnCompletionSnapshot(
       snapshotRef.current,
-      threadShells,
+      authoritativeThreadShells,
     );
     // Always advance, even with both toggles off — re-enabling a toggle must
     // not burst out a backlog of stale completions.
@@ -165,7 +180,11 @@ export function TurnCompletionNotifications() {
       return;
     }
 
-    const notifySystem = systemEnabled && !isWindowForeground();
+    const notifySystem = shouldShowTurnCompletionSystemNotification({
+      enabled: systemEnabled,
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+    });
     for (const candidate of candidates) {
       const threadRef: DesktopNotificationThreadRef = {
         environmentId: candidate.environmentId,
@@ -192,7 +211,13 @@ export function TurnCompletionNotifications() {
         });
       }
     }
-  }, [readyForNotifications, threadShells, toastsEnabled, systemEnabled, navigateToThread]);
+  }, [
+    authoritativeThreadShells,
+    shellsBootstrapped,
+    toastsEnabled,
+    systemEnabled,
+    navigateToThread,
+  ]);
 
   return null;
 }

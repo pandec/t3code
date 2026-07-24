@@ -25,7 +25,7 @@ import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
 import {
   allEnvironmentShellsBootstrappedAtom,
-  allEnvironmentShellsReadyForTurnCompletionAtom,
+  environmentIdsReadyForTurnCompletionAtom,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
@@ -127,8 +127,8 @@ export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
 }
 
-export function useAllEnvironmentShellsReadyForTurnCompletion(): boolean {
-  return useAtomValue(allEnvironmentShellsReadyForTurnCompletionAtom);
+export function useEnvironmentIdsReadyForTurnCompletion(): ReadonlySet<EnvironmentId> {
+  return useAtomValue(environmentIdsReadyForTurnCompletionAtom);
 }
 
 export function useThreadShellsForProjectRefs(

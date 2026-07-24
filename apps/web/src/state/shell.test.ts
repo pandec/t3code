@@ -42,6 +42,12 @@ describe("isEnvironmentShellReadyForTurnCompletion", () => {
         connection({ desired: true, phase: "connected" }),
       ),
     ).toBe(true);
+    expect(
+      isEnvironmentShellReadyForTurnCompletion(
+        shellState("live"),
+        connection({ desired: true, phase: "connecting", stage: "synchronizing" }),
+      ),
+    ).toBe(false);
   });
 
   it("waits while connection state is still unknown", () => {

@@ -137,7 +137,7 @@ function RootRouteView() {
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {primaryEnvironmentAuthenticated ? <TurnCompletionNotifications /> : null}
+        <TurnCompletionNotifications />
         {appShell}
       </AnchoredToastProvider>
     </ToastProvider>

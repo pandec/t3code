@@ -18,6 +18,39 @@ function installWindow(overrides: Record<string, unknown> = {}) {
 }
 
 describe("browser turn completion notifications", () => {
+  it("suppresses system notifications only while the document is visible and focused", async () => {
+    const { shouldShowTurnCompletionSystemNotification } = await import("./turnCompletion");
+
+    expect(
+      shouldShowTurnCompletionSystemNotification({
+        enabled: true,
+        visibilityState: "visible",
+        hasFocus: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowTurnCompletionSystemNotification({
+        enabled: true,
+        visibilityState: "visible",
+        hasFocus: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowTurnCompletionSystemNotification({
+        enabled: true,
+        visibilityState: "hidden",
+        hasFocus: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowTurnCompletionSystemNotification({
+        enabled: false,
+        visibilityState: "hidden",
+        hasFocus: false,
+      }),
+    ).toBe(false);
+  });
+
   it("degrades when the Notification API is undefined", async () => {
     installWindow();
     vi.stubGlobal("Notification", undefined);

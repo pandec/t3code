@@ -6,6 +6,7 @@ import {
   advanceTurnCompletionSnapshot,
   buildTurnCompletionCopy,
   collectTurnCompletionCandidates,
+  filterShellsForTurnCompletion,
   seedTurnCompletionSnapshot,
 } from "./turnCompletion.logic";
 
@@ -166,6 +167,52 @@ describe("turn completion snapshot", () => {
     const sameTurnCompletesAgain = advanceTurnCompletionSnapshot(runningAgain.snapshot, [
       running("a"),
       completed("b"),
+    ]);
+    expect(sameTurnCompletesAgain.candidates).toEqual([]);
+  });
+
+  it("keeps healthy environments live while another environment resynchronizes", () => {
+    const env1Running = running("a");
+    const env2Running = makeShell({
+      ...running("b"),
+      environmentId: "env-2",
+    });
+    const initial = seedTurnCompletionSnapshot([env1Running, env2Running]);
+
+    const env2Unavailable = filterShellsForTurnCompletion(
+      [
+        completed("a"),
+        makeShell({
+          ...completed("b"),
+          environmentId: "env-2",
+        }),
+      ],
+      new Set(["env-1"]),
+    );
+    const whileEnv2Synchronizes = advanceTurnCompletionSnapshot(initial, env2Unavailable);
+    expect(whileEnv2Synchronizes.candidates.map((candidate) => candidate.turnId)).toEqual([
+      "a-turn",
+    ]);
+
+    const env2Returns = advanceTurnCompletionSnapshot(whileEnv2Synchronizes.snapshot, [
+      completed("a"),
+      makeShell({
+        ...completed("b"),
+        environmentId: "env-2",
+      }),
+    ]);
+    expect(env2Returns.candidates).toEqual([]);
+  });
+
+  it("keeps lifetime turn dedupe when an environment leaves and re-enters the baseline", () => {
+    const initial = seedTurnCompletionSnapshot([running("a")]);
+    const firstCompletion = advanceTurnCompletionSnapshot(initial, [completed("a")]);
+    expect(firstCompletion.candidates).toHaveLength(1);
+
+    const unavailable = advanceTurnCompletionSnapshot(firstCompletion.snapshot, []);
+    const returnsRunning = advanceTurnCompletionSnapshot(unavailable.snapshot, [running("a")]);
+    const sameTurnCompletesAgain = advanceTurnCompletionSnapshot(returnsRunning.snapshot, [
+      completed("a"),
     ]);
     expect(sameTurnCompletesAgain.candidates).toEqual([]);
   });

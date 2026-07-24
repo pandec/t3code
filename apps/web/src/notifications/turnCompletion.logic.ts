@@ -14,6 +14,13 @@ export interface TurnCompletionSnapshot {
   readonly seenCompletedTurnIds: ReadonlySet<string>;
 }
 
+export function filterShellsForTurnCompletion(
+  shells: ReadonlyArray<EnvironmentThreadShell>,
+  readyEnvironmentIds: ReadonlySet<string>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  return shells.filter((shell) => readyEnvironmentIds.has(shell.environmentId));
+}
+
 function threadShellKey(shell: EnvironmentThreadShell): string {
   return threadKey({ environmentId: shell.environmentId, threadId: shell.id });
 }

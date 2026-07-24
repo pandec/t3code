@@ -19,6 +19,14 @@ function retainNotification(notification: Electron.Notification): () => void {
     const oldest = activeNotifications.values().next().value;
     if (oldest !== undefined) {
       activeNotifications.delete(oldest);
+      try {
+        // Do not leave an Action Center entry visible after dropping the
+        // instance that owns its click listener.
+        oldest.close();
+      } catch {
+        // Retention is a best-effort safety net; showing the new notification
+        // must not fail because an older platform entry could not be removed.
+      }
     }
   }
   return () => {
@@ -69,8 +77,13 @@ export const showNotification = DesktopIpc.makeIpcMethod({
       ...(input.body !== undefined ? { body: input.body } : {}),
     });
     const releaseNotification = retainNotification(notification);
-    notification.once("close", releaseNotification);
-    notification.once("failed", releaseNotification);
+    notification.once("close", (event) => {
+      // Windows emits close when the initial popup times out even though the
+      // same actionable entry can remain in Action Center.
+      if (event.reason !== "timedOut") {
+        releaseNotification();
+      }
+    });
 
     const threadRef = input.threadRef;
     notification.on("click", () => {
@@ -90,7 +103,9 @@ export const showNotification = DesktopIpc.makeIpcMethod({
             if (window.isDestroyed()) {
               return;
             }
-            yield* electronWindow.sendAll(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, threadRef);
+            yield* Effect.sync(() => {
+              window.webContents.send(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, threadRef);
+            });
           }
         }).pipe(
           Effect.catchCause((cause) =>
@@ -103,16 +118,40 @@ export const showNotification = DesktopIpc.makeIpcMethod({
       );
     });
 
-    const shown = yield* Effect.try({
-      try: () => {
+    const shown = yield* Effect.callback<boolean>((resume) => {
+      let settled = false;
+      const finish = (result: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        notification.removeListener("show", onShow);
+        notification.removeListener("failed", onFailed);
+        if (!result) {
+          releaseNotification();
+        }
+        resume(Effect.succeed(result));
+      };
+      const onShow = () => {
+        finish(true);
+      };
+      const onFailed = () => {
+        finish(false);
+      };
+
+      notification.once("show", onShow);
+      notification.once("failed", onFailed);
+      try {
         notification.show();
-        return true;
-      },
-      catch: () => false,
-    }).pipe(Effect.orElseSucceed(() => false));
-    if (!shown) {
-      releaseNotification();
-    }
+      } catch {
+        finish(false);
+      }
+
+      return Effect.sync(() => {
+        notification.removeListener("show", onShow);
+        notification.removeListener("failed", onFailed);
+      });
+    });
     return shown;
   }),
 });

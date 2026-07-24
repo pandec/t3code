@@ -10,6 +10,7 @@ import {
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
 } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -37,10 +38,13 @@ export function isEnvironmentShellReadyForTurnCompletion(
   shell: EnvironmentShellState,
   connection: Option.Option<SupervisorConnectionState>,
 ): boolean {
-  if (shell.status === "live") {
-    return true;
+  if (Option.isNone(connection)) {
+    return false;
   }
-  return Option.isSome(connection) && disconnectedEnvironmentIsSettled(connection.value);
+  if (connectionProjectionPhase(connection.value) === "ready") {
+    return shell.status === "live";
+  }
+  return disconnectedEnvironmentIsSettled(connection.value);
 }
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
@@ -63,17 +67,18 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   return true;
 }).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
 
-export const allEnvironmentShellsReadyForTurnCompletionAtom = Atom.make((get) => {
+export const environmentIdsReadyForTurnCompletionAtom = Atom.make((get) => {
+  const readyEnvironmentIds = new Set<EnvironmentId>();
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
-    return false;
+    return readyEnvironmentIds;
   }
   for (const environmentId of catalog.value.entries.keys()) {
     const shell = get(environmentShell.stateValueAtom(environmentId));
     const connection = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
-    if (!isEnvironmentShellReadyForTurnCompletion(shell, connection)) {
-      return false;
+    if (isEnvironmentShellReadyForTurnCompletion(shell, connection)) {
+      readyEnvironmentIds.add(environmentId);
     }
   }
-  return true;
-}).pipe(Atom.withLabel("web-all-environment-shells-ready-for-turn-completion"));
+  return readyEnvironmentIds;
+}).pipe(Atom.withLabel("web-environment-ids-ready-for-turn-completion"));
