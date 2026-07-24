@@ -372,6 +372,7 @@ describe("EnvironmentThreads", () => {
       };
       const httpThread: OrchestrationThread = {
         ...cachedThread,
+        completedTurnAssistantMessageIds: [MessageId.make("message-1")],
         messages: [
           {
             id: MessageId.make("message-1"),
@@ -407,6 +408,7 @@ describe("EnvironmentThreads", () => {
       expect(Option.getOrThrow(state.data).messages[0]?.generatedSummary?.summary).toBe(
         "Persisted summary",
       );
+      expect(Option.getOrThrow(state.data).completedTurnAssistantMessageIds).toEqual(["message-1"]);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
     }),
   );

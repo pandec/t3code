@@ -330,6 +330,9 @@ export function applyThreadDetailEvent(
               ? reconcileCompletedTurnAssistantMessageIds(
                   thread.completedTurnAssistantMessageIds,
                   latestTurn,
+                  thread.latestTurn?.turnId === event.payload.turnId
+                    ? thread.latestTurn.assistantMessageId
+                    : null,
                 )
               : thread.completedTurnAssistantMessageIds,
           updatedAt: event.occurredAt,
@@ -480,6 +483,9 @@ export function applyThreadDetailEvent(
           completedTurnAssistantMessageIds: reconcileCompletedTurnAssistantMessageIds(
             thread.completedTurnAssistantMessageIds,
             latestTurn,
+            thread.latestTurn?.turnId === event.payload.turnId
+              ? thread.latestTurn.assistantMessageId
+              : null,
           ),
           updatedAt: event.occurredAt,
         },
@@ -607,16 +613,28 @@ function checkpointStatusToTurnState(
 function reconcileCompletedTurnAssistantMessageIds(
   messageIds: ReadonlyArray<MessageId>,
   turn: OrchestrationLatestTurn | null,
-): MessageId[] {
+  previousAssistantMessageId: MessageId | null = null,
+): ReadonlyArray<MessageId> {
   const assistantMessageId = turn?.assistantMessageId ?? null;
   if (assistantMessageId === null) {
-    return [...messageIds];
+    return messageIds;
   }
 
-  const withoutTurnMessage = messageIds.filter((messageId) => messageId !== assistantMessageId);
-  return turn?.state === "completed"
-    ? [...withoutTurnMessage, assistantMessageId]
-    : withoutTurnMessage;
+  const shouldInclude = turn?.state === "completed";
+  const previousIdToRemove =
+    previousAssistantMessageId !== assistantMessageId ? previousAssistantMessageId : null;
+  const hasPreviousId = previousIdToRemove !== null && messageIds.includes(previousIdToRemove);
+  const hasAssistantId = messageIds.includes(assistantMessageId);
+  if (!hasPreviousId && hasAssistantId === shouldInclude) {
+    return messageIds;
+  }
+
+  const withoutTurnMessages = messageIds.filter(
+    (messageId) =>
+      messageId !== assistantMessageId &&
+      (previousIdToRemove === null || messageId !== previousIdToRemove),
+  );
+  return shouldInclude ? [...withoutTurnMessages, assistantMessageId] : withoutTurnMessages;
 }
 
 function rebindCheckpointAssistantMessage(

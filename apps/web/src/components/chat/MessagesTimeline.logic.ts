@@ -37,6 +37,19 @@ export function resolveTimelineMinimapTopPercent(index: number, itemCount: numbe
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
 }
 
+export function resolveTimelineMinimapTooltipTranslate(
+  positionIndex: number,
+  positionCount: number,
+): string {
+  if (positionIndex === 0) {
+    return "0%";
+  }
+  if (positionIndex === positionCount - 1) {
+    return "-100%";
+  }
+  return "-50%";
+}
+
 export function resolveTimelineMinimapIndexFromPointer(input: {
   readonly itemCount: number;
   readonly railTop: number;
@@ -61,18 +74,11 @@ export function resolveTimelineMinimapItemIndexFromPointer(input: {
   readonly pointerY: number;
 }): number | null {
   const firstItem = input.items[0];
-  if (!firstItem) {
+  if (!firstItem || input.railHeight <= 0) {
     return null;
   }
-  const targetPosition = resolveTimelineMinimapIndexFromPointer({
-    itemCount: firstItem.positionCount,
-    railTop: input.railTop,
-    railHeight: input.railHeight,
-    pointerY: input.pointerY,
-  });
-  if (targetPosition === null) {
-    return null;
-  }
+  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
+  const targetPosition = progress * Math.max(0, firstItem.positionCount - 1);
 
   let nearestItemIndex = 0;
   let nearestDistance = Number.POSITIVE_INFINITY;

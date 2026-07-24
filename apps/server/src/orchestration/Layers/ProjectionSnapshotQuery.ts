@@ -738,7 +738,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_turns
         WHERE state = 'completed'
           AND assistant_message_id IS NOT NULL
-        ORDER BY thread_id ASC, completed_at ASC, turn_id ASC
+        ORDER BY thread_id ASC, requested_at ASC
       `,
   });
 
@@ -1072,7 +1072,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND state = 'completed'
           AND assistant_message_id IS NOT NULL
-        ORDER BY completed_at ASC, turn_id ASC
+        ORDER BY requested_at ASC
       `,
   });
 

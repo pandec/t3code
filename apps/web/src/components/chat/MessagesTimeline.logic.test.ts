@@ -8,6 +8,7 @@ import {
   resolveAssistantMessageCopyState,
   resolveTimelineMinimapAriaLabel,
   resolveTimelineMinimapItemIndexFromPointer,
+  resolveTimelineMinimapTooltipTranslate,
 } from "./MessagesTimeline.logic";
 
 describe("resolveTimelineMinimapAriaLabel", () => {
@@ -56,6 +57,29 @@ describe("resolveTimelineMinimapItemIndexFromPointer", () => {
         pointerY: 160,
       }),
     ).toBe(0);
+  });
+
+  it("compares sparse markers against the continuous pointer position", () => {
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items: [
+          { positionIndex: 0, positionCount: 4 },
+          { positionIndex: 2, positionCount: 4 },
+        ],
+        railTop: 0,
+        railHeight: 24,
+        pointerY: 11,
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("resolveTimelineMinimapTooltipTranslate", () => {
+  it("only edge-clamps markers at the endpoints of the full turn space", () => {
+    expect(resolveTimelineMinimapTooltipTranslate(0, 5)).toBe("0%");
+    expect(resolveTimelineMinimapTooltipTranslate(1, 5)).toBe("-50%");
+    expect(resolveTimelineMinimapTooltipTranslate(3, 5)).toBe("-50%");
+    expect(resolveTimelineMinimapTooltipTranslate(4, 5)).toBe("-100%");
   });
 });
 

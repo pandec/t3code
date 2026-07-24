@@ -56,6 +56,7 @@ function mergeThreadMessageArtifacts(
   const refreshedById = new Map(refreshed.messages.map((message) => [message.id, message]));
   return {
     ...current,
+    completedTurnAssistantMessageIds: refreshed.completedTurnAssistantMessageIds,
     messages: current.messages.map((message) => {
       const refreshedMessage = refreshedById.get(message.id);
       if (refreshedMessage === undefined || refreshedMessage.text !== message.text) return message;

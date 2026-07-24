@@ -91,6 +91,7 @@ import {
   resolveTimelineMinimapItemIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  resolveTimelineMinimapTooltipTranslate,
   resolveTimelineMinimapAriaLabel,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -728,14 +729,9 @@ function TimelineMinimap({
           activeItem?.positionIndex ?? 0,
           activeItem?.positionCount ?? items.length,
         );
-  const activeTooltipTranslate =
-    resolvedActiveIndex === null
-      ? "-50%"
-      : resolvedActiveIndex === 0
-        ? "0%"
-        : resolvedActiveIndex === items.length - 1
-          ? "-100%"
-          : "-50%";
+  const activeTooltipTranslate = activeItem
+    ? resolveTimelineMinimapTooltipTranslate(activeItem.positionIndex, activeItem.positionCount)
+    : "-50%";
 
   const resolveActiveIndexFromPointer = useCallback(
     (event: MouseEvent<HTMLElement>) => {
