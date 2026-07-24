@@ -88,7 +88,7 @@ import {
   resolveTimelineMinimapHasPersistentGutter,
   resolveTimelineMinimapHeightStyle,
   resolveTimelineMinimapHitStripWidth,
-  resolveTimelineMinimapIndexFromPointer,
+  resolveTimelineMinimapItemIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   resolveTimelineMinimapAriaLabel,
@@ -195,6 +195,7 @@ interface MessagesTimelineProps {
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
+  completedTurnAssistantMessageIds: ReadonlySet<MessageId>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -233,6 +234,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   latestTurn,
   runningTurnId,
+  completedTurnAssistantMessageIds,
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
@@ -347,6 +349,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         timelineEntries,
         latestTurn,
         runningTurnId,
+        completedTurnAssistantMessageIds,
         expandedTurnIds,
         expandedWorkGroupIds,
         isWorking,
@@ -358,6 +361,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timelineEntries,
       latestTurn,
       runningTurnId,
+      completedTurnAssistantMessageIds,
       expandedTurnIds,
       expandedWorkGroupIds,
       isWorking,
@@ -720,7 +724,10 @@ function TimelineMinimap({
   const activeTopPercent =
     resolvedActiveIndex === null
       ? 0
-      : resolveTimelineMinimapTopPercent(resolvedActiveIndex, items.length);
+      : resolveTimelineMinimapTopPercent(
+          activeItem?.positionIndex ?? 0,
+          activeItem?.positionCount ?? items.length,
+        );
   const activeTooltipTranslate =
     resolvedActiveIndex === null
       ? "-50%"
@@ -733,14 +740,14 @@ function TimelineMinimap({
   const resolveActiveIndexFromPointer = useCallback(
     (event: MouseEvent<HTMLElement>) => {
       const rect = event.currentTarget.getBoundingClientRect();
-      return resolveTimelineMinimapIndexFromPointer({
-        itemCount: items.length,
+      return resolveTimelineMinimapItemIndexFromPointer({
+        items,
         railTop: rect.top,
         railHeight: rect.height,
         pointerY: event.clientY,
       });
     },
-    [items.length],
+    [items],
   );
 
   const updateActiveIndexFromPointer = useCallback(
@@ -838,7 +845,7 @@ function TimelineMinimap({
             event.preventDefault();
           }}
           style={{
-            height: resolveTimelineMinimapHeightStyle(items.length),
+            height: resolveTimelineMinimapHeightStyle(items[0]?.positionCount ?? items.length),
             width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
           }}
           type="button"
@@ -850,7 +857,10 @@ function TimelineMinimap({
             )}
           />
           {items.map((item, index) => {
-            const top = `${resolveTimelineMinimapTopPercent(index, items.length)}%`;
+            const top = `${resolveTimelineMinimapTopPercent(
+              item.positionIndex,
+              item.positionCount,
+            )}%`;
             const activeDistance =
               resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
             return (

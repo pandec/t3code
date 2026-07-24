@@ -39,6 +39,7 @@ const baseThread: OrchestrationThread = {
   settledAt: null,
   deletedAt: null,
   messages: [],
+  completedTurnAssistantMessageIds: [],
   proposedPlans: [],
   activities: [],
   checkpoints: [],
@@ -345,6 +346,7 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
         expect(result.thread.latestTurn?.state).toBe("completed");
         expect(result.thread.latestTurn?.assistantMessageId).toBe("msg-3");
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual(["msg-3"]);
       }
     });
 
@@ -393,6 +395,55 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.latestTurn?.state).toBe("running");
         expect(result.thread.latestTurn?.completedAt).toBeNull();
+      }
+    });
+
+    it("keeps an interrupted turn interrupted when late commentary arrives", () => {
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "claude",
+            runtimeMode: "full-access",
+            activeTurnId: TurnId.make("turn-1"),
+            lastError: null,
+            updatedAt: "2026-04-01T07:00:00.000Z",
+          },
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "interrupted",
+            requestedAt: "2026-04-01T07:00:00.000Z",
+            startedAt: "2026-04-01T07:00:00.000Z",
+            completedAt: "2026-04-01T07:00:05.000Z",
+            assistantMessageId: null,
+          },
+        },
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T07:00:06.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.message-sent",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            messageId: MessageId.make("msg-late-commentary"),
+            role: "assistant",
+            text: "Late commentary.",
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T07:00:06.000Z",
+            updatedAt: "2026-04-01T07:00:06.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.latestTurn?.state).toBe("interrupted");
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
       }
     });
   });
@@ -501,6 +552,51 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.latestTurn?.state).toBe("completed");
         expect(result.thread.latestTurn?.completedAt).toBe("2026-04-01T08:00:00.000Z");
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual(["msg-3"]);
+      }
+    });
+
+    it("does not retain terminal commentary when the session is interrupted", () => {
+      const commentaryMessageId = MessageId.make("msg-commentary");
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          completedTurnAssistantMessageIds: [commentaryMessageId],
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "running",
+            requestedAt: "2026-04-01T07:00:00.000Z",
+            startedAt: "2026-04-01T07:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: commentaryMessageId,
+          },
+        },
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T08:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "interrupted",
+              providerName: "claude",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-04-01T08:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.latestTurn?.state).toBe("interrupted");
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
       }
     });
 

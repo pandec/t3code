@@ -54,6 +54,42 @@ export function resolveTimelineMinimapIndexFromPointer(input: {
   return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
 }
 
+export function resolveTimelineMinimapItemIndexFromPointer(input: {
+  readonly items: ReadonlyArray<Pick<TimelineMinimapItem, "positionCount" | "positionIndex">>;
+  readonly railTop: number;
+  readonly railHeight: number;
+  readonly pointerY: number;
+}): number | null {
+  const firstItem = input.items[0];
+  if (!firstItem) {
+    return null;
+  }
+  const targetPosition = resolveTimelineMinimapIndexFromPointer({
+    itemCount: firstItem.positionCount,
+    railTop: input.railTop,
+    railHeight: input.railHeight,
+    pointerY: input.pointerY,
+  });
+  if (targetPosition === null) {
+    return null;
+  }
+
+  let nearestItemIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < input.items.length; index += 1) {
+    const item = input.items[index];
+    if (!item) {
+      continue;
+    }
+    const distance = Math.abs(item.positionIndex - targetPosition);
+    if (distance < nearestDistance) {
+      nearestItemIndex = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearestItemIndex;
+}
+
 export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number): boolean {
   if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
     return false;
@@ -131,8 +167,7 @@ export interface TimelineDurationMessage {
 export type TimelineLatestTurn = Pick<
   OrchestrationLatestTurn,
   "turnId" | "state" | "startedAt" | "completedAt"
-> &
-  Partial<Pick<OrchestrationLatestTurn, "assistantMessageId">>;
+>;
 
 export type MessagesTimelineRow =
   | {
@@ -189,6 +224,8 @@ export type TimelineMinimapKind = "user-turn" | "final-assistant";
 export interface TimelineMinimapItem {
   readonly id: string;
   readonly rowIndex: number;
+  readonly positionIndex: number;
+  readonly positionCount: number;
   readonly primaryText: string | null;
   readonly secondaryText: string | null;
 }
@@ -198,10 +235,18 @@ export function deriveTimelineMinimapItems(
   kind: TimelineMinimapKind,
 ): TimelineMinimapItem[] {
   const items: TimelineMinimapItem[] = [];
+  const positionCount = Math.max(
+    1,
+    rows.filter((row) => row.kind === "message" && row.message.role === "user").length,
+  );
+  let positionIndex = -1;
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     if (row?.kind !== "message") {
       continue;
+    }
+    if (row.message.role === "user") {
+      positionIndex += 1;
     }
 
     if (kind === "final-assistant") {
@@ -211,6 +256,8 @@ export function deriveTimelineMinimapItems(
       items.push({
         id: row.id,
         rowIndex: index,
+        positionIndex: Math.max(0, positionIndex),
+        positionCount,
         primaryText: compactMinimapPreview(row.message.text),
         secondaryText: null,
       });
@@ -223,6 +270,8 @@ export function deriveTimelineMinimapItems(
     items.push({
       id: row.id,
       rowIndex: index,
+      positionIndex: Math.max(0, positionIndex),
+      positionCount,
       primaryText: compactMinimapPreview(row.message.text),
       secondaryText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
     });
@@ -367,57 +416,6 @@ function deriveUnsettledTurnId(
   return isSettled ? null : latestTurn.turnId;
 }
 
-function timelineEntryHasTrailingTurnActivity(
-  timelineEntries: ReadonlyArray<TimelineEntry>,
-  entryIndex: number,
-  turnId: TurnId | null,
-): boolean {
-  if (turnId === null) {
-    return false;
-  }
-  for (let index = entryIndex + 1; index < timelineEntries.length; index += 1) {
-    const entry = timelineEntries[index];
-    if (!entry || (entry.kind === "message" && entry.message.role === "user")) {
-      return false;
-    }
-    if (entry.kind === "work" && entry.entry.turnId === turnId) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function resolveIsFinalAssistantResponse(input: {
-  timelineEntries: ReadonlyArray<TimelineEntry>;
-  entryIndex: number;
-  message: ChatMessage;
-  latestTurn: TimelineLatestTurn | null;
-  turnDiffSummary: TurnDiffSummary | undefined;
-}): boolean {
-  if (input.message.role !== "assistant") {
-    return false;
-  }
-
-  if (input.latestTurn?.turnId === input.message.turnId) {
-    return (
-      input.latestTurn.state === "completed" &&
-      input.latestTurn.completedAt !== null &&
-      (input.latestTurn.assistantMessageId === undefined ||
-        input.latestTurn.assistantMessageId === input.message.id)
-    );
-  }
-
-  if (input.turnDiffSummary) {
-    return input.turnDiffSummary.status === "ready";
-  }
-
-  return !timelineEntryHasTrailingTurnActivity(
-    input.timelineEntries,
-    input.entryIndex,
-    input.message.turnId,
-  );
-}
-
 /**
  * Settled turns fold their commentary and tool activity behind a
  * "Worked for ..." row anchored at the turn's first foldable entry; the
@@ -551,6 +549,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedWorkGroupIds?: ReadonlySet<string>;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
+  completedTurnAssistantMessageIds?: ReadonlySet<MessageId>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
@@ -697,13 +696,7 @@ export function deriveMessagesTimelineRows(input: {
       showAssistantMeta,
       isFinalAssistantResponse:
         showAssistantMeta &&
-        resolveIsFinalAssistantResponse({
-          timelineEntries: input.timelineEntries,
-          entryIndex: index,
-          message: timelineEntry.message,
-          latestTurn: input.latestTurn ?? null,
-          turnDiffSummary: assistantTurnDiffSummary,
-        }),
+        input.completedTurnAssistantMessageIds?.has(timelineEntry.message.id) === true,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
       assistantTurnDiffSummary,

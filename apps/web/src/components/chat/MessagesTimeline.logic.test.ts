@@ -7,6 +7,7 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineMinimapAriaLabel,
+  resolveTimelineMinimapItemIndexFromPointer,
 } from "./MessagesTimeline.logic";
 
 describe("resolveTimelineMinimapAriaLabel", () => {
@@ -29,6 +30,65 @@ describe("resolveTimelineMinimapAriaLabel", () => {
         side: "right",
       }),
     ).toBe(`Jump to agent response 2 of 3: ${"A".repeat(120)}`);
+  });
+});
+
+describe("resolveTimelineMinimapItemIndexFromPointer", () => {
+  it("selects the nearest rendered reply in the full turn-position space", () => {
+    const items = [
+      { positionIndex: 0, positionCount: 4 },
+      { positionIndex: 3, positionCount: 4 },
+    ];
+
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items,
+        railTop: 100,
+        railHeight: 300,
+        pointerY: 360,
+      }),
+    ).toBe(1);
+    expect(
+      resolveTimelineMinimapItemIndexFromPointer({
+        items,
+        railTop: 100,
+        railHeight: 300,
+        pointerY: 160,
+      }),
+    ).toBe(0);
+  });
+});
+
+describe("deriveTimelineMinimapItems", () => {
+  it("keeps sparse agent replies aligned with their user-turn positions", () => {
+    const messageRow = (
+      id: string,
+      role: "user" | "assistant",
+      isFinalAssistantResponse: boolean,
+    ) =>
+      ({
+        kind: "message",
+        id,
+        message: { id, role, text: id },
+        isFinalAssistantResponse,
+      }) as never;
+    const rows = [
+      messageRow("user-1", "user", false),
+      messageRow("assistant-1", "assistant", true),
+      messageRow("user-2", "user", false),
+      messageRow("assistant-commentary", "assistant", false),
+      messageRow("user-3", "user", false),
+      messageRow("assistant-3", "assistant", true),
+    ];
+
+    expect(
+      deriveTimelineMinimapItems(rows, "final-assistant").map(
+        ({ id, positionIndex, positionCount }) => ({ id, positionIndex, positionCount }),
+      ),
+    ).toEqual([
+      { id: "assistant-1", positionIndex: 0, positionCount: 3 },
+      { id: "assistant-3", positionIndex: 2, positionCount: 3 },
+    ]);
   });
 });
 
@@ -928,6 +988,7 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       expandedTurnIds: new Set(["turn-1" as never]),
+      completedTurnAssistantMessageIds: new Set(["assistant-final" as never]),
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
@@ -944,6 +1005,8 @@ describe("deriveMessagesTimelineRows", () => {
       {
         id: "user-prompt-entry",
         rowIndex: 0,
+        positionIndex: 0,
+        positionCount: 1,
         primaryText: "Please check this.",
         secondaryText: "Done.",
       },
@@ -952,6 +1015,8 @@ describe("deriveMessagesTimelineRows", () => {
       {
         id: "assistant-final-entry",
         rowIndex: 3,
+        positionIndex: 0,
+        positionCount: 1,
         primaryText: "Done.",
         secondaryText: null,
       },
@@ -1022,7 +1087,6 @@ describe("deriveMessagesTimelineRows", () => {
         state: "interrupted",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: "2026-01-01T00:00:12Z",
-        assistantMessageId: "assistant-commentary" as never,
       },
       isWorking: false,
       activeTurnStartedAt: null,

@@ -1791,7 +1791,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
-  it.effect("settles a superseded running turn when a new turn becomes active", () =>
+  it.effect("interrupts a superseded running turn when a new turn becomes active", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
@@ -1853,6 +1853,27 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         });
 
       yield* appendRunningSessionSet("evt-ts2", oldTurnId, "2026-01-01T00:00:01.000Z");
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-ts-commentary"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:15.000Z",
+        commandId: CommandId.make("cmd-ts-commentary"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-ts-commentary"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("assistant-steer-commentary"),
+          role: "assistant",
+          text: "Still working.",
+          turnId: oldTurnId,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:15.000Z",
+          updatedAt: "2026-01-01T00:00:15.000Z",
+        },
+      });
       // A steer: a new turn becomes active without the provider ever
       // completing the previous one.
       yield* appendRunningSessionSet("evt-ts3", newTurnId, "2026-01-01T00:00:30.000Z");
@@ -1863,15 +1884,25 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         readonly turnId: string;
         readonly state: string;
         readonly completedAt: string | null;
+        readonly assistantMessageId: string | null;
       }>`
-        SELECT turn_id AS "turnId", state, completed_at AS "completedAt"
+        SELECT
+          turn_id AS "turnId",
+          state,
+          completed_at AS "completedAt",
+          assistant_message_id AS "assistantMessageId"
         FROM projection_turns
         WHERE thread_id = ${threadId}
         ORDER BY requested_at
       `;
       assert.deepEqual(rows, [
-        { turnId: oldTurnId, state: "completed", completedAt: "2026-01-01T00:00:30.000Z" },
-        { turnId: newTurnId, state: "running", completedAt: null },
+        {
+          turnId: oldTurnId,
+          state: "interrupted",
+          completedAt: "2026-01-01T00:00:30.000Z",
+          assistantMessageId: "assistant-steer-commentary",
+        },
+        { turnId: newTurnId, state: "running", completedAt: null, assistantMessageId: null },
       ]);
     }),
   );
@@ -2131,6 +2162,28 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           },
         });
 
+        yield* appendAndProject({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("evt-conflict-6"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-conflict"),
+          occurredAt: "2026-02-26T13:00:05.000Z",
+          commandId: CommandId.make("cmd-conflict-6"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-conflict-6"),
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-conflict"),
+            turnId: TurnId.make("turn-interrupted"),
+            checkpointTurnCount: 2,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-conflict/turn/2"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("assistant-interrupted"),
+            completedAt: "2026-02-26T13:00:05.000Z",
+          },
+        });
+
         const turnRows = yield* sql<{
           readonly turnId: string;
           readonly checkpointTurnCount: number | null;
@@ -2152,7 +2205,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       `;
         assert.deepEqual(turnRows, [
           { turnId: "turn-completed", checkpointTurnCount: 1, status: "completed" },
-          { turnId: "turn-interrupted", checkpointTurnCount: null, status: "interrupted" },
+          { turnId: "turn-interrupted", checkpointTurnCount: 2, status: "interrupted" },
         ]);
       }),
   );

@@ -50,6 +50,7 @@ function makeThread(
     checkpoints: [],
     session: null,
     ...input,
+    completedTurnAssistantMessageIds: input.completedTurnAssistantMessageIds ?? [],
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledAt ?? null,
   };

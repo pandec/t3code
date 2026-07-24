@@ -76,6 +76,7 @@ export function applyThreadDetailEvent(
           settledAt: null,
           deletedAt: null,
           messages: [],
+          completedTurnAssistantMessageIds: [],
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -185,16 +186,21 @@ export function applyThreadDetailEvent(
       if (latestTurn === null || latestTurn.turnId !== event.payload.turnId) {
         return { kind: "unchanged" };
       }
+      const interruptedLatestTurn: OrchestrationLatestTurn = {
+        ...latestTurn,
+        state: "interrupted",
+        startedAt: latestTurn.startedAt ?? event.payload.createdAt,
+        completedAt: latestTurn.completedAt ?? event.payload.createdAt,
+      };
       return {
         kind: "updated",
         thread: {
           ...thread,
-          latestTurn: {
-            ...latestTurn,
-            state: "interrupted",
-            startedAt: latestTurn.startedAt ?? event.payload.createdAt,
-            completedAt: latestTurn.completedAt ?? event.payload.createdAt,
-          },
+          latestTurn: interruptedLatestTurn,
+          completedTurnAssistantMessageIds: reconcileCompletedTurnAssistantMessageIds(
+            thread.completedTurnAssistantMessageIds,
+            interruptedLatestTurn,
+          ),
           updatedAt: event.occurredAt,
         },
       };
@@ -277,13 +283,14 @@ export function applyThreadDetailEvent(
         (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
           ? {
               turnId: event.payload.turnId,
-              state: settlesTurn
-                ? thread.latestTurn?.state === "interrupted"
+              state:
+                thread.latestTurn?.state === "interrupted"
                   ? "interrupted"
                   : thread.latestTurn?.state === "error"
                     ? "error"
-                    : "completed"
-                : "running",
+                    : settlesTurn
+                      ? "completed"
+                      : "running",
               requestedAt:
                 thread.latestTurn?.turnId === event.payload.turnId
                   ? thread.latestTurn.requestedAt
@@ -318,6 +325,13 @@ export function applyThreadDetailEvent(
           messages,
           checkpoints,
           latestTurn,
+          completedTurnAssistantMessageIds:
+            event.payload.role === "assistant"
+              ? reconcileCompletedTurnAssistantMessageIds(
+                  thread.completedTurnAssistantMessageIds,
+                  latestTurn,
+                )
+              : thread.completedTurnAssistantMessageIds,
           updatedAt: event.occurredAt,
         },
       };
@@ -366,6 +380,10 @@ export function applyThreadDetailEvent(
           ...thread,
           session: event.payload.session,
           latestTurn,
+          completedTurnAssistantMessageIds: reconcileCompletedTurnAssistantMessageIds(
+            thread.completedTurnAssistantMessageIds,
+            latestTurn,
+          ),
           updatedAt: event.occurredAt,
         },
       };
@@ -440,7 +458,12 @@ export function applyThreadDetailEvent(
         (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
           ? {
               turnId: event.payload.turnId,
-              state: checkpointStatusToTurnState(event.payload.status),
+              state:
+                thread.latestTurn?.state === "interrupted"
+                  ? "interrupted"
+                  : thread.latestTurn?.state === "error"
+                    ? "error"
+                    : checkpointStatusToTurnState(event.payload.status),
               requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
               startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
               completedAt: event.payload.completedAt,
@@ -450,7 +473,16 @@ export function applyThreadDetailEvent(
 
       return {
         kind: "updated",
-        thread: { ...thread, checkpoints, latestTurn, updatedAt: event.occurredAt },
+        thread: {
+          ...thread,
+          checkpoints,
+          latestTurn,
+          completedTurnAssistantMessageIds: reconcileCompletedTurnAssistantMessageIds(
+            thread.completedTurnAssistantMessageIds,
+            latestTurn,
+          ),
+          updatedAt: event.occurredAt,
+        },
       };
     }
 
@@ -468,6 +500,7 @@ export function applyThreadDetailEvent(
 
       const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
       const messages = retainMessagesAfterRevert(thread.messages, retainedTurnIds);
+      const retainedMessageIds = new Set(Arr.map(messages, (message) => message.id));
       const proposedPlans = pipe(
         thread.proposedPlans,
         Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
@@ -484,6 +517,9 @@ export function applyThreadDetailEvent(
           ...thread,
           checkpoints,
           messages,
+          completedTurnAssistantMessageIds: thread.completedTurnAssistantMessageIds.filter(
+            (messageId) => retainedMessageIds.has(messageId),
+          ),
           proposedPlans,
           activities,
           latestTurn:
@@ -566,6 +602,21 @@ function checkpointStatusToTurnState(
     case "missing":
       return "completed";
   }
+}
+
+function reconcileCompletedTurnAssistantMessageIds(
+  messageIds: ReadonlyArray<MessageId>,
+  turn: OrchestrationLatestTurn | null,
+): MessageId[] {
+  const assistantMessageId = turn?.assistantMessageId ?? null;
+  if (assistantMessageId === null) {
+    return [...messageIds];
+  }
+
+  const withoutTurnMessage = messageIds.filter((messageId) => messageId !== assistantMessageId);
+  return turn?.state === "completed"
+    ? [...withoutTurnMessage, assistantMessageId]
+    : withoutTurnMessage;
 }
 
 function rebindCheckpointAssistantMessage(

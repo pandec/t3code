@@ -178,6 +178,7 @@ function buildProps() {
     listRef: createRef<LegendListRef | null>(),
     latestTurn: null,
     runningTurnId: null,
+    completedTurnAssistantMessageIds: new Set<MessageId>(),
     turnDiffSummaryByAssistantMessageId: new Map(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
@@ -459,6 +460,9 @@ describe("MessagesTimeline", () => {
           secondUserEntry,
           buildAssistantTimelineEntry("assistant-2", "Second final response.", "turn-2"),
         ]}
+        completedTurnAssistantMessageIds={
+          new Set([MessageId.make("assistant-1"), MessageId.make("assistant-2")])
+        }
       />,
     );
 

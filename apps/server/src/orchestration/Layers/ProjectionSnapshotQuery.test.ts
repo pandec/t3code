@@ -394,6 +394,36 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '[{"path":"README.md","kind":"modified","additions":2,"deletions":1}]'
         )
       `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id,
+          turn_id,
+          pending_message_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_turn_count,
+          checkpoint_ref,
+          checkpoint_status,
+          checkpoint_files_json
+        )
+        VALUES (
+          'thread-1',
+          'turn-interrupted',
+          NULL,
+          'message-interrupted-commentary',
+          'interrupted',
+          '2026-02-24T00:00:09.000Z',
+          '2026-02-24T00:00:09.000Z',
+          '2026-02-24T00:00:10.000Z',
+          NULL,
+          NULL,
+          NULL,
+          '[]'
+        )
+      `;
 
       let sequence = 5;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
@@ -496,6 +526,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               },
             },
           ],
+          completedTurnAssistantMessageIds: [asMessageId("message-1")],
           proposedPlans: [
             {
               id: "plan-1",

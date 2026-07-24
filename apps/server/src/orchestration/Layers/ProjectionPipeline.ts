@@ -1291,8 +1291,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
 
           // A new active turn supersedes any still-running turn on the same
-          // thread — steering can open a new turn without the provider ever
-          // completing the previous one.
+          // thread. Treat the old turn as interrupted: steering can open the
+          // new turn without a final assistant response from the old one.
           const otherRunningTurns = yield* projectionTurnRepository.listByThreadId({
             threadId: event.payload.threadId,
           });
@@ -1306,7 +1306,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                 : projectionTurnRepository.upsertByTurnId({
                     ...turn,
                     turnId: turn.turnId,
-                    state: "completed",
+                    state: "interrupted",
                     completedAt: event.payload.session.updatedAt,
                   }),
             { concurrency: 1 },
@@ -1395,18 +1395,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           // assistant messages per turn (commentary between tool calls), and
           // the turn must stay unsettled until the provider reports turn end
           // (projected as thread.session-set leaving the "running" status).
-          const session = yield* projectionThreadSessionRepository.getByThreadId({
-            threadId: event.payload.threadId,
-          });
-          const turnStillRunning =
-            Option.isSome(session) &&
-            session.value.status === "running" &&
-            session.value.activeTurnId === event.payload.turnId;
-          const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const turnStillRunning =
+            (Option.isSome(existingTurn) && existingTurn.value.state === "running") ||
+            (Option.isSome(session) &&
+              session.value.status === "running" &&
+              session.value.activeTurnId === event.payload.turnId);
+          const settlesTurn = !event.payload.streaming && !turnStillRunning;
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
@@ -1504,10 +1505,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
 
           if (Option.isSome(existingTurn)) {
+            const preservedTerminalState =
+              existingTurn.value.state === "interrupted" || existingTurn.value.state === "error"
+                ? existingTurn.value.state
+                : null;
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               assistantMessageId: event.payload.assistantMessageId,
-              state: turnStillRunning ? existingTurn.value.state : nextState,
+              state: turnStillRunning
+                ? existingTurn.value.state
+                : (preservedTerminalState ?? nextState),
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,

@@ -20,6 +20,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
     messages: [],
+    completedTurnAssistantMessageIds: [],
     checkpoints: [],
     activities: [],
     proposedPlans: [],
