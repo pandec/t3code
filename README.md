@@ -11,9 +11,9 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### Conversations & threads
 
-- **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread; forked threads are titled with a 🔱 prefix.
+- **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread, including immediately after importing an external session; forked threads are titled with a 🔱 prefix.
 - **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads, including strict resume/continuation and CLI-assigned session names in the import picker.
-- **Archived-thread search & grouping** — archived chats are searchable and grouped by project, with repository identity persisted so grouping survives project changes.
+- **Archived-thread search, grouping & project filtering** — archived chats are searchable, grouped, and filterable by project, with direct scoped access from project menus and persisted repository identity so grouping survives project changes.
 - **Archive undo** — press Command+Z outside the composer after archiving to restore the latest thread; an empty new-thread screen reopens it, while another active conversation stays in place.
 - **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes.
 - **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
@@ -24,7 +24,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### Voice
 
 - **Voice dictation** — ElevenLabs-powered voice transcription in the composer, including mobile.
-- **Message listening** — optional spoken versions of assistant messages with playback controls; per-turn summaries and speech artifacts are persisted, with mobile playback support.
+- **Message listening** — optional spoken versions of assistant messages with playback controls; per-message summaries and speech artifacts are persisted, with mobile playback support.
 
 ### Agents & skills
 
