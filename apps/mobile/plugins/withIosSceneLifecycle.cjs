@@ -1,7 +1,6 @@
 const { withAppDelegate, withInfoPlist } = require("expo/config-plugins");
 
 const SCENE_DELEGATE = `
-
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
 
@@ -66,7 +65,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       continue: userActivity,
       restorationHandler: { _ in })
   }
-}`;
+}
+`;
 
 module.exports = function withIosSceneLifecycle(config) {
   config = withInfoPlist(config, (nextConfig) => {
