@@ -34,6 +34,7 @@ import {
   resolveEmptyDraftIdForArchiveUndo,
 } from "../archiveUndo";
 import { hasComposerDraftContent, useComposerDraftStore } from "../composerDraftStore";
+import { draftSubmissionTracker } from "../draftSubmissionState";
 import { useUnarchiveThread } from "../hooks/useThreadActions";
 import {
   buildThreadRouteParams,
@@ -53,11 +54,12 @@ function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string
   }
   const composerState = useComposerDraftStore.getState();
   const draftSession = composerState.getDraftSession(target.draftId);
-  const hasMaterializedThread = Boolean(
-    draftSession &&
-    (draftSession.promotedTo ||
-      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
-  );
+  const hasMaterializedThread =
+    Boolean(
+      draftSession &&
+      (draftSession.promotedTo ||
+        readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
+    ) || draftSubmissionTracker.isInFlight(target.draftId);
   return resolveEmptyDraftIdForArchiveUndo(
     target,
     hasComposerDraftContent(composerState.getComposerDraft(target.draftId)),
