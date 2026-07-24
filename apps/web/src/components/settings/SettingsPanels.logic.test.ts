@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  archivedThreadMatchesProject,
   archivedThreadMatchesSearch,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
@@ -34,6 +35,17 @@ describe("archivedThreadMatchesSearch", () => {
 
   it("treats blank queries as unfiltered", () => {
     expect(archivedThreadMatchesSearch(candidate, "   ")).toBe(true);
+  });
+});
+
+describe("archivedThreadMatchesProject", () => {
+  it("matches every group without a project filter", () => {
+    expect(archivedThreadMatchesProject("project-a", null)).toBe(true);
+  });
+
+  it("matches only the selected logical project", () => {
+    expect(archivedThreadMatchesProject("project-a", "project-a")).toBe(true);
+    expect(archivedThreadMatchesProject("project-b", "project-a")).toBe(false);
   });
 });
 

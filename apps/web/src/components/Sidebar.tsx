@@ -1701,6 +1701,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
             buildTargetedItem("import-session", "Import CLI Session..."),
+            {
+              id: "unarchive",
+              label: "Unarchive...",
+            },
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1715,16 +1719,31 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
 
+        if (clicked === "unarchive") {
+          if (isMobile) {
+            setOpenMobile(false);
+          }
+          await router.navigate({
+            to: "/settings/archived",
+            search: { project: project.projectKey },
+          });
+          return;
+        }
+
         await actionHandlers.get(clicked)?.();
       })();
     },
     [
       copyPathToClipboard,
       handleRemoveProject,
+      isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
       project.groupedProjectCount,
       project.memberProjects,
+      project.projectKey,
+      router,
+      setOpenMobile,
       suppressProjectClickForContextMenuRef,
     ],
   );

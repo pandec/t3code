@@ -37,6 +37,13 @@ export function archivedThreadMatchesSearch(
   return searchTerms.every((term) => searchableText.includes(term));
 }
 
+export function archivedThreadMatchesProject(
+  groupKey: string,
+  projectFilterKey: string | null,
+): boolean {
+  return projectFilterKey === null || groupKey === projectFilterKey;
+}
+
 export function isProjectGroupingEnabled(mode: SidebarProjectGroupingMode): boolean {
   return mode !== "separate";
 }
