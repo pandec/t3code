@@ -80,6 +80,7 @@ import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
+  deriveTimelineMinimapItems,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
@@ -93,6 +94,7 @@ import {
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
+  type TimelineMinimapItem,
   type TimelineLatestTurn,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
@@ -257,7 +259,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
-  const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
+  const [userMinimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
+  const [assistantMinimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const userNavigationIntentUntilRef = useRef(0);
   const markUserNavigationIntent = useCallback(() => {
     userNavigationIntentUntilRef.current = performance.now() + 750;
@@ -363,7 +366,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
-  const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
+  const userMinimapItems = useMemo(() => deriveTimelineMinimapItems(rows, "user-turn"), [rows]);
+  const assistantMinimapItems = useMemo(
+    () => deriveTimelineMinimapItems(rows, "final-assistant"),
+    [rows],
+  );
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -406,30 +413,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         }
         onIsAtEndChange(isAtEnd, isUserNavigation);
       }
-      if (!state || minimapItems.length === 0) {
+      if (!state) {
         return;
       }
 
       const scrollTop = state.scroll ?? 0;
       const scrollBottom = scrollTop + (state.scrollLength ?? 0);
 
-      for (const item of minimapItems) {
-        const strip = minimapStripMap.get(item.id);
-        if (!strip) {
-          continue;
+      for (const [items, stripMap] of [
+        [userMinimapItems, userMinimapStripMap],
+        [assistantMinimapItems, assistantMinimapStripMap],
+      ] as const) {
+        for (const item of items) {
+          const strip = stripMap.get(item.id);
+          if (!strip) {
+            continue;
+          }
+
+          const rowTop = resolveTimelineRowTop(state, item.rowIndex);
+          const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
+          const inView =
+            rowTop !== null &&
+            rowTop < scrollBottom &&
+            rowTop + Math.max(1, rowHeight ?? 1) > scrollTop;
+
+          strip.dataset.inView = inView ? "true" : "false";
         }
-
-        const rowTop = resolveTimelineRowTop(state, item.rowIndex);
-        const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
-        const inView =
-          rowTop !== null &&
-          rowTop < scrollBottom &&
-          rowTop + Math.max(1, rowHeight ?? 1) > scrollTop;
-
-        strip.dataset.inView = inView ? "true" : "false";
       }
     },
-    [listRef, minimapItems, minimapStripMap, onIsAtEndChange],
+    [
+      assistantMinimapItems,
+      assistantMinimapStripMap,
+      listRef,
+      onIsAtEndChange,
+      userMinimapItems,
+      userMinimapStripMap,
+    ],
   );
 
   useEffect(() => {
@@ -604,11 +623,30 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap
-            items={minimapItems}
+            items={userMinimapItems}
             bottomInset={contentInsetEndAdjustment}
             hasPersistentGutter={minimapHasPersistentGutter}
             hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
+            side="left"
+            stripMap={userMinimapStripMap}
+            testId="timeline-minimap"
+            onSelect={(item) => {
+              onManualNavigation();
+              void listRef.current?.scrollToIndex({
+                index: item.rowIndex,
+                animated: true,
+                viewOffset: 24,
+              });
+            }}
+          />
+          <TimelineMinimap
+            items={assistantMinimapItems}
+            bottomInset={contentInsetEndAdjustment}
+            hasPersistentGutter={minimapHasPersistentGutter}
+            hitStripWidth={minimapHitStripWidth}
+            side="right"
+            stripMap={assistantMinimapStripMap}
+            testId="timeline-agent-minimap"
             onSelect={(item) => {
               onManualNavigation();
               void listRef.current?.scrollToIndex({
@@ -632,64 +670,12 @@ function getItemType(item: MessagesTimelineRow) {
   return item.kind === "message" ? `message:${item.message.role}` : item.kind;
 }
 
-interface TimelineMinimapItem {
-  readonly id: string;
-  readonly rowIndex: number;
-  readonly userText: string | null;
-  readonly assistantText: string | null;
-}
-
 interface TimelinePositionState {
   readonly contentLength?: number;
   readonly scroll?: number;
   readonly scrollLength?: number;
   readonly positionAtIndex?: (index: number) => number | undefined;
   readonly sizeAtIndex?: (index: number) => number | undefined;
-}
-
-function deriveTimelineMinimapItems(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-): TimelineMinimapItem[] {
-  const items: TimelineMinimapItem[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message" || row.message.role !== "user") {
-      continue;
-    }
-
-    items.push({
-      id: row.id,
-      rowIndex: index,
-      userText: compactMinimapPreview(row.message.text),
-      assistantText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
-    });
-  }
-  return items;
-}
-
-function resolveFinalAssistantTextForTurn(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  userRowIndex: number,
-) {
-  let finalAssistantText: string | null = null;
-  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "user") {
-      break;
-    }
-    if (row.message.role === "assistant") {
-      finalAssistantText = row.message.text ?? null;
-    }
-  }
-  return finalAssistantText;
-}
-
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
 }
 
 function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
@@ -711,14 +697,18 @@ function TimelineMinimap({
   hasPersistentGutter,
   hitStripWidth,
   items,
+  side,
   stripMap,
+  testId,
   onSelect,
 }: {
   bottomInset: number;
   hasPersistentGutter: boolean;
   hitStripWidth: number;
   items: ReadonlyArray<TimelineMinimapItem>;
+  side: "left" | "right";
   stripMap: Map<string, HTMLSpanElement>;
+  testId: string;
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -779,20 +769,25 @@ function TimelineMinimap({
   return (
     <div
       className={cn(
-        "group/minimap pointer-events-none absolute top-0 left-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
+        "group/minimap pointer-events-none absolute top-0 z-40 hidden w-18 [@media(pointer:fine)]:block",
+        side === "left" ? "left-0" : "right-0",
         hasPersistentGutter
           ? "opacity-100"
           : "opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
       )}
-      data-testid="timeline-minimap"
+      data-minimap-side={side}
+      data-testid={testId}
       data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
       style={{ bottom: safeBottomInset }}
     >
       <div className="relative h-full w-full select-none">
         <button
-          aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
+          aria-label={`Jump to message: ${
+            activeItem?.primaryText ?? (side === "left" ? "User message" : "Agent response")
+          }`}
           className={cn(
-            "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            "absolute top-1/2 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            side === "left" ? "left-3" : "right-3",
             // The strip is width-capped to the side gutter so it never overlays
             // the centered content column; with no usable gutter it goes inert.
             hitStripWidth > 0 ? "pointer-events-auto" : "pointer-events-none",
@@ -844,7 +839,12 @@ function TimelineMinimap({
           }}
           type="button"
         >
-          <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
+          <div
+            className={cn(
+              "absolute top-0 h-full w-px bg-border/15",
+              side === "left" ? "left-3" : "right-3",
+            )}
+          />
           {items.map((item, index) => {
             const top = `${resolveTimelineMinimapTopPercent(index, items.length)}%`;
             const activeDistance =
@@ -854,6 +854,7 @@ function TimelineMinimap({
                 aria-hidden="true"
                 className={cn(
                   "pointer-events-none absolute left-0 h-0.5 -translate-y-1/2 rounded-full bg-muted-foreground/35 transition-[background-color,width] duration-150 data-[in-view=true]:bg-foreground/90",
+                  side === "right" && "right-0 left-auto",
                   activeDistance === 0
                     ? "w-6 bg-muted-foreground/75"
                     : activeDistance === 1
@@ -878,7 +879,10 @@ function TimelineMinimap({
           })}
           {activeItem ? (
             <span
-              className="pointer-events-auto absolute left-8 w-80 cursor-text select-text"
+              className={cn(
+                "pointer-events-auto absolute w-80 cursor-text select-text",
+                side === "left" ? "left-8" : "right-8",
+              )}
               data-minimap-preview
               onMouseMove={(event) => event.stopPropagation()}
               style={{
@@ -888,9 +892,9 @@ function TimelineMinimap({
             >
               <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
                 <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
-                  {activeItem.userText ?? "User message"}
+                  {activeItem.primaryText ?? (side === "left" ? "User message" : "Agent response")}
                 </span>
-                {activeItem.assistantText ? (
+                {activeItem.secondaryText ? (
                   <span
                     className="mt-1 max-h-[3.75rem] overflow-hidden text-muted-foreground text-sm leading-5"
                     style={{
@@ -899,7 +903,7 @@ function TimelineMinimap({
                       WebkitLineClamp: 3,
                     }}
                   >
-                    {activeItem.assistantText}
+                    {activeItem.secondaryText}
                   </span>
                 ) : null}
               </span>

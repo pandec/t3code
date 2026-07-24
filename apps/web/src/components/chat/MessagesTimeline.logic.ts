@@ -181,6 +181,77 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
+export type TimelineMinimapKind = "user-turn" | "final-assistant";
+
+export interface TimelineMinimapItem {
+  readonly id: string;
+  readonly rowIndex: number;
+  readonly primaryText: string | null;
+  readonly secondaryText: string | null;
+}
+
+export function deriveTimelineMinimapItems(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  kind: TimelineMinimapKind,
+): TimelineMinimapItem[] {
+  const items: TimelineMinimapItem[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind !== "message") {
+      continue;
+    }
+
+    if (kind === "final-assistant") {
+      if (row.message.role !== "assistant" || !row.showAssistantMeta) {
+        continue;
+      }
+      items.push({
+        id: row.id,
+        rowIndex: index,
+        primaryText: compactMinimapPreview(row.message.text),
+        secondaryText: null,
+      });
+      continue;
+    }
+
+    if (row.message.role !== "user") {
+      continue;
+    }
+    items.push({
+      id: row.id,
+      rowIndex: index,
+      primaryText: compactMinimapPreview(row.message.text),
+      secondaryText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
+    });
+  }
+  return items;
+}
+
+function resolveFinalAssistantTextForTurn(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  userRowIndex: number,
+) {
+  let finalAssistantText: string | null = null;
+  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind !== "message") {
+      continue;
+    }
+    if (row.message.role === "user") {
+      break;
+    }
+    if (row.message.role === "assistant") {
+      finalAssistantText = row.message.text ?? null;
+    }
+  }
+  return finalAssistantText;
+}
+
+function compactMinimapPreview(text: string | null | undefined) {
+  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
+  return compact.length > 0 ? compact : null;
+}
+
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Map<string, string> {

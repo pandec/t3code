@@ -223,6 +223,23 @@ function buildUserTimelineEntry(text: string) {
   };
 }
 
+function buildAssistantTimelineEntry(id: string, text: string, turnId: string) {
+  return {
+    id: `entry-${id}`,
+    kind: "message" as const,
+    createdAt: MESSAGE_CREATED_AT,
+    message: {
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId: TurnId.make(turnId),
+      createdAt: MESSAGE_CREATED_AT,
+      updatedAt: MESSAGE_CREATED_AT,
+      streaming: false,
+    },
+  };
+}
+
 describe("MessagesTimeline", () => {
   it("shows the listening action only when text-to-speech is available", () => {
     const timelineEntries = [
@@ -421,6 +438,38 @@ describe("MessagesTimeline", () => {
     expect(resolveTimelineMinimapInteractiveWidth(0, true)).toBe("22rem");
     expect(resolveTimelineMinimapInteractiveWidth(14, true)).toBe("22rem");
     expect(resolveTimelineMinimapInteractiveWidth(40, true)).toBe("22rem");
+  });
+
+  it("renders a mirrored navigator for final agent responses", () => {
+    const firstUserEntry = buildUserTimelineEntry("First prompt.");
+    const secondUserEntry = {
+      ...buildUserTimelineEntry("Second prompt."),
+      id: "entry-user-2",
+      message: {
+        ...buildUserTimelineEntry("Second prompt.").message,
+        id: MessageId.make("message-user-2"),
+      },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          firstUserEntry,
+          buildAssistantTimelineEntry("assistant-1", "First final response.", "turn-1"),
+          secondUserEntry,
+          buildAssistantTimelineEntry("assistant-2", "Second final response.", "turn-2"),
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="timeline-minimap"');
+    expect(markup).toContain('data-minimap-side="left"');
+    expect(markup).toContain('aria-label="Jump to message: User message"');
+    expect(markup).toContain('data-testid="timeline-agent-minimap"');
+    expect(markup).toContain('data-minimap-side="right"');
+    expect(markup).toContain('aria-label="Jump to message: Agent response"');
+    expect(markup).toContain("right-0");
+    expect(markup).toContain("right-3");
   });
 
   it("anchors a sent attachment message using its measured height", () => {

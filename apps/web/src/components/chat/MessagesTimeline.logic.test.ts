@@ -3,6 +3,7 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  deriveTimelineMinimapItems,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
@@ -859,6 +860,20 @@ describe("deriveMessagesTimelineRows", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
+          id: "user-prompt-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-prompt" as never,
+            role: "user",
+            text: "Please check this.",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
           id: "assistant-thought-entry",
           kind: "message",
           createdAt: "2026-01-01T00:00:10Z",
@@ -900,6 +915,22 @@ describe("deriveMessagesTimelineRows", () => {
     );
 
     expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(deriveTimelineMinimapItems(rows, "user-turn")).toEqual([
+      {
+        id: "user-prompt-entry",
+        rowIndex: 0,
+        primaryText: "Please check this.",
+        secondaryText: "Done.",
+      },
+    ]);
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([
+      {
+        id: "assistant-final-entry",
+        rowIndex: 3,
+        primaryText: "Done.",
+        secondaryText: null,
+      },
+    ]);
   });
 
   it("withholds assistant metadata while the active turn is still in progress", () => {
@@ -939,6 +970,7 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(assistantRow?.showAssistantMeta).toBe(false);
     expect(assistantRow?.showAssistantCopyButton).toBe(false);
+    expect(deriveTimelineMinimapItems(rows, "final-assistant")).toEqual([]);
   });
 
   it("models work log overflow expansion as inserted list rows", () => {
