@@ -18,6 +18,8 @@ const clientSettings: ClientSettings = {
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
+  enableTurnCompletionToasts: false,
+  enableTurnCompletionSystemNotifications: false,
   favorites: [],
   glassOpacity: 80,
   providerModelPreferences: {},
