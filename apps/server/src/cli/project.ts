@@ -33,6 +33,7 @@ import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig }
 import {
   CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationRequestError,
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
@@ -126,6 +127,7 @@ export const ProjectCommandError = Schema.Union([
   CliOrchestrationUndeclaredStatusError,
   CliOrchestrationRequestError,
   CliOrchestrationConflictError,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationServerUnavailableError,
   ProjectTitleEmptyError,
   ProjectIdentifierEmptyError,

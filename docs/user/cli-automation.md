@@ -53,6 +53,10 @@ changed the actions after the CLI read them, the mutation fails with a conflict;
 again and retry. The CLI also verifies that the running server supports conditional action updates
 before writing; update and restart T3 Code if it reports an incompatible server.
 
+Mutation acknowledgement is bounded. If the connection is lost after dispatch, the CLI reports that
+the outcome is unknown because the server may still have committed the command. List the actions and
+reconcile their current state before retrying; do not blindly repeat the mutation.
+
 Only one action can run automatically when a worktree is created. Adding or updating an action with
 `--run-on-worktree-create` disables that setting on the previous setup action and reports its id in
 human and JSON output.

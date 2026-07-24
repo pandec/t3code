@@ -1,6 +1,7 @@
 import {
   AuthAdministrativeScopes,
-  type ClientOrchestrationCommand,
+  ClientOrchestrationCommand,
+  DispatchResult,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
   EnvironmentHttpConflictError,
@@ -22,6 +23,12 @@ import {
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
+const decodeEnvironmentHttpCommonError = Schema.decodeUnknownOption(EnvironmentHttpCommonError);
+const decodeEnvironmentHttpConflictError = Schema.decodeUnknownOption(EnvironmentHttpConflictError);
+const decodeDispatchResult = Schema.decodeUnknownEffect(DispatchResult);
+const encodeClientOrchestrationCommandJson = Schema.encodeSync(
+  Schema.fromJsonString(ClientOrchestrationCommand),
+);
 
 export class CliOrchestrationDeclaredResponseError extends Schema.TaggedErrorClass<CliOrchestrationDeclaredResponseError>()(
   "CliOrchestrationDeclaredResponseError",
@@ -75,6 +82,18 @@ export class CliOrchestrationConflictError extends Schema.TaggedErrorClass<CliOr
   }
 }
 
+export class CliOrchestrationOutcomeUnknownError extends Schema.TaggedErrorClass<CliOrchestrationOutcomeUnknownError>()(
+  "CliOrchestrationOutcomeUnknownError",
+  {
+    operation: Schema.Literal("dispatchLiveServer"),
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "The server acknowledgement was lost, so this command may have completed. Inspect the current state before retrying.";
+  }
+}
+
 export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorClass<CliOrchestrationServerUnavailableError>()(
   "CliOrchestrationServerUnavailableError",
   {
@@ -86,6 +105,9 @@ export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorCl
     return "No running T3 Code server was found for this data directory.";
   }
 }
+
+const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
+const isCliOrchestrationUndeclaredStatusError = Schema.is(CliOrchestrationUndeclaredStatusError);
 
 export type CliOrchestrationCallError =
   | CliOrchestrationDeclaredResponseError
@@ -120,8 +142,114 @@ export function cliOrchestrationErrorFromRequest(cause: unknown): CliOrchestrati
 }
 
 const CLI_LIVE_SERVER_READ_TIMEOUT = Duration.seconds(1);
+const CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS = 30_000;
 const withLiveServerReadTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.timeout(CLI_LIVE_SERVER_READ_TIMEOUT));
+
+interface DispatchAcknowledgement {
+  readonly response: Response;
+  readonly payload: unknown;
+}
+
+const fetchDispatchAcknowledgement = (
+  origin: string,
+  bearerToken: string,
+  command: ClientOrchestrationCommand,
+  timeoutMilliseconds: number,
+): Effect.Effect<
+  DispatchAcknowledgement,
+  CliOrchestrationOutcomeUnknownError | CliOrchestrationUndeclaredStatusError
+> =>
+  Effect.callback((resume) => {
+    let settled = false;
+    let responseStatus: number | undefined;
+    let responseOk: boolean | undefined;
+    const controller = new AbortController();
+    const finish = (
+      result: Effect.Effect<
+        DispatchAcknowledgement,
+        CliOrchestrationOutcomeUnknownError | CliOrchestrationUndeclaredStatusError
+      >,
+    ): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      resume(result);
+    };
+    // @effect-diagnostics-next-line globalTimersInEffect:off - transport acknowledgement needs a hard deadline even when fetch ignores interruption.
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      resume(
+        Effect.fail(
+          responseOk === false && responseStatus !== undefined
+            ? new CliOrchestrationUndeclaredStatusError({
+                operation: "callLiveServer",
+                status: responseStatus,
+                cause: new Error("Server error acknowledgement timed out."),
+              })
+            : new CliOrchestrationOutcomeUnknownError({
+                operation: "dispatchLiveServer",
+                cause: new Error("Server acknowledgement timed out."),
+              }),
+        ),
+      );
+    }, timeoutMilliseconds);
+    // @effect-diagnostics-next-line globalFetchInEffect:off - explicit AbortController ownership is required to bound acknowledgement body reads.
+    globalThis
+      .fetch(new URL("/api/orchestration/dispatch", origin), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        body: encodeClientOrchestrationCommandJson(command),
+        signal: controller.signal,
+      })
+      .then(async (response) => {
+        responseStatus = response.status;
+        responseOk = response.ok;
+        try {
+          return {
+            response,
+            payload: await response.json(),
+          };
+        } catch (cause) {
+          throw response.ok
+            ? new CliOrchestrationOutcomeUnknownError({
+                operation: "dispatchLiveServer",
+                cause,
+              })
+            : new CliOrchestrationUndeclaredStatusError({
+                operation: "callLiveServer",
+                status: response.status,
+                cause,
+              });
+        }
+      })
+      .then(
+        (acknowledgement) => finish(Effect.succeed(acknowledgement)),
+        (cause: unknown) =>
+          finish(
+            Effect.fail(
+              isCliOrchestrationOutcomeUnknownError(cause) ||
+                isCliOrchestrationUndeclaredStatusError(cause)
+                ? cause
+                : new CliOrchestrationOutcomeUnknownError({
+                    operation: "dispatchLiveServer",
+                    cause,
+                  }),
+            ),
+          ),
+      );
+    return Effect.sync(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      controller.abort();
+    });
+  });
 
 const makeLiveServerClient = (origin: string) =>
   HttpApiClient.make(EnvironmentHttpApi, {
@@ -165,14 +293,44 @@ export const dispatchLiveOrchestrationCommand = (
   origin: string,
   bearerToken: string,
   command: ClientOrchestrationCommand,
+  options?: {
+    readonly timeoutMilliseconds?: number;
+  },
 ) =>
   Effect.gen(function* () {
-    const client = yield* makeLiveServerClient(origin);
-    return yield* client.orchestration.dispatch({
-      headers: { authorization: `Bearer ${bearerToken}` },
-      payload: command,
-    } as Parameters<typeof client.orchestration.dispatch>[0]);
-  }).pipe(Effect.mapError(cliOrchestrationErrorFromRequest));
+    const { response, payload: responsePayload } = yield* fetchDispatchAcknowledgement(
+      origin,
+      bearerToken,
+      command,
+      options?.timeoutMilliseconds === undefined
+        ? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS
+        : options.timeoutMilliseconds,
+    );
+    if (!response.ok) {
+      const conflict = decodeEnvironmentHttpConflictError(responsePayload);
+      if (Option.isSome(conflict)) {
+        return yield* cliOrchestrationErrorFromRequest(conflict.value);
+      }
+      const declared = decodeEnvironmentHttpCommonError(responsePayload);
+      if (Option.isSome(declared)) {
+        return yield* cliOrchestrationErrorFromRequest(declared.value);
+      }
+      return yield* new CliOrchestrationUndeclaredStatusError({
+        operation: "callLiveServer",
+        status: response.status,
+        cause: responsePayload,
+      });
+    }
+    return yield* decodeDispatchResult(responsePayload).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CliOrchestrationOutcomeUnknownError({
+            operation: "dispatchLiveServer",
+            cause,
+          }),
+      ),
+    );
+  });
 
 export interface CliLiveOrchestrationServer {
   readonly origin: string;

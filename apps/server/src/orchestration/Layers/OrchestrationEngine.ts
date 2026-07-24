@@ -51,6 +51,16 @@ const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
 );
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 const REPOSITORY_IDENTITY_ENRICHMENT_TIMEOUT = Duration.seconds(3);
+const ProjectActionReceiptRejection = Schema.fromJsonString(
+  Schema.Struct({
+    code: Schema.Literals(["project_actions_changed", "project_actions_precondition_required"]),
+    detail: Schema.String,
+  }),
+);
+const encodeProjectActionReceiptRejection = Schema.encodeSync(ProjectActionReceiptRejection);
+const decodeProjectActionReceiptRejection = Schema.decodeUnknownOption(
+  ProjectActionReceiptRejection,
+);
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
@@ -203,6 +213,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               sequence: existingReceipt.value.resultSequence,
             };
           }
+          const projectActionRejection = decodeProjectActionReceiptRejection(
+            existingReceipt.value.error ?? "",
+          );
+          if (Option.isSome(projectActionRejection)) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: envelope.command.type,
+              code: projectActionRejection.value.code,
+              detail: projectActionRejection.value.detail,
+            });
+          }
           return yield* new OrchestrationCommandPreviouslyRejectedError({
             commandId: envelope.command.commandId,
             detail: existingReceipt.value.error ?? "Previously rejected.",
@@ -347,7 +367,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   acceptedAt: yield* nowIso,
                   resultSequence: commandReadModel.snapshotSequence,
                   status: "rejected",
-                  error: error.message,
+                  error:
+                    error.code === undefined
+                      ? error.message
+                      : encodeProjectActionReceiptRejection({
+                          code: error.code,
+                          detail: error.detail,
+                        }),
                 })
                 .pipe(Effect.catch(() => Effect.void));
             }

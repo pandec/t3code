@@ -204,6 +204,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      if (command.scripts !== undefined && command.expectedScripts === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          code: "project_actions_precondition_required",
+          detail: "Project action updates require the actions that were read.",
+        });
+      }
       if (
         command.expectedScripts !== undefined &&
         !Equal.equals(command.expectedScripts, project.scripts)

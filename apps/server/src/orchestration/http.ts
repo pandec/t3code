@@ -90,10 +90,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               Effect.gen(function* () {
                 if (
                   isOrchestrationCommandInvariantError(cause) &&
-                  cause.code === "project_actions_changed"
+                  (cause.code === "project_actions_changed" ||
+                    cause.code === "project_actions_precondition_required")
                 ) {
                   return yield* new EnvironmentHttpConflictError({
-                    message: "Project actions changed after they were read. List them and retry.",
+                    message:
+                      cause.code === "project_actions_changed"
+                        ? "Project actions changed after they were read. List them and retry."
+                        : "This client cannot safely update project actions. Update or refresh T3 Code, then retry.",
                   });
                 }
                 return yield* failEnvironmentInternal("orchestration_dispatch_failed", cause);

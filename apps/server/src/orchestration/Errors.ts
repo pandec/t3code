@@ -32,7 +32,9 @@ export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<
   {
     commandType: Schema.String,
     detail: Schema.String,
-    code: Schema.optional(Schema.Literal("project_actions_changed")),
+    code: Schema.optional(
+      Schema.Literals(["project_actions_changed", "project_actions_precondition_required"]),
+    ),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
