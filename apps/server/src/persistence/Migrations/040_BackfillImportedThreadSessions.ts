@@ -3,35 +3,61 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
  * Imports created before migration 040 persisted a provider binding and
- * history, but no projected session. Restore only rows whose import event and
- * resumable stopped binding agree, leaving binding-only orphans untouched.
+ * history, but no session event. Append the missing canonical event only when
+ * the import and resumable stopped binding agree, leaving binding-only orphans
+ * untouched and keeping projection rebuilds deterministic.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    INSERT OR IGNORE INTO projection_thread_sessions (
-      thread_id,
-      status,
-      provider_name,
-      provider_instance_id,
-      runtime_mode,
-      active_turn_id,
-      last_error,
-      updated_at
+    INSERT OR IGNORE INTO orchestration_events (
+      event_id,
+      aggregate_kind,
+      stream_id,
+      stream_version,
+      event_type,
+      occurred_at,
+      command_id,
+      causation_event_id,
+      correlation_id,
+      actor_kind,
+      payload_json,
+      metadata_json
     )
     SELECT
+      'migration-040-import-session:' || threads.thread_id,
+      'thread',
       threads.thread_id,
-      'stopped',
-      runtime.provider_name,
-      COALESCE(
-        runtime.provider_instance_id,
-        json_extract(threads.model_selection_json, '$.instanceId')
+      (
+        SELECT COALESCE(MAX(existing.stream_version), -1) + 1
+        FROM orchestration_events AS existing
+        WHERE existing.aggregate_kind = 'thread'
+          AND existing.stream_id = threads.thread_id
       ),
-      runtime.runtime_mode,
+      'thread.session-set',
+      runtime.last_seen_at,
       NULL,
       NULL,
-      runtime.last_seen_at
+      NULL,
+      'server',
+      json_object(
+        'threadId', threads.thread_id,
+        'session', json_object(
+          'threadId', threads.thread_id,
+          'status', 'stopped',
+          'providerName', runtime.provider_name,
+          'providerInstanceId', COALESCE(
+            runtime.provider_instance_id,
+            json_extract(threads.model_selection_json, '$.instanceId')
+          ),
+          'runtimeMode', runtime.runtime_mode,
+          'activeTurnId', NULL,
+          'lastError', NULL,
+          'updatedAt', runtime.last_seen_at
+        )
+      ),
+      json_object('migration', 40)
     FROM projection_threads AS threads
     INNER JOIN provider_session_runtime AS runtime
       ON runtime.thread_id = threads.thread_id
