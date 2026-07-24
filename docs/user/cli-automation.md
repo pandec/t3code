@@ -50,7 +50,8 @@ these commands.
 Action listing works with or without a running T3 server. Adding, updating, and removing actions
 requires the server so concurrent UI and CLI edits can be serialized safely. If another client
 changed the actions after the CLI read them, the mutation fails with a conflict; list the actions
-again and retry.
+again and retry. The CLI also verifies that the running server supports conditional action updates
+before writing; update and restart T3 Code if it reports an incompatible server.
 
 Only one action can run automatically when a worktree is created. Adding or updating an action with
 `--run-on-worktree-create` disables that setting on the previous setup action and reports its id in

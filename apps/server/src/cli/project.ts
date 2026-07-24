@@ -38,6 +38,7 @@ import {
   CliOrchestrationUndeclaredStatusError,
   cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
+  fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationSnapshot,
   tryResolveLiveOrchestrationServer,
   withCliOrchestrationSession,
@@ -107,6 +108,18 @@ export class ProjectAlreadyExistsError extends Schema.TaggedErrorClass<ProjectAl
   }
 }
 
+export class ProjectActionServerUnsupportedError extends Schema.TaggedErrorClass<ProjectActionServerUnsupportedError>()(
+  "ProjectActionServerUnsupportedError",
+  {
+    operation: Schema.Literal("validateProjectActionServerCapability"),
+    serverVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The running T3 Code server (${this.serverVersion}) does not support safe project action updates. Update and restart T3 Code, then retry.`;
+  }
+}
+
 export const ProjectCommandError = Schema.Union([
   ProjectCommandIdGenerationError,
   CliOrchestrationDeclaredResponseError,
@@ -118,6 +131,7 @@ export const ProjectCommandError = Schema.Union([
   ProjectIdentifierEmptyError,
   ProjectNotFoundError,
   ProjectAlreadyExistsError,
+  ProjectActionServerUnsupportedError,
   ProjectActionAlreadyExistsError,
   ProjectActionNotFoundError,
   ProjectActionValidationError,
@@ -192,6 +206,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   >,
   options?: {
     readonly requireLive?: boolean;
+    readonly requireConditionalProjectScriptUpdates?: boolean;
   },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
@@ -207,6 +222,15 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     );
 
     if (Option.isSome(liveMode)) {
+      if (options?.requireConditionalProjectScriptUpdates) {
+        const descriptor = yield* fetchLiveEnvironmentDescriptor(liveMode.value.origin);
+        if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
+          return yield* new ProjectActionServerUnsupportedError({
+            operation: "validateProjectActionServerCapability",
+            serverVersion: descriptor.serverVersion,
+          });
+        }
+      }
       return yield* withCliOrchestrationSession(environmentAuth, "t3 project cli", (token) =>
         Effect.gen(function* () {
           const snapshot = yield* fetchLiveOrchestrationSnapshot(liveMode.value.origin, token);
@@ -552,7 +576,7 @@ const projectActionAddCommand = Command.make("add", {
             })
           : `Added action ${result.action.id} (${result.action.name}) to project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`;
       }),
-      { requireLive: true },
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
     ),
   ),
 );
@@ -638,7 +662,7 @@ const projectActionUpdateCommand = Command.make("update", {
             ? `Updated action ${result.action.id} (${result.action.name}) in project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`
             : `Action ${result.action.id} is unchanged.`;
       }),
-      { requireLive: true },
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
     ),
   ),
 );
@@ -679,7 +703,7 @@ const projectActionRemoveCommand = Command.make("remove", {
             })
           : `Removed action ${result.action.id} (${result.action.name}) from project ${project.id}.`;
       }),
-      { requireLive: true },
+      { requireLive: true, requireConditionalProjectScriptUpdates: true },
     ),
   ),
 );

@@ -119,9 +119,9 @@ export function cliOrchestrationErrorFromRequest(cause: unknown): CliOrchestrati
   return new CliOrchestrationRequestError({ operation: "callLiveServer", cause });
 }
 
-const CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(1);
-const withLiveServerTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.timeout(CLI_LIVE_SERVER_TIMEOUT));
+const CLI_LIVE_SERVER_READ_TIMEOUT = Duration.seconds(1);
+const withLiveServerReadTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.timeout(CLI_LIVE_SERVER_READ_TIMEOUT));
 
 const makeLiveServerClient = (origin: string) =>
   HttpApiClient.make(EnvironmentHttpApi, {
@@ -145,7 +145,7 @@ export const fetchLiveOrchestrationSnapshot = (origin: string, bearerToken: stri
     return yield* client.orchestration.snapshot({
       headers: { authorization: `Bearer ${bearerToken}` },
     });
-  }).pipe(withLiveServerTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
 
 export const fetchLiveOrchestrationShell = (origin: string, bearerToken: string) =>
   Effect.gen(function* () {
@@ -153,7 +153,13 @@ export const fetchLiveOrchestrationShell = (origin: string, bearerToken: string)
     return yield* client.orchestration.shellSnapshot({
       headers: { authorization: `Bearer ${bearerToken}` },
     });
-  }).pipe(withLiveServerTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+
+export const fetchLiveEnvironmentDescriptor = (origin: string) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.metadata.descriptor();
+  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
 
 export const dispatchLiveOrchestrationCommand = (
   origin: string,
@@ -166,7 +172,7 @@ export const dispatchLiveOrchestrationCommand = (
       headers: { authorization: `Bearer ${bearerToken}` },
       payload: command,
     } as Parameters<typeof client.orchestration.dispatch>[0]);
-  }).pipe(withLiveServerTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(Effect.mapError(cliOrchestrationErrorFromRequest));
 
 export interface CliLiveOrchestrationServer {
   readonly origin: string;

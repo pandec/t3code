@@ -2822,6 +2822,7 @@ function ChatViewContent(props: ChatViewProps) {
           environmentId,
           input: {
             projectId: input.projectId,
+            expectedScripts: input.previousScripts,
             scripts: input.nextScripts,
           },
         }),
