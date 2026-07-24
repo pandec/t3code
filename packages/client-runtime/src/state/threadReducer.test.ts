@@ -946,6 +946,48 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.completedTurnAssistantMessageIds).toEqual(["msg-final"]);
       }
     });
+
+    it("removes the prior completed response when a terminal checkpoint has no message ID", () => {
+      const previousMessageId = MessageId.make("msg-final");
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          completedTurnAssistantMessageIds: [previousMessageId],
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
+            requestedAt: "2026-04-01T11:59:00.000Z",
+            startedAt: "2026-04-01T11:59:00.000Z",
+            completedAt: "2026-04-01T11:59:30.000Z",
+            assistantMessageId: previousMessageId,
+          },
+        },
+        {
+          ...baseEventFields,
+          sequence: 15,
+          occurredAt: "2026-04-01T12:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.turn-diff-completed",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            turnId: TurnId.make("turn-1"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("ref-error"),
+            status: "error",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-04-01T12:00:00.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.latestTurn?.state).toBe("error");
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
+      }
+    });
   });
 
   describe("thread.reverted", () => {

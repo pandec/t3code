@@ -617,7 +617,10 @@ function reconcileCompletedTurnAssistantMessageIds(
 ): ReadonlyArray<MessageId> {
   const assistantMessageId = turn?.assistantMessageId ?? null;
   if (assistantMessageId === null) {
-    return messageIds;
+    if (previousAssistantMessageId === null || !messageIds.includes(previousAssistantMessageId)) {
+      return messageIds;
+    }
+    return messageIds.filter((messageId) => messageId !== previousAssistantMessageId);
   }
 
   const shouldInclude = turn?.state === "completed";

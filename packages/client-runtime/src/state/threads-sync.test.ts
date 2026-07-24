@@ -424,7 +424,11 @@ describe("EnvironmentThreads", () => {
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z",
       };
-      const cachedThread: OrchestrationThread = { ...BASE_THREAD, messages: [message] };
+      const cachedThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        messages: [message],
+        completedTurnAssistantMessageIds: [message.id],
+      };
       const snapshotLoadGate = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
         cached: cachedThread,
@@ -433,6 +437,7 @@ describe("EnvironmentThreads", () => {
           snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
           thread: {
             ...cachedThread,
+            completedTurnAssistantMessageIds: [],
             messages: [
               {
                 ...message,
@@ -462,6 +467,9 @@ describe("EnvironmentThreads", () => {
           value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
       );
       expect(Option.getOrThrow(hydrated.data).title).toBe("Live title");
+      expect(Option.getOrThrow(hydrated.data).completedTurnAssistantMessageIds).toEqual([
+        message.id,
+      ]);
     }),
   );
 

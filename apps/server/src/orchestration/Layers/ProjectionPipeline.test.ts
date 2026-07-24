@@ -96,6 +96,27 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           },
         });
         yield* eventStore.append({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("copy-checkpoint-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-checkpoint-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-checkpoint-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            turnId: TurnId.make("source-turn"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/copy-source/turn/1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("source-assistant"),
+            completedAt: now,
+          },
+        });
+        yield* eventStore.append({
           type: "thread.message-sent",
           eventId: EventId.make("copy-assistant-event"),
           aggregateKind: "thread",
@@ -167,8 +188,14 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
         const turnRows = yield* sql<{
           readonly state: string;
           readonly assistantMessageId: string | null;
+          readonly checkpointTurnCount: number | null;
+          readonly checkpointRef: string | null;
         }>`
-        SELECT state, assistant_message_id AS "assistantMessageId"
+        SELECT
+          state,
+          assistant_message_id AS "assistantMessageId",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef"
         FROM projection_turns
         WHERE thread_id = ${destinationThreadId}
       `;
@@ -176,6 +203,8 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           {
             state: "completed",
             assistantMessageId: `fork:${destinationThreadId}:source-assistant`,
+            checkpointTurnCount: null,
+            checkpointRef: null,
           },
         ]);
       }),

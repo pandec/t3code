@@ -52,11 +52,14 @@ function shouldPersistThread(thread: OrchestrationThread): boolean {
 function mergeThreadMessageArtifacts(
   current: OrchestrationThread,
   refreshed: OrchestrationThread,
+  hydrateCompletedResponseIds: boolean,
 ): OrchestrationThread {
   const refreshedById = new Map(refreshed.messages.map((message) => [message.id, message]));
   return {
     ...current,
-    completedTurnAssistantMessageIds: refreshed.completedTurnAssistantMessageIds,
+    completedTurnAssistantMessageIds: hydrateCompletedResponseIds
+      ? refreshed.completedTurnAssistantMessageIds
+      : current.completedTurnAssistantMessageIds,
     messages: current.messages.map((message) => {
       const refreshedMessage = refreshedById.get(message.id);
       if (refreshedMessage === undefined || refreshedMessage.text !== message.text) return message;
@@ -265,7 +268,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           return;
         }
         yield* setThread(
-          mergeThreadMessageArtifacts(currentState.data.value, httpSnapshot.value.thread),
+          mergeThreadMessageArtifacts(
+            currentState.data.value,
+            httpSnapshot.value.thread,
+            httpSnapshot.value.snapshotSequence === sequence,
+          ),
         );
       }),
     );

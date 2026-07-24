@@ -286,10 +286,10 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           requested_at,
           started_at,
           completed_at,
-          checkpoint_turn_count,
-          checkpoint_ref,
-          checkpoint_status,
-          checkpoint_files_json
+          NULL,
+          NULL,
+          NULL,
+          '[]'
         FROM projection_turns
         WHERE thread_id = ${sourceThreadId}
           AND turn_id IS NOT NULL
@@ -302,10 +302,10 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           requested_at = excluded.requested_at,
           started_at = excluded.started_at,
           completed_at = excluded.completed_at,
-          checkpoint_turn_count = excluded.checkpoint_turn_count,
-          checkpoint_ref = excluded.checkpoint_ref,
-          checkpoint_status = excluded.checkpoint_status,
-          checkpoint_files_json = excluded.checkpoint_files_json
+          checkpoint_turn_count = NULL,
+          checkpoint_ref = NULL,
+          checkpoint_status = NULL,
+          checkpoint_files_json = '[]'
       `,
   });
 
