@@ -33,6 +33,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
+import { ProviderCatalogResult } from "./providerCatalog.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -42,6 +43,12 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
+import {
+  SessionImportListCandidatesPayload,
+  SessionImportListCandidatesResult,
+  SessionImportPayload,
+  SessionImportResult,
+} from "./sessionImport.ts";
 import {
   MessageSpeechSynthesisRequest,
   MessageSpeechSynthesisResult,
@@ -329,6 +336,31 @@ const EnvironmentVoiceTranscriptionErrors = [
   EnvironmentInternalError,
 ] as const;
 
+export class EnvironmentSessionImportError extends Schema.TaggedErrorClass<EnvironmentSessionImportError>()(
+  "EnvironmentSessionImportError",
+  {
+    code: Schema.Literal("session_import_error"),
+    reason: Schema.Literals([
+      "project-not-found",
+      "instance-not-found",
+      "provider-read-failed",
+      "nothing-to-import",
+      "already-imported",
+      "invalid-model",
+      "invalid-options",
+      "invalid-worktree",
+      "import-failed",
+    ]),
+    detail: Schema.String,
+    existingThreadId: Schema.optional(ThreadId),
+  },
+  { httpApiStatus: 400 },
+) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(EnvironmentSessionImportError)(this, { status: 400 });
+  }
+}
+
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
@@ -517,6 +549,32 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export class EnvironmentSessionImportHttpApi extends HttpApiGroup.make("sessionImport")
+  .add(
+    HttpApiEndpoint.post("candidates", "/api/session-import/candidates", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportListCandidatesPayload,
+      success: SessionImportListCandidatesResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("importSession", "/api/session-import/import", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportPayload,
+      success: SessionImportResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentProvidersHttpApi extends HttpApiGroup.make("providers").add(
+  HttpApiEndpoint.get("catalog", "/api/providers/catalog", {
+    headers: OptionalBearerHeaders,
+    success: ProviderCatalogResult,
+    error: [EnvironmentScopeRequiredError],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
   .add(
     HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
@@ -609,6 +667,8 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentSessionImportHttpApi)
+  .add(EnvironmentProvidersHttpApi)
   .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi) {}

@@ -1,6 +1,6 @@
 # Cross-machine session handover
 
-Status: **design settled — ready to implement the agent-driven v0** (CLI additions + agent skill). The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
+Status: **agent-driven v0 CLI primitives implemented; agent skill and integrated cross-machine verification remain**. The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
 
 ## Motivation
 
@@ -40,15 +40,16 @@ Insight from practice: an agent with SSH access to all machines can already perf
 
 ### CLI additions (fork, PR to dev)
 
-1. **`t3 session import --file <transcript> --project <id-or-path> [--branch X --worktree Y] [--model M --effort E] [--title T]`**
+1. **`t3 session import --file <transcript> --project <id-or-path> [--worktree-branch B] [--model M] [--effort E] [--instance I] [--json]`**
    - Sniffs provider, native session id, source cwd, and last-used model from the file itself (Codex rollouts start with `session_meta`; Claude JSONLs are typed message lines). No provider/id flags needed.
    - **Does the placement itself**: computes the target escaped-cwd dir for the effective project path and installs the Claude file there, or drops the Codex rollout into `~/.codex/sessions/<date>/`. Path translation is the most error-prone step — code owns it. Never overwrites an existing file.
-   - `--branch/--worktree`: recreates a **T3-managed** worktree via the existing `thread.create` fields (`branch`, `worktreePath` already exist in the orchestration command; the UI worktree flow uses them). T3's worktree layout under `~/.t3/worktrees` is machine-consistent, so placement lines up automatically. Fails clearly if the branch's commit is absent locally — the CLI never fetches.
+   - `--worktree-branch` derives and creates the standard T3 worktree path; free-form worktree paths are not accepted. It fails clearly if the branch is absent locally — the CLI never fetches. Unlike the UI bootstrap flow, this CLI path does not run the project setup script or trigger a git-status refresh.
    - Defaults model selection from the transcript, overridable.
-   - Validates defensively: session id UUID pattern, id-inside-transcript matches filename claim, size caps, all destination paths computed server-side — never taken from input.
-   - Wraps the existing `SessionImportService` (transactional binding-first, duplicate-import rejection via `nativeIdsFromCursor` — all reused). Note: `sessionImport.*` are WS RPCs today; the CLI needs an authenticated HTTP route (same bearer scheme as `/api/orchestration/dispatch`) or direct service access.
-2. **`t3 session candidates --project <id-or-path>`** — wraps `sessionImport.listCandidates`.
-3. **`thread new --model M --effort E`** — currently the CLI hardcodes the project default (`apps/server/src/cli/thread.ts:254-256`); agents need explicit model control.
+   - Validates defensively: session id UUID pattern, id-inside-transcript matches filename claim, size caps, provider instance/model options, and server-side worktree identity.
+   - Uses authenticated HTTP session-import endpoints while retaining the existing binding-first transaction and deterministic duplicate recovery.
+   - `--title` is intentionally absent; imported provider names remain authoritative, and later renames use `t3 thread rename`.
+2. **`t3 session candidates --project <id-or-path> [--cwd <worktree>] [--json]`** — standalone candidate inspection for a project or validated existing worktree.
+3. **`t3 thread new ... --model M [--effort E] [--instance I]`** — explicitly selects an advertised provider model; with no model flags, project-default behavior is unchanged.
 4. **`t3 thread archive <thread-id>`** — required so the agent can mark the source thread handed-off (archive exists in the UI multi-select only).
 5. **Bugfix**: `t3 project list --json` times out against a live server (reproduced on grey-mac while `status`/`thread` commands work). The recipe resolves projects by path, so this must work.
 
@@ -66,7 +67,7 @@ Recipe the skill encodes:
 
 ### The two worktree cases
 
-- **Case A — T3-managed worktree thread** (worktree selected at thread creation): the thread's cwd _is_ the worktree; the transcript is keyed to it. The CLI's `--branch/--worktree` recreates it and places the session under its path.
+- **Case A — T3-managed worktree thread** (worktree selected at thread creation): the thread's cwd _is_ the worktree; the transcript is keyed to it. The CLI's `--worktree-branch` recreates it and places the session under its path.
 - **Case B — thread in the main repo dir, agent working in a self-made worktree**: T3 and the provider key everything to the main repo dir; the worktree is just state the conversation _talks about_. CLI import is plain (project = main repo dir). The agent recreates the auxiliary worktree with ordinary git (`git worktree add <same relative path> <branch>`) so the resumed agent's references resolve. The CLI must not try to parse conversation content to guess such worktrees.
 
 ### Decisions locked for v0
@@ -89,6 +90,5 @@ Client-mediated transport (no server↔server channel exists or is needed): the 
 
 ## Next steps
 
-1. Implement the CLI additions (branch off dev, PR to `pandec/t3code` dev).
-2. Write the `t3-session-handover` skill.
-3. Verify end-to-end with a real working session across machines: clean tree, dirty tree, Case A and Case B worktrees, and the failure paths (missing commit, dirty target, oversized import).
+1. Write the `t3-session-handover` skill.
+2. Verify end-to-end with a real working session across machines: clean tree, dirty tree, Case A and Case B worktrees, and the failure paths (missing commit, dirty target, oversized import).
