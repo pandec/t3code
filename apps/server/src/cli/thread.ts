@@ -128,13 +128,15 @@ export const deriveThreadCliTitle = (message: string): string => {
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 };
 
-const threadSummary = (thread: OrchestrationThreadShell) => ({
+export const threadSummary = (thread: OrchestrationThreadShell) => ({
   id: thread.id,
   projectId: thread.projectId,
   title: thread.title,
   state: threadCliState(thread),
   sessionStatus: thread.session?.status ?? null,
   activeTurnId: thread.session?.activeTurnId ?? null,
+  snoozedUntil: thread.snoozedUntil ?? null,
+  snoozedAt: thread.snoozedAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
   hasPendingUserInput: thread.hasPendingUserInput,
   latestUserMessageAt: thread.latestUserMessageAt,
@@ -454,6 +456,7 @@ const threadStatusCommand = Command.make("status", {
                 `${summary.id}\t${summary.state}\t${summary.title}`,
                 `Project: ${summary.projectId}`,
                 `Session: ${summary.sessionStatus ?? "not started"}`,
+                `Snoozed: ${summary.snoozedUntil ? `until ${summary.snoozedUntil}` : "no"}`,
                 `Pending approval: ${summary.hasPendingApprovals ? "yes" : "no"}`,
                 `Pending input: ${summary.hasPendingUserInput ? "yes" : "no"}`,
               ].join("\n"),

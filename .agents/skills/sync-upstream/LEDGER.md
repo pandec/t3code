@@ -20,16 +20,12 @@ Self-cleaning rules (apply during every sync's ledger update):
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
-| Path                                                              | Question                                                                                                                        | Untouched streak |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `packages/shared/src/composerTrigger.ts`                          | Do fork `/t3-rename` and `/t3-status` commands still compose with upstream's slash-command changes?                             | 1                |
-| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`  | Are fork steering and `titlePinned` still compatible with upstream's interrupt and title-generation flow?                       | 0                |
-| `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` | Is the repository-identity write-back seam intact (see standing decision)?                                                      | 0                |
-| `apps/server/src/cli/project.ts`                                  | Does fork CLI automation still align with upstream's project CLI wiring?                                                        | 1                |
-| `apps/web/src/components/sidebar.tsx`                             | Are the fork resize fixes (no-drag rail, pending-width flush) still needed?                                                     | 1                |
-| `apps/server/src/provider/*TextGeneration*.ts`                    | Do fork summary/speech generators still coexist with upstream commit-message generation?                                        | 1                |
-| `apps/server/src/persistence/Migrations/`                         | Migration numbering per standing decision.                                                                                      | 0                |
-| `apps/mobile/app.config.ts`                                       | Single personal-team validation block; fork custom paid-team extension (`T3CODE_APPLE_TEAM_ID`, `isCustomIosTeamBuild`) intact? | 1                |
+| Path                                                              | Question                                                                                                  | Untouched streak |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------- |
+| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`  | Are fork steering and `titlePinned` still compatible with upstream's interrupt and title-generation flow? | 1                |
+| `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` | Is the repository-identity write-back seam intact (see standing decision)?                                | 0                |
+| `apps/server/src/cli/thread.ts`                                   | Does fork CLI automation expose upstream thread lifecycle fields and commands with stable JSON semantics? | 0                |
+| `apps/server/src/persistence/Migrations/`                         | Migration numbering per standing decision.                                                                | 0                |
 
 ## Full audit
 
