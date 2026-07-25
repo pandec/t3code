@@ -55,7 +55,11 @@ import {
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
+import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { providerUsageMenuActions, providerUsageTriggerLabel } from "../../lib/providerUsageMenu";
+import { useSelectedThreadDetail } from "../../state/use-thread-detail";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -84,6 +88,15 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
 export const COMPOSER_EXPANDED_CHROME = 174;
+
+function useMinuteClockMs(): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return nowMs;
+}
 
 export interface ThreadComposerProps {
   readonly draftMessage: string;
@@ -343,6 +356,26 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  const selectedThreadDetail = useSelectedThreadDetail();
+  const providerUsageNowMs = useMinuteClockMs();
+  const providerUsage = useMemo(
+    () =>
+      deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
+        provider: selectedProviderStatus?.driver ?? null,
+        providerInstanceId: props.selectedThread.modelSelection.instanceId,
+        now: providerUsageNowMs,
+      }),
+    [
+      props.selectedThread.modelSelection.instanceId,
+      providerUsageNowMs,
+      selectedProviderStatus?.driver,
+      selectedThreadDetail,
+    ],
+  );
+  const providerUsageActions = useMemo(
+    () => (providerUsage ? providerUsageMenuActions(providerUsage, providerUsageNowMs) : []),
+    [providerUsage, providerUsageNowMs],
+  );
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -938,6 +971,31 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     label={configurationLabel}
                   />
                 </ControlPillMenu>
+                {providerUsage ? (
+                  <ControlPillMenu
+                    accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                    actions={providerUsageActions}
+                    title={`${providerUsage.providerLabel} usage`}
+                    onPressAction={() => {}}
+                  >
+                    <ComposerToolbarTrigger
+                      accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                      iconNode={
+                        <View
+                          className={cn(
+                            "h-2 w-2 rounded-full",
+                            providerUsage.status === "critical"
+                              ? "bg-rose-500"
+                              : providerUsage.status === "warning"
+                                ? "bg-amber-500"
+                                : "bg-neutral-400 dark:bg-neutral-500",
+                          )}
+                        />
+                      }
+                      label={providerUsageTriggerLabel(providerUsage)}
+                    />
+                  </ControlPillMenu>
+                ) : null}
                 {showStopAction ? (
                   <ComposerToolbarButton
                     accessibilityLabel="Stop"

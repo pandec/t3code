@@ -136,4 +136,31 @@ describe("browser turn completion notifications", () => {
     expect(focus).toHaveBeenCalledOnce();
     expect(onBrowserNotificationClick).toHaveBeenCalledOnce();
   });
+
+  it("uses a caller-provided browser notification tag", async () => {
+    const constructNotification = vi.fn();
+    class NotificationMock {
+      static permission = "granted";
+
+      constructor(title: string, options: NotificationOptions) {
+        constructNotification(title, options);
+        return { addEventListener: vi.fn() };
+      }
+    }
+    installWindow();
+    vi.stubGlobal("Notification", NotificationMock);
+    const { showSystemNotification } = await import("./turnCompletion");
+
+    await expect(
+      showSystemNotification({
+        title: "Claude rate limit warning",
+        body: "Session (5h) is at 85%.",
+        tag: "provider-usage:Claude:five_hour:warning:1784970000",
+      }),
+    ).resolves.toBe(true);
+    expect(constructNotification).toHaveBeenCalledWith("Claude rate limit warning", {
+      body: "Session (5h) is at 85%.",
+      tag: "provider-usage:Claude:five_hour:warning:1784970000",
+    });
+  });
 });

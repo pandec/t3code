@@ -143,6 +143,8 @@ export const make = Effect.gen(function* () {
       messageSummaries: true,
       threadSettlement: true,
       conditionalProjectScriptUpdates: true,
+      sessionImport: true,
+      providerCatalog: true,
       threadSnooze: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
     },

@@ -443,6 +443,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
+      ...(settings.sidebarThreadProviderIconVisibility !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
+        ? ["Thread provider icon"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -485,6 +489,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications
         ? ["System notifications"]
         : []),
+      ...(settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts
+        ? ["Rate limit alerts"]
+        : []),
       ...(isGitWritingModelDirty ? ["Git writing model"] : []),
     ],
     [
@@ -494,6 +501,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.enableTurnCompletionToasts,
       settings.enableTurnCompletionSystemNotifications,
+      settings.enableRateLimitAlerts,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -503,6 +511,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectGroupingMode,
+      settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       settings.wordWrap,
@@ -528,6 +537,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      sidebarThreadProviderIconVisibility:
+        DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -540,6 +551,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
       enableTurnCompletionSystemNotifications:
         DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
+      enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
@@ -712,6 +724,51 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project Grouping"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Thread provider icon"
+          description="Choose whether thread rows show their provider only on hover or at all times."
+          resetAction={
+            settings.sidebarThreadProviderIconVisibility !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility ? (
+              <SettingResetButton
+                label="thread provider icon"
+                onClick={() =>
+                  updateSettings({
+                    sidebarThreadProviderIconVisibility:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarThreadProviderIconVisibility}
+              onValueChange={(value) => {
+                if (value === "hover" || value === "always") {
+                  updateSettings({ sidebarThreadProviderIconVisibility: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Thread provider icon">
+                <SelectValue>
+                  {settings.sidebarThreadProviderIconVisibility === "always"
+                    ? "Always"
+                    : "On hover"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="hover">
+                  On hover
+                </SelectItem>
+                <SelectItem hideIndicator value="always">
+                  Always
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 
@@ -1243,6 +1300,32 @@ function NotificationsSettingsSection() {
               aria-label="Show system notifications"
             />
           </div>
+        }
+      />
+
+      <SettingsRow
+        title="Rate limit alerts"
+        description="Warn once per rate-limit window when subscription usage crosses the warning or critical threshold."
+        resetAction={
+          settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts ? (
+            <SettingResetButton
+              label="rate limit alerts"
+              onClick={() =>
+                updateSettings({
+                  enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.enableRateLimitAlerts}
+            onCheckedChange={(checked) =>
+              updateSettings({ enableRateLimitAlerts: Boolean(checked) })
+            }
+            aria-label="Warn about rate limit usage"
+          />
         }
       />
     </SettingsSection>

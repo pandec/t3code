@@ -9,6 +9,7 @@ import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
   makeClaudeEnvironment,
+  resolveClaudeConfigDirPath,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
 
@@ -20,6 +21,9 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const resolved = path.resolve(NodeOS.homedir());
 
         expect(yield* resolveClaudeHomePath({ homePath: "" })).toBe(resolved);
+        expect(yield* resolveClaudeConfigDirPath({ homePath: "" })).toBe(
+          path.join(resolved, ".claude"),
+        );
         expect(yield* makeClaudeEnvironment({ homePath: "" })).toBe(process.env);
       }),
     );
@@ -31,6 +35,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const resolved = path.resolve(NodeOS.homedir(), ".claude-work");
 
         expect(yield* resolveClaudeHomePath({ homePath })).toBe(resolved);
+        expect(yield* resolveClaudeConfigDirPath({ homePath })).toBe(resolved);
         expect((yield* makeClaudeEnvironment({ homePath })).CLAUDE_CONFIG_DIR).toBe(resolved);
         expect(yield* makeClaudeContinuationGroupKey({ homePath })).toBe(`claude:home:${resolved}`);
         expect(yield* makeClaudeCapabilitiesCacheKey({ binaryPath: "claude", homePath })).toBe(
@@ -54,8 +59,33 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const resolved = path.resolve(NodeOS.homedir());
 
         expect(yield* makeClaudeContinuationGroupKey({ homePath: "" })).toBe(
-          `claude:home:${resolved}`,
+          `claude:home:${path.join(resolved, ".claude")}`,
         );
+      }),
+    );
+
+    it.effect("uses inherited absolute provider homes for import and continuation identity", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const configDir = path.resolve("/tmp/claude-environment-home");
+        const environment = { HOME: "/tmp/user-home", CLAUDE_CONFIG_DIR: configDir };
+
+        expect(yield* resolveClaudeConfigDirPath({ homePath: "" }, environment)).toBe(configDir);
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment)).toBe(
+          `claude:home:${configDir}`,
+        );
+      }),
+    );
+
+    it.effect("keeps relative config homes grouped without advertising a static path", () =>
+      Effect.gen(function* () {
+        const environment = { CLAUDE_CONFIG_DIR: ".claude-instance" };
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment)).toBe(
+          "claude:relative-config:.claude-instance",
+        );
+        expect(
+          yield* resolveClaudeConfigDirPath({ homePath: "" }, environment, "/tmp/project"),
+        ).toBe("/tmp/project/.claude-instance");
       }),
     );
   });
