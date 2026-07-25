@@ -11,6 +11,7 @@ import { authCommand } from "./cli/auth.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
+import { isCliJsonOutputRequested, withCliJsonUsageErrorOutput } from "./cli/errorOutput.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { statusCommand } from "./cli/status.ts";
@@ -61,6 +62,7 @@ export const cli = makeCli();
 
 if (import.meta.main) {
   Command.run(cli, { version: packageJson.version }).pipe(
+    withCliJsonUsageErrorOutput(isCliJsonOutputRequested(process.argv.slice(2))),
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),
     NodeRuntime.runMain,

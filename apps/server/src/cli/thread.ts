@@ -27,7 +27,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
-  CliOrchestrationDeclaredResponseError,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationServerUnavailableError,
   type CliLiveOrchestrationServer,
   dispatchLiveOrchestrationCommand,
@@ -43,7 +43,7 @@ const jsonFlag = Flag.boolean("json").pipe(
 );
 
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
-const isCliOrchestrationDeclaredResponseError = Schema.is(CliOrchestrationDeclaredResponseError);
+const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 
 export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNotFoundError>()(
   "ThreadCliNotFoundError",
@@ -192,6 +192,21 @@ const dispatchThreadCommand = (
   command: ClientOrchestrationCommand,
 ) => dispatchLiveOrchestrationCommand(input.live.origin, input.token, command);
 
+export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStart")(function* <
+  OriginalError,
+  CleanupError,
+  R,
+>(originalError: OriginalError, cleanup: Effect.Effect<unknown, CleanupError, R>) {
+  const cleanupResult = yield* Effect.result(cleanup);
+  if (cleanupResult._tag === "Failure") {
+    return yield* new CliOrchestrationOutcomeUnknownError({
+      operation: "dispatchLiveServer",
+      cause: cleanupResult.failure,
+    });
+  }
+  return yield* Effect.fail(originalError);
+});
+
 const threadListCommand = Command.make("list", {
   ...projectLocationFlags,
   project: Flag.string("project").pipe(
@@ -296,18 +311,22 @@ const threadNewCommand = Command.make("new", {
           interactionMode: flags.interactionMode,
           createdAt,
         }).pipe(
-          Effect.tapError((error) =>
-            isCliOrchestrationDeclaredResponseError(error)
-              ? Effect.gen(function* () {
-                  const cleanupCommandId = CommandId.make(yield* randomUuid);
-                  yield* dispatchThreadCommand(input, {
+          Effect.catch((error) => {
+            if (isCliOrchestrationOutcomeUnknownError(error)) return Effect.fail(error);
+            return randomUuid.pipe(
+              Effect.map(CommandId.make),
+              Effect.flatMap((cleanupCommandId) =>
+                compensateFailedThreadStart(
+                  error,
+                  dispatchThreadCommand(input, {
                     type: "thread.delete",
                     commandId: cleanupCommandId,
                     threadId,
-                  }).pipe(Effect.ignore({ log: true }));
-                })
-              : Effect.void,
-          ),
+                  }),
+                ),
+              ),
+            );
+          }),
         );
         yield* Console.log(
           flags.json

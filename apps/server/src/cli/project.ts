@@ -256,12 +256,17 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
         return;
       }
 
+      const liveReadTimeout =
+        liveAttempt._tag === "Failure" &&
+        options?.readOnly === true &&
+        isCliOrchestrationReadTimeoutError(liveAttempt.failure)
+          ? liveAttempt.failure
+          : undefined;
+
       if (liveAttempt._tag === "Failure") {
         // A live-but-slow server only degrades to the local snapshot for
         // read-only commands; mutations must never bypass the live server.
-        const fallbackToOffline =
-          options?.readOnly === true && isCliOrchestrationReadTimeoutError(liveAttempt.failure);
-        if (!fallbackToOffline) {
+        if (liveReadTimeout === undefined) {
           return yield* Effect.fail(liveAttempt.failure);
         }
         yield* Console.error(
@@ -284,7 +289,10 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
         const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
         const output = yield* run({
           snapshot,
-          dispatch: (command) => orchestrationEngine.dispatch(command),
+          dispatch:
+            liveReadTimeout === undefined
+              ? (command) => orchestrationEngine.dispatch(command)
+              : () => Effect.fail(liveReadTimeout),
           mode: "offline",
         });
         yield* Console.log(output);

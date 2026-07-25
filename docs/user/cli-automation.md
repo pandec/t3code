@@ -18,9 +18,10 @@ document. On failure it exits non-zero and stdout holds one error document inste
 ```
 
 `code` is the stable error tag and `detail` carries the error's primitive fields (never the cause
-chain). When a mutation was dispatched but its acknowledgement was lost, the error additionally
-carries `"outcome": "unknown"`; reconcile current state before retrying. All other failures mean the
-command was not applied.
+chain). When a mutation acknowledgement was lost or a multi-step command could not confirm its
+compensation, the error additionally carries `"outcome": "unknown"`; reconcile current state before
+retrying. Without that marker, the failing mutation was not applied or any earlier step was
+successfully compensated.
 
 ## Live-read timeouts
 
