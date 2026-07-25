@@ -137,7 +137,6 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
-import { primaryServerProvidersAtom } from "../state/server";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { CommandDialogTrigger } from "./ui/command";
 import { Button } from "./ui/button";
@@ -370,7 +369,7 @@ function SidebarV2ProviderIcon(props: {
       className={cn(
         "inline-flex shrink-0 items-center opacity-60 transition-opacity",
         props.visibility === "hover" &&
-          "opacity-0 max-sm:opacity-60 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
+          "opacity-0 max-sm:opacity-60 [@media(hover:none)]:opacity-60 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
       )}
     >
       <ProviderInstanceIcon
@@ -405,7 +404,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   projectCwd: string | null;
   projectTitle: string | null;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
-  providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+  providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
@@ -545,7 +544,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   }, [onChangeRequestState, prState, threadKey]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
+  const providerEntry =
+    props.providerEntriesByEnvironmentId.get(thread.environmentId)?.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -1170,16 +1170,23 @@ export default function SidebarV2() {
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
-  const providerEntryByInstanceId = useMemo(
-    () =>
-      new Map(
-        deriveProviderInstanceEntries(serverProviders).map(
-          (entry) => [entry.instanceId as string, entry] as const,
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const providerEntriesByEnvironmentId = useMemo<
+    ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>
+  >(() => {
+    const entriesByEnvironmentId = new Map<string, ReadonlyMap<string, ProviderInstanceEntry>>();
+    for (const [environmentId, config] of serverConfigs) {
+      entriesByEnvironmentId.set(
+        environmentId,
+        new Map(
+          deriveProviderInstanceEntries(config.providers).map(
+            (entry) => [entry.instanceId as string, entry] as const,
+          ),
         ),
-      ),
-    [serverProviders],
-  );
+      );
+    }
+    return entriesByEnvironmentId;
+  }, [serverConfigs]);
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -1421,7 +1428,6 @@ export default function SidebarV2() {
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const { activeThreads, snoozedThreads, settledThreads, snoozeNow } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2511,7 +2517,7 @@ export default function SidebarV2() {
                         ) ?? null
                       }
                       providerIconVisibility={providerIconVisibility}
-                      providerEntryByInstanceId={providerEntryByInstanceId}
+                      providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}
                       onThreadClick={handleThreadClick}
                       onThreadActivate={navigateToThread}
                       onStartRename={startThreadRename}
