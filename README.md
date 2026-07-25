@@ -17,7 +17,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Archive undo** — press Command+Z outside the composer after archiving to restore the latest thread; an empty new-thread screen reopens it, while another active conversation stays in place.
 - **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes.
 - **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
-- **Thread naming & sidebar polish** — split thread naming with refined fork titles, and the thread's provider icon shown on sidebar hover.
+- **Thread naming & sidebar polish** — split thread naming with refined fork titles, plus a setting to show each thread's provider icon on hover or at all times.
 - **Conversation navigation rails** — desktop threads keep the existing left-side user-message navigator and add a mirrored right-side navigator for completed agent responses, with hover previews and click-to-jump navigation.
 - **Turn-completion notifications** — optional in-app toast and OS-level notification when an agent turn finishes (both off by default, toggled independently in Settings). System notifications fire only while the app is in the background, and clicking one focuses the window and opens the thread; works in both the desktop app and the browser.
 

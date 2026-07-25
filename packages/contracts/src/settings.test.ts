@@ -88,6 +88,28 @@ describe("ClientSettings sidebar v2", () => {
   });
 });
 
+describe("ClientSettings sidebar provider icon visibility", () => {
+  it("preserves the existing hover-only behavior by default", () => {
+    expect(decodeClientSettings({}).sidebarThreadProviderIconVisibility).toBe("hover");
+  });
+
+  it.each(["hover", "always"] as const)("accepts %s visibility in patches", (value) => {
+    expect(
+      decodeClientSettingsPatch({
+        sidebarThreadProviderIconVisibility: value,
+      }).sidebarThreadProviderIconVisibility,
+    ).toBe(value);
+  });
+
+  it("rejects unsupported visibility values", () => {
+    expect(() =>
+      decodeClientSettingsPatch({
+        sidebarThreadProviderIconVisibility: "sometimes",
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
