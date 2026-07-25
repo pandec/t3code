@@ -6,6 +6,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
+  HermesSettings,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -14,6 +15,7 @@ const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
 describe("ClientSettings word wrap", () => {
@@ -141,6 +143,40 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
         providerInstances: { "1bad": { driver: "codex" } },
       }),
     ).toThrow();
+  });
+});
+
+describe("HermesSettings", () => {
+  it("defaults to a disabled machine-local Hermes ACP configuration", () => {
+    expect(decodeHermesSettings({})).toEqual({
+      enabled: false,
+      binaryPath: "hermes",
+      requireGateway: true,
+      customModels: [],
+    });
+    expect(decodeServerSettings({}).providers.hermes).toEqual(decodeHermesSettings({}));
+  });
+
+  it("round-trips Hermes provider patches", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          hermes: {
+            enabled: true,
+            binaryPath: "  /opt/homebrew/bin/hermes  ",
+            authMethodId: "  openai-codex  ",
+            requireGateway: false,
+            customModels: ["openai-codex:gpt-5.6-sol"],
+          },
+        },
+      }).providers?.hermes,
+    ).toEqual({
+      enabled: true,
+      binaryPath: "/opt/homebrew/bin/hermes",
+      authMethodId: "openai-codex",
+      requireGateway: false,
+      customModels: ["openai-codex:gpt-5.6-sol"],
+    });
   });
 });
 
