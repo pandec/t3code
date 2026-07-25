@@ -78,6 +78,7 @@ export const ClientSettingsSchema = Schema.Struct({
   enableTurnCompletionSystemNotifications: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  enableRateLimitAlerts: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
   ),
@@ -644,6 +645,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   enableTurnCompletionToasts: Schema.optionalKey(Schema.Boolean),
   enableTurnCompletionSystemNotifications: Schema.optionalKey(Schema.Boolean),
+  enableRateLimitAlerts: Schema.optionalKey(Schema.Boolean),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   favorites: Schema.optionalKey(
     Schema.Array(

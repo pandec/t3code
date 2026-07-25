@@ -489,6 +489,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications
         ? ["System notifications"]
         : []),
+      ...(settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts
+        ? ["Rate limit alerts"]
+        : []),
       ...(isGitWritingModelDirty ? ["Git writing model"] : []),
     ],
     [
@@ -498,6 +501,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.enableTurnCompletionToasts,
       settings.enableTurnCompletionSystemNotifications,
+      settings.enableRateLimitAlerts,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -547,6 +551,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
       enableTurnCompletionSystemNotifications:
         DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
+      enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
@@ -1295,6 +1300,32 @@ function NotificationsSettingsSection() {
               aria-label="Show system notifications"
             />
           </div>
+        }
+      />
+
+      <SettingsRow
+        title="Rate limit alerts"
+        description="Warn once per rate-limit window when subscription usage crosses the warning or critical threshold."
+        resetAction={
+          settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts ? (
+            <SettingResetButton
+              label="rate limit alerts"
+              onClick={() =>
+                updateSettings({
+                  enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.enableRateLimitAlerts}
+            onCheckedChange={(checked) =>
+              updateSettings({ enableRateLimitAlerts: Boolean(checked) })
+            }
+            aria-label="Warn about rate limit usage"
+          />
         }
       />
     </SettingsSection>
