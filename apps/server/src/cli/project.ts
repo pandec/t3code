@@ -18,31 +18,41 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
 import * as ServerConfig from "../config.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "../orchestration/runtimeLayer.ts";
-import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
+import { latestMigrationId } from "../persistence/Migrations.ts";
+import {
+  layerConfig as SqlitePersistenceLayerLive,
+  layerReadOnlyConfig as SqliteReadOnlyPersistenceLive,
+} from "../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationReadTimeoutError,
   CliOrchestrationRequestError,
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
+  causeChainHasSqliteBusy,
   fetchLiveOrchestrationSnapshot,
-  tryResolveLiveOrchestrationServer,
-  withCliOrchestrationSession,
+  isCliOrchestrationReadTimeoutError,
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
 import {
   addProjectAction,
@@ -128,6 +138,7 @@ export const ProjectCommandError = Schema.Union([
   CliOrchestrationRequestError,
   CliOrchestrationConflictError,
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationReadTimeoutError,
   CliOrchestrationServerUnavailableError,
   ProjectTitleEmptyError,
   ProjectIdentifierEmptyError,
@@ -162,6 +173,30 @@ const ProjectCliRuntimeLive = Layer.mergeAll(
     Layer.provideMerge(SqlitePersistenceLayerLive),
   ),
 );
+
+// Full offline stack for when no live server owns the database: may run
+// migrations and dispatch through the local orchestration engine.
+const offlineEngineRuntimeLayer = (
+  config: ServerConfig.ServerConfig["Service"],
+  minimumLogLevel: ServerConfig.ServerConfig["Service"]["logLevel"],
+) =>
+  ProjectCliRuntimeLive.pipe(
+    Layer.provide(ServerConfig.layer(config)),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+  );
+
+// Snapshot-only stack for when a live server still owns the database: opens it
+// strictly read-only — no migrations, no projection bootstrap, no writes.
+const offlineReadOnlySnapshotLayer = (
+  config: ServerConfig.ServerConfig["Service"],
+  minimumLogLevel: ServerConfig.ServerConfig["Service"]["logLevel"],
+) =>
+  OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(RepositoryIdentityResolver.layer),
+    Layer.provideMerge(SqliteReadOnlyPersistenceLive),
+    Layer.provide(ServerConfig.layer(config)),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+  );
 
 const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   workspaceRoot: string,
@@ -227,6 +262,28 @@ const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
   return yield* projectionSnapshotQuery.getSnapshot();
 });
 
+/**
+ * The read-only fallback must not read through a schema older than this CLI
+ * expects (a newer CLI next to a not-yet-restarted older server). When the
+ * migration ledger is missing or behind, surface the original live-read
+ * failure instead of a possibly-misdecoded snapshot.
+ */
+export const requireCurrentOfflineSchema = Effect.fn("requireCurrentOfflineSchema")(function* (
+  fallbackError: Error,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    readonly latestApplied: number | bigint | null;
+  }>`SELECT MAX(migration_id) AS latestApplied FROM effect_sql_migrations`.pipe(
+    Effect.orElseSucceed(() => []),
+  );
+  const latestApplied = rows[0]?.latestApplied;
+  const appliedId = typeof latestApplied === "bigint" ? Number(latestApplied) : latestApplied;
+  if (typeof appliedId !== "number" || appliedId < latestMigrationId) {
+    return yield* Effect.fail(fallbackError);
+  }
+});
+
 const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   flags: CliAuthLocationFlags,
   json: boolean,
@@ -248,78 +305,108 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   options?: {
     readonly requireLive?: boolean;
     readonly requireConditionalProjectScriptUpdates?: boolean;
+    readonly readOnly?: boolean;
   },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = json ? "None" : config.logLevel;
 
   return yield* Effect.gen(function* () {
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const liveMode = yield* tryResolveLiveOrchestrationServer(
-      environmentAuth,
-      config,
-      "t3 project cli",
-    );
-
-    if (Option.isSome(liveMode)) {
-      if (options?.requireConditionalProjectScriptUpdates) {
-        const descriptor = yield* fetchLiveEnvironmentDescriptor(liveMode.value.origin);
-        if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
-          return yield* new ProjectActionServerUnsupportedError({
-            operation: "validateProjectActionServerCapability",
-            serverVersion: descriptor.serverVersion,
-          });
-        }
-      }
-      return yield* withCliOrchestrationSession(environmentAuth, "t3 project cli", (token) =>
-        Effect.gen(function* () {
-          const snapshot = yield* fetchLiveOrchestrationSnapshot(liveMode.value.origin, token);
-          const output = yield* run({
-            snapshot,
-            dispatch: (command) =>
-              dispatchLiveOrchestrationCommand(liveMode.value.origin, token, command).pipe(
-                Effect.asVoid,
-              ),
-            mode: "live",
-          });
-          yield* Console.log(output);
-        }),
-      );
-    }
-
-    if (options?.requireLive) {
-      return yield* new CliOrchestrationServerUnavailableError({
-        operation: "resolveLiveServer",
-        statePath: config.serverRuntimeStatePath,
-      });
-    }
-
-    const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
-      Layer.provide(ServerConfig.layer(config)),
-      Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-    );
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = json ? "None" : config.logLevel;
 
     return yield* Effect.gen(function* () {
-      const snapshot = yield* getOfflineSnapshot();
-      const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
-      const output = yield* run({
-        snapshot,
-        dispatch: (command) => orchestrationEngine.dispatch(command),
-        mode: "offline",
-      });
-      yield* Console.log(output);
-    }).pipe(Effect.provide(offlineRuntimeLayer));
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+
+      const liveAttempt = yield* Effect.result(
+        withResolvedLiveOrchestrationServer(
+          { environmentAuth, config, label: "t3 project cli", timeouts },
+          (live, token) =>
+            Effect.gen(function* () {
+              if (options?.requireConditionalProjectScriptUpdates) {
+                const descriptor = yield* fetchLiveEnvironmentDescriptor(live.origin, timeouts);
+                if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
+                  return yield* new ProjectActionServerUnsupportedError({
+                    operation: "validateProjectActionServerCapability",
+                    serverVersion: descriptor.serverVersion,
+                  });
+                }
+              }
+              const snapshot = yield* fetchLiveOrchestrationSnapshot(live.origin, token, timeouts);
+              const output = yield* run({
+                snapshot,
+                dispatch: (command) =>
+                  dispatchLiveOrchestrationCommand(live.origin, token, command).pipe(Effect.asVoid),
+                mode: "live",
+              });
+              yield* Console.log(output);
+            }),
+        ),
+      );
+
+      if (liveAttempt._tag === "Success" && Option.isSome(liveAttempt.success)) {
+        return;
+      }
+
+      // A live-but-unresponsive server (slow reads, or a locked auth database
+      // during session issuance) only degrades to the local snapshot for
+      // read-only commands; mutations must never bypass the live server.
+      const liveFallbackError =
+        liveAttempt._tag === "Failure" &&
+        options?.readOnly === true &&
+        (isCliOrchestrationReadTimeoutError(liveAttempt.failure) ||
+          causeChainHasSqliteBusy(liveAttempt.failure))
+          ? liveAttempt.failure
+          : undefined;
+
+      if (liveAttempt._tag === "Failure") {
+        if (liveFallbackError === undefined) {
+          return yield* Effect.fail(liveAttempt.failure);
+        }
+        yield* Console.error(
+          `${liveFallbackError.message} Reading local state instead; it may lag behind the running server.`,
+        );
+      } else if (options?.requireLive) {
+        return yield* new CliOrchestrationServerUnavailableError({
+          operation: "resolveLiveServer",
+          statePath: config.serverRuntimeStatePath,
+        });
+      }
+
+      if (liveFallbackError === undefined) {
+        return yield* Effect.gen(function* () {
+          const snapshot = yield* getOfflineSnapshot();
+          const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+          const output = yield* run({
+            snapshot,
+            dispatch: (command) => orchestrationEngine.dispatch(command),
+            mode: "offline",
+          });
+          yield* Console.log(output);
+        }).pipe(Effect.provide(offlineEngineRuntimeLayer(config, minimumLogLevel)));
+      }
+
+      return yield* Effect.gen(function* () {
+        yield* requireCurrentOfflineSchema(liveFallbackError);
+        const snapshot = yield* getOfflineSnapshot();
+        const output = yield* run({
+          snapshot,
+          dispatch: () => Effect.fail(liveFallbackError),
+          mode: "offline",
+        });
+        yield* Console.log(output);
+      }).pipe(Effect.provide(offlineReadOnlySnapshotLayer(config, minimumLogLevel)));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
       ),
-    ),
-    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-  );
+      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+    );
+  }).pipe(withCliJsonErrorOutput(json));
 });
 
 const projectAddCommand = Command.make("add", {
@@ -468,25 +555,44 @@ const runProjectList = Effect.fn("runProjectList")(function* (
 
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const liveMode = yield* tryResolveLiveOrchestrationServer(
-      environmentAuth,
-      config,
-      "t3 project cli",
-    );
-    if (Option.isSome(liveMode)) {
-      return {
-        mode: "live" as const,
-        projects: liveMode.value.shell.projects,
-      };
-    }
-    const snapshot = yield* getOfflineSnapshot().pipe(
-      Effect.provide(
-        ProjectCliRuntimeLive.pipe(
-          Layer.provide(ServerConfig.layer(config)),
-          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-        ),
+    const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+    const liveAttempt = yield* Effect.result(
+      withResolvedLiveOrchestrationServer(
+        { environmentAuth, config, label: "t3 project cli", timeouts },
+        (live) => Effect.succeed(live.shell.projects),
       ),
     );
+    if (liveAttempt._tag === "Success" && Option.isSome(liveAttempt.success)) {
+      return {
+        mode: "live" as const,
+        projects: liveAttempt.success.value,
+      };
+    }
+
+    const liveFallbackError =
+      liveAttempt._tag === "Failure" &&
+      (isCliOrchestrationReadTimeoutError(liveAttempt.failure) ||
+        causeChainHasSqliteBusy(liveAttempt.failure))
+        ? liveAttempt.failure
+        : undefined;
+    if (liveAttempt._tag === "Failure") {
+      if (liveFallbackError === undefined) {
+        return yield* Effect.fail(liveAttempt.failure);
+      }
+      yield* Console.error(
+        `${liveFallbackError.message} Reading local state instead; it may lag behind the running server.`,
+      );
+    }
+
+    const snapshot =
+      liveFallbackError === undefined
+        ? yield* getOfflineSnapshot().pipe(
+            Effect.provide(offlineEngineRuntimeLayer(config, minimumLogLevel)),
+          )
+        : yield* Effect.gen(function* () {
+            yield* requireCurrentOfflineSchema(liveFallbackError);
+            return yield* getOfflineSnapshot();
+          }).pipe(Effect.provide(offlineReadOnlySnapshotLayer(config, minimumLogLevel)));
     return {
       mode: "offline" as const,
       projects: snapshot.projects.filter((project) => project.deletedAt === null),
@@ -526,7 +632,7 @@ const projectListCommand = Command.make("list", {
                 .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
                 .join("\n"),
       );
-    }),
+    }).pipe(withCliJsonErrorOutput(flags.json)),
   ),
 );
 
@@ -563,23 +669,29 @@ const projectActionListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List a project's actions."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode }) =>
-      Effect.gen(function* () {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        return flags.json
-          ? jsonOutput({
-              mode,
-              projectId: project.id,
-              title: project.title,
-              workspaceRoot: project.workspaceRoot,
-              actions: project.scripts,
-            })
-          : project.scripts.length === 0
-            ? `Project ${project.id} has no actions.`
-            : project.scripts
-                .map((action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`)
-                .join("\n");
-      }),
+    runProjectMutation(
+      flags,
+      flags.json,
+      ({ snapshot, mode }) =>
+        Effect.gen(function* () {
+          const project = yield* findProjectForAction(snapshot, flags.project);
+          return flags.json
+            ? jsonOutput({
+                mode,
+                projectId: project.id,
+                title: project.title,
+                workspaceRoot: project.workspaceRoot,
+                actions: project.scripts,
+              })
+            : project.scripts.length === 0
+              ? `Project ${project.id} has no actions.`
+              : project.scripts
+                  .map(
+                    (action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`,
+                  )
+                  .join("\n");
+        }),
+      { readOnly: true },
     ),
   ),
 );

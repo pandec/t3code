@@ -159,7 +159,15 @@ export interface CliServerFlags {
 export interface CliAuthLocationFlags {
   readonly baseDir: Option.Option<string>;
   readonly devUrl?: Option.Option<URL>;
+  readonly timeoutMs?: Option.Option<number>;
 }
+
+export const timeoutMsFlag = Flag.integer("timeout-ms").pipe(
+  Flag.withDescription(
+    "Timeout for live-server reads in milliseconds (equivalent to T3CODE_CLI_TIMEOUT_MS).",
+  ),
+  Flag.optional,
+);
 
 export const sharedServerLocationFlags = {
   baseDir: baseDirFlag,
@@ -168,6 +176,7 @@ export const sharedServerLocationFlags = {
 
 export const projectLocationFlags = {
   baseDir: baseDirFlag,
+  timeoutMs: timeoutMsFlag,
 } as const;
 
 export const sharedServerCommandFlags = {

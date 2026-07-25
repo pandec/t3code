@@ -28,6 +28,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
+import * as TestClock from "effect/testing/TestClock";
 import { Command } from "effect/unstable/cli";
 
 import { cli, makeCli } from "./bin.ts";
@@ -52,6 +53,7 @@ import { ThreadCliNoActiveTurnError } from "./cli/thread.ts";
 import {
   CliOrchestrationConflictError,
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationReadTimeoutError,
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   dispatchLiveOrchestrationCommand,
@@ -956,7 +958,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const server = NodeHttp.createServer((_request, response) => {
-          response.writeHead(500, { "content-type": "application/json" }).end('{"incomplete":');
+          response.writeHead(404, { "content-type": "application/json" }).end('{"incomplete":');
         });
         yield* Effect.promise(
           () =>
@@ -988,7 +990,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         ).pipe(Effect.flip);
 
         assert.instanceOf(error, CliOrchestrationUndeclaredStatusError);
-        assert.equal(error.status, 500);
+        assert.equal(error.status, 404);
       }),
     ).pipe(Effect.provide(FetchHttpClient.layer)),
   );
@@ -1049,6 +1051,70 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout) as { readonly workspaceRoot: string };
     assert.equal(output.workspaceRoot, workspaceRoot);
+  });
+
+  it("emits one structured JSON document for parser failures in a real CLI process", () => {
+    const result = NodeChildProcess.spawnSync(
+      process.execPath,
+      [NodePath.join(import.meta.dirname, "bin.ts"), "status", "--wat", "--json"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout) as {
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+        readonly detail?: Record<string, unknown>;
+      };
+    };
+    assert.equal(output.error.code, "UnrecognizedOption");
+    assert.include(output.error.message, "--wat");
+    assert.deepEqual(output.error.detail, { option: "--wat" });
+  });
+
+  it("emits structured JSON and exit 1 for handler failures in a real CLI process", () => {
+    const baseDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-cli-json-error-process-test-"),
+    );
+    const result = NodeChildProcess.spawnSync(
+      process.execPath,
+      [
+        NodePath.join(import.meta.dirname, "bin.ts"),
+        "project",
+        "action",
+        "add",
+        "/tmp/t3-cli-json-error-missing-project",
+        "--name",
+        "Test",
+        "--command",
+        "true",
+        "--base-dir",
+        baseDir,
+        "--json",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout) as {
+      readonly error: { readonly code: string };
+    };
+    assert.equal(output.error.code, "CliOrchestrationServerUnavailableError");
+  });
+
+  it("keeps explicit help human-readable when --json is present", () => {
+    const result = NodeChildProcess.spawnSync(
+      process.execPath,
+      [NodePath.join(import.meta.dirname, "bin.ts"), "status", "--json", "--help"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.include(result.stdout, "USAGE");
+    assert.include(result.stdout, "t3 status");
   });
 
   it.effect("keeps runtime warnings out of --json stdout in a real CLI process", () =>
@@ -1126,7 +1192,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           },
         });
 
-        yield* runCliWithRuntime(["status", "--base-dir", baseDir, "--json"]).pipe(Effect.flip);
+        yield* runCliWithRuntime(["status", "--base-dir", baseDir]).pipe(Effect.flip);
         assert.isTrue(NodeFS.existsSync(config.serverRuntimeStatePath));
 
         yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]).pipe(
@@ -1137,6 +1203,93 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         assert.equal(snapshot.projects.length, 0);
       }),
     ),
+  );
+
+  it.effect("falls back only for read-only commands when a live server read times out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const baseDir = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-fallback-test-"),
+        );
+        const workspaceRoot = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-fallback-workspace-"),
+        );
+        yield* runCliWithRuntime([
+          "project",
+          "add",
+          workspaceRoot,
+          "--title",
+          "Original Title",
+          "--base-dir",
+          baseDir,
+        ]);
+
+        const config = yield* makeCliTestServerConfig(baseDir);
+        const server = NodeHttp.createServer((_request, response) => {
+          // @effect-diagnostics-next-line globalTimers:off - delayed response exercises the CLI read deadline.
+          setTimeout(() => {
+            if (!response.destroyed) {
+              response
+                .writeHead(200, { "content-type": "application/json" })
+                .end(JSON.stringify({}));
+            }
+          }, 100);
+        });
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", resolve);
+            }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.closeAllConnections();
+            server.close();
+          }),
+        );
+        const address = server.address();
+        if (typeof address === "string" || address === null) {
+          assert.fail(`Expected TCP address, got ${String(address)}`);
+        }
+        yield* persistServerRuntimeState({
+          path: config.serverRuntimeStatePath,
+          state: {
+            version: 1,
+            pid: process.pid,
+            port: address.port,
+            origin: `http://127.0.0.1:${address.port}`,
+            startedAt: DateTime.formatIso(yield* DateTime.now),
+          },
+        });
+
+        const { output } = yield* captureStdout(
+          runCli(["project", "list", "--base-dir", baseDir, "--timeout-ms", "10", "--json"]),
+        );
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+        const listed = JSON.parse(output) as { readonly mode: string };
+        assert.equal(listed.mode, "offline", output);
+
+        const mutationError = yield* runCliWithRuntime([
+          "project",
+          "rename",
+          workspaceRoot,
+          "Changed Title",
+          "--base-dir",
+          baseDir,
+          "--timeout-ms",
+          "10",
+        ]).pipe(Effect.flip);
+        assert.instanceOf(mutationError, CliOrchestrationReadTimeoutError);
+        assert.equal(mutationError.phase, "discovery");
+
+        const snapshot = yield* readPersistedSnapshot(baseDir);
+        assert.equal(
+          snapshot.projects.find((project) => project.workspaceRoot === workspaceRoot)?.title,
+          "Original Title",
+        );
+      }),
+    ).pipe(TestClock.withLive),
   );
 
   it.effect("clears stale runtime discovery when its port refuses connections", () =>
@@ -1275,7 +1428,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
             created.threadId,
             "--base-dir",
             baseDir,
-            "--json",
           ]).pipe(Effect.flip);
           assert.instanceOf(interruptError, ThreadCliNoActiveTurnError);
 

@@ -25,13 +25,16 @@ import * as ServerConfig from "../config.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
-  CliOrchestrationDeclaredResponseError,
+  CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationServerUnavailableError,
   type CliLiveOrchestrationServer,
+  type CliLiveServerReadTimeouts,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
-  requireLiveOrchestrationServer,
-  withCliOrchestrationSession,
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
 import { findActiveProjectTarget } from "./projectTarget.ts";
 import {
@@ -49,7 +52,7 @@ const jsonFlag = Flag.boolean("json").pipe(
 );
 
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
-const isCliOrchestrationDeclaredResponseError = Schema.is(CliOrchestrationDeclaredResponseError);
+const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 
 export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNotFoundError>()(
   "ThreadCliNotFoundError",
@@ -156,38 +159,67 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
   json: boolean,
   run: (input: {
     readonly live: CliLiveOrchestrationServer;
-    readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
+    readonly token: string;
+    readonly timeouts: CliLiveServerReadTimeouts;
   }) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = json ? "None" : config.logLevel;
   return yield* Effect.gen(function* () {
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const live = yield* requireLiveOrchestrationServer(environmentAuth, config, "t3 thread cli");
-    return yield* run({ live, environmentAuth });
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = json ? "None" : config.logLevel;
+    return yield* Effect.gen(function* () {
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+      const outcome = yield* withResolvedLiveOrchestrationServer(
+        { environmentAuth, config, label: "t3 thread cli", timeouts },
+        (live, token) => run({ live, token, timeouts }),
+      );
+      if (Option.isNone(outcome)) {
+        return yield* new CliOrchestrationServerUnavailableError({
+          operation: "resolveLiveServer",
+          statePath: config.serverRuntimeStatePath,
+        });
+      }
+      return outcome.value;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
       ),
-    ),
-    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-  );
+      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+    );
+  }).pipe(withCliJsonErrorOutput(json));
 });
 
 const dispatchThreadCommand = (
   input: {
     readonly live: CliLiveOrchestrationServer;
-    readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
+    readonly token: string;
   },
   command: ClientOrchestrationCommand,
-) =>
-  withCliOrchestrationSession(input.environmentAuth, "t3 thread cli", (token) =>
-    dispatchLiveOrchestrationCommand(input.live.origin, token, command),
+) => dispatchLiveOrchestrationCommand(input.live.origin, input.token, command);
+
+export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStart")(function* <
+  OriginalError,
+  CleanupError,
+  R,
+>(originalError: OriginalError, cleanup: Effect.Effect<unknown, CleanupError, R>) {
+  return yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      const cleanupResult = yield* Effect.result(cleanup);
+      if (cleanupResult._tag === "Failure") {
+        return yield* new CliOrchestrationOutcomeUnknownError({
+          operation: "dispatchLiveServer",
+          cause: cleanupResult.failure,
+        });
+      }
+      return yield* Effect.fail(originalError);
+    }),
   );
+});
 
 const threadListCommand = Command.make("list", {
   ...projectLocationFlags,
@@ -288,18 +320,17 @@ const threadNewCommand = Command.make("new", {
         }
         const explicitModelSelection = hasModelFlags
           ? yield* Effect.gen(function* () {
-              const descriptor = yield* fetchLiveEnvironmentDescriptor(input.live.origin);
+              const descriptor = yield* fetchLiveEnvironmentDescriptor(
+                input.live.origin,
+                input.timeouts,
+              );
               if (descriptor.capabilities.providerCatalog !== true) {
                 return yield* new SessionCliServerUnsupportedError({
                   serverVersion: descriptor.serverVersion,
                   capability: "providerCatalog",
                 });
               }
-              const catalog = yield* withCliOrchestrationSession(
-                input.environmentAuth,
-                "t3 thread cli",
-                (token) => fetchProviderCatalog(input.live.origin, token),
-              );
+              const catalog = yield* fetchProviderCatalog(input.live.origin, input.token);
               const instance = yield* resolveThreadModelInstance({
                 catalog,
                 model: flags.model.pipe(Option.getOrThrow),
@@ -347,18 +378,22 @@ const threadNewCommand = Command.make("new", {
           interactionMode: flags.interactionMode,
           createdAt,
         }).pipe(
-          Effect.tapError((error) =>
-            isCliOrchestrationDeclaredResponseError(error)
-              ? Effect.gen(function* () {
-                  const cleanupCommandId = CommandId.make(yield* randomUuid);
-                  yield* dispatchThreadCommand(input, {
+          Effect.catch((error) => {
+            if (isCliOrchestrationOutcomeUnknownError(error)) return Effect.fail(error);
+            return randomUuid.pipe(
+              Effect.map(CommandId.make),
+              Effect.flatMap((cleanupCommandId) =>
+                compensateFailedThreadStart(
+                  error,
+                  dispatchThreadCommand(input, {
                     type: "thread.delete",
                     commandId: cleanupCommandId,
                     threadId,
-                  }).pipe(Effect.ignore({ log: true }));
-                })
-              : Effect.void,
-          ),
+                  }),
+                ),
+              ),
+            );
+          }),
         );
         yield* Console.log(
           flags.json

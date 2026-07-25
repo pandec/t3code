@@ -7,9 +7,12 @@ import {
   EnvironmentHttpConflictError,
   type OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
+import * as Config from "effect/Config";
+import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { HttpClientError } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
@@ -106,6 +109,24 @@ export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorCl
   }
 }
 
+export const CliLiveServerReadPhase = Schema.Literals(["discovery", "descriptor", "snapshot"]);
+export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
+
+export class CliOrchestrationReadTimeoutError extends Schema.TaggedErrorClass<CliOrchestrationReadTimeoutError>()(
+  "CliOrchestrationReadTimeoutError",
+  {
+    operation: Schema.Literal("callLiveServer"),
+    phase: CliLiveServerReadPhase,
+    timeoutMillis: Schema.Int,
+  },
+) {
+  override get message(): string {
+    return `The running server did not answer the ${this.phase} read within ${this.timeoutMillis}ms. Retry with a larger --timeout-ms (or T3CODE_CLI_TIMEOUT_MS) if the server is busy.`;
+  }
+}
+
+export const isCliOrchestrationReadTimeoutError = Schema.is(CliOrchestrationReadTimeoutError);
+
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 const isCliOrchestrationUndeclaredStatusError = Schema.is(CliOrchestrationUndeclaredStatusError);
 
@@ -113,7 +134,8 @@ export type CliOrchestrationCallError =
   | CliOrchestrationDeclaredResponseError
   | CliOrchestrationUndeclaredStatusError
   | CliOrchestrationRequestError
-  | CliOrchestrationConflictError;
+  | CliOrchestrationConflictError
+  | CliOrchestrationReadTimeoutError;
 
 export function cliOrchestrationErrorFromRequest(cause: unknown): CliOrchestrationCallError {
   if (isEnvironmentHttpConflictError(cause)) {
@@ -141,10 +163,72 @@ export function cliOrchestrationErrorFromRequest(cause: unknown): CliOrchestrati
   return new CliOrchestrationRequestError({ operation: "callLiveServer", cause });
 }
 
-const CLI_LIVE_SERVER_READ_TIMEOUT = Duration.seconds(1);
+const CLI_LIVE_SERVER_DISCOVERY_TIMEOUT_DEFAULT = Duration.seconds(3);
+const CLI_LIVE_SERVER_READ_TIMEOUT_DEFAULT = Duration.seconds(10);
 const CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS = 30_000;
-const withLiveServerReadTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.timeout(CLI_LIVE_SERVER_READ_TIMEOUT));
+
+export interface CliLiveServerReadTimeouts {
+  readonly discovery: Duration.Duration;
+  readonly read: Duration.Duration;
+}
+
+export const defaultCliLiveServerReadTimeouts: CliLiveServerReadTimeouts = {
+  discovery: CLI_LIVE_SERVER_DISCOVERY_TIMEOUT_DEFAULT,
+  read: CLI_LIVE_SERVER_READ_TIMEOUT_DEFAULT,
+};
+
+export const cliLiveServerReadTimeoutsFromMillis = (
+  overrideMillis: number,
+): CliLiveServerReadTimeouts => ({
+  // An explicit override applies to every live read: the shell snapshot behind
+  // thread/status commands runs under the discovery timeout, so clamping it to
+  // the short default would make the override ineffective exactly when the
+  // server is busy.
+  discovery: Duration.millis(overrideMillis),
+  read: Duration.millis(overrideMillis),
+});
+
+export const resolveCliLiveServerReadTimeouts = Effect.fn("resolveCliLiveServerReadTimeouts")(
+  function* (flagTimeoutMillis: Option.Option<number>) {
+    const envTimeoutMillis = yield* Config.int("T3CODE_CLI_TIMEOUT_MS").pipe(
+      Config.option,
+      Effect.catch(() =>
+        Console.error("Ignoring invalid T3CODE_CLI_TIMEOUT_MS; using default timeouts.").pipe(
+          Effect.as(Option.none<number>()),
+        ),
+      ),
+    );
+    const requestedOverrideMillis = Option.firstSomeOf([flagTimeoutMillis, envTimeoutMillis]);
+    const overrideMillis = requestedOverrideMillis.pipe(
+      Option.filter((value) => Number.isFinite(value) && value > 0),
+    );
+    if (Option.isSome(requestedOverrideMillis) && Option.isNone(overrideMillis)) {
+      yield* Console.error(
+        `Ignoring non-positive live-read timeout override (${requestedOverrideMillis.value}); using default timeouts.`,
+      );
+    }
+    return Option.isSome(overrideMillis)
+      ? cliLiveServerReadTimeoutsFromMillis(overrideMillis.value)
+      : defaultCliLiveServerReadTimeouts;
+  },
+);
+
+const withLiveServerReadTimeout =
+  (phase: CliLiveServerReadPhase, duration: Duration.Duration) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration,
+        orElse: () =>
+          Effect.fail(
+            new CliOrchestrationReadTimeoutError({
+              operation: "callLiveServer",
+              phase,
+              timeoutMillis: Duration.toMillis(duration),
+            }),
+          ),
+      }),
+    );
 
 interface DispatchAcknowledgement {
   readonly response: Response;
@@ -161,6 +245,17 @@ const fetchDispatchAcknowledgement = (
   CliOrchestrationOutcomeUnknownError | CliOrchestrationUndeclaredStatusError
 > =>
   Effect.callback((resume) => {
+    // An undeclared 5xx during dispatch can happen after the command committed
+    // (a defect between commit and response encoding), so the outcome is
+    // unknown; only sub-5xx statuses prove the command was rejected.
+    const undeclaredDispatchFailure = (status: number, cause: unknown) =>
+      status >= 500
+        ? new CliOrchestrationOutcomeUnknownError({ operation: "dispatchLiveServer", cause })
+        : new CliOrchestrationUndeclaredStatusError({
+            operation: "callLiveServer",
+            status,
+            cause,
+          });
     let settled = false;
     let responseStatus: number | undefined;
     let responseOk: boolean | undefined;
@@ -184,11 +279,10 @@ const fetchDispatchAcknowledgement = (
       resume(
         Effect.fail(
           responseOk === false && responseStatus !== undefined
-            ? new CliOrchestrationUndeclaredStatusError({
-                operation: "callLiveServer",
-                status: responseStatus,
-                cause: new Error("Server error acknowledgement timed out."),
-              })
+            ? undeclaredDispatchFailure(
+                responseStatus,
+                new Error("Server error acknowledgement timed out."),
+              )
             : new CliOrchestrationOutcomeUnknownError({
                 operation: "dispatchLiveServer",
                 cause: new Error("Server acknowledgement timed out."),
@@ -221,11 +315,7 @@ const fetchDispatchAcknowledgement = (
                 operation: "dispatchLiveServer",
                 cause,
               })
-            : new CliOrchestrationUndeclaredStatusError({
-                operation: "callLiveServer",
-                status: response.status,
-                cause,
-              });
+            : undeclaredDispatchFailure(response.status, cause);
         }
       })
       .then(
@@ -256,38 +346,85 @@ const makeLiveServerClient = (origin: string) =>
     baseUrl: origin,
   });
 
+// The CLI issues auth sessions by writing to the same SQLite database the live
+// server uses, so a busy server can surface as a transient SQLITE_BUSY here.
+export const causeChainHasSqliteBusy = (cause: unknown, seen = new Set<unknown>()): boolean => {
+  if (typeof cause !== "object" || cause === null || seen.has(cause)) return false;
+  seen.add(cause);
+  if ("code" in cause && cause.code === "SQLITE_BUSY") return true;
+  if (
+    "message" in cause &&
+    typeof cause.message === "string" &&
+    cause.message.includes("database is locked")
+  ) {
+    return true;
+  }
+  if ("cause" in cause && causeChainHasSqliteBusy(cause.cause, seen)) return true;
+  return "reason" in cause && causeChainHasSqliteBusy(cause.reason, seen);
+};
+
+const authSessionBusyRetryPolicy = {
+  while: (error: unknown) => causeChainHasSqliteBusy(error),
+  schedule: Schedule.exponential(Duration.millis(50)).pipe(Schedule.both(Schedule.recurs(3))),
+};
+
 export const withCliOrchestrationSession = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
   label: string,
   run: (token: string) => Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
-    environmentAuth.issueSession({ scopes: AuthAdministrativeScopes, label }),
+    environmentAuth
+      .issueSession({ scopes: AuthAdministrativeScopes, label })
+      .pipe(Effect.retry(authSessionBusyRetryPolicy)),
     (issued) => run(issued.token),
-    (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+    (issued) =>
+      environmentAuth
+        .revokeSession(issued.sessionId)
+        .pipe(Effect.retry(authSessionBusyRetryPolicy), Effect.ignore({ log: true })),
   );
 
-export const fetchLiveOrchestrationSnapshot = (origin: string, bearerToken: string) =>
+export const fetchLiveOrchestrationSnapshot = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
   Effect.gen(function* () {
     const client = yield* makeLiveServerClient(origin);
     return yield* client.orchestration.snapshot({
       headers: { authorization: `Bearer ${bearerToken}` },
     });
-  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("snapshot", timeouts.read),
+  );
 
-export const fetchLiveOrchestrationShell = (origin: string, bearerToken: string) =>
+export const fetchLiveOrchestrationShell = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
   Effect.gen(function* () {
     const client = yield* makeLiveServerClient(origin);
     return yield* client.orchestration.shellSnapshot({
       headers: { authorization: `Bearer ${bearerToken}` },
     });
-  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("discovery", timeouts.discovery),
+  );
 
-export const fetchLiveEnvironmentDescriptor = (origin: string) =>
+export const fetchLiveEnvironmentDescriptor = (
+  origin: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
   Effect.gen(function* () {
     const client = yield* makeLiveServerClient(origin);
     return yield* client.metadata.descriptor();
-  }).pipe(withLiveServerReadTimeout, Effect.mapError(cliOrchestrationErrorFromRequest));
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("descriptor", timeouts.read),
+  );
 
 export const dispatchLiveOrchestrationCommand = (
   origin: string,
@@ -314,6 +451,14 @@ export const dispatchLiveOrchestrationCommand = (
       const declared = decodeEnvironmentHttpCommonError(responsePayload);
       if (Option.isSome(declared)) {
         return yield* cliOrchestrationErrorFromRequest(declared.value);
+      }
+      // An undeclared 5xx can occur after the command committed, so the
+      // outcome is unknown; sub-5xx statuses prove the command was rejected.
+      if (response.status >= 500) {
+        return yield* new CliOrchestrationOutcomeUnknownError({
+          operation: "dispatchLiveServer",
+          cause: responsePayload,
+        });
       }
       return yield* new CliOrchestrationUndeclaredStatusError({
         operation: "callLiveServer",
@@ -364,61 +509,60 @@ const causeHasCode = (cause: unknown, code: string, seen = new Set<unknown>()): 
 
 const isConnectionRefused = (error: unknown): boolean => causeHasCode(error, "ECONNREFUSED");
 
-export const tryResolveLiveOrchestrationServer = Effect.fn("tryResolveLiveOrchestrationServer")(
-  function* (
-    environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
-    config: ServerConfig.ServerConfig["Service"],
-    label: string,
+export interface CliResolvedLiveOrchestrationInput {
+  readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
+  readonly config: ServerConfig.ServerConfig["Service"];
+  readonly label: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+}
+
+/**
+ * Resolves the persisted live server and runs `use` against it inside a single
+ * auth session, so discovery and the actual operation share one issue/revoke
+ * cycle. Returns `Option.none` when no live server exists for this data
+ * directory; a server that is alive but unresponsive fails with the discovery
+ * error instead of being treated as absent.
+ */
+export const withResolvedLiveOrchestrationServer = Effect.fn("withResolvedLiveOrchestrationServer")(
+  function* <A, E, R>(
+    input: CliResolvedLiveOrchestrationInput,
+    use: (live: CliLiveOrchestrationServer, token: string) => Effect.Effect<A, E, R>,
   ) {
-    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    const runtimeState = yield* readPersistedServerRuntimeState(
+      input.config.serverRuntimeStatePath,
+    );
     if (Option.isNone(runtimeState)) {
-      return Option.none<CliLiveOrchestrationServer>();
+      return Option.none<A>();
     }
 
-    const attempt = withCliOrchestrationSession(environmentAuth, label, (token) =>
-      fetchLiveOrchestrationShell(runtimeState.value.origin, token).pipe(
-        Effect.map((shell) => ({
+    return yield* withCliOrchestrationSession(input.environmentAuth, input.label, (token) =>
+      Effect.gen(function* () {
+        const attempted = yield* Effect.result(
+          fetchLiveOrchestrationShell(runtimeState.value.origin, token, input.timeouts),
+        );
+        if (attempted._tag === "Failure") {
+          yield* Effect.logDebug("Failed to connect to the persisted T3 CLI server.", {
+            origin: runtimeState.value.origin,
+            cause: attempted.failure,
+          });
+          if (
+            !(yield* isProcessAlive(runtimeState.value.pid)) ||
+            isConnectionRefused(attempted.failure)
+          ) {
+            yield* clearPersistedServerRuntimeState(input.config.serverRuntimeStatePath);
+            return Option.none<A>();
+          }
+          return yield* attempted.failure;
+        }
+
+        const live: CliLiveOrchestrationServer = {
           origin: runtimeState.value.origin,
           pid: runtimeState.value.pid,
           startedAt: runtimeState.value.startedAt,
-          shell,
-        })),
-      ),
+          shell: attempted.success,
+        };
+        return Option.some(yield* use(live, token));
+      }),
     );
-    const attempted = yield* Effect.result(attempt);
-    if (attempted._tag === "Success") {
-      return Option.some(attempted.success);
-    }
-
-    yield* Effect.logDebug("Failed to connect to the persisted T3 CLI server.", {
-      origin: runtimeState.value.origin,
-      cause: attempted.failure,
-    });
-    if (
-      !(yield* isProcessAlive(runtimeState.value.pid)) ||
-      isConnectionRefused(attempted.failure)
-    ) {
-      yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
-      return Option.none<CliLiveOrchestrationServer>();
-    }
-
-    return yield* attempted.failure;
-  },
-);
-
-export const requireLiveOrchestrationServer = Effect.fn("requireLiveOrchestrationServer")(
-  function* (
-    environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
-    config: ServerConfig.ServerConfig["Service"],
-    label: string,
-  ) {
-    const live = yield* tryResolveLiveOrchestrationServer(environmentAuth, config, label);
-    if (Option.isNone(live)) {
-      return yield* new CliOrchestrationServerUnavailableError({
-        operation: "resolveLiveServer",
-        statePath: config.serverRuntimeStatePath,
-      });
-    }
-    return live.value;
   },
 );

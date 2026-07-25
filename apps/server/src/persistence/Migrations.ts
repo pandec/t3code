@@ -109,6 +109,8 @@ export const migrationEntries = [
   [41, "ProjectionThreadsSnoozed", Migration0041],
 ] as const;
 
+export const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(

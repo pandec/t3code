@@ -4,9 +4,40 @@ The `t3` CLI exposes project and thread operations for scripts and external agen
 to receive one structured JSON document on stdout; routine runtime logs are suppressed so the output
 can be piped directly to tools such as `jq`.
 
-Check the exit code before parsing. On success the command exits `0` and stdout holds only the JSON
-document. On failure it exits non-zero and stdout carries a human-readable diagnostic instead of
-JSON, so `t3 ... --json | jq` should be guarded (for example `if out=$(t3 ... --json); then ...`).
+Check the exit code before parsing. On success the command exits `0` and stdout holds the result
+document. On failure it exits non-zero and stdout holds one error document instead:
+
+```json
+{
+  "error": {
+    "code": "CliOrchestrationReadTimeoutError",
+    "message": "The running server did not answer the snapshot read within 10000ms. ...",
+    "detail": { "operation": "callLiveServer", "phase": "snapshot", "timeoutMillis": 10000 }
+  }
+}
+```
+
+`code` is the stable error tag and `detail` carries the error's primitive fields (never the cause
+chain). When a mutation's outcome is ambiguous — the acknowledgement was lost, the server answered
+an undeclared 5xx during dispatch, or a multi-step command could not confirm its compensation — the
+error additionally carries `"outcome": "unknown"`; reconcile current state before retrying. Without
+that marker, the failing mutation was not applied or any earlier step was successfully compensated.
+
+## Live-read timeouts
+
+Project, thread, and status commands talk to the running server with phase-specific timeouts: the
+shell snapshot read that discovers the server (and backs thread/status commands) defaults to 3
+seconds, and further data reads (full snapshot, capability descriptor) default to 10 seconds.
+Override with `--timeout-ms <n>` or `T3CODE_CLI_TIMEOUT_MS`; an explicit override applies to every
+live read, discovery included, so raising it also helps thread and status commands on a busy
+server. Invalid or non-positive overrides are ignored with a warning on stderr. Timeout errors name
+the phase that expired. Mutations use a separate fixed 30-second acknowledgement bound.
+
+Read-only listings (`project list`, `project action list`) fall back to reading local state when the
+server is alive but slower than the timeout (or its database is briefly locked); a warning on
+stderr and `"mode": "offline"` in JSON output mark the fallback. The fallback opens the database
+strictly read-only — it never migrates the schema or writes — and refuses to read through a schema
+older than the CLI expects. Mutations never fall back to a stale read.
 
 ## Projects
 

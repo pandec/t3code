@@ -9,7 +9,11 @@ import { FetchHttpClient } from "effect/unstable/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
-import { tryResolveLiveOrchestrationServer } from "./orchestration.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
+import {
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
+} from "./orchestration.ts";
 import { threadCliState } from "./threadState.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
@@ -29,10 +33,10 @@ export const statusCommand = Command.make("status", {
       const minimumLogLevel = flags.json ? "None" : config.logLevel;
       return yield* Effect.gen(function* () {
         const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        const live = yield* tryResolveLiveOrchestrationServer(
-          environmentAuth,
-          config,
-          "t3 status cli",
+        const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs);
+        const live = yield* withResolvedLiveOrchestrationServer(
+          { environmentAuth, config, label: "t3 status cli", timeouts },
+          (resolved) => Effect.succeed(resolved),
         );
         if (Option.isNone(live)) {
           yield* Console.log(
@@ -83,6 +87,6 @@ export const statusCommand = Command.make("status", {
         ),
         Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
       );
-    }),
+    }).pipe(withCliJsonErrorOutput(flags.json)),
   ),
 );

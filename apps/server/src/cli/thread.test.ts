@@ -1,7 +1,15 @@
 import type { OrchestrationThreadShell } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
-import { threadSummary } from "./thread.ts";
+import {
+  CliOrchestrationDeclaredResponseError,
+  CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationRequestError,
+} from "./orchestration.ts";
+import { compensateFailedThreadStart, threadSummary } from "./thread.ts";
 
 const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThreadShell =>
   ({
@@ -37,3 +45,56 @@ it("normalizes missing legacy snooze timestamps to null", () => {
   assert.isNull(summary.snoozedUntil);
   assert.isNull(summary.snoozedAt);
 });
+
+const rejectedStart = new CliOrchestrationDeclaredResponseError({
+  operation: "callLiveServer",
+  code: "THREAD_START_REJECTED",
+  traceId: "trace-1",
+  cause: new Error("rejected"),
+});
+
+it.effect("preserves the rejected start error when compensation succeeds", () =>
+  Effect.gen(function* () {
+    const error = yield* compensateFailedThreadStart(rejectedStart, Effect.void).pipe(Effect.flip);
+
+    assert.strictEqual(error, rejectedStart);
+  }),
+);
+
+it.effect("marks the command outcome unknown when compensation fails", () =>
+  Effect.gen(function* () {
+    const cleanupFailure = new CliOrchestrationRequestError({
+      operation: "callLiveServer",
+      cause: new Error("cleanup acknowledgement lost"),
+    });
+    const error = yield* compensateFailedThreadStart(
+      rejectedStart,
+      Effect.fail(cleanupFailure),
+    ).pipe(Effect.flip);
+
+    assert.instanceOf(error, CliOrchestrationOutcomeUnknownError);
+  }),
+);
+
+it.effect("finishes compensation when interrupted after cleanup starts", () =>
+  Effect.gen(function* () {
+    const cleanupStarted = yield* Deferred.make<void>();
+    const releaseCleanup = yield* Deferred.make<void>();
+    let cleanupFinished = false;
+    const fiber = yield* compensateFailedThreadStart(
+      rejectedStart,
+      Effect.gen(function* () {
+        yield* Deferred.succeed(cleanupStarted, undefined);
+        yield* Deferred.await(releaseCleanup);
+        cleanupFinished = true;
+      }),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+
+    yield* Deferred.await(cleanupStarted);
+    fiber.interruptUnsafe();
+    yield* Deferred.succeed(releaseCleanup, undefined);
+    yield* Fiber.await(fiber);
+
+    assert.isTrue(cleanupFinished);
+  }),
+);
