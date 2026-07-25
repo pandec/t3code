@@ -42,13 +42,17 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
+const failFirstPrompt = process.env.T3_ACP_FAIL_FIRST_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const firstPromptDelayMs = Number(process.env.T3_ACP_FIRST_PROMPT_DELAY_MS ?? "0");
+const secondPromptDelayMs = Number(process.env.T3_ACP_SECOND_PROMPT_DELAY_MS ?? "0");
+const setModelDelayMs = Number(process.env.T3_ACP_SET_MODEL_DELAY_MS ?? "0");
 const cancelDelayMs = Number(process.env.T3_ACP_CANCEL_DELAY_MS ?? "0");
 const advertisedAuthMethodId = process.env.T3_ACP_ADVERTISED_AUTH_METHOD_ID;
+const advertisedAuthMethodType = process.env.T3_ACP_ADVERTISED_AUTH_METHOD_TYPE;
 const useHermesModes = process.env.T3_ACP_USE_HERMES_MODES === "1";
 const permissionOptionIds = {
   allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
@@ -331,6 +335,7 @@ const program = Effect.gen(function* () {
                 {
                   id: advertisedAuthMethodId,
                   name: advertisedAuthMethodId,
+                  ...(advertisedAuthMethodType === "terminal" ? { type: "terminal" as const } : {}),
                 },
               ],
             }
@@ -462,6 +467,9 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
+      if (Number.isFinite(setModelDelayMs) && setModelDelayMs > 0) {
+        yield* Effect.sleep(`${setModelDelayMs} millis`);
+      }
       if (!acpModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
@@ -539,19 +547,31 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+      const currentPromptCount = promptCount;
 
-      if (promptCount === 1 && Number.isFinite(firstPromptDelayMs) && firstPromptDelayMs > 0) {
+      if (
+        currentPromptCount === 1 &&
+        Number.isFinite(firstPromptDelayMs) &&
+        firstPromptDelayMs > 0
+      ) {
         yield* Effect.sleep(`${firstPromptDelayMs} millis`);
+      }
+      if (
+        currentPromptCount === 2 &&
+        Number.isFinite(secondPromptDelayMs) &&
+        secondPromptDelayMs > 0
+      ) {
+        yield* Effect.sleep(`${secondPromptDelayMs} millis`);
       }
       if (Number.isFinite(promptDelayMs) && promptDelayMs > 0) {
         yield* Effect.sleep(`${promptDelayMs} millis`);
       }
 
-      if (failPrompt) {
+      if (failPrompt || (failFirstPrompt && currentPromptCount === 1)) {
         return yield* AcpError.AcpRequestError.internalError("Mock prompt failure");
       }
 
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
+      if (emitStaleXAiPromptCompleteBeforeSecondHang && currentPromptCount === 1) {
         return {
           stopReason: "end_turn",
           _meta: {
@@ -561,7 +581,7 @@ const program = Effect.gen(function* () {
         };
       }
 
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 2) {
+      if (emitStaleXAiPromptCompleteBeforeSecondHang && currentPromptCount === 2) {
         const currentPromptId = promptIdFromRequestMeta(request) ?? "mock-current-xai-prompt-2";
         writeJsonRpcNotification("_x.ai/session/prompt_complete", {
           sessionId: requestedSessionId,
@@ -580,12 +600,12 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 1) {
+      if (emitOverlappingXAiPromptCompleteOutOfOrder && currentPromptCount === 1) {
         overlappingFirstPromptId = promptIdFromRequestMeta(request);
         return yield* Effect.never;
       }
 
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 2) {
+      if (emitOverlappingXAiPromptCompleteOutOfOrder && currentPromptCount === 2) {
         const secondPromptId = promptIdFromRequestMeta(request);
         if (overlappingFirstPromptId !== undefined && secondPromptId !== undefined) {
           writeJsonRpcNotification("_x.ai/session/prompt_complete", {
@@ -604,7 +624,7 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (hangPromptForever || (hangFirstPromptForever && promptCount === 1)) {
+      if (hangPromptForever || (hangFirstPromptForever && currentPromptCount === 1)) {
         return yield* Effect.never;
       }
 

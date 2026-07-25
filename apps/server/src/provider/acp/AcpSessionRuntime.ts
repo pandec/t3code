@@ -900,8 +900,12 @@ export const make = (
         );
       });
       return options.promptConcurrency === "concurrent"
-        ? promptStart(payload).pipe(
-            Effect.flatMap((handle) => handle.start.pipe(Effect.andThen(handle.awaitResult))),
+        ? Effect.uninterruptibleMask((restore) =>
+            promptStart(payload).pipe(
+              Effect.flatMap((handle) =>
+                handle.start.pipe(Effect.andThen(restore(handle.awaitResult))),
+              ),
+            ),
           )
         : promptSerializationSemaphore.withPermit(runPrompt);
     };

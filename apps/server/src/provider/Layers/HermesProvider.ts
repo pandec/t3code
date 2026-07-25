@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,7 +32,7 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
-import { makeHermesAcpRuntime } from "../acp/HermesAcpSupport.ts";
+import { HERMES_ACP_AUTH_ERROR_PREFIX, makeHermesAcpRuntime } from "../acp/HermesAcpSupport.ts";
 import { readHermesSkillsSnapshot } from "../hermesSkillsSnapshot.ts";
 
 const HERMES_PRESENTATION = {
@@ -384,7 +385,12 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     Effect.exit,
   );
   let discovery: HermesAcpDiscovery | undefined;
+  let authenticationUnavailable = false;
   if (Exit.isFailure(discoveryExit)) {
+    const discoveryError = Cause.squash(discoveryExit.cause);
+    authenticationUnavailable =
+      discoveryError instanceof Error &&
+      discoveryError.message.startsWith(HERMES_ACP_AUTH_ERROR_PREFIX);
     yield* Effect.logWarning("Hermes ACP discovery failed", {
       errorTag: causeErrorTag(discoveryExit.cause),
     });
@@ -413,8 +419,20 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     probe: {
       installed: true,
       version,
-      status: "ready",
-      auth: { status: discovery ? "authenticated" : "unknown" },
+      status: authenticationUnavailable ? "warning" : "ready",
+      auth: {
+        status: authenticationUnavailable
+          ? "unauthenticated"
+          : discovery
+            ? "authenticated"
+            : "unknown",
+      },
+      ...(authenticationUnavailable
+        ? {
+            message:
+              "Hermes provider credentials are not configured. Run `hermes --setup`, then refresh provider status.",
+          }
+        : {}),
     },
   });
 });

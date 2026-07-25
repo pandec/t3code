@@ -84,6 +84,28 @@ const makeTestAdapter = (binaryPath: string) =>
   ).pipe(Effect.orDie);
 
 it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
+  it.effect("surfaces terminal-only Hermes authentication during session startup", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            T3_ACP_ADVERTISED_AUTH_METHOD_ID: "hermes-setup",
+            T3_ACP_ADVERTISED_AUTH_METHOD_TYPE: "terminal",
+          }),
+        ),
+      );
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          threadId: ThreadId.make("hermes-auth-setup"),
+          provider: ProviderDriverKind.make("hermes"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        }),
+      );
+      expect(error.message).toContain("hermes --setup");
+    }),
+  );
+
   it.effect("starts a session and maps ACP prompt streaming to canonical events", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("hermes-core");
@@ -159,6 +181,65 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
     }),
+  );
+
+  it.effect("retains an early prompt failure until the final steer settles", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-mixed-outcome-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            T3_ACP_FAIL_FIRST_PROMPT: "1",
+            T3_ACP_FIRST_PROMPT_DELAY_MS: "150",
+            T3_ACP_SECOND_PROMPT_DELAY_MS: "300",
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          }),
+        ),
+      );
+      const threadId = ThreadId.make("hermes-mixed-outcome");
+      const completed =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.completed" }>>();
+      const terminalEvents: Array<Extract<ProviderRuntimeEvent, { type: "turn.completed" }>> = [];
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed"
+          ? Effect.sync(() => terminalEvents.push(event)).pipe(
+              Effect.andThen(Deferred.succeed(completed, event)),
+            )
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const original = yield* adapter.sendTurn({
+        threadId,
+        input: "fails first",
+        attachments: [],
+      });
+      yield* waitForFileContent(requestLogPath, "fails first");
+      const steer = yield* adapter.sendTurn({
+        threadId,
+        input: "succeeds last",
+        attachments: [],
+      });
+      assert.equal(steer.turnId, original.turnId);
+      yield* Effect.sleep("225 millis");
+      assert.lengthOf(terminalEvents, 0);
+      const terminal = yield* Deferred.await(completed);
+      assert.equal(terminal.payload.state, "failed");
+      assert.include(
+        terminal.payload.state === "failed" ? terminal.payload.errorMessage : "",
+        "Mock prompt failure",
+      );
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("uses provider permission kinds to select the agent option id", () =>
@@ -347,6 +428,47 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       assert.include(requests, '"modeId":"default"');
       yield* adapter.stopSession(threadId);
     }),
+  );
+
+  it.effect("does not launch a prompt when sendTurn is interrupted during model preparation", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-send-interrupt-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+            T3_ACP_SET_MODEL_DELAY_MS: "250",
+          }),
+        ),
+      );
+      const threadId = ThreadId.make("hermes-send-interrupt");
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "must not launch",
+          attachments: [],
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("hermes"),
+            model: "anthropic:claude-sonnet-5",
+          },
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* waitForFileContent(requestLogPath, "session/set_model");
+      yield* Fiber.interrupt(sendFiber);
+      yield* Effect.sleep("300 millis");
+      const requests = yield* Effect.promise(() => NodeFSP.readFile(requestLogPath, "utf8"));
+      assert.notInclude(requests, "session/prompt");
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("interrupts a running prompt and emits a cancelled turn", () =>

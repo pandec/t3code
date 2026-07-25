@@ -7,19 +7,29 @@ import {
   buildHermesAcpSpawnInput,
   resolveHermesAcpAuthMethodId,
   resolveHermesAcpModelId,
+  validateHermesAcpAuthSelection,
 } from "./HermesAcpSupport.ts";
 
 describe("HermesAcpSupport", () => {
-  it("uses an explicit auth override before the method advertised by Hermes", () => {
+  it("selects only advertised agent-managed authentication methods", () => {
     const initializeResult = {
       protocolVersion: 1,
       agentCapabilities: {},
-      authMethods: [{ id: "anthropic", name: "Anthropic" }],
+      authMethods: [
+        { id: "anthropic", name: "Anthropic" },
+        { id: "hermes-setup", name: "Setup", type: "terminal" as const },
+      ],
     };
     expect(resolveHermesAcpAuthMethodId(undefined, initializeResult)).toBe("anthropic");
-    expect(resolveHermesAcpAuthMethodId({ authMethodId: "openrouter" }, initializeResult)).toBe(
-      "openrouter",
+    expect(resolveHermesAcpAuthMethodId({ authMethodId: "anthropic" }, initializeResult)).toBe(
+      "anthropic",
     );
+    expect(
+      resolveHermesAcpAuthMethodId({ authMethodId: "openrouter" }, initializeResult),
+    ).toBeUndefined();
+    expect(
+      resolveHermesAcpAuthMethodId({ authMethodId: "hermes-setup" }, initializeResult),
+    ).toBeUndefined();
     expect(
       resolveHermesAcpAuthMethodId(undefined, {
         protocolVersion: 1,
@@ -27,6 +37,32 @@ describe("HermesAcpSupport", () => {
       }),
     ).toBeUndefined();
   });
+
+  it.effect("rejects terminal-only auth and stale explicit overrides", () =>
+    Effect.gen(function* () {
+      const terminalOnly = {
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [{ id: "hermes-setup", name: "Setup", type: "terminal" as const }],
+      };
+      const setupError = yield* Effect.flip(
+        validateHermesAcpAuthSelection(undefined, terminalOnly),
+      );
+      expect(setupError.message).toContain("hermes --setup");
+
+      const staleOverrideError = yield* Effect.flip(
+        validateHermesAcpAuthSelection(
+          { authMethodId: "openai-codex" },
+          {
+            protocolVersion: 1,
+            agentCapabilities: {},
+            authMethods: [{ id: "openrouter", name: "OpenRouter" }],
+          },
+        ),
+      );
+      expect(staleOverrideError.message).toContain("openai-codex");
+    }),
+  );
 
   it("builds the Hermes ACP command and preserves the instance environment", () => {
     expect(

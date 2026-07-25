@@ -27,6 +27,7 @@ async function makeHermesProbeWrapper(input?: {
   readonly gatewayOutput?: string;
   readonly failAcp?: boolean;
   readonly emitForeignCommands?: boolean;
+  readonly terminalOnlyAuth?: boolean;
 }) {
   const directory = await NodeFSP.mkdtemp(
     NodePath.join(NodeOS.tmpdir(), "t3code-hermes-provider-"),
@@ -46,6 +47,7 @@ if [ "$1" = "acp" ]; then
 	  export T3_ACP_USE_HERMES_MODES=1
 	  export T3_ACP_EMIT_HERMES_AVAILABLE_COMMANDS=1
 	  ${input?.emitForeignCommands ? "export T3_ACP_EMIT_HERMES_FOREIGN_AVAILABLE_COMMANDS=1" : ""}
+	  ${input?.terminalOnlyAuth ? "export T3_ACP_ADVERTISED_AUTH_METHOD_ID=hermes-setup\n\t  export T3_ACP_ADVERTISED_AUTH_METHOD_TYPE=terminal" : ""}
 	  exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}
 fi
 exit 2
@@ -147,5 +149,19 @@ it.layer(NodeServices.layer)("checkHermesProviderStatus", (it) => {
         "custom:hermes-model",
       ]);
     }),
+  );
+
+  it.effect("reports terminal-only Hermes authentication as setup-required", () =>
+    Effect.gen(function* () {
+      const binaryPath = yield* Effect.promise(() =>
+        makeHermesProbeWrapper({ terminalOnlyAuth: true }),
+      );
+      const snapshot = yield* checkHermesProviderStatus(
+        decodeHermesSettings({ enabled: true, binaryPath, requireGateway: false }),
+      );
+      expect(snapshot.status).toBe("warning");
+      expect(snapshot.auth.status).toBe("unauthenticated");
+      expect(snapshot.message).toContain("hermes --setup");
+    }).pipe(TestClock.withLive),
   );
 });

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
-import type * as EffectAcpErrors from "effect-acp/errors";
+import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -40,7 +40,43 @@ export function resolveHermesAcpAuthMethodId(
   hermesSettings: Pick<HermesSettings, "authMethodId"> | null | undefined,
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): string | undefined {
-  return hermesSettings?.authMethodId?.trim() || initializeResult.authMethods?.[0]?.id;
+  const configuredMethodId = hermesSettings?.authMethodId?.trim();
+  const agentManagedMethods = initializeResult.authMethods?.filter((method) => !("type" in method));
+  return configuredMethodId
+    ? agentManagedMethods?.find((method) => method.id === configuredMethodId)?.id
+    : agentManagedMethods?.[0]?.id;
+}
+
+export const HERMES_ACP_AUTH_ERROR_PREFIX = "Hermes authentication is unavailable:";
+
+export function validateHermesAcpAuthSelection(
+  hermesSettings: Pick<HermesSettings, "authMethodId"> | null | undefined,
+  initializeResult: EffectAcpSchema.InitializeResponse,
+): Effect.Effect<void, EffectAcpErrors.AcpError> {
+  const authMethods = initializeResult.authMethods;
+  if (!authMethods || authMethods.length === 0) {
+    return Effect.void;
+  }
+  const configuredMethodId = hermesSettings?.authMethodId?.trim();
+  if (configuredMethodId) {
+    const configuredMethod = authMethods.find((method) => method.id === configuredMethodId);
+    if (configuredMethod && !("type" in configuredMethod)) {
+      return Effect.void;
+    }
+    return Effect.fail(
+      EffectAcpErrors.AcpRequestError.invalidParams(
+        `${HERMES_ACP_AUTH_ERROR_PREFIX} configured method '${configuredMethodId}' is not an advertised agent-managed method.`,
+      ),
+    );
+  }
+  if (authMethods.some((method) => !("type" in method))) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    EffectAcpErrors.AcpRequestError.invalidParams(
+      `${HERMES_ACP_AUTH_ERROR_PREFIX} run \`hermes --setup\` to configure a provider before starting T3 Code.`,
+    ),
+  );
 }
 
 export const makeHermesAcpRuntime = (
@@ -63,9 +99,20 @@ export const makeHermesAcpRuntime = (
         Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),
       ),
     );
-    return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+    const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
       Effect.provide(acpContext),
     );
+    return {
+      ...runtime,
+      start: () =>
+        runtime
+          .start()
+          .pipe(
+            Effect.tap((started) =>
+              validateHermesAcpAuthSelection(hermesSettings, started.initializeResult),
+            ),
+          ),
+    } satisfies AcpSessionRuntime.AcpSessionRuntime["Service"];
   });
 
 export function resolveHermesAcpModelId(model: string | null | undefined): string | undefined {

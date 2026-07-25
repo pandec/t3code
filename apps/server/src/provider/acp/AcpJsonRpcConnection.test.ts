@@ -6,6 +6,7 @@ import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -39,23 +40,6 @@ function waitForPromptStarts(
   }
   return Effect.sleep("10 millis").pipe(
     Effect.andThen(Effect.suspend(() => waitForPromptStarts(events, expected, attempts - 1))),
-  );
-}
-
-function waitForFileContent(
-  filePath: string,
-  expected: string,
-  attempts = 100,
-): Effect.Effect<string> {
-  const contents = NodeFS.existsSync(filePath) ? NodeFS.readFileSync(filePath, "utf8") : "";
-  if (contents.includes(expected)) {
-    return Effect.succeed(contents);
-  }
-  if (attempts <= 0) {
-    return Effect.die(new Error(`Timed out waiting for ${expected} in ${filePath}`));
-  }
-  return Effect.sleep("10 millis").pipe(
-    Effect.andThen(Effect.suspend(() => waitForFileContent(filePath, expected, attempts - 1))),
   );
 }
 
@@ -492,66 +476,77 @@ describe("AcpSessionRuntime", () => {
 
   it.effect(
     "holds concurrent prompt registration behind cancellation through caller interrupt",
-    () => {
-      const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
-      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "acp-cancel-barrier-"));
-      const requestLogPath = NodePath.join(directory, "requests.ndjson");
-      return Effect.gen(function* () {
-        const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-        yield* runtime.start();
+    () =>
+      Effect.gen(function* () {
+        const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+        const cancelSendStarted = yield* Deferred.make<void>();
+        const releaseCancelSend = yield* Deferred.make<void>();
+        yield* Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+          yield* runtime.start();
 
-        const firstHandle = yield* runtime.promptStart({
-          prompt: [{ type: "text", text: "first" }],
-        });
-        yield* firstHandle.start;
-        yield* waitForPromptStarts(requestEvents, 1);
+          const firstHandle = yield* runtime.promptStart({
+            prompt: [{ type: "text", text: "first" }],
+          });
+          yield* firstHandle.start;
+          yield* waitForPromptStarts(requestEvents, 1);
 
-        const cancelFiber = yield* runtime.cancel.pipe(
-          Effect.forkChild({ startImmediately: true }),
-        );
-        yield* waitForFileContent(requestLogPath, "session/cancel");
-        const secondHandleFiber = yield* runtime
-          .promptStart({ prompt: [{ type: "text", text: "second" }] })
-          .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* Effect.sleep("25 millis");
-        expect(
-          requestEvents.filter(
-            (event) => event.method === "session/prompt" && event.status === "started",
-          ),
-        ).toHaveLength(1);
+          const cancelFiber = yield* runtime.cancel.pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Deferred.await(cancelSendStarted);
+          const secondHandleFiber = yield* runtime
+            .promptStart({ prompt: [{ type: "text", text: "second" }] })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          const interruptFiber = yield* Fiber.interrupt(cancelFiber).pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Effect.sleep("25 millis");
+          expect(secondHandleFiber.pollUnsafe()).toBeUndefined();
 
-        yield* Fiber.interrupt(cancelFiber);
-        expect(yield* firstHandle.awaitResult).toMatchObject({ stopReason: "cancelled" });
-        const secondHandle = yield* Fiber.join(secondHandleFiber);
-        yield* secondHandle.start;
-        expect(yield* secondHandle.awaitResult).toMatchObject({ stopReason: "end_turn" });
-      }).pipe(
-        Effect.provide(
-          AcpSessionRuntime.layer({
-            authMethodId: "test",
-            promptConcurrency: "concurrent",
-            spawn: {
-              command: mockAgentCommand,
-              args: mockAgentArgs,
-              env: {
-                T3_ACP_CANCEL_DELAY_MS: "150",
-                T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
-                T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          yield* Deferred.succeed(releaseCancelSend, undefined);
+          yield* Fiber.join(interruptFiber);
+          expect(yield* firstHandle.awaitResult).toMatchObject({ stopReason: "cancelled" });
+          const secondHandle = yield* Fiber.join(secondHandleFiber);
+          yield* secondHandle.start;
+          expect(yield* secondHandle.awaitResult).toMatchObject({ stopReason: "end_turn" });
+        }).pipe(
+          Effect.provide(
+            AcpSessionRuntime.layer({
+              authMethodId: "test",
+              promptConcurrency: "concurrent",
+              spawn: {
+                command: mockAgentCommand,
+                args: mockAgentArgs,
+                env: {
+                  T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+                },
               },
-            },
-            cwd: process.cwd(),
-            clientInfo: { name: "t3-test", version: "0.0.0" },
-            requestLogger: (event) =>
-              Effect.sync(() => {
-                requestEvents.push(event);
-              }),
-          }),
-        ),
-        Effect.scoped,
-        Effect.provide(NodeServices.layer),
-        TestClock.withLive,
-      );
-    },
+              cwd: process.cwd(),
+              clientInfo: { name: "t3-test", version: "0.0.0" },
+              requestLogger: (event) =>
+                Effect.sync(() => {
+                  requestEvents.push(event);
+                }),
+              protocolLogging: {
+                logOutgoing: true,
+                logger: (event) => {
+                  const payload = event.payload as { readonly tag?: unknown };
+                  return event.direction === "outgoing" &&
+                    event.stage === "decoded" &&
+                    payload.tag === "session/cancel"
+                    ? Deferred.succeed(cancelSendStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseCancelSend)),
+                      )
+                    : Effect.void;
+                },
+              },
+            }),
+          ),
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+        );
+      }).pipe(TestClock.withLive),
   );
 
   it.effect("segments assistant text around ACP tool calls", () =>
