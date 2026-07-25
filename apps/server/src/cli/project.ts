@@ -174,6 +174,30 @@ const ProjectCliRuntimeLive = Layer.mergeAll(
   ),
 );
 
+// Full offline stack for when no live server owns the database: may run
+// migrations and dispatch through the local orchestration engine.
+const offlineEngineRuntimeLayer = (
+  config: ServerConfig.ServerConfig["Service"],
+  minimumLogLevel: ServerConfig.ServerConfig["Service"]["logLevel"],
+) =>
+  ProjectCliRuntimeLive.pipe(
+    Layer.provide(ServerConfig.layer(config)),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+  );
+
+// Snapshot-only stack for when a live server still owns the database: opens it
+// strictly read-only — no migrations, no projection bootstrap, no writes.
+const offlineReadOnlySnapshotLayer = (
+  config: ServerConfig.ServerConfig["Service"],
+  minimumLogLevel: ServerConfig.ServerConfig["Service"]["logLevel"],
+) =>
+  OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(RepositoryIdentityResolver.layer),
+    Layer.provideMerge(SqliteReadOnlyPersistenceLive),
+    Layer.provide(ServerConfig.layer(config)),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+  );
+
 const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   workspaceRoot: string,
   explicitTitle?: string,
@@ -192,6 +216,45 @@ const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   const path = yield* Path.Path;
   const basename = path.basename(workspaceRoot).trim();
   return basename.length > 0 ? basename : "project";
+});
+
+export const addProjectToOrchestration = Effect.fn("addProjectToOrchestration")(function* (input: {
+  readonly projects: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly workspaceRoot: string;
+    readonly deletedAt?: string | null;
+  }>;
+  readonly workspaceRoot: string;
+  readonly title?: string;
+  readonly dispatch: (
+    command: Extract<ClientOrchestrationCommand, { type: "project.create" }>,
+  ) => Effect.Effect<unknown, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
+}) {
+  const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(input.workspaceRoot);
+  const existingProject = input.projects.find(
+    (project) => project.deletedAt == null && project.workspaceRoot === workspaceRoot,
+  );
+  if (existingProject) {
+    return yield* new ProjectAlreadyExistsError({
+      operation: "addProject",
+      projectId: existingProject.id,
+      workspaceRoot,
+    });
+  }
+
+  const title = yield* resolveProjectTitle(workspaceRoot, input.title);
+  const projectId = ProjectId.make(yield* projectCommandUuid);
+  yield* input.dispatch({
+    type: "project.create",
+    commandId: CommandId.make(yield* projectCommandUuid),
+    projectId,
+    title,
+    workspaceRoot,
+    defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
+    createdAt: DateTime.formatIso(yield* DateTime.now),
+  });
+  return { projectId, title, workspaceRoot };
 });
 
 const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
@@ -311,13 +374,6 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
       }
 
       if (liveFallbackError === undefined) {
-        // No live server owns the database: the full offline stack may run
-        // migrations and dispatch through the local orchestration engine.
-        const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
-          Layer.provide(ServerConfig.layer(config)),
-          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-        );
-
         return yield* Effect.gen(function* () {
           const snapshot = yield* getOfflineSnapshot();
           const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
@@ -327,17 +383,8 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
             mode: "offline",
           });
           yield* Console.log(output);
-        }).pipe(Effect.provide(offlineRuntimeLayer));
+        }).pipe(Effect.provide(offlineEngineRuntimeLayer(config, minimumLogLevel)));
       }
-
-      // A live server still owns the database: open it strictly read-only —
-      // no migrations, no projection bootstrap, no writes of any kind.
-      const readOnlySnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
-        Layer.provideMerge(RepositoryIdentityResolver.layer),
-        Layer.provideMerge(SqliteReadOnlyPersistenceLive),
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-      );
 
       return yield* Effect.gen(function* () {
         yield* requireCurrentOfflineSchema(liveFallbackError);
@@ -348,7 +395,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
           mode: "offline",
         });
         yield* Console.log(output);
-      }).pipe(Effect.provide(readOnlySnapshotLayer));
+      }).pipe(Effect.provide(offlineReadOnlySnapshotLayer(config, minimumLogLevel)));
     }).pipe(
       Effect.provide(
         Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
@@ -384,28 +431,11 @@ const projectAddCommand = Command.make("add", {
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
-        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
-        const existingProject = snapshot.projects.find(
-          (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
-        );
-        if (existingProject) {
-          return yield* new ProjectAlreadyExistsError({
-            operation: "addProject",
-            projectId: existingProject.id,
-            workspaceRoot,
-          });
-        }
-
-        const title = yield* resolveProjectTitle(workspaceRoot, Option.getOrUndefined(flags.title));
-        const projectId = ProjectId.make(yield* projectCommandUuid);
-        yield* dispatch({
-          type: "project.create",
-          commandId: CommandId.make(yield* projectCommandUuid),
-          projectId,
-          title,
-          workspaceRoot,
-          defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
-          createdAt: DateTime.formatIso(yield* DateTime.now),
+        const { projectId, title, workspaceRoot } = yield* addProjectToOrchestration({
+          projects: snapshot.projects,
+          workspaceRoot: flags.workspaceRoot,
+          ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+          dispatch,
         });
         return flags.json
           ? jsonOutput({ projectId, title, workspaceRoot, action: "added" })
@@ -515,36 +545,94 @@ const projectRenameCommand = Command.make("rename", {
   ),
 );
 
+const runProjectList = Effect.fn("runProjectList")(function* (
+  flags: CliAuthLocationFlags,
+  json: boolean,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const minimumLogLevel = json ? "None" : config.logLevel;
+
+  return yield* Effect.gen(function* () {
+    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+    const liveAttempt = yield* Effect.result(
+      withResolvedLiveOrchestrationServer(
+        { environmentAuth, config, label: "t3 project cli", timeouts },
+        (live) => Effect.succeed(live.shell.projects),
+      ),
+    );
+    if (liveAttempt._tag === "Success" && Option.isSome(liveAttempt.success)) {
+      return {
+        mode: "live" as const,
+        projects: liveAttempt.success.value,
+      };
+    }
+
+    const liveFallbackError =
+      liveAttempt._tag === "Failure" &&
+      (isCliOrchestrationReadTimeoutError(liveAttempt.failure) ||
+        causeChainHasSqliteBusy(liveAttempt.failure))
+        ? liveAttempt.failure
+        : undefined;
+    if (liveAttempt._tag === "Failure") {
+      if (liveFallbackError === undefined) {
+        return yield* Effect.fail(liveAttempt.failure);
+      }
+      yield* Console.error(
+        `${liveFallbackError.message} Reading local state instead; it may lag behind the running server.`,
+      );
+    }
+
+    const snapshot =
+      liveFallbackError === undefined
+        ? yield* getOfflineSnapshot().pipe(
+            Effect.provide(offlineEngineRuntimeLayer(config, minimumLogLevel)),
+          )
+        : yield* Effect.gen(function* () {
+            yield* requireCurrentOfflineSchema(liveFallbackError);
+            return yield* getOfflineSnapshot();
+          }).pipe(Effect.provide(offlineReadOnlySnapshotLayer(config, minimumLogLevel)));
+    return {
+      mode: "offline" as const,
+      projects: snapshot.projects.filter((project) => project.deletedAt === null),
+    };
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+        Layer.provideMerge(FetchHttpClient.layer),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+      ),
+    ),
+    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+  );
+});
+
 const projectListCommand = Command.make("list", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
   Command.withDescription("List active projects."),
   Command.withHandler((flags) =>
-    runProjectMutation(
-      flags,
-      flags.json,
-      ({ snapshot, mode }) => {
-        const projects = snapshot.projects
-          .filter((project) => project.deletedAt === null)
-          .map((project) => ({
-            id: project.id,
-            title: project.title,
-            workspaceRoot: project.workspaceRoot,
-            defaultModelSelection: project.defaultModelSelection,
-          }));
-        return Effect.succeed(
-          flags.json
-            ? jsonOutput({ mode, projects })
-            : projects.length === 0
-              ? "No active projects."
-              : projects
-                  .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
-                  .join("\n"),
-        );
-      },
-      { readOnly: true },
-    ),
+    Effect.gen(function* () {
+      const { mode, projects: projectShells } = yield* runProjectList(flags, flags.json);
+      const projects = projectShells.map((project) => ({
+        id: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        defaultModelSelection: project.defaultModelSelection,
+      }));
+      yield* Console.log(
+        flags.json
+          ? jsonOutput({ mode, projects })
+          : projects.length === 0
+            ? "No active projects."
+            : projects
+                .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
+                .join("\n"),
+      );
+    }).pipe(withCliJsonErrorOutput(flags.json)),
   ),
 );
 

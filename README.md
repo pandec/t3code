@@ -35,6 +35,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### CLI & automation
 
 - **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting. Live reads use configurable phase-specific timeouts (`--timeout-ms` / `T3CODE_CLI_TIMEOUT_MS`), commands reuse one auth session, `--json` failures emit a stable machine-readable error document, and read-only listings fall back to local state when the server is busy.
+- **Session-handover CLI primitives** — inspect and import Claude/Codex transcripts (including standard worktrees and explicit model options), create model-specific threads, and archive handed-off source threads.
 
 ### Reliability
 

@@ -33,26 +33,48 @@ const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "models_cache.json"]);
 const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "tmp"]);
 const REPLACEABLE_SHARED_RUNTIME_DIRECTORIES = new Set(["mcp-oauth-locks"]);
 
-function resolveHomePath(path: Path.Path, value: string | undefined): string {
-  const expanded =
-    value && value.trim().length > 0
-      ? expandHomePath(value)
-      : path.join(NodeOS.homedir(), ".codex");
-  return path.resolve(expanded);
+function resolveHomePath(path: Path.Path, value: string): string {
+  return path.resolve(expandHomePath(value));
 }
 
 export const resolveCodexHomeLayout = Effect.fn("resolveCodexHomeLayout")(function* (
   config: CodexSettings,
+  environment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<CodexHomeLayout, never, Path.Path> {
   const path = yield* Path.Path;
-  const sharedHomePath = resolveHomePath(path, config.homePath);
+  const configuredHomePath = config.homePath.trim();
+  const environmentCodexHome = environment.CODEX_HOME?.trim() ?? "";
+  const environmentHome = environment.HOME?.trim() ?? "";
+  const selectedHomePath =
+    configuredHomePath ||
+    environmentCodexHome ||
+    (environmentHome
+      ? path.join(environmentHome, ".codex")
+      : path.join(NodeOS.homedir(), ".codex"));
+  const sharedHomePath = resolveHomePath(path, selectedHomePath);
   const shadowHomePath = config.shadowHomePath.trim();
   if (shadowHomePath.length === 0) {
+    const relativeEnvironmentKey =
+      configuredHomePath.length === 0 &&
+      environmentCodexHome.length > 0 &&
+      !path.isAbsolute(environmentCodexHome)
+        ? `codex:relative-home:${environmentCodexHome}`
+        : configuredHomePath.length === 0 &&
+            environmentCodexHome.length === 0 &&
+            environmentHome.length > 0 &&
+            !path.isAbsolute(environmentHome)
+          ? `codex:relative-user-home:${environmentHome}`
+          : undefined;
     return {
       mode: "direct",
       sharedHomePath,
-      effectiveHomePath: config.homePath.trim().length > 0 ? sharedHomePath : undefined,
-      continuationKey: `codex:home:${sharedHomePath}`,
+      effectiveHomePath:
+        configuredHomePath.length > 0 ||
+        (relativeEnvironmentKey === undefined &&
+          (environmentCodexHome.length > 0 || environmentHome.length > 0))
+          ? sharedHomePath
+          : undefined,
+      continuationKey: relativeEnvironmentKey ?? `codex:home:${sharedHomePath}`,
     };
   }
 

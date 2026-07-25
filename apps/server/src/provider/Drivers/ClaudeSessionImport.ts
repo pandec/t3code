@@ -1,6 +1,6 @@
 /**
  * ClaudeSessionImport — discovery and parsing of Claude Code CLI sessions
- * persisted under `<home>/.claude/projects/<escaped-cwd>/<uuid>.jsonl`.
+ * persisted under `<config-dir>/projects/<escaped-cwd>/<uuid>.jsonl`.
  *
  * The JSONL format is not a public interchange contract. Parsing is
  * deliberately strict: known-benign record types are skipped, but an
@@ -308,8 +308,8 @@ export interface ClaudeImportableSessionSummary {
   readonly updatedAt: string;
 }
 
-function sessionsDirectory(path: Path.Path, homePath: string, canonicalCwd: string) {
-  return path.join(homePath, ".claude", "projects", claudeProjectDirectoryName(canonicalCwd));
+function sessionsDirectory(path: Path.Path, configDirPath: string, canonicalCwd: string) {
+  return path.join(configDirPath, "projects", claudeProjectDirectoryName(canonicalCwd));
 }
 
 const readTranscriptLines = Effect.fn("readTranscriptLines")(function* (input: {
@@ -348,7 +348,7 @@ const readTranscriptLines = Effect.fn("readTranscriptLines")(function* (input: {
  */
 export const readClaudeSessionTranscript = Effect.fn("readClaudeSessionTranscript")(
   function* (input: {
-    readonly homePath: string;
+    readonly configDirPath: string;
     readonly canonicalCwd: string;
     readonly sessionId: string;
   }) {
@@ -359,7 +359,7 @@ export const readClaudeSessionTranscript = Effect.fn("readClaudeSessionTranscrip
     }
     const path = yield* Path.Path;
     const filePath = path.join(
-      sessionsDirectory(path, input.homePath, input.canonicalCwd),
+      sessionsDirectory(path, input.configDirPath, input.canonicalCwd),
       `${input.sessionId}.jsonl`,
     );
     const lines = yield* readTranscriptLines({ filePath, sessionId: input.sessionId });
@@ -373,10 +373,10 @@ export const readClaudeSessionTranscript = Effect.fn("readClaudeSessionTranscrip
  * announced instead of sessions silently disappearing from the picker.
  */
 export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscripts")(
-  function* (input: { readonly homePath: string; readonly canonicalCwd: string }) {
+  function* (input: { readonly configDirPath: string; readonly canonicalCwd: string }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const directory = sessionsDirectory(path, input.homePath, input.canonicalCwd);
+    const directory = sessionsDirectory(path, input.configDirPath, input.canonicalCwd);
     const directoryExists = yield* fileSystem.exists(directory).pipe(
       Effect.mapError(
         (cause) =>
@@ -404,7 +404,7 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
       if (match === null) continue;
       const sessionId = match[1]!;
       const transcript = yield* readClaudeSessionTranscript({
-        homePath: input.homePath,
+        configDirPath: input.configDirPath,
         canonicalCwd: input.canonicalCwd,
         sessionId,
       });

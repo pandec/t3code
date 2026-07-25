@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ModelSelection } from "./orchestration.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const SESSION_IMPORT_WS_METHODS = {
@@ -17,9 +18,13 @@ export class SessionImportError extends Schema.TaggedErrorClass<SessionImportErr
       "provider-read-failed",
       "nothing-to-import",
       "already-imported",
+      "invalid-model",
+      "invalid-options",
+      "invalid-worktree",
       "import-failed",
     ]),
     detail: Schema.String,
+    existingThreadId: Schema.optional(ThreadId),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -43,6 +48,7 @@ export type SessionImportCandidate = typeof SessionImportCandidate.Type;
 
 export const SessionImportListCandidatesPayload = Schema.Struct({
   projectId: ProjectId,
+  cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type SessionImportListCandidatesPayload = typeof SessionImportListCandidatesPayload.Type;
 
@@ -55,10 +61,24 @@ export const SessionImportPayload = Schema.Struct({
   projectId: ProjectId,
   instanceId: ProviderInstanceId,
   nativeSessionId: TrimmedNonEmptyString,
+  modelSelection: Schema.optional(ModelSelection),
+  worktree: Schema.optional(
+    Schema.Struct({
+      branch: TrimmedNonEmptyString,
+      worktreePath: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type SessionImportPayload = typeof SessionImportPayload.Type;
 
+export const SessionImportWarning = Schema.Struct({
+  code: Schema.Literal("meta-update-failed"),
+  message: Schema.String,
+});
+export type SessionImportWarning = typeof SessionImportWarning.Type;
+
 export const SessionImportResult = Schema.Struct({
   threadId: ThreadId,
+  warnings: Schema.optional(Schema.Array(SessionImportWarning)),
 });
 export type SessionImportResult = typeof SessionImportResult.Type;
