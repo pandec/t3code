@@ -18,6 +18,10 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+const emitHermesAvailableCommands = process.env.T3_ACP_EMIT_HERMES_AVAILABLE_COMMANDS === "1";
+const emitHermesForeignAvailableCommands =
+  process.env.T3_ACP_EMIT_HERMES_FOREIGN_AVAILABLE_COMMANDS === "1";
+const emitHermesOpenToolCall = process.env.T3_ACP_EMIT_HERMES_OPEN_TOOL_CALL === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
@@ -28,6 +32,7 @@ const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANC
 const omitXAiPromptCompleteStopReason =
   process.env.T3_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
 const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
+const emptyLoadSession = process.env.T3_ACP_EMPTY_LOAD_SESSION === "1";
 const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.T3_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
@@ -37,10 +42,18 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
+const failFirstPrompt = process.env.T3_ACP_FAIL_FIRST_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
+const firstPromptDelayMs = Number(process.env.T3_ACP_FIRST_PROMPT_DELAY_MS ?? "0");
+const secondPromptDelayMs = Number(process.env.T3_ACP_SECOND_PROMPT_DELAY_MS ?? "0");
+const setModelDelayMs = Number(process.env.T3_ACP_SET_MODEL_DELAY_MS ?? "0");
+const cancelDelayMs = Number(process.env.T3_ACP_CANCEL_DELAY_MS ?? "0");
+const advertisedAuthMethodId = process.env.T3_ACP_ADVERTISED_AUTH_METHOD_ID;
+const advertisedAuthMethodType = process.env.T3_ACP_ADVERTISED_AUTH_METHOD_TYPE;
+const useHermesModes = process.env.T3_ACP_USE_HERMES_MODES === "1";
 const permissionOptionIds = {
   allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
   allowAlways: process.env.T3_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
@@ -48,7 +61,7 @@ const permissionOptionIds = {
 };
 const sessionId = "mock-session-1";
 
-let currentModeId = "ask";
+let currentModeId = process.env.T3_ACP_INITIAL_MODE_ID ?? (useHermesModes ? "default" : "ask");
 let currentModelId = "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
@@ -254,23 +267,29 @@ function availableModels(): ReadonlyArray<{
   }));
 }
 
-const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
-  {
-    id: "ask",
-    name: "Ask",
-    description: "Request permission before making any changes",
-  },
-  {
-    id: "architect",
-    name: "Architect",
-    description: "Design and plan software systems without implementation",
-  },
-  {
-    id: "code",
-    name: "Code",
-    description: "Write and modify code with full tool access",
-  },
-];
+const availableModes: ReadonlyArray<AcpSchema.SessionMode> = useHermesModes
+  ? [
+      { id: "default", name: "Default" },
+      { id: "accept_edits", name: "Accept edits" },
+      { id: "dont_ask", name: "Don't ask" },
+    ]
+  : [
+      {
+        id: "ask",
+        name: "Ask",
+        description: "Request permission before making any changes",
+      },
+      {
+        id: "architect",
+        name: "Architect",
+        description: "Design and plan software systems without implementation",
+      },
+      {
+        id: "code",
+        name: "Code",
+        description: "Write and modify code with full tool access",
+      },
+    ];
 
 function modeState(): AcpSchema.SessionModeState {
   return {
@@ -283,14 +302,20 @@ const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "grok-build", name: "Grok Build" },
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
 ];
+const acpModels: ReadonlyArray<AcpSchema.ModelInfo> = useHermesModes
+  ? [
+      { modelId: "openai-codex:gpt-5.6-sol", name: "GPT-5.6 Sol" },
+      { modelId: "anthropic:claude-sonnet-5", name: "Claude Sonnet 5" },
+    ]
+  : grokAcpModels;
 
 function modelState(): AcpSchema.SessionModelState {
-  const modelId = grokAcpModels.some((model) => model.modelId === currentModelId)
+  const modelId = acpModels.some((model) => model.modelId === currentModelId)
     ? currentModelId
-    : "grok-build";
+    : (acpModels[0]?.modelId ?? "default");
   return {
     currentModelId: modelId,
-    availableModels: grokAcpModels,
+    availableModels: acpModels,
   };
 }
 
@@ -304,18 +329,74 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true },
+        ...(advertisedAuthMethodId
+          ? {
+              authMethods: [
+                {
+                  id: advertisedAuthMethodId,
+                  name: advertisedAuthMethodId,
+                  ...(advertisedAuthMethodType === "terminal" ? { type: "terminal" as const } : {}),
+                },
+              ],
+            }
+          : {}),
       };
     }),
   );
 
-  yield* agent.handleAuthenticate(() => Effect.succeed({}));
+  yield* agent.handleAuthenticate((request) =>
+    advertisedAuthMethodId && request.methodId !== advertisedAuthMethodId
+      ? AcpError.AcpRequestError.invalidParams("Unexpected authentication method")
+      : Effect.succeed({}),
+  );
 
   yield* agent.handleCreateSession(() =>
-    Effect.succeed({
-      sessionId,
-      modes: modeState(),
-      models: modelState(),
-      configOptions: configOptions(),
+    Effect.gen(function* () {
+      if (emitHermesAvailableCommands) {
+        if (emitHermesForeignAvailableCommands) {
+          yield* Effect.sleep("10 millis").pipe(
+            Effect.andThen(
+              agent.client.sessionUpdate({
+                sessionId: "mock-child-session-1",
+                update: {
+                  sessionUpdate: "available_commands_update",
+                  availableCommands: [
+                    {
+                      name: "child-only",
+                      description: "Must not escape child session discovery",
+                    },
+                  ],
+                },
+              }),
+            ),
+            Effect.forkDetach({ startImmediately: true }),
+          );
+        }
+        yield* Effect.sleep(emitHermesForeignAvailableCommands ? "20 millis" : "10 millis").pipe(
+          Effect.andThen(
+            agent.client.sessionUpdate({
+              sessionId,
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: [
+                  {
+                    name: "version",
+                    description: "Show Hermes version",
+                    input: { hint: "[--verbose]" },
+                  },
+                ],
+              },
+            }),
+          ),
+          Effect.forkDetach({ startImmediately: true }),
+        );
+      }
+      return {
+        sessionId,
+        modes: modeState(),
+        models: modelState(),
+        configOptions: configOptions(),
+      };
     }),
   );
 
@@ -346,6 +427,9 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
+      }
+      if (emptyLoadSession) {
+        return {};
       }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);
@@ -383,7 +467,10 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
-      if (!grokAcpModels.some((model) => model.modelId === request.modelId)) {
+      if (Number.isFinite(setModelDelayMs) && setModelDelayMs > 0) {
+        yield* Effect.sleep(`${setModelDelayMs} millis`);
+      }
+      if (!acpModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
           {
@@ -437,6 +524,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleCancel(({ sessionId }) =>
     Effect.gen(function* () {
       const cancelledSessionId = String(sessionId ?? "mock-session-1");
+      if (Number.isFinite(cancelDelayMs) && cancelDelayMs > 0) {
+        yield* Effect.sleep(`${cancelDelayMs} millis`);
+      }
       cancelledSessions.add(cancelledSessionId);
       if (emitLateUpdateAfterCancel) {
         yield* Effect.sleep("50 millis");
@@ -457,16 +547,31 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+      const currentPromptCount = promptCount;
 
+      if (
+        currentPromptCount === 1 &&
+        Number.isFinite(firstPromptDelayMs) &&
+        firstPromptDelayMs > 0
+      ) {
+        yield* Effect.sleep(`${firstPromptDelayMs} millis`);
+      }
+      if (
+        currentPromptCount === 2 &&
+        Number.isFinite(secondPromptDelayMs) &&
+        secondPromptDelayMs > 0
+      ) {
+        yield* Effect.sleep(`${secondPromptDelayMs} millis`);
+      }
       if (Number.isFinite(promptDelayMs) && promptDelayMs > 0) {
         yield* Effect.sleep(`${promptDelayMs} millis`);
       }
 
-      if (failPrompt) {
+      if (failPrompt || (failFirstPrompt && currentPromptCount === 1)) {
         return yield* AcpError.AcpRequestError.internalError("Mock prompt failure");
       }
 
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
+      if (emitStaleXAiPromptCompleteBeforeSecondHang && currentPromptCount === 1) {
         return {
           stopReason: "end_turn",
           _meta: {
@@ -476,7 +581,7 @@ const program = Effect.gen(function* () {
         };
       }
 
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 2) {
+      if (emitStaleXAiPromptCompleteBeforeSecondHang && currentPromptCount === 2) {
         const currentPromptId = promptIdFromRequestMeta(request) ?? "mock-current-xai-prompt-2";
         writeJsonRpcNotification("_x.ai/session/prompt_complete", {
           sessionId: requestedSessionId,
@@ -495,12 +600,12 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 1) {
+      if (emitOverlappingXAiPromptCompleteOutOfOrder && currentPromptCount === 1) {
         overlappingFirstPromptId = promptIdFromRequestMeta(request);
         return yield* Effect.never;
       }
 
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 2) {
+      if (emitOverlappingXAiPromptCompleteOutOfOrder && currentPromptCount === 2) {
         const secondPromptId = promptIdFromRequestMeta(request);
         if (overlappingFirstPromptId !== undefined && secondPromptId !== undefined) {
           writeJsonRpcNotification("_x.ai/session/prompt_complete", {
@@ -519,7 +624,7 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (hangPromptForever || (hangFirstPromptForever && promptCount === 1)) {
+      if (hangPromptForever || (hangFirstPromptForever && currentPromptCount === 1)) {
         return yield* Effect.never;
       }
 
@@ -724,6 +829,21 @@ const program = Effect.gen(function* () {
         return { stopReason: cancelled ? "cancelled" : "end_turn" };
       }
 
+      if (emitHermesOpenToolCall) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "hermes-open-tool-1",
+            title: "Hermes open tool",
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command: ["echo", "open"] },
+          },
+        });
+        return { stopReason: "end_turn" };
+      }
+
       if (emitGenericToolPlaceholders) {
         const toolCallId = "tool-call-generic-1";
 
@@ -893,7 +1013,7 @@ const program = Effect.gen(function* () {
       });
     }
 
-    if (method !== "session/mode/set") {
+    if (method !== "session/mode/set" && method !== "session/set_mode") {
       return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
     }
 

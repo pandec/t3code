@@ -6,6 +6,7 @@ import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -21,7 +22,86 @@ const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.
 const mockAgentCommand = "node";
 const mockAgentArgs = [mockAgentPath];
 
+function waitForPromptStarts(
+  events: ReadonlyArray<AcpSessionRuntime.AcpSessionRequestLogEvent>,
+  expected: number,
+  attempts = 80,
+): Effect.Effect<void> {
+  const count = events.filter(
+    (event) => event.method === "session/prompt" && event.status === "started",
+  ).length;
+  if (count >= expected) {
+    return Effect.void;
+  }
+  if (attempts <= 0) {
+    return Effect.die(
+      new Error(`Timed out waiting for ${expected} prompt starts; observed ${count}`),
+    );
+  }
+  return Effect.sleep("10 millis").pipe(
+    Effect.andThen(Effect.suspend(() => waitForPromptStarts(events, expected, attempts - 1))),
+  );
+}
+
 describe("AcpSessionRuntime", () => {
+  it.effect("selects authentication from the initialize response", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      expect(
+        requestEvents.find((event) => event.method === "authenticate" && event.status === "started")
+          ?.payload,
+      ).toEqual({ methodId: "anthropic" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { T3_ACP_ADVERTISED_AUTH_METHOD_ID: "anthropic" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: (initializeResult) => initializeResult.authMethods?.[0]?.id,
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("skips authentication when the selector finds no advertised method", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      expect(requestEvents.some((event) => event.method === "authenticate")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: (initializeResult) => initializeResult.authMethods?.[0]?.id,
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
@@ -62,6 +142,7 @@ describe("AcpSessionRuntime", () => {
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
+      TestClock.withLive,
     );
   });
 
@@ -115,6 +196,88 @@ describe("AcpSessionRuntime", () => {
       Effect.provide(NodeServices.layer),
     ),
   );
+
+  it.effect("serializes prompt RPCs by default", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 1);
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild);
+      yield* Effect.sleep("50 millis");
+      expect(
+        requestEvents.filter(
+          (event) => event.method === "session/prompt" && event.status === "started",
+        ),
+      ).toHaveLength(1);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { ...process.env, T3_ACP_FIRST_PROMPT_DELAY_MS: "200" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
+
+  it.effect("allows overlapping prompt RPCs only when concurrent mode is selected", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 1);
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 2);
+      expect((yield* Fiber.join(second)).stopReason).toBe("end_turn");
+      yield* Fiber.join(first);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          promptConcurrency: "concurrent",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { ...process.env, T3_ACP_FIRST_PROMPT_DELAY_MS: "200" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
 
   it.effect("keeps assistant item IDs unique when a provider session restarts", () => {
     const collectFirstAssistantItemId = Effect.gen(function* () {
@@ -267,6 +430,123 @@ describe("AcpSessionRuntime", () => {
       Effect.scoped,
       Effect.provide(NodeServices.layer),
     ),
+  );
+
+  it.effect("cancels every concurrently active prompt fiber", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* waitForPromptStarts(requestEvents, 2);
+
+      yield* runtime.cancel;
+
+      expect(yield* Fiber.join(first)).toMatchObject({ stopReason: "cancelled" });
+      expect(yield* Fiber.join(second)).toMatchObject({ stopReason: "cancelled" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          promptConcurrency: "concurrent",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
+
+  it.effect(
+    "holds concurrent prompt registration behind cancellation through caller interrupt",
+    () =>
+      Effect.gen(function* () {
+        const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+        const cancelSendStarted = yield* Deferred.make<void>();
+        const releaseCancelSend = yield* Deferred.make<void>();
+        yield* Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+          yield* runtime.start();
+
+          const firstHandle = yield* runtime.promptStart({
+            prompt: [{ type: "text", text: "first" }],
+          });
+          yield* firstHandle.start;
+          yield* waitForPromptStarts(requestEvents, 1);
+
+          const cancelFiber = yield* runtime.cancel.pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Deferred.await(cancelSendStarted);
+          const secondHandleFiber = yield* runtime
+            .promptStart({ prompt: [{ type: "text", text: "second" }] })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          const interruptFiber = yield* Fiber.interrupt(cancelFiber).pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Effect.sleep("25 millis");
+          expect(secondHandleFiber.pollUnsafe()).toBeUndefined();
+
+          yield* Deferred.succeed(releaseCancelSend, undefined);
+          yield* Fiber.join(interruptFiber);
+          expect(yield* firstHandle.awaitResult).toMatchObject({ stopReason: "cancelled" });
+          const secondHandle = yield* Fiber.join(secondHandleFiber);
+          yield* secondHandle.start;
+          expect(yield* secondHandle.awaitResult).toMatchObject({ stopReason: "end_turn" });
+        }).pipe(
+          Effect.provide(
+            AcpSessionRuntime.layer({
+              authMethodId: "test",
+              promptConcurrency: "concurrent",
+              spawn: {
+                command: mockAgentCommand,
+                args: mockAgentArgs,
+                env: {
+                  T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+                },
+              },
+              cwd: process.cwd(),
+              clientInfo: { name: "t3-test", version: "0.0.0" },
+              requestLogger: (event) =>
+                Effect.sync(() => {
+                  requestEvents.push(event);
+                }),
+              protocolLogging: {
+                logOutgoing: true,
+                logger: (event) => {
+                  const payload = event.payload as { readonly tag?: unknown };
+                  return event.direction === "outgoing" &&
+                    event.stage === "decoded" &&
+                    payload.tag === "session/cancel"
+                    ? Deferred.succeed(cancelSendStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseCancelSend)),
+                      )
+                    : Effect.void;
+                },
+              },
+            }),
+          ),
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+        );
+      }).pipe(TestClock.withLive),
   );
 
   it.effect("segments assistant text around ACP tool calls", () =>

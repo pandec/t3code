@@ -5752,16 +5752,44 @@ function ChatViewContent(props: ChatViewProps) {
         nextModelSelection,
       );
       setStickyComposerModelSelection(nextModelSelection);
+      // Mirror the sticky write into the project record: the last model the
+      // user picked in this project's composer becomes the project's default,
+      // so new drafts in the project pre-select it even after the global
+      // sticky memory moves on in another project. Best-effort — a failure
+      // only loses the remembered default, never the composer selection.
+      if (activeProject) {
+        const currentDefault = activeProject.defaultModelSelection;
+        const defaultUnchanged =
+          currentDefault !== null &&
+          currentDefault.instanceId === nextModelSelection.instanceId &&
+          currentDefault.model === nextModelSelection.model &&
+          (currentDefault.options?.length ?? 0) === 0;
+        const mutationUnavailableMessage = projectActionMutationUnavailableMessage(
+          serverConfigs.get(activeProject.environmentId)?.environment,
+        );
+        if (!defaultUnchanged && mutationUnavailableMessage === null) {
+          void updateProject({
+            environmentId: activeProject.environmentId,
+            input: {
+              projectId: activeProject.id,
+              defaultModelSelection: nextModelSelection,
+            },
+          });
+        }
+      }
       scheduleComposerFocus();
     },
     [
+      activeProject,
       activeThread,
       lockedProvider,
       scheduleComposerFocus,
+      serverConfigs,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
       providerStatuses,
       settings,
+      updateProject,
     ],
   );
   const onEnvModeChange = useCallback(

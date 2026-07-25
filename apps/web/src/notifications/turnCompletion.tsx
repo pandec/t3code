@@ -76,6 +76,7 @@ type ShowSystemNotificationInput = {
   readonly title: string;
   readonly body: string;
   readonly threadRef?: DesktopNotificationThreadRef;
+  readonly tag?: string;
   readonly onBrowserNotificationClick?: () => void;
 };
 
@@ -102,9 +103,11 @@ export async function showSystemNotification(input: ShowSystemNotificationInput)
     return false;
   }
   try {
-    const tag = input.threadRef
-      ? `turn-completed:${input.threadRef.environmentId}:${input.threadRef.threadId}`
-      : "turn-completed:test";
+    const tag =
+      input.tag ??
+      (input.threadRef
+        ? `turn-completed:${input.threadRef.environmentId}:${input.threadRef.threadId}`
+        : "turn-completed:test");
     const notification = new Notification(input.title, { body: input.body, tag });
     notification.addEventListener("click", () => {
       window.focus();
