@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { HermesSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   buildInitialHermesProviderSnapshot,
@@ -25,6 +26,7 @@ async function makeHermesProbeWrapper(input?: {
   readonly gatewayExitCode?: number;
   readonly gatewayOutput?: string;
   readonly failAcp?: boolean;
+  readonly emitForeignCommands?: boolean;
 }) {
   const directory = await NodeFSP.mkdtemp(
     NodePath.join(NodeOS.tmpdir(), "t3code-hermes-provider-"),
@@ -40,10 +42,11 @@ if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
   exit ${input?.gatewayExitCode ?? 0}
 fi
 if [ "$1" = "acp" ]; then
-  ${input?.failAcp ? "exit 9" : ""}
-  export T3_ACP_USE_HERMES_MODES=1
-  export T3_ACP_EMIT_HERMES_AVAILABLE_COMMANDS=1
-  exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}
+	  ${input?.failAcp ? "exit 9" : ""}
+	  export T3_ACP_USE_HERMES_MODES=1
+	  export T3_ACP_EMIT_HERMES_AVAILABLE_COMMANDS=1
+	  ${input?.emitForeignCommands ? "export T3_ACP_EMIT_HERMES_FOREIGN_AVAILABLE_COMMANDS=1" : ""}
+	  exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}
 fi
 exit 2
 `;
@@ -90,7 +93,9 @@ describe("buildInitialHermesProviderSnapshot", () => {
 it.layer(NodeServices.layer)("checkHermesProviderStatus", (it) => {
   it.effect("discovers composite models and slash commands through one ACP session", () =>
     Effect.gen(function* () {
-      const binaryPath = yield* Effect.promise(() => makeHermesProbeWrapper());
+      const binaryPath = yield* Effect.promise(() =>
+        makeHermesProbeWrapper({ emitForeignCommands: true }),
+      );
       const snapshot = yield* checkHermesProviderStatus(
         decodeHermesSettings({ enabled: true, binaryPath, requireGateway: false }),
       );
@@ -108,7 +113,7 @@ it.layer(NodeServices.layer)("checkHermesProviderStatus", (it) => {
           input: { hint: "[--verbose]" },
         },
       ]);
-    }),
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("returns a warning when the required gateway is not running", () =>

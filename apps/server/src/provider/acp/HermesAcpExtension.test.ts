@@ -51,6 +51,7 @@ describe("HermesAcpExtension", () => {
         replayUpdateCount: 0,
         sessionSetupResult: {
           modes: { currentModeId: "default", availableModes: [] },
+          models: { currentModelId: "default", availableModels: [] },
         },
       }),
     ).toBe(false);
@@ -66,6 +67,7 @@ describe("HermesAcpExtension", () => {
     };
     const open = updateHermesOpenToolCalls(new Map(), pending);
     expect(settleHermesOpenToolCalls(open)).toEqual([{ ...pending, status: "completed" }]);
+    expect(settleHermesOpenToolCalls(open, "failed")).toEqual([{ ...pending, status: "failed" }]);
     expect(updateHermesOpenToolCalls(open, { ...pending, status: "failed" }).size).toBe(0);
   });
 });

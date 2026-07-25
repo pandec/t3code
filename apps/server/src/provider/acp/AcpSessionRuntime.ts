@@ -13,6 +13,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
@@ -294,7 +295,7 @@ export const make = (
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     const promptSerializationSemaphore = yield* Semaphore.make(1);
-    const activePromptFibersRef = yield* Ref.make<
+    const activePromptFibersRef = yield* SynchronizedRef.make<
       ReadonlySet<Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>>
     >(new Set());
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
@@ -705,16 +706,23 @@ export const make = (
         const cancelledResponse = {
           stopReason: "cancelled",
         } satisfies EffectAcpSchema.PromptResponse;
-        const promptRpcFiber = yield* runLoggedRequest(
-          "session/prompt",
-          requestPayload,
-          acp.agent.prompt(requestPayload),
-        ).pipe(Effect.forkIn(runtimeScope));
-        yield* Ref.update(activePromptFibersRef, (active) => {
-          const next = new Set(active);
-          next.add(promptRpcFiber);
-          return next;
-        });
+        const promptRpcFiber = yield* SynchronizedRef.modifyEffect(
+          activePromptFibersRef,
+          (active) =>
+            runLoggedRequest(
+              "session/prompt",
+              requestPayload,
+              acp.agent.prompt(requestPayload),
+            ).pipe(
+              Effect.forkIn(runtimeScope),
+              Effect.map((fiber) => {
+                const next = new Set(active);
+                next.add(fiber);
+                return [fiber, next] as const;
+              }),
+              Effect.uninterruptible,
+            ),
+        );
         return yield* Fiber.join(promptRpcFiber).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
@@ -724,7 +732,7 @@ export const make = (
           Effect.ensuring(
             Effect.gen(function* () {
               yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
-              yield* Ref.update(activePromptFibersRef, (active) => {
+              yield* SynchronizedRef.update(activePromptFibersRef, (active) => {
                 const next = new Set(active);
                 next.delete(promptRpcFiber);
                 return next;
@@ -776,11 +784,19 @@ export const make = (
       cancel: getStartedState.pipe(
         Effect.flatMap((started) =>
           Effect.gen(function* () {
-            const activePromptFibers = yield* Ref.get(activePromptFibersRef);
+            const activePromptFibers = yield* SynchronizedRef.getAndSet(
+              activePromptFibersRef,
+              new Set(),
+            );
             yield* Effect.forEach(activePromptFibers, Fiber.interrupt, { discard: true });
-            yield* acp.agent
+            const cancelNotification = acp.agent
               .cancel({ sessionId: started.sessionId })
-              .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+              .pipe(Effect.ignore);
+            if (options.promptConcurrency === "concurrent") {
+              yield* cancelNotification;
+            } else {
+              yield* cancelNotification.pipe(Effect.forkIn(runtimeScope));
+            }
           }),
         ),
       ),

@@ -84,6 +84,16 @@ describe("HermesAcpSupport", () => {
           payload: { sessionId: "resumed-session", modeId: "default" },
         },
       ]);
+      expect(
+        yield* applyHermesAcpModeSelection({
+          runtime,
+          sessionId: "already-default",
+          currentModeId: "default",
+          runtimeMode: "approval-required",
+          mapError: (cause) => cause,
+        }),
+      ).toBe("default");
+      expect(calls).toHaveLength(1);
     }),
   );
 });

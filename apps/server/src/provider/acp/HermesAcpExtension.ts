@@ -54,9 +54,10 @@ export function updateHermesOpenToolCalls(
 
 export function settleHermesOpenToolCalls(
   openToolCalls: ReadonlyMap<string, AcpToolCallState>,
+  status: "completed" | "failed" = "completed",
 ): ReadonlyArray<AcpToolCallState> {
   return Array.from(openToolCalls.values(), (toolCall) => ({
     ...toolCall,
-    status: "completed" as const,
+    status,
   }));
 }

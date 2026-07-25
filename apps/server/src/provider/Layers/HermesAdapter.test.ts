@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import {
   ApprovalRequestId,
   HermesSettings,
@@ -234,6 +234,15 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       assert.equal(events.filter((event) => event.type === "turn.started").length, 1);
       assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
       assert.isAtLeast(events.filter((event) => event.type === "content.delta").length, 2);
+      const snapshot = yield* adapter.readThread(threadId);
+      expect(snapshot.turns).toMatchObject([
+        {
+          items: [
+            { prompt: [{ type: "text", text: "first prompt" }] },
+            { prompt: [{ type: "text", text: "steer prompt" }] },
+          ],
+        },
+      ]);
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),
@@ -288,8 +297,17 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
 
   it.effect("interrupts a running prompt and emits a cancelled turn", () =>
     Effect.gen(function* () {
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-interrupt-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
       const adapter = yield* makeTestAdapter(
-        yield* Effect.promise(() => makeMockHermesWrapper({ T3_ACP_HANG_PROMPT_FOREVER: "1" })),
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          }),
+        ),
       );
       const threadId = ThreadId.make("hermes-interrupt");
       const completed =
@@ -310,6 +328,9 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       yield* adapter.interruptTurn(threadId);
       assert.equal((yield* Deferred.await(completed)).payload.state, "cancelled");
       yield* Fiber.join(send);
+      yield* adapter.sendTurn({ threadId, input: "after cancellation", attachments: [] });
+      const requests = yield* waitForFileContent(requestLogPath, "after cancellation");
+      assert.isBelow(requests.indexOf("session/cancel"), requests.indexOf("after cancellation"));
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),

@@ -19,6 +19,8 @@ const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitHermesAvailableCommands = process.env.T3_ACP_EMIT_HERMES_AVAILABLE_COMMANDS === "1";
+const emitHermesForeignAvailableCommands =
+  process.env.T3_ACP_EMIT_HERMES_FOREIGN_AVAILABLE_COMMANDS === "1";
 const emitHermesOpenToolCall = process.env.T3_ACP_EMIT_HERMES_OPEN_TOOL_CALL === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
@@ -330,19 +332,43 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
       if (emitHermesAvailableCommands) {
-        yield* agent.client.sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: "available_commands_update",
-            availableCommands: [
-              {
-                name: "version",
-                description: "Show Hermes version",
-                input: { hint: "[--verbose]" },
+        if (emitHermesForeignAvailableCommands) {
+          yield* Effect.sleep("10 millis").pipe(
+            Effect.andThen(
+              agent.client.sessionUpdate({
+                sessionId: "mock-child-session-1",
+                update: {
+                  sessionUpdate: "available_commands_update",
+                  availableCommands: [
+                    {
+                      name: "child-only",
+                      description: "Must not escape child session discovery",
+                    },
+                  ],
+                },
+              }),
+            ),
+            Effect.forkDetach({ startImmediately: true }),
+          );
+        }
+        yield* Effect.sleep(emitHermesForeignAvailableCommands ? "20 millis" : "10 millis").pipe(
+          Effect.andThen(
+            agent.client.sessionUpdate({
+              sessionId,
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: [
+                  {
+                    name: "version",
+                    description: "Show Hermes version",
+                    input: { hint: "[--verbose]" },
+                  },
+                ],
               },
-            ],
-          },
-        });
+            }),
+          ),
+          Effect.forkDetach({ startImmediately: true }),
+        );
       }
       return {
         sessionId,

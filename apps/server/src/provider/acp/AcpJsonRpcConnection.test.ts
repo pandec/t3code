@@ -373,6 +373,48 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("cancels every concurrently active prompt fiber", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* waitForPromptStarts(requestEvents, 2);
+
+      yield* runtime.cancel;
+
+      expect(yield* Fiber.join(first)).toMatchObject({ stopReason: "cancelled" });
+      expect(yield* Fiber.join(second)).toMatchObject({ stopReason: "cancelled" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          promptConcurrency: "concurrent",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
+
   it.effect("segments assistant text around ACP tool calls", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;

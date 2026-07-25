@@ -46,6 +46,7 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const HERMES_ACP_DISCOVERY_TIMEOUT_MS = 15_000;
+const HERMES_COMMAND_DISCOVERY_GRACE_MS = 500;
 
 const HERMES_DEFAULT_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
@@ -131,6 +132,26 @@ interface HermesAcpDiscovery {
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
 }
 
+function parseHermesAvailableCommands(
+  commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+): ReadonlyArray<ServerProviderSlashCommand> {
+  return commands.flatMap((command) => {
+    const name = command.name.trim();
+    if (!name) {
+      return [];
+    }
+    const description = command.description.trim();
+    const hint = command.input?.hint?.trim();
+    return [
+      {
+        name,
+        ...(description ? { description } : {}),
+        ...(hint ? { input: { hint } } : {}),
+      },
+    ];
+  });
+}
+
 const discoverHermesViaAcp = (
   hermesSettings: HermesSettings,
   environment: NodeJS.ProcessEnv = process.env,
@@ -144,36 +165,40 @@ const discoverHermesViaAcp = (
       cwd: process.cwd(),
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
     });
-    const slashCommandsRef = yield* Ref.make<ReadonlyArray<ServerProviderSlashCommand>>([]);
+    const slashCommandsBySessionRef = yield* Ref.make<
+      ReadonlyMap<string, ReadonlyArray<ServerProviderSlashCommand>>
+    >(new Map());
     yield* acp.handleSessionUpdate((notification) => {
       const update = notification.update;
       if (update.sessionUpdate !== "available_commands_update") {
         return Effect.void;
       }
-      return Ref.update(slashCommandsRef, (current) =>
-        current.length > 0
-          ? current
-          : update.availableCommands.flatMap((command) => {
-              const name = command.name.trim();
-              if (!name) {
-                return [];
-              }
-              const description = command.description.trim();
-              const hint = command.input?.hint?.trim();
-              return [
-                {
-                  name,
-                  ...(description ? { description } : {}),
-                  ...(hint ? { input: { hint } } : {}),
-                },
-              ];
-            }),
-      );
+      return Ref.update(slashCommandsBySessionRef, (current) => {
+        const sessionId = String(notification.sessionId);
+        if (current.has(sessionId)) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(sessionId, parseHermesAvailableCommands(update.availableCommands));
+        return next;
+      });
     });
     const started = yield* acp.start();
+    const slashCommands = yield* Effect.gen(function* () {
+      while (true) {
+        const commands = (yield* Ref.get(slashCommandsBySessionRef)).get(started.sessionId);
+        if (commands !== undefined) {
+          return commands;
+        }
+        yield* Effect.sleep("10 millis");
+      }
+    }).pipe(
+      Effect.timeoutOption(HERMES_COMMAND_DISCOVERY_GRACE_MS),
+      Effect.map(Option.getOrElse((): ReadonlyArray<ServerProviderSlashCommand> => [])),
+    );
     return {
       models: buildHermesDiscoveredModelsFromSessionModelState(started.sessionSetupResult.models),
-      slashCommands: yield* Ref.get(slashCommandsRef),
+      slashCommands,
     } satisfies HermesAcpDiscovery;
   }).pipe(Effect.scoped);
 
@@ -325,7 +350,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     });
   }
 
-  const skills = yield* readHermesSkillsSnapshot();
+  const skills = yield* readHermesSkillsSnapshot({ environment });
   if (hermesSettings.requireGateway) {
     const gatewayResult = yield* runHermesGatewayStatusCommand(hermesSettings, environment).pipe(
       Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
