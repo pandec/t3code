@@ -1,6 +1,8 @@
 import type { OrchestrationThreadShell } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
 import {
   CliOrchestrationDeclaredResponseError,
@@ -71,5 +73,28 @@ it.effect("marks the command outcome unknown when compensation fails", () =>
     ).pipe(Effect.flip);
 
     assert.instanceOf(error, CliOrchestrationOutcomeUnknownError);
+  }),
+);
+
+it.effect("finishes compensation when interrupted after cleanup starts", () =>
+  Effect.gen(function* () {
+    const cleanupStarted = yield* Deferred.make<void>();
+    const releaseCleanup = yield* Deferred.make<void>();
+    let cleanupFinished = false;
+    const fiber = yield* compensateFailedThreadStart(
+      rejectedStart,
+      Effect.gen(function* () {
+        yield* Deferred.succeed(cleanupStarted, undefined);
+        yield* Deferred.await(releaseCleanup);
+        cleanupFinished = true;
+      }),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+
+    yield* Deferred.await(cleanupStarted);
+    fiber.interruptUnsafe();
+    yield* Deferred.succeed(releaseCleanup, undefined);
+    yield* Fiber.await(fiber);
+
+    assert.isTrue(cleanupFinished);
   }),
 );

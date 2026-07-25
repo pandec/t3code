@@ -76,6 +76,7 @@ it("unwraps Effect CLI usage errors without serializing the help control envelop
 
   assert.strictEqual(serialized.code, "UnrecognizedOption");
   assert.include(serialized.message, "--wat");
+  assert.deepStrictEqual(serialized.detail, { option: "--wat" });
   assert.notInclude(JSON.stringify(serialized), "commandPath");
 });
 

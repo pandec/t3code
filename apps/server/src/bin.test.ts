@@ -1056,17 +1056,22 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
   it("emits one structured JSON document for parser failures in a real CLI process", () => {
     const result = NodeChildProcess.spawnSync(
       process.execPath,
-      [NodePath.join(import.meta.dirname, "bin.ts"), "status", "--json", "--timeout-ms", "nope"],
+      [NodePath.join(import.meta.dirname, "bin.ts"), "status", "--wat", "--json"],
       { cwd: process.cwd(), encoding: "utf8" },
     );
 
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.stderr, "");
     const output = JSON.parse(result.stdout) as {
-      readonly error: { readonly code: string; readonly message: string };
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+        readonly detail?: Record<string, unknown>;
+      };
     };
-    assert.equal(output.error.code, "InvalidValue");
-    assert.include(output.error.message, "--timeout-ms");
+    assert.equal(output.error.code, "UnrecognizedOption");
+    assert.include(output.error.message, "--wat");
+    assert.deepEqual(output.error.detail, { option: "--wat" });
   });
 
   it("emits structured JSON and exit 1 for handler failures in a real CLI process", () => {

@@ -29,7 +29,7 @@ export const serializeCliError = (error: unknown): CliJsonError => {
   if (Predicate.isObject(error) && typeof error["_tag"] === "string") {
     const detail: Record<string, string | number | boolean | null> = {};
     for (const [key, value] of Object.entries(error)) {
-      if (key === "_tag" || key === "cause") continue;
+      if (key === "_tag" || key === "cause" || key.startsWith("~")) continue;
       if (isJsonPrimitive(value)) {
         detail[key] = value;
       }

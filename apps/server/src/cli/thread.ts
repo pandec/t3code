@@ -197,14 +197,18 @@ export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStar
   CleanupError,
   R,
 >(originalError: OriginalError, cleanup: Effect.Effect<unknown, CleanupError, R>) {
-  const cleanupResult = yield* Effect.result(cleanup);
-  if (cleanupResult._tag === "Failure") {
-    return yield* new CliOrchestrationOutcomeUnknownError({
-      operation: "dispatchLiveServer",
-      cause: cleanupResult.failure,
-    });
-  }
-  return yield* Effect.fail(originalError);
+  return yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      const cleanupResult = yield* Effect.result(cleanup);
+      if (cleanupResult._tag === "Failure") {
+        return yield* new CliOrchestrationOutcomeUnknownError({
+          operation: "dispatchLiveServer",
+          cause: cleanupResult.failure,
+        });
+      }
+      return yield* Effect.fail(originalError);
+    }),
+  );
 });
 
 const threadListCommand = Command.make("list", {
