@@ -515,9 +515,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const threadMetaClassName = isConfirmingArchive
     ? "pointer-events-none opacity-0"
     : hasThreadHoverControls && !showProviderAlways
-      ? "pointer-events-none transition-opacity duration-150 max-sm:pr-6 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+      ? "pointer-events-none transition-opacity duration-150 max-sm:pr-6 [@media(hover:none)]:pr-6 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
       : showProviderAlways && !isThreadRunning
-        ? "pointer-events-none max-sm:pr-6"
+        ? "pointer-events-none max-sm:pr-6 [@media(hover:none)]:pr-6"
         : "pointer-events-none";
   const threadLabelClassName =
     showProviderAlways && !isThreadRunning
@@ -831,7 +831,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           )}
           <div
             className={`flex min-w-12 justify-end ${
-              isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
+              isRemoteThread
+                ? "max-sm:min-w-24 [@media(hover:none)]:min-w-24"
+                : "max-sm:min-w-20 [@media(hover:none)]:min-w-20"
             }`}
           >
             {isConfirmingArchive ? (
@@ -848,7 +850,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 Confirm
               </button>
             ) : hasThreadHoverControls ? (
-              <div className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+              <div className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
                 {providerInstance && !showProviderAlways ? (
                   <SidebarThreadProviderIcon
                     providerInstance={providerInstance}
