@@ -35,6 +35,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### CLI & automation
 
 - **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting.
+- **Session-handover CLI primitives** — inspect and import Claude/Codex transcripts (including standard worktrees and explicit model options), create model-specific threads, and archive handed-off source threads.
 
 ### Reliability
 

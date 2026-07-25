@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -293,10 +295,39 @@ describe("claudeProjectDirectoryName", () => {
 });
 
 describe("readClaudeSessionTranscript", () => {
+  it.effect("reads sessions directly from a custom Claude config directory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-claude-custom-config-",
+      });
+      const configDirPath = path.join(root, ".claude-work");
+      const canonicalCwd = "/tmp/custom-project";
+      const sessionsPath = path.join(
+        configDirPath,
+        "projects",
+        claudeProjectDirectoryName(canonicalCwd),
+      );
+      yield* fileSystem.makeDirectory(sessionsPath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(sessionsPath, `${SESSION_ID}.jsonl`),
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+      );
+
+      const transcript = yield* readClaudeSessionTranscript({
+        configDirPath,
+        canonicalCwd,
+        sessionId: SESSION_ID,
+      });
+      expect(transcript.messages.map((message) => message.text)).toEqual(["hello"]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects a non-UUID session id before resolving a transcript path", () =>
     Effect.gen(function* () {
       const error = yield* readClaudeSessionTranscript({
-        homePath: "/tmp/home",
+        configDirPath: "/tmp/home/.claude",
         canonicalCwd: "/tmp/project",
         sessionId: "../other-project/session",
       }).pipe(Effect.flip);

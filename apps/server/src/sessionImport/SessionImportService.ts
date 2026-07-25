@@ -19,39 +19,60 @@ import {
   type ProviderInstanceId,
   type SessionImportCandidate,
   SessionImportError,
+  type SessionImportWarning,
   ThreadId,
   type ThreadImportMessage,
   THREAD_IMPORT_MAX_MESSAGES,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Crypto from "effect/Crypto";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
+import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
+import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 
+class SessionImportGitError extends Schema.TaggedErrorClass<SessionImportGitError>()(
+  "SessionImportGitError",
+  {
+    detail: Schema.String,
+  },
+) {}
+
 export interface SessionImportResult {
   readonly threadId: ThreadId;
+  readonly warnings?: ReadonlyArray<SessionImportWarning>;
 }
 
 export interface SessionImportServiceShape {
   readonly listCandidates: (input: {
     readonly projectId: ProjectId;
+    readonly cwd?: string;
   }) => Effect.Effect<ReadonlyArray<SessionImportCandidate>, SessionImportError>;
   readonly importSession: (input: {
     readonly projectId: ProjectId;
     readonly instanceId: ProviderInstanceId;
     readonly nativeSessionId: string;
+    readonly modelSelection?: ModelSelection;
+    readonly worktree?: {
+      readonly branch: string;
+      readonly worktreePath: string;
+    };
   }) => Effect.Effect<SessionImportResult, SessionImportError>;
 }
 
@@ -62,6 +83,8 @@ export class SessionImportService extends Context.Service<
 
 const PREVIEW_MAX_CHARS = 120;
 const TITLE_MAX_CHARS = 80;
+const SESSION_IMPORT_GIT_TIMEOUT = Duration.seconds(30);
+const SESSION_IMPORT_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 function importMessageId(threadId: ThreadId, index: number) {
   return MessageId.make(`import:${threadId}:${String(index).padStart(5, "0")}`);
@@ -131,7 +154,9 @@ export const makeSessionImportService = Effect.gen(function* () {
     return { project: project.value, workspaceRoot };
   });
 
-  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* () {
+  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* (
+    instances: ReadonlyArray<ProviderInstance>,
+  ) {
     const bindings = yield* runtimeRepository.list().pipe(
       Effect.mapError(
         (cause) =>
@@ -142,35 +167,168 @@ export const makeSessionImportService = Effect.gen(function* () {
           }),
       ),
     );
-    const idsByInstance = new Map<string, Set<string>>();
+    const continuationKeyByInstance = new Map<string, string>(
+      instances.map((instance) => [
+        instance.instanceId,
+        instance.continuationIdentity?.continuationKey ??
+          `provider-instance:${instance.instanceId}`,
+      ]),
+    );
+    const idsByContinuationKey = new Map<string, Map<string, ThreadId>>();
     for (const binding of bindings) {
       // Legacy rows without an explicit instance id belong to the default
       // instance, whose id is the provider/driver name.
       const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
-      const ids = idsByInstance.get(ownerInstanceId) ?? new Set<string>();
+      const continuationKey =
+        continuationKeyByInstance.get(ownerInstanceId) ?? `provider-instance:${ownerInstanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ThreadId>();
       for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
-        ids.add(id);
+        if (!ids.has(id)) ids.set(id, binding.threadId);
       }
       if (ids.size > 0) {
-        idsByInstance.set(ownerInstanceId, ids);
+        idsByContinuationKey.set(continuationKey, ids);
       }
     }
+    const idsByInstance = new Map<string, Map<string, ThreadId>>();
+    for (const instance of instances) {
+      const continuationKey =
+        instance.continuationIdentity?.continuationKey ??
+        `provider-instance:${instance.instanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey);
+      if (ids !== undefined) idsByInstance.set(instance.instanceId, ids);
+    }
     return idsByInstance;
+  });
+
+  const path = yield* Path.Path;
+  const processRunner = yield* ProcessRunner.make();
+
+  const runGit = Effect.fn("SessionImportService.runGit")(function* (
+    cwd: string,
+    args: ReadonlyArray<string>,
+  ) {
+    const result = yield* processRunner
+      .run({
+        command: "git",
+        args,
+        cwd,
+        env: {
+          ...sanitizeGitRepositoryEnvironment(),
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+        timeout: SESSION_IMPORT_GIT_TIMEOUT,
+        maxOutputBytes: SESSION_IMPORT_GIT_MAX_OUTPUT_BYTES,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SessionImportGitError({
+              detail: cause.message,
+            }),
+        ),
+      );
+    const exitCode = result.code === null ? -1 : Number(result.code);
+    if (exitCode !== 0) {
+      return yield* new SessionImportGitError({
+        detail: result.stderr.trim() || `git exited with code ${exitCode}`,
+      });
+    }
+    return result.stdout.trim();
+  });
+
+  const invalidWorktree = (detail: string, cause?: unknown) =>
+    new SessionImportError({
+      reason: "invalid-worktree",
+      detail,
+      ...(cause === undefined ? {} : { cause }),
+    });
+
+  const resolveGitCommonDirectory = Effect.fn("SessionImportService.resolveGitCommonDirectory")(
+    function* (cwd: string) {
+      const raw = yield* runGit(cwd, ["rev-parse", "--git-common-dir"]);
+      const resolved = path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+      return yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved));
+    },
+  );
+
+  const validateWorktreeCwd = Effect.fn("SessionImportService.validateWorktreeCwd")(function* (
+    workspaceRoot: string,
+    rawWorktreePath: string,
+    expectedBranch?: string,
+  ) {
+    const worktreePath = rawWorktreePath.trim();
+    if (worktreePath.length === 0) {
+      return yield* invalidWorktree("Worktree path cannot be empty.");
+    }
+    const info = yield* fileSystem
+      .stat(worktreePath)
+      .pipe(
+        Effect.mapError((cause) =>
+          invalidWorktree(`Worktree path '${worktreePath}' does not exist.`, cause),
+        ),
+      );
+    if (info.type !== "Directory") {
+      return yield* invalidWorktree(`Worktree path '${worktreePath}' is not a directory.`);
+    }
+    const canonicalWorktreePath = yield* fileSystem
+      .realPath(worktreePath)
+      .pipe(
+        Effect.mapError((cause) =>
+          invalidWorktree(`Failed to canonicalize worktree path '${worktreePath}'.`, cause),
+        ),
+      );
+    const [projectGitDirectory, worktreeGitDirectory] = yield* Effect.all(
+      [resolveGitCommonDirectory(workspaceRoot), resolveGitCommonDirectory(canonicalWorktreePath)],
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.mapError((cause) =>
+        invalidWorktree(
+          `Worktree path '${canonicalWorktreePath}' is not a git worktree for this project.`,
+          cause,
+        ),
+      ),
+    );
+    if (projectGitDirectory !== worktreeGitDirectory) {
+      return yield* invalidWorktree(
+        `Worktree path '${canonicalWorktreePath}' belongs to a different git repository.`,
+      );
+    }
+    const branch = yield* runGit(canonicalWorktreePath, [
+      "symbolic-ref",
+      "--quiet",
+      "--short",
+      "HEAD",
+    ]).pipe(
+      Effect.mapError((cause) =>
+        invalidWorktree(`Worktree path '${canonicalWorktreePath}' has a detached HEAD.`, cause),
+      ),
+    );
+    if (expectedBranch !== undefined && branch !== expectedBranch) {
+      return yield* invalidWorktree(
+        `Worktree path '${canonicalWorktreePath}' is on branch '${branch}', not '${expectedBranch}'.`,
+      );
+    }
+    return { branch, worktreePath: canonicalWorktreePath };
   });
 
   const listCandidates: SessionImportServiceShape["listCandidates"] = Effect.fn(
     "SessionImportService.listCandidates",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
     const instances = yield* instanceRegistry.listInstances;
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
+    const effectiveCwd =
+      input.cwd === undefined
+        ? workspaceRoot
+        : (yield* validateWorktreeCwd(workspaceRoot, input.cwd)).worktreePath;
     const candidates: Array<SessionImportCandidate> = [];
     for (const instance of instances) {
       if (!instance.enabled) continue;
       const listImportable = instance.adapter.listImportableSessions;
       if (listImportable === undefined) continue;
       const boundNativeIds = boundNativeIdsByInstance.get(instance.instanceId);
-      const sessions = yield* listImportable({ cwd: workspaceRoot }).pipe(
+      const sessions = yield* listImportable({ cwd: effectiveCwd }).pipe(
         Effect.mapError(
           (cause) =>
             new SessionImportError({
@@ -205,8 +363,35 @@ export const makeSessionImportService = Effect.gen(function* () {
   const resolveModelSelection = Effect.fn("resolveModelSelection")(function* (input: {
     readonly instance: ProviderInstance;
     readonly importedModel: string | null;
+    readonly override?: ModelSelection;
   }) {
     const snapshot = yield* input.instance.snapshot.getSnapshot;
+    if (input.override !== undefined) {
+      if (input.override.instanceId !== input.instance.instanceId) {
+        return yield* new SessionImportError({
+          reason: "invalid-options",
+          detail: `Model selection instance '${input.override.instanceId}' does not match import instance '${input.instance.instanceId}'.`,
+        });
+      }
+      const advertisedModel = snapshot.models.find((model) => model.slug === input.override?.model);
+      if (advertisedModel === undefined) {
+        return yield* new SessionImportError({
+          reason: "invalid-model",
+          detail: `Model '${input.override.model}' is not advertised by provider instance '${input.instance.instanceId}'.`,
+        });
+      }
+      const validationError = validateProviderOptionSelectionsStrict({
+        descriptors: advertisedModel.capabilities?.optionDescriptors ?? [],
+        selections: input.override.options ?? [],
+      });
+      if (validationError !== null) {
+        return yield* new SessionImportError({
+          reason: "invalid-options",
+          detail: validationError.detail,
+        });
+      }
+      return input.override;
+    }
     const knownSlugs = new Set(snapshot.models.map((model) => model.slug));
     const providerDefault = DEFAULT_MODEL_BY_PROVIDER[input.instance.driverKind];
     const fallback =
@@ -233,11 +418,16 @@ export const makeSessionImportService = Effect.gen(function* () {
     "SessionImportService.importSessionUnlocked",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
-    if (boundNativeIdsByInstance.get(input.instanceId)?.has(input.nativeSessionId) === true) {
+    const instances = yield* instanceRegistry.listInstances;
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
+    const existingThreadId = boundNativeIdsByInstance
+      .get(input.instanceId)
+      ?.get(input.nativeSessionId);
+    if (existingThreadId !== undefined) {
       return yield* new SessionImportError({
         reason: "already-imported",
         detail: `Session '${input.nativeSessionId}' is already attached to a t3 thread.`,
+        existingThreadId,
       });
     }
 
@@ -255,6 +445,15 @@ export const makeSessionImportService = Effect.gen(function* () {
         detail: `Provider instance '${input.instanceId}' does not support session import.`,
       });
     }
+    const validatedWorktree =
+      input.worktree === undefined
+        ? undefined
+        : yield* validateWorktreeCwd(
+            workspaceRoot,
+            input.worktree.worktreePath,
+            input.worktree.branch,
+          );
+    const effectiveCwd = validatedWorktree?.worktreePath ?? workspaceRoot;
 
     const threadUuid = yield* crypto.randomUUIDv4.pipe(
       Effect.mapError(
@@ -270,7 +469,7 @@ export const makeSessionImportService = Effect.gen(function* () {
 
     const history = yield* readImportable({
       nativeSessionId: input.nativeSessionId,
-      cwd: workspaceRoot,
+      cwd: effectiveCwd,
       destinationThreadId: threadId,
     }).pipe(
       Effect.mapError(
@@ -302,6 +501,7 @@ export const makeSessionImportService = Effect.gen(function* () {
     const modelSelection = yield* resolveModelSelection({
       instance,
       importedModel: history.model,
+      ...(input.modelSelection === undefined ? {} : { override: input.modelSelection }),
     });
     const currentInstance = yield* instanceRegistry.getInstance(input.instanceId);
     if (currentInstance !== instance || !currentInstance.enabled) {
@@ -333,9 +533,10 @@ export const makeSessionImportService = Effect.gen(function* () {
           status: "stopped",
           resumeCursor: history.resumeCursor,
           runtimePayload: {
-            cwd: workspaceRoot,
+            cwd: effectiveCwd,
             modelSelection,
             activeTurnId: null,
+            ...(validatedWorktree === undefined ? {} : { cwdAuthority: "imported-session" }),
             lastRuntimeEvent: "provider.importConversation",
             lastRuntimeEventAt: createdAt,
           },
@@ -392,7 +593,62 @@ export const makeSessionImportService = Effect.gen(function* () {
       }
     }).pipe(Effect.uninterruptible);
 
-    return { threadId };
+    const warnings: Array<SessionImportWarning> = [];
+    if (validatedWorktree !== undefined) {
+      const metaResult = yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make(`import-meta:${threadId}`),
+          threadId,
+          branch: validatedWorktree.branch,
+          worktreePath: validatedWorktree.worktreePath,
+        })
+        .pipe(Effect.exit);
+      if (Exit.isFailure(metaResult)) {
+        const message = `Imported thread ${threadId}, but failed to attach worktree metadata.`;
+        warnings.push({ code: "meta-update-failed", message });
+        yield* Effect.logWarning(message, {
+          threadId,
+          branch: validatedWorktree.branch,
+          worktreePath: validatedWorktree.worktreePath,
+          cause: metaResult.cause,
+        });
+      } else {
+        // Once canonical worktree metadata is attached, normal thread metadata
+        // can drive later intentional worktree changes. The durable binding
+        // authority is retained only for the accepted warning-only failure path.
+        const binding = Option.getOrUndefined(
+          yield* sessionDirectory.getBinding(threadId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to inspect imported CWD authority.", {
+                threadId,
+                cause,
+              }).pipe(Effect.as(Option.none())),
+            ),
+          ),
+        );
+        if (binding !== undefined) {
+          yield* sessionDirectory
+            .refreshIfUnchanged({
+              binding,
+              runtimePayloadPatch: { cwdAuthority: null },
+            })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Failed to release imported CWD authority.", {
+                  threadId,
+                  cause,
+                }),
+              ),
+            );
+        }
+      }
+    }
+
+    return {
+      threadId,
+      ...(warnings.length === 0 ? {} : { warnings }),
+    };
   });
 
   // The provider-runtime table is keyed by destination thread id, so checking

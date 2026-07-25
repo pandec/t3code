@@ -29,10 +29,18 @@ import {
   CliOrchestrationDeclaredResponseError,
   type CliLiveOrchestrationServer,
   dispatchLiveOrchestrationCommand,
+  fetchLiveEnvironmentDescriptor,
   requireLiveOrchestrationServer,
   withCliOrchestrationSession,
 } from "./orchestration.ts";
 import { findActiveProjectTarget } from "./projectTarget.ts";
+import {
+  fetchProviderCatalog,
+  resolveCliModelSelection,
+  resolveThreadModelInstance,
+  SessionCliError,
+  SessionCliServerUnsupportedError,
+} from "./session.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
@@ -237,6 +245,15 @@ const threadNewCommand = Command.make("new", {
   interactionMode: Flag.choice("interaction-mode", ProviderInteractionMode.literals).pipe(
     Flag.withDefault(DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  model: Flag.string("model").pipe(Flag.withDescription("Explicit model slug."), Flag.optional),
+  effort: Flag.string("effort").pipe(
+    Flag.withDescription("Provider effort/reasoning-effort option."),
+    Flag.optional,
+  ),
+  instance: Flag.string("instance").pipe(
+    Flag.withDescription("Explicit provider instance id."),
+    Flag.optional,
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Create a thread and start its first turn."),
@@ -253,7 +270,52 @@ const threadNewCommand = Command.make("new", {
         const title = hasExplicitTitle
           ? yield* requireTrimmedTitle(flags.title.value)
           : deriveThreadCliTitle(message);
+        const hasModelFlags =
+          Option.isSome(flags.model) ||
+          Option.isSome(flags.effort) ||
+          Option.isSome(flags.instance);
+        if (Option.isNone(flags.model) && Option.isSome(flags.effort)) {
+          return yield* new SessionCliError({
+            operation: "resolveModelSelection",
+            detail: "--effort requires --model for t3 thread new.",
+          });
+        }
+        if (Option.isNone(flags.model) && Option.isSome(flags.instance)) {
+          return yield* new SessionCliError({
+            operation: "resolveModelSelection",
+            detail: "--instance requires --model for t3 thread new.",
+          });
+        }
+        const explicitModelSelection = hasModelFlags
+          ? yield* Effect.gen(function* () {
+              const descriptor = yield* fetchLiveEnvironmentDescriptor(input.live.origin);
+              if (descriptor.capabilities.providerCatalog !== true) {
+                return yield* new SessionCliServerUnsupportedError({
+                  serverVersion: descriptor.serverVersion,
+                  capability: "providerCatalog",
+                });
+              }
+              const catalog = yield* withCliOrchestrationSession(
+                input.environmentAuth,
+                "t3 thread cli",
+                (token) => fetchProviderCatalog(input.live.origin, token),
+              );
+              const instance = yield* resolveThreadModelInstance({
+                catalog,
+                model: flags.model.pipe(Option.getOrThrow),
+                ...(Option.isSome(flags.instance)
+                  ? { explicitInstanceId: flags.instance.value }
+                  : {}),
+              });
+              return yield* resolveCliModelSelection({
+                instance,
+                explicitModel: flags.model.pipe(Option.getOrThrow),
+                ...(Option.isSome(flags.effort) ? { effort: flags.effort.value } : {}),
+              });
+            })
+          : undefined;
         const modelSelection =
+          explicitModelSelection ??
           projectShell.defaultModelSelection ??
           ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
         const threadId = ThreadId.make(yield* randomUuid);
@@ -466,6 +528,35 @@ const threadStatusCommand = Command.make("status", {
   ),
 );
 
+const threadArchiveCommand = Command.make("archive", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Archive a thread."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const commandId = CommandId.make(yield* randomUuid);
+        yield* dispatchThreadCommand(input, {
+          type: "thread.archive",
+          commandId,
+          threadId: thread.id,
+        });
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({
+                threadId: thread.id,
+                action: "archived",
+              })
+            : `Archived thread ${thread.id}.`,
+        );
+      }),
+    ),
+  ),
+);
+
 export const threadCommand = Command.make("thread").pipe(
   Command.withDescription("Manage threads and agent turns."),
   Command.withSubcommands([
@@ -475,5 +566,6 @@ export const threadCommand = Command.make("thread").pipe(
     threadRenameCommand,
     threadInterruptCommand,
     threadStatusCommand,
+    threadArchiveCommand,
   ]),
 );

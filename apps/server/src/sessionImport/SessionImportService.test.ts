@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - focused integration tests create real git worktrees.
+import * as NodeChildProcess from "node:child_process";
+import * as NodePath from "node:path";
+
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -5,6 +9,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
@@ -22,12 +27,27 @@ const instanceId = ProviderInstanceId.make("claude-main");
 const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
 interface HarnessOptions {
+  readonly additionalInstances?: ReadonlyArray<ProviderInstance>;
   readonly bindingStarted?: Deferred.Deferred<void>;
   readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
   readonly importedModel?: string | null;
   readonly listedSessionName?: string | null;
-  readonly models?: ReadonlyArray<{ readonly slug: string; readonly isCustom?: boolean }>;
+  readonly metaUpdateFails?: boolean;
+  readonly models?: ReadonlyArray<{
+    readonly slug: string;
+    readonly name?: string;
+    readonly isCustom?: boolean;
+    readonly capabilities?: {
+      readonly optionDescriptors?: ReadonlyArray<{
+        readonly id: string;
+        readonly label: string;
+        readonly type: "select";
+        readonly options: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+      }>;
+    } | null;
+  }>;
+  readonly workspaceRoot?: string;
   readonly replaceInstanceDuringRead?: boolean;
   readonly releaseBinding?: Deferred.Deferred<void>;
   readonly releaseDispatch?: Deferred.Deferred<void>;
@@ -39,6 +59,8 @@ interface HarnessState {
   readonly bindings: Map<string, ProviderSessionRuntime>;
   readonly dispatched: Array<{ type: string; [key: string]: unknown }>;
   readonly callOrder: Array<"binding-upsert" | "dispatch" | "binding-delete">;
+  readonly listCwds: Array<string>;
+  readonly readCwds: Array<string>;
 }
 
 const makeHarness = (options?: HarnessOptions) => {
@@ -46,12 +68,18 @@ const makeHarness = (options?: HarnessOptions) => {
     bindings: new Map(),
     dispatched: [],
     callOrder: [],
+    listCwds: [],
+    readCwds: [],
   };
 
   let currentInstance: ProviderInstance;
   const instance = {
     instanceId,
     driverKind: ProviderDriverKind.make("claudeAgent"),
+    continuationIdentity: {
+      driverKind: ProviderDriverKind.make("claudeAgent"),
+      continuationKey: "claude:home:/tmp/.claude",
+    },
     displayName: "Claude",
     enabled: true,
     snapshot: {
@@ -60,18 +88,22 @@ const makeHarness = (options?: HarnessOptions) => {
       }),
     },
     adapter: {
-      listImportableSessions: () =>
-        Effect.succeed([
-          {
-            nativeSessionId: NATIVE_SESSION_ID,
-            name: options?.listedSessionName ?? options?.sessionName ?? null,
-            preview: "Remember the codeword PINEAPPLE-42.",
-            messageCount: 2,
-            updatedAt: "2026-07-16T10:00:01.000Z",
-          },
-        ]),
-      readImportableSession: (input: { destinationThreadId: ThreadId }) =>
+      listImportableSessions: (input: { cwd: string }) =>
+        Effect.sync(() => {
+          state.listCwds.push(input.cwd);
+          return [
+            {
+              nativeSessionId: NATIVE_SESSION_ID,
+              name: options?.listedSessionName ?? options?.sessionName ?? null,
+              preview: "Remember the codeword PINEAPPLE-42.",
+              messageCount: 2,
+              updatedAt: "2026-07-16T10:00:01.000Z",
+            },
+          ];
+        }),
+      readImportableSession: (input: { destinationThreadId: ThreadId; cwd: string }) =>
         Effect.gen(function* () {
+          state.readCwds.push(input.cwd);
           if (options?.yieldBeforeRead === true) {
             yield* Effect.yieldNow;
           }
@@ -103,8 +135,13 @@ const makeHarness = (options?: HarnessOptions) => {
   currentInstance = instance;
 
   const registryLayer = Layer.mock(ProviderInstanceRegistry)({
-    getInstance: (id) => Effect.succeed(id === instanceId ? currentInstance : undefined),
-    listInstances: Effect.sync(() => [currentInstance]),
+    getInstance: (id) =>
+      Effect.succeed(
+        id === instanceId
+          ? currentInstance
+          : options?.additionalInstances?.find((candidate) => candidate.instanceId === id),
+      ),
+    listInstances: Effect.sync(() => [currentInstance, ...(options?.additionalInstances ?? [])]),
     listUnavailable: Effect.succeed([]),
     streamChanges: Stream.empty,
   });
@@ -115,7 +152,7 @@ const makeHarness = (options?: HarnessOptions) => {
         Option.some({
           projectId,
           title: "Project",
-          workspaceRoot: "/tmp",
+          workspaceRoot: options?.workspaceRoot ?? "/tmp",
           repositoryIdentity: null,
           defaultModelSelection: null,
           scripts: [],
@@ -158,6 +195,49 @@ const makeHarness = (options?: HarnessOptions) => {
           yield* Deferred.await(options.releaseBinding);
         }
       }),
+    getBinding: (threadId) =>
+      Effect.succeed(
+        Option.fromNullishOr(state.bindings.get(threadId)).pipe(
+          Option.map((binding) => ({
+            threadId: binding.threadId,
+            provider: ProviderDriverKind.make(binding.providerName),
+            ...(binding.providerInstanceId === null
+              ? {}
+              : { providerInstanceId: binding.providerInstanceId }),
+            adapterKey: binding.adapterKey,
+            status: binding.status,
+            resumeCursor: binding.resumeCursor,
+            runtimePayload: binding.runtimePayload,
+            runtimeMode: binding.runtimeMode,
+            lastSeenAt: binding.lastSeenAt,
+            revision: binding.revision,
+            providerInstanceIdWasLegacyNull: binding.providerInstanceId === null,
+          })),
+        ),
+      ),
+    refreshIfUnchanged: ({ binding, runtimePayloadPatch }) =>
+      Effect.sync(() => {
+        const current = state.bindings.get(binding.threadId);
+        if (current === undefined || current.revision !== binding.revision) return false;
+        const currentPayload =
+          current.runtimePayload !== null &&
+          typeof current.runtimePayload === "object" &&
+          !Array.isArray(current.runtimePayload)
+            ? current.runtimePayload
+            : {};
+        const patch =
+          runtimePayloadPatch !== null &&
+          typeof runtimePayloadPatch === "object" &&
+          !Array.isArray(runtimePayloadPatch)
+            ? runtimePayloadPatch
+            : {};
+        state.bindings.set(binding.threadId, {
+          ...current,
+          runtimePayload: { ...currentPayload, ...patch },
+          revision: current.revision + 1,
+        });
+        return true;
+      }),
   });
 
   const engineLayer = Layer.mock(OrchestrationEngineService)({
@@ -170,7 +250,10 @@ const makeHarness = (options?: HarnessOptions) => {
         if (options?.releaseDispatch) {
           yield* Deferred.await(options.releaseDispatch);
         }
-        if (options?.dispatchFails === true) {
+        if (
+          options?.dispatchFails === true ||
+          (options?.metaUpdateFails === true && command.type === "thread.meta.update")
+        ) {
           return yield* Effect.die(new Error("dispatch failed"));
         }
         state.dispatched.push(command as unknown as HarnessState["dispatched"][number]);
@@ -190,6 +273,34 @@ const makeHarness = (options?: HarnessOptions) => {
 
   return { state, layer };
 };
+
+const runGit = (cwd: string, args: ReadonlyArray<string>) =>
+  Effect.sync(() =>
+    NodeChildProcess.execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+
+const makeGitWorktree = Effect.fn("makeGitWorktree")(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const container = yield* fileSystem.makeTempDirectoryScoped({
+    prefix: "t3-session-import-git-",
+  });
+  const root = NodePath.join(container, "repo");
+  yield* fileSystem.makeDirectory(root);
+  yield* runGit(root, ["init", "-b", "main"]);
+  yield* runGit(root, ["config", "user.email", "test@example.com"]);
+  yield* runGit(root, ["config", "user.name", "T3 Test"]);
+  yield* fileSystem.writeFileString(NodePath.join(root, "README.md"), "test\n");
+  yield* runGit(root, ["add", "README.md"]);
+  yield* runGit(root, ["commit", "-m", "initial"]);
+  yield* runGit(root, ["branch", "feature/session-import"]);
+  const worktreePath = NodePath.join(container, "worktree");
+  yield* runGit(root, ["worktree", "add", worktreePath, "feature/session-import"]);
+  return { root, worktreePath };
+});
 
 it.layer(NodeServices.layer)("SessionImportService", (it) => {
   it.effect("imports a session: binding first, then dispatch, with stopped-binding fields", () =>
@@ -373,6 +484,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
         .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
         .pipe(Effect.flip);
       expect(error.reason).toBe("already-imported");
+      expect(error.existingThreadId).toBe([...state.bindings.keys()][0]);
       expect(state.bindings.size).toBe(1);
 
       // And the candidate disappears from the listing.
@@ -408,6 +520,43 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       });
       expect(imported.threadId).not.toBe(existing.threadId);
       expect(state.bindings.size).toBe(2);
+    }),
+  );
+
+  it.effect("deduplicates native sessions across instances sharing one continuation home", () =>
+    Effect.gen(function* () {
+      const secondaryInstanceId = ProviderInstanceId.make("claude-secondary");
+      const secondary = {
+        instanceId: secondaryInstanceId,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          continuationKey: "claude:home:/tmp/.claude",
+        },
+        enabled: false,
+      } as unknown as ProviderInstance;
+      const { state, layer } = makeHarness({ additionalInstances: [secondary] });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const existingBinding = state.bindings.get(existing.threadId);
+      state.bindings.set(existing.threadId, {
+        ...existingBinding!,
+        providerInstanceId: secondaryInstanceId,
+      });
+
+      expect(yield* service.listCandidates({ projectId })).toHaveLength(0);
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "already-imported",
+        existingThreadId: existing.threadId,
+      });
     }),
   );
 
@@ -501,6 +650,209 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
       const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
       expect(command.modelSelection.model).toBe("claude-sonnet-5");
+    }),
+  );
+
+  it.effect("uses one canonical worktree cwd for listing, reading, binding, and metadata", () =>
+    Effect.gen(function* () {
+      const { root, worktreePath } = yield* makeGitWorktree();
+      const { state, layer } = makeHarness({ workspaceRoot: root });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.listCandidates({ projectId, cwd: worktreePath });
+      const result = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        worktree: { branch: "feature/session-import", worktreePath },
+      });
+      const canonicalWorktree = yield* (yield* FileSystem.FileSystem).realPath(worktreePath);
+
+      expect(state.listCwds).toEqual([canonicalWorktree]);
+      expect(state.readCwds).toEqual([canonicalWorktree]);
+      expect(state.bindings.get(result.threadId)?.runtimePayload).toMatchObject({
+        cwd: canonicalWorktree,
+        cwdAuthority: null,
+      });
+      expect(state.dispatched[1]).toMatchObject({
+        type: "thread.meta.update",
+        threadId: result.threadId,
+        branch: "feature/session-import",
+        worktreePath: canonicalWorktree,
+      });
+    }),
+  );
+
+  it.effect("rejects a mismatched or detached worktree before provider reads", () =>
+    Effect.gen(function* () {
+      const { root, worktreePath } = yield* makeGitWorktree();
+      const wrongBranch = makeHarness({ workspaceRoot: root });
+      const wrongBranchService = yield* makeSessionImportService.pipe(
+        Effect.provide(wrongBranch.layer),
+      );
+      const mismatch = yield* wrongBranchService
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          worktree: { branch: "main", worktreePath },
+        })
+        .pipe(Effect.flip);
+      expect(mismatch.reason).toBe("invalid-worktree");
+      expect(wrongBranch.state.readCwds).toHaveLength(0);
+
+      yield* runGit(worktreePath, ["checkout", "--detach"]);
+      const detached = makeHarness({ workspaceRoot: root });
+      const detachedService = yield* makeSessionImportService.pipe(Effect.provide(detached.layer));
+      const detachedError = yield* detachedService
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          worktree: { branch: "feature/session-import", worktreePath },
+        })
+        .pipe(Effect.flip);
+      expect(detachedError.reason).toBe("invalid-worktree");
+      expect(detached.state.readCwds).toHaveLength(0);
+    }),
+  );
+
+  it.effect("accepts a strict model override and persists its options", () =>
+    Effect.gen(function* () {
+      const models = [
+        {
+          slug: "claude-sonnet-5",
+          name: "Sonnet",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "effort",
+                label: "Effort",
+                type: "select" as const,
+                options: [{ id: "high", label: "High" }],
+              },
+            ],
+          },
+        },
+      ];
+      const { state, layer } = makeHarness({ models });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        modelSelection: {
+          instanceId,
+          model: "claude-sonnet-5",
+          options: [{ id: "effort", value: "high" }],
+        },
+      });
+      expect(state.dispatched[0]).toMatchObject({
+        modelSelection: {
+          instanceId,
+          model: "claude-sonnet-5",
+          options: [{ id: "effort", value: "high" }],
+        },
+      });
+    }),
+  );
+
+  it.effect("rejects invalid model, option, and instance overrides", () =>
+    Effect.gen(function* () {
+      const models = [
+        {
+          slug: "claude-sonnet-5",
+          name: "Sonnet",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "effort",
+                label: "Effort",
+                type: "select" as const,
+                options: [{ id: "high", label: "High" }],
+              },
+            ],
+          },
+        },
+      ];
+      const invalidModelHarness = makeHarness({ models });
+      const invalidModelService = yield* makeSessionImportService.pipe(
+        Effect.provide(invalidModelHarness.layer),
+      );
+      const invalidModel = yield* invalidModelService
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          modelSelection: { instanceId, model: "claude-unknown" },
+        })
+        .pipe(Effect.flip);
+      expect(invalidModel.reason).toBe("invalid-model");
+
+      const invalidOptionsHarness = makeHarness({ models });
+      const invalidOptionsService = yield* makeSessionImportService.pipe(
+        Effect.provide(invalidOptionsHarness.layer),
+      );
+      const invalidOptions = yield* invalidOptionsService
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          modelSelection: {
+            instanceId,
+            model: "claude-sonnet-5",
+            options: [{ id: "effort", value: "impossible" }],
+          },
+        })
+        .pipe(Effect.flip);
+      expect(invalidOptions.reason).toBe("invalid-options");
+
+      const mismatchedHarness = makeHarness({ models });
+      const mismatchedService = yield* makeSessionImportService.pipe(
+        Effect.provide(mismatchedHarness.layer),
+      );
+      const mismatched = yield* mismatchedService
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude-other"),
+            model: "claude-sonnet-5",
+          },
+        })
+        .pipe(Effect.flip);
+      expect(mismatched.reason).toBe("invalid-options");
+    }),
+  );
+
+  it.effect("returns a warning when worktree metadata update fails after import", () =>
+    Effect.gen(function* () {
+      const { root, worktreePath } = yield* makeGitWorktree();
+      const { state, layer } = makeHarness({ workspaceRoot: root, metaUpdateFails: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const result = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        worktree: { branch: "feature/session-import", worktreePath },
+      });
+
+      expect(result.warnings).toEqual([
+        {
+          code: "meta-update-failed",
+          message: `Imported thread ${result.threadId}, but failed to attach worktree metadata.`,
+        },
+      ]);
+      expect(state.bindings.has(result.threadId)).toBe(true);
+      expect(state.bindings.get(result.threadId)?.runtimePayload).toMatchObject({
+        cwdAuthority: "imported-session",
+      });
+      expect(state.dispatched[0]).toMatchObject({ type: "thread.import" });
     }),
   );
 });

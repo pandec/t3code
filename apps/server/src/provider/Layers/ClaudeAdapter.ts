@@ -74,7 +74,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeEnvironment, resolveClaudeConfigDirPath } from "../Drivers/ClaudeHome.ts";
 import {
   listClaudeSessionTranscripts,
   readClaudeSessionTranscript,
@@ -4136,12 +4136,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const listImportableSessions: NonNullable<ClaudeAdapterShape["listImportableSessions"]> =
     Effect.fn("ClaudeAdapter.listImportableSessions")(function* (input) {
-      const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
-        Effect.provideService(Path.Path, path),
-      );
       const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listImportableSessions");
+      const configDirPath = yield* resolveClaudeConfigDirPath(
+        claudeSettings,
+        claudeEnvironment,
+        canonicalCwd,
+      ).pipe(Effect.provideService(Path.Path, path));
       const summaries = yield* importDriverContext(
-        listClaudeSessionTranscripts({ homePath, canonicalCwd }),
+        listClaudeSessionTranscripts({ configDirPath, canonicalCwd }),
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -4167,13 +4169,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const readImportableSession: NonNullable<ClaudeAdapterShape["readImportableSession"]> = Effect.fn(
     "ClaudeAdapter.readImportableSession",
   )(function* (input) {
-    const homePath = yield* resolveClaudeHomePath(claudeSettings).pipe(
-      Effect.provideService(Path.Path, path),
-    );
     const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "readImportableSession");
+    const configDirPath = yield* resolveClaudeConfigDirPath(
+      claudeSettings,
+      claudeEnvironment,
+      canonicalCwd,
+    ).pipe(Effect.provideService(Path.Path, path));
     const transcript = yield* importDriverContext(
       readClaudeSessionTranscript({
-        homePath,
+        configDirPath,
         canonicalCwd,
         sessionId: input.nativeSessionId,
       }),

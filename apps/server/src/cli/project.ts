@@ -183,6 +183,45 @@ const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   return basename.length > 0 ? basename : "project";
 });
 
+export const addProjectToOrchestration = Effect.fn("addProjectToOrchestration")(function* (input: {
+  readonly projects: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly workspaceRoot: string;
+    readonly deletedAt?: string | null;
+  }>;
+  readonly workspaceRoot: string;
+  readonly title?: string;
+  readonly dispatch: (
+    command: Extract<ClientOrchestrationCommand, { type: "project.create" }>,
+  ) => Effect.Effect<unknown, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
+}) {
+  const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(input.workspaceRoot);
+  const existingProject = input.projects.find(
+    (project) => project.deletedAt == null && project.workspaceRoot === workspaceRoot,
+  );
+  if (existingProject) {
+    return yield* new ProjectAlreadyExistsError({
+      operation: "addProject",
+      projectId: existingProject.id,
+      workspaceRoot,
+    });
+  }
+
+  const title = yield* resolveProjectTitle(workspaceRoot, input.title);
+  const projectId = ProjectId.make(yield* projectCommandUuid);
+  yield* input.dispatch({
+    type: "project.create",
+    commandId: CommandId.make(yield* projectCommandUuid),
+    projectId,
+    title,
+    workspaceRoot,
+    defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
+    createdAt: DateTime.formatIso(yield* DateTime.now),
+  });
+  return { projectId, title, workspaceRoot };
+});
+
 const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   return yield* projectionSnapshotQuery.getSnapshot();
@@ -305,28 +344,11 @@ const projectAddCommand = Command.make("add", {
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
-        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
-        const existingProject = snapshot.projects.find(
-          (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
-        );
-        if (existingProject) {
-          return yield* new ProjectAlreadyExistsError({
-            operation: "addProject",
-            projectId: existingProject.id,
-            workspaceRoot,
-          });
-        }
-
-        const title = yield* resolveProjectTitle(workspaceRoot, Option.getOrUndefined(flags.title));
-        const projectId = ProjectId.make(yield* projectCommandUuid);
-        yield* dispatch({
-          type: "project.create",
-          commandId: CommandId.make(yield* projectCommandUuid),
-          projectId,
-          title,
-          workspaceRoot,
-          defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
-          createdAt: DateTime.formatIso(yield* DateTime.now),
+        const { projectId, title, workspaceRoot } = yield* addProjectToOrchestration({
+          projects: snapshot.projects,
+          workspaceRoot: flags.workspaceRoot,
+          ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+          dispatch,
         });
         return flags.json
           ? jsonOutput({ projectId, title, workspaceRoot, action: "added" })
@@ -436,22 +458,66 @@ const projectRenameCommand = Command.make("rename", {
   ),
 );
 
+const runProjectList = Effect.fn("runProjectList")(function* (
+  flags: CliAuthLocationFlags,
+  json: boolean,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const minimumLogLevel = json ? "None" : config.logLevel;
+
+  return yield* Effect.gen(function* () {
+    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const liveMode = yield* tryResolveLiveOrchestrationServer(
+      environmentAuth,
+      config,
+      "t3 project cli",
+    );
+    if (Option.isSome(liveMode)) {
+      return {
+        mode: "live" as const,
+        projects: liveMode.value.shell.projects,
+      };
+    }
+    const snapshot = yield* getOfflineSnapshot().pipe(
+      Effect.provide(
+        ProjectCliRuntimeLive.pipe(
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
+      ),
+    );
+    return {
+      mode: "offline" as const,
+      projects: snapshot.projects.filter((project) => project.deletedAt === null),
+    };
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+        Layer.provideMerge(FetchHttpClient.layer),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+      ),
+    ),
+    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+  );
+});
+
 const projectListCommand = Command.make("list", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
   Command.withDescription("List active projects."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode }) => {
-      const projects = snapshot.projects
-        .filter((project) => project.deletedAt === null)
-        .map((project) => ({
-          id: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-          defaultModelSelection: project.defaultModelSelection,
-        }));
-      return Effect.succeed(
+    Effect.gen(function* () {
+      const { mode, projects: projectShells } = yield* runProjectList(flags, flags.json);
+      const projects = projectShells.map((project) => ({
+        id: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        defaultModelSelection: project.defaultModelSelection,
+      }));
+      yield* Console.log(
         flags.json
           ? jsonOutput({ mode, projects })
           : projects.length === 0

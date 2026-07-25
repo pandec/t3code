@@ -56,6 +56,63 @@ export function getProviderOptionBooleanSelectionValue(
   return typeof value === "boolean" ? value : undefined;
 }
 
+export interface StrictProviderOptionSelectionValidationError {
+  readonly optionId: string;
+  readonly detail: string;
+}
+
+/**
+ * Validate explicit option selections without applying defaults or silently
+ * substituting a descriptor's current value.
+ */
+export function validateProviderOptionSelectionsStrict(input: {
+  readonly descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  readonly selections: ReadonlyArray<ProviderOptionSelection>;
+}): StrictProviderOptionSelectionValidationError | null {
+  const descriptorsById = new Map(
+    input.descriptors.map((descriptor) => [descriptor.id, descriptor]),
+  );
+  const seen = new Set<string>();
+
+  for (const selection of input.selections) {
+    if (seen.has(selection.id)) {
+      return {
+        optionId: selection.id,
+        detail: `Option '${selection.id}' was provided more than once.`,
+      };
+    }
+    seen.add(selection.id);
+
+    const descriptor = descriptorsById.get(selection.id);
+    if (descriptor === undefined) {
+      return {
+        optionId: selection.id,
+        detail: `Option '${selection.id}' is not advertised by this model.`,
+      };
+    }
+    if (descriptor.type === "boolean") {
+      if (typeof selection.value !== "boolean") {
+        return {
+          optionId: selection.id,
+          detail: `Option '${selection.id}' requires a boolean value.`,
+        };
+      }
+      continue;
+    }
+    if (
+      typeof selection.value !== "string" ||
+      !descriptor.options.some((choice) => choice.id === selection.value)
+    ) {
+      return {
+        optionId: selection.id,
+        detail: `Option '${selection.id}' has an unsupported value '${String(selection.value)}'.`,
+      };
+    }
+  }
+
+  return null;
+}
+
 export function getModelSelectionOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,
