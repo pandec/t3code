@@ -21,6 +21,27 @@ const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.
 const mockAgentCommand = "node";
 const mockAgentArgs = [mockAgentPath];
 
+function waitForPromptStarts(
+  events: ReadonlyArray<AcpSessionRuntime.AcpSessionRequestLogEvent>,
+  expected: number,
+  attempts = 80,
+): Effect.Effect<void> {
+  const count = events.filter(
+    (event) => event.method === "session/prompt" && event.status === "started",
+  ).length;
+  if (count >= expected) {
+    return Effect.void;
+  }
+  if (attempts <= 0) {
+    return Effect.die(
+      new Error(`Timed out waiting for ${expected} prompt starts; observed ${count}`),
+    );
+  }
+  return Effect.sleep("10 millis").pipe(
+    Effect.andThen(Effect.suspend(() => waitForPromptStarts(events, expected, attempts - 1))),
+  );
+}
+
 describe("AcpSessionRuntime", () => {
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
@@ -62,6 +83,7 @@ describe("AcpSessionRuntime", () => {
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
+      TestClock.withLive,
     );
   });
 
@@ -115,6 +137,88 @@ describe("AcpSessionRuntime", () => {
       Effect.provide(NodeServices.layer),
     ),
   );
+
+  it.effect("serializes prompt RPCs by default", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 1);
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild);
+      yield* Effect.sleep("50 millis");
+      expect(
+        requestEvents.filter(
+          (event) => event.method === "session/prompt" && event.status === "started",
+        ),
+      ).toHaveLength(1);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { ...process.env, T3_ACP_FIRST_PROMPT_DELAY_MS: "200" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
+
+  it.effect("allows overlapping prompt RPCs only when concurrent mode is selected", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 1);
+      const second = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "second" }] })
+        .pipe(Effect.forkChild);
+      yield* waitForPromptStarts(requestEvents, 2);
+      expect((yield* Fiber.join(second)).stopReason).toBe("end_turn");
+      yield* Fiber.join(first);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          promptConcurrency: "concurrent",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { ...process.env, T3_ACP_FIRST_PROMPT_DELAY_MS: "200" },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      TestClock.withLive,
+    );
+  });
 
   it.effect("keeps assistant item IDs unique when a provider session restarts", () => {
     const collectFirstAssistantItemId = Effect.gen(function* () {
