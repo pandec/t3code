@@ -359,6 +359,29 @@ function SnoozePopoverButton(props: {
   );
 }
 
+function SidebarV2ProviderIcon(props: {
+  driverKind: ProviderInstanceEntry["driverKind"];
+  displayName: string;
+  visibility: SidebarThreadProviderIconVisibility;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex shrink-0 items-center opacity-60 transition-opacity",
+        props.visibility === "hover" &&
+          "opacity-0 max-sm:opacity-60 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
+      )}
+    >
+      <ProviderInstanceIcon
+        driverKind={props.driverKind}
+        displayName={props.displayName}
+        iconClassName="size-3.5"
+      />
+    </span>
+  );
+}
+
 const SidebarV2Row = memo(function SidebarV2Row(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
@@ -776,6 +799,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             </span>
             {title}
+            {driverKind ? (
+              <SidebarV2ProviderIcon
+                driverKind={driverKind}
+                displayName={thread.session?.providerName ?? modelInstanceId}
+                visibility={props.providerIconVisibility}
+              />
+            ) : null}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -975,19 +1005,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span
-                    className={cn(
-                      "inline-flex shrink-0 items-center opacity-60 transition-opacity",
-                      props.providerIconVisibility === "hover" &&
-                        "opacity-0 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
-                    )}
-                  >
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={thread.session?.providerName ?? modelInstanceId}
-                      iconClassName="size-3.5"
-                    />
-                  </span>
+                  <SidebarV2ProviderIcon
+                    driverKind={driverKind}
+                    displayName={thread.session?.providerName ?? modelInstanceId}
+                    visibility={props.providerIconVisibility}
+                  />
                 ) : null}
               </span>
             </div>
