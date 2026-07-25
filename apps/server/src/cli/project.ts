@@ -30,10 +30,12 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationReadTimeoutError,
   CliOrchestrationRequestError,
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
@@ -41,8 +43,9 @@ import {
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationSnapshot,
-  tryResolveLiveOrchestrationServer,
-  withCliOrchestrationSession,
+  isCliOrchestrationReadTimeoutError,
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
 import {
   addProjectAction,
@@ -128,6 +131,7 @@ export const ProjectCommandError = Schema.Union([
   CliOrchestrationRequestError,
   CliOrchestrationConflictError,
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationReadTimeoutError,
   CliOrchestrationServerUnavailableError,
   ProjectTitleEmptyError,
   ProjectIdentifierEmptyError,
@@ -209,78 +213,93 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   options?: {
     readonly requireLive?: boolean;
     readonly requireConditionalProjectScriptUpdates?: boolean;
+    readonly readOnly?: boolean;
   },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = json ? "None" : config.logLevel;
 
   return yield* Effect.gen(function* () {
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const liveMode = yield* tryResolveLiveOrchestrationServer(
-      environmentAuth,
-      config,
-      "t3 project cli",
-    );
-
-    if (Option.isSome(liveMode)) {
-      if (options?.requireConditionalProjectScriptUpdates) {
-        const descriptor = yield* fetchLiveEnvironmentDescriptor(liveMode.value.origin);
-        if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
-          return yield* new ProjectActionServerUnsupportedError({
-            operation: "validateProjectActionServerCapability",
-            serverVersion: descriptor.serverVersion,
-          });
-        }
-      }
-      return yield* withCliOrchestrationSession(environmentAuth, "t3 project cli", (token) =>
-        Effect.gen(function* () {
-          const snapshot = yield* fetchLiveOrchestrationSnapshot(liveMode.value.origin, token);
-          const output = yield* run({
-            snapshot,
-            dispatch: (command) =>
-              dispatchLiveOrchestrationCommand(liveMode.value.origin, token, command).pipe(
-                Effect.asVoid,
-              ),
-            mode: "live",
-          });
-          yield* Console.log(output);
-        }),
-      );
-    }
-
-    if (options?.requireLive) {
-      return yield* new CliOrchestrationServerUnavailableError({
-        operation: "resolveLiveServer",
-        statePath: config.serverRuntimeStatePath,
-      });
-    }
-
-    const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
-      Layer.provide(ServerConfig.layer(config)),
-      Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-    );
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = json ? "None" : config.logLevel;
 
     return yield* Effect.gen(function* () {
-      const snapshot = yield* getOfflineSnapshot();
-      const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
-      const output = yield* run({
-        snapshot,
-        dispatch: (command) => orchestrationEngine.dispatch(command),
-        mode: "offline",
-      });
-      yield* Console.log(output);
-    }).pipe(Effect.provide(offlineRuntimeLayer));
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+
+      const liveAttempt = yield* Effect.result(
+        withResolvedLiveOrchestrationServer(
+          { environmentAuth, config, label: "t3 project cli", timeouts },
+          (live, token) =>
+            Effect.gen(function* () {
+              if (options?.requireConditionalProjectScriptUpdates) {
+                const descriptor = yield* fetchLiveEnvironmentDescriptor(live.origin, timeouts);
+                if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
+                  return yield* new ProjectActionServerUnsupportedError({
+                    operation: "validateProjectActionServerCapability",
+                    serverVersion: descriptor.serverVersion,
+                  });
+                }
+              }
+              const snapshot = yield* fetchLiveOrchestrationSnapshot(live.origin, token, timeouts);
+              const output = yield* run({
+                snapshot,
+                dispatch: (command) =>
+                  dispatchLiveOrchestrationCommand(live.origin, token, command).pipe(Effect.asVoid),
+                mode: "live",
+              });
+              yield* Console.log(output);
+            }),
+        ),
+      );
+
+      if (liveAttempt._tag === "Success" && Option.isSome(liveAttempt.success)) {
+        return;
+      }
+
+      if (liveAttempt._tag === "Failure") {
+        // A live-but-slow server only degrades to the local snapshot for
+        // read-only commands; mutations must never bypass the live server.
+        const fallbackToOffline =
+          options?.readOnly === true && isCliOrchestrationReadTimeoutError(liveAttempt.failure);
+        if (!fallbackToOffline) {
+          return yield* Effect.fail(liveAttempt.failure);
+        }
+        yield* Console.error(
+          `${liveAttempt.failure.message} Reading local state instead; it may lag behind the running server.`,
+        );
+      } else if (options?.requireLive) {
+        return yield* new CliOrchestrationServerUnavailableError({
+          operation: "resolveLiveServer",
+          statePath: config.serverRuntimeStatePath,
+        });
+      }
+
+      const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
         Layer.provide(ServerConfig.layer(config)),
         Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+      );
+
+      return yield* Effect.gen(function* () {
+        const snapshot = yield* getOfflineSnapshot();
+        const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const output = yield* run({
+          snapshot,
+          dispatch: (command) => orchestrationEngine.dispatch(command),
+          mode: "offline",
+        });
+        yield* Console.log(output);
+      }).pipe(Effect.provide(offlineRuntimeLayer));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
       ),
-    ),
-    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-  );
+      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+    );
+  }).pipe(withCliJsonErrorOutput(json));
 });
 
 const projectAddCommand = Command.make("add", {
@@ -442,25 +461,30 @@ const projectListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List active projects."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode }) => {
-      const projects = snapshot.projects
-        .filter((project) => project.deletedAt === null)
-        .map((project) => ({
-          id: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-          defaultModelSelection: project.defaultModelSelection,
-        }));
-      return Effect.succeed(
-        flags.json
-          ? jsonOutput({ mode, projects })
-          : projects.length === 0
-            ? "No active projects."
-            : projects
-                .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
-                .join("\n"),
-      );
-    }),
+    runProjectMutation(
+      flags,
+      flags.json,
+      ({ snapshot, mode }) => {
+        const projects = snapshot.projects
+          .filter((project) => project.deletedAt === null)
+          .map((project) => ({
+            id: project.id,
+            title: project.title,
+            workspaceRoot: project.workspaceRoot,
+            defaultModelSelection: project.defaultModelSelection,
+          }));
+        return Effect.succeed(
+          flags.json
+            ? jsonOutput({ mode, projects })
+            : projects.length === 0
+              ? "No active projects."
+              : projects
+                  .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
+                  .join("\n"),
+        );
+      },
+      { readOnly: true },
+    ),
   ),
 );
 
@@ -497,23 +521,29 @@ const projectActionListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List a project's actions."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode }) =>
-      Effect.gen(function* () {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        return flags.json
-          ? jsonOutput({
-              mode,
-              projectId: project.id,
-              title: project.title,
-              workspaceRoot: project.workspaceRoot,
-              actions: project.scripts,
-            })
-          : project.scripts.length === 0
-            ? `Project ${project.id} has no actions.`
-            : project.scripts
-                .map((action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`)
-                .join("\n");
-      }),
+    runProjectMutation(
+      flags,
+      flags.json,
+      ({ snapshot, mode }) =>
+        Effect.gen(function* () {
+          const project = yield* findProjectForAction(snapshot, flags.project);
+          return flags.json
+            ? jsonOutput({
+                mode,
+                projectId: project.id,
+                title: project.title,
+                workspaceRoot: project.workspaceRoot,
+                actions: project.scripts,
+              })
+            : project.scripts.length === 0
+              ? `Project ${project.id} has no actions.`
+              : project.scripts
+                  .map(
+                    (action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`,
+                  )
+                  .join("\n");
+        }),
+      { readOnly: true },
     ),
   ),
 );

@@ -25,12 +25,14 @@ import * as ServerConfig from "../config.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationDeclaredResponseError,
+  CliOrchestrationServerUnavailableError,
   type CliLiveOrchestrationServer,
   dispatchLiveOrchestrationCommand,
-  requireLiveOrchestrationServer,
-  withCliOrchestrationSession,
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
 import { findActiveProjectTarget } from "./projectTarget.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
@@ -148,38 +150,47 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
   json: boolean,
   run: (input: {
     readonly live: CliLiveOrchestrationServer;
-    readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
+    readonly token: string;
   }) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = json ? "None" : config.logLevel;
   return yield* Effect.gen(function* () {
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const live = yield* requireLiveOrchestrationServer(environmentAuth, config, "t3 thread cli");
-    return yield* run({ live, environmentAuth });
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = json ? "None" : config.logLevel;
+    return yield* Effect.gen(function* () {
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+      const outcome = yield* withResolvedLiveOrchestrationServer(
+        { environmentAuth, config, label: "t3 thread cli", timeouts },
+        (live, token) => run({ live, token }),
+      );
+      if (Option.isNone(outcome)) {
+        return yield* new CliOrchestrationServerUnavailableError({
+          operation: "resolveLiveServer",
+          statePath: config.serverRuntimeStatePath,
+        });
+      }
+      return outcome.value;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
       ),
-    ),
-    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-  );
+      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+    );
+  }).pipe(withCliJsonErrorOutput(json));
 });
 
 const dispatchThreadCommand = (
   input: {
     readonly live: CliLiveOrchestrationServer;
-    readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
+    readonly token: string;
   },
   command: ClientOrchestrationCommand,
-) =>
-  withCliOrchestrationSession(input.environmentAuth, "t3 thread cli", (token) =>
-    dispatchLiveOrchestrationCommand(input.live.origin, token, command),
-  );
+) => dispatchLiveOrchestrationCommand(input.live.origin, input.token, command);
 
 const threadListCommand = Command.make("list", {
   ...projectLocationFlags,
