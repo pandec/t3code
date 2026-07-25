@@ -4,11 +4,16 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@t3tools/contracts";
+import {
+  DEFAULT_RUNTIME_MODE,
+  type ModelSelection,
+  type ScopedProjectRef,
+} from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
   markPromotedDraftThreadByRef,
+  type DraftId,
   type DraftThreadEnvMode,
   type DraftThreadState,
   useComposerDraftStore,
@@ -26,6 +31,45 @@ import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
+
+/**
+ * Seeds a freshly created draft's composer model state.
+ *
+ * Precedence, lowest to highest:
+ * 1. Global per-provider sticky memory (`applyStickyState`).
+ * 2. The owning project's `defaultModelSelection` — the last model the user
+ *    picked in that project's composer. Options are not replaced so sticky
+ *    option memory (effort, context window) still applies unless the stored
+ *    default carries its own options.
+ * 3. The carried selection — the exact model state of the thread the user was
+ *    viewing — but only when that thread belongs to the same logical project
+ *    (or the project has no default). Creating a draft in a *different*
+ *    project must land on that project's own default, not drag the previous
+ *    project's model along.
+ */
+export function seedNewDraftModelState(input: {
+  draftId: DraftId;
+  logicalProjectKey: string;
+  projectDefaultModelSelection: ModelSelection | null;
+  carryModelSelection: ModelSelection | null;
+  carrySourceLogicalProjectKey: string | null;
+}): void {
+  const { applyStickyState, setModelSelection } = useComposerDraftStore.getState();
+  applyStickyState(input.draftId);
+  if (input.projectDefaultModelSelection) {
+    setModelSelection(input.draftId, input.projectDefaultModelSelection);
+  }
+  const carryWinsOverProjectDefault =
+    input.projectDefaultModelSelection === null ||
+    input.carrySourceLogicalProjectKey === input.logicalProjectKey;
+  if (input.carryModelSelection && carryWinsOverProjectDefault) {
+    // After sticky state and the project default so the viewed thread's exact
+    // selection (model + options like effort and context window) wins.
+    // replaceOptions: the carried selection is a complete snapshot — absent
+    // options mean "no options", not "keep whatever was just seeded".
+    setModelSelection(input.draftId, input.carryModelSelection, { replaceOptions: true });
+  }
+}
 
 export function useNewThreadHandler() {
   const projects = useProjects();
@@ -58,7 +102,6 @@ export function useNewThreadHandler() {
         getDraftSessionByLogicalProjectKey,
         getDraftSession,
         getDraftThread,
-        applyStickyState,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
         setModelSelection,
@@ -108,6 +151,29 @@ export function useNewThreadHandler() {
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
+      // The logical project the carried model selection originates from. Used
+      // to decide whether the carry may out-rank the target project's default
+      // model: it does within the same logical project, not across projects.
+      const carrySourceLogicalProjectKey = (() => {
+        if (carrySourceDraft) {
+          return carrySourceDraft.logicalProjectKey;
+        }
+        if (!carrySourceShell) {
+          return null;
+        }
+        const carrySourceProjectRef = scopeProjectRef(
+          carrySourceShell.environmentId,
+          carrySourceShell.projectId,
+        );
+        const carrySourceProject = projects.find(
+          (candidate) =>
+            candidate.id === carrySourceProjectRef.projectId &&
+            candidate.environmentId === carrySourceProjectRef.environmentId,
+        );
+        return carrySourceProject
+          ? deriveLogicalProjectKeyFromSettings(carrySourceProject, projectGroupingSettings)
+          : scopedProjectKey(carrySourceProjectRef);
+      })();
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
@@ -262,15 +328,13 @@ export function useNewThreadHandler() {
           runtimeMode: carryRuntimeMode ?? DEFAULT_RUNTIME_MODE,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
-        applyStickyState(draftId);
-        if (carryModelSelection) {
-          // After sticky state so the viewed thread's exact selection
-          // (model + options like effort and context window) wins over the
-          // globally sticky one. replaceOptions: the carried selection is a
-          // complete snapshot — absent options mean "no options", not "keep
-          // whatever sticky state just wrote".
-          setModelSelection(draftId, carryModelSelection, { replaceOptions: true });
-        }
+        seedNewDraftModelState({
+          draftId,
+          logicalProjectKey,
+          projectDefaultModelSelection: project?.defaultModelSelection ?? null,
+          carryModelSelection,
+          carrySourceLogicalProjectKey,
+        });
 
         await router.navigate({
           to: "/draft/$draftId",
