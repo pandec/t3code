@@ -623,7 +623,12 @@ export function runtimeEventToActivities(
           tone: "info",
           kind: "account.rate-limits.updated",
           summary: "Account rate limits updated",
-          payload: event.payload,
+          payload: {
+            rateLimits: event.payload.rateLimits,
+            ...(event.providerInstanceId !== undefined
+              ? { providerInstanceId: event.providerInstanceId }
+              : {}),
+          },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

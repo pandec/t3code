@@ -8,6 +8,7 @@ const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
 function makeSnapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageSnapshot {
   return {
     providerLabel: "Claude",
+    providerInstanceId: null,
     windows: [],
     status: "ok",
     constrainedWindow: null,

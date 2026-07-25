@@ -14,14 +14,20 @@ import { showSystemNotification } from "./turnCompletion";
  * per threshold per reset period when subscription usage crosses the warning
  * or critical threshold. De-dupe keys are persisted in localStorage (keyed by
  * the window's reset time) so reloads and event replay stay silent; entries
- * expire with their reset period.
+ * expire with their reset period, or after a bounded 24h fallback when the
+ * provider omits reset metadata.
  */
 
 const FIRED_ALERTS_STORAGE_KEY = "t3.providerUsage.firedAlertKeys";
 const UNKNOWN_RESET_TTL_MS = 24 * 60 * 60 * 1_000;
+const inMemoryFiredAlerts = new Map<string, number>();
 
 function readFiredAlerts(nowMs: number): Map<string, number> {
   const fired = new Map<string, number>();
+  for (const [key, expiresAtMs] of inMemoryFiredAlerts) {
+    if (expiresAtMs > nowMs) fired.set(key, expiresAtMs);
+    else inMemoryFiredAlerts.delete(key);
+  }
   try {
     const raw = window.localStorage.getItem(FIRED_ALERTS_STORAGE_KEY);
     if (!raw) return fired;
@@ -39,13 +45,17 @@ function readFiredAlerts(nowMs: number): Map<string, number> {
 }
 
 function writeFiredAlerts(fired: Map<string, number>): void {
+  inMemoryFiredAlerts.clear();
+  for (const [key, expiresAtMs] of fired) {
+    inMemoryFiredAlerts.set(key, expiresAtMs);
+  }
   try {
     window.localStorage.setItem(
       FIRED_ALERTS_STORAGE_KEY,
       JSON.stringify(Object.fromEntries(fired)),
     );
   } catch {
-    // Best-effort persistence; in-session de-dupe still holds via the snapshot.
+    // Best-effort persistence; the module-level map still de-dupes this session.
   }
 }
 
@@ -70,12 +80,14 @@ export function buildProviderUsageAlertCopy(
   const resetTime = formatResetTime(alert.window.resetsAt, nowMs);
   const title =
     alert.threshold === "critical"
-      ? `${alert.providerLabel} rate limit almost reached`
+      ? `${alert.providerLabel} rate limit ${percent ? "almost reached" : "reached"}`
       : `${alert.providerLabel} rate limit warning`;
-  const body = [
-    `${alert.window.label} is at ${percent ?? "its limit"}`,
-    resetTime ? `resets ${resetTime}` : null,
-  ]
+  const usageDescription = percent
+    ? `${alert.window.label} is at ${percent}`
+    : alert.threshold === "critical"
+      ? `${alert.window.label} has reached its limit`
+      : `${alert.window.label} is nearing its limit`;
+  const body = [usageDescription, resetTime ? `resets ${resetTime}` : null]
     .filter(Boolean)
     .join(" — ");
   return { title, body: `${body}.` };
@@ -108,7 +120,11 @@ export function useProviderUsageAlerts(snapshot: ProviderUsageSnapshot | null): 
       // The toast covers the focused app; the system notification covers the
       // rest, mirroring turn-completion's delivery split.
       if (!(document.visibilityState === "visible" && document.hasFocus())) {
-        void showSystemNotification({ title, body });
+        void showSystemNotification({
+          title,
+          body,
+          tag: `provider-usage:${alert.keys.at(-1) ?? alert.window.id}`,
+        });
       }
     }
     writeFiredAlerts(fired);

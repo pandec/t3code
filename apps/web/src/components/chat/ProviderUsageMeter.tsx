@@ -131,7 +131,7 @@ export function ProviderUsageMeter(props: { snapshot: ProviderUsageSnapshot }) {
                   className="w-[3px] rounded-[1px] transition-[height,background-color] duration-500 ease-out motion-reduce:transition-none"
                   style={{
                     // Keep a visible stub even near 0% so the glyph reads as bars.
-                    height: `${Math.max(18, window.usedPercent ?? 100)}%`,
+                    height: `${Math.max(18, window.usedPercent ?? 18)}%`,
                     backgroundColor: BAR_COLOR_BY_STATUS[window.status],
                   }}
                 />

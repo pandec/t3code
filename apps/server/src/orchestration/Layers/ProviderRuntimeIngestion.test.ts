@@ -2954,6 +2954,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "account.rate-limits.updated",
       eventId: asEventId("evt-account-rate-limits-updated"),
       provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex-work"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
       payload: {
@@ -2978,6 +2979,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(rateLimitActivity).toBeDefined();
     expect(rateLimitActivity?.payload).toMatchObject({
+      providerInstanceId: "codex-work",
       rateLimits: {
         rateLimits: {
           limitId: "codex",

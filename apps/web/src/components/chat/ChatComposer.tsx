@@ -196,6 +196,7 @@ import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts"
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -965,13 +966,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ?.driver ?? null
     );
   }, [providerStatuses, activeThreadModelSelection]);
+  const providerUsageNowMinute = useNowMinute();
   const activeProviderUsage = useMemo(
     () =>
       deriveLatestProviderUsageSnapshot(activeThreadActivities ?? [], {
         provider: activeThreadProviderDriver,
+        providerInstanceId: activeThreadModelSelection?.instanceId ?? null,
         now: Date.now(),
       }),
-    [activeThreadActivities, activeThreadProviderDriver],
+    [
+      activeThreadActivities,
+      activeThreadModelSelection?.instanceId,
+      activeThreadProviderDriver,
+      providerUsageNowMinute,
+    ],
   );
   useProviderUsageAlerts(activeProviderUsage);
   const activeThreadProviderDisplayName = useMemo(() => {

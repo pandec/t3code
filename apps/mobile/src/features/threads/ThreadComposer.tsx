@@ -89,6 +89,15 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  */
 export const COMPOSER_EXPANDED_CHROME = 174;
 
+function useMinuteClockMs(): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return nowMs;
+}
+
 export interface ThreadComposerProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
@@ -348,17 +357,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
   const selectedThreadDetail = useSelectedThreadDetail();
+  const providerUsageNowMs = useMinuteClockMs();
   const providerUsage = useMemo(
     () =>
       deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
         provider: selectedProviderStatus?.driver ?? null,
-        now: Date.now(),
+        providerInstanceId: props.selectedThread.modelSelection.instanceId,
+        now: providerUsageNowMs,
       }),
-    [selectedThreadDetail, selectedProviderStatus],
+    [
+      props.selectedThread.modelSelection.instanceId,
+      providerUsageNowMs,
+      selectedProviderStatus?.driver,
+      selectedThreadDetail,
+    ],
   );
   const providerUsageActions = useMemo(
-    () => (providerUsage ? providerUsageMenuActions(providerUsage, Date.now()) : []),
-    [providerUsage],
+    () => (providerUsage ? providerUsageMenuActions(providerUsage, providerUsageNowMs) : []),
+    [providerUsage, providerUsageNowMs],
   );
   const providerSkills = props.providerSkills;
 

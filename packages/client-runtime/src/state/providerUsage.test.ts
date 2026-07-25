@@ -90,7 +90,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBeNull();
   });
 
-  it("treats a rejected Claude window without a number as exhausted", () => {
+  it("renders a rejected Claude window without fabricating a percentage", () => {
     const snapshot = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
         status: "rejected",
@@ -100,7 +100,20 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     ]);
 
     expect(snapshot?.status).toBe("critical");
-    expect(snapshot?.windows[0]?.usedPercent).toBe(100);
+    expect(snapshot?.windows[0]?.usedPercent).toBeNull();
+  });
+
+  it("does not treat a crossed threshold as current utilization", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a1", {
+        status: "allowed",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
+        surpassedThreshold: 0.8,
+      }),
+    ]);
+
+    expect(snapshot).toBeNull();
   });
 
   it("labels unknown weekly window taxonomies instead of dropping them", () => {
@@ -197,7 +210,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.providerLabel).toBe("Codex");
     expect(snapshot?.windows).toEqual([
       {
-        id: "primary:codex-10080m",
+        id: "codex-10080m",
         label: "Weekly",
         shortLabel: "Wk",
         usedPercent: 28,
@@ -223,6 +236,34 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows.map((w) => w.label)).toEqual(["Session (5h)", "Weekly"]);
     expect(snapshot?.status).toBe("critical");
     expect(snapshot?.constrainedWindow?.label).toBe("Weekly");
+  });
+
+  it("keeps one weekly Codex window when it moves from primary to secondary", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 28, windowDurationMins: 10080, resetsAt: 1785575320 },
+          },
+        },
+      }),
+      makeActivity(
+        "a2",
+        {
+          rateLimits: {
+            rateLimits: {
+              primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1785475320 },
+              secondary: { usedPercent: 31, windowDurationMins: 10080, resetsAt: 1785575320 },
+            },
+          },
+        },
+        "2026-07-25T00:01:00.000Z",
+      ),
+    ]);
+
+    expect(snapshot?.windows.map((window) => window.id)).toEqual(["codex-300m", "codex-10080m"]);
+    expect(snapshot?.windows.find((window) => window.id === "codex-10080m")?.usedPercent).toBe(31);
   });
 
   it("suppresses Spark-tier Codex limits", () => {
@@ -252,6 +293,43 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBe(28);
   });
 
+  it("carries Codex limit identity across anonymous sparse updates", () => {
+    const sparseWeekly = {
+      primary: { usedPercent: 67, windowDurationMins: 10080, resetsAt: 1785475320 },
+    };
+    const afterSpark = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex-spark",
+            limitName: "Codex Spark weekly",
+            primary: { usedPercent: 55, windowDurationMins: 10080, resetsAt: 1785475320 },
+          },
+        },
+      }),
+      makeActivity("a2", { rateLimits: { rateLimits: sparseWeekly } }, "2026-07-25T00:01:00.000Z"),
+    ]);
+    expect(afterSpark).toBeNull();
+
+    const afterDefault = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 28, windowDurationMins: 10080, resetsAt: 1785475320 },
+          },
+        },
+      }),
+      makeActivity("a2", { rateLimits: { rateLimits: sparseWeekly } }, "2026-07-25T00:01:00.000Z"),
+    ]);
+    expect(afterDefault?.windows[0]?.usedPercent).toBe(67);
+
+    const withoutNamedPredecessor = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", { rateLimits: { rateLimits: sparseWeekly } }),
+    ]);
+    expect(withoutNamedPredecessor?.windows[0]?.usedPercent).toBe(67);
+  });
+
   it("escalates Codex windows when the provider reports the limit reached", () => {
     const snapshot = deriveLatestProviderUsageSnapshot([
       makeActivity("a1", {
@@ -266,6 +344,28 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     ]);
 
     expect(snapshot?.status).toBe("critical");
+  });
+
+  it("applies a sparse Codex limit-reached update to retained windows", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 91, windowDurationMins: 10080, resetsAt: 1785475320 },
+          },
+        },
+      }),
+      makeActivity(
+        "a2",
+        { rateLimits: { rateLimits: { rateLimitReachedType: "rate_limit_reached" } } },
+        "2026-07-25T00:01:00.000Z",
+      ),
+    ]);
+
+    expect(snapshot?.status).toBe("critical");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(91);
+    expect(snapshot?.updatedAt).toBe("2026-07-25T00:01:00.000Z");
   });
 
   it("filters events by the requested provider", () => {
@@ -300,6 +400,73 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(deriveLatestProviderUsageSnapshot(activities, { provider: "opencode" })).toBeNull();
   });
 
+  it("filters and scopes snapshots by provider instance", () => {
+    const activities = [
+      makeActivity("a1", {
+        providerInstanceId: "claude-personal",
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+          },
+        },
+      }),
+      makeActivity(
+        "a2",
+        {
+          providerInstanceId: "claude-work",
+          rateLimits: {
+            type: "rate_limit_event",
+            rate_limit_info: {
+              status: "allowed",
+              rateLimitType: "five_hour",
+              utilization: 0.25,
+            },
+          },
+        },
+        "2026-07-25T00:01:00.000Z",
+      ),
+    ];
+
+    const snapshot = deriveLatestProviderUsageSnapshot(activities, {
+      provider: "claudeAgent",
+      providerInstanceId: "claude-personal",
+    });
+    expect(snapshot?.providerInstanceId).toBe("claude-personal");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(85);
+  });
+
+  it("does not carry Codex suppression identity across provider instances", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        providerInstanceId: "codex-personal",
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex-spark",
+            primary: { usedPercent: 50, windowDurationMins: 10080 },
+          },
+        },
+      }),
+      makeActivity(
+        "a2",
+        {
+          providerInstanceId: "codex-work",
+          rateLimits: {
+            rateLimits: {
+              primary: { usedPercent: 22, windowDurationMins: 10080 },
+            },
+          },
+        },
+        "2026-07-25T00:01:00.000Z",
+      ),
+    ]);
+
+    expect(snapshot?.providerInstanceId).toBe("codex-work");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(22);
+  });
+
   it("returns null once the snapshot is a day old", () => {
     const activities = [
       claudeActivity(
@@ -319,6 +486,49 @@ describe("deriveLatestProviderUsageSnapshot", () => {
         now: Date.parse("2026-07-24T23:59:59.000Z"),
       }),
     ).not.toBeNull();
+  });
+
+  it("expires each merged window by its own source activity", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot(
+      [
+        claudeActivity(
+          "a1",
+          { status: "allowed", rateLimitType: "five_hour", utilization: 0.9 },
+          "2026-07-23T23:59:59.000Z",
+        ),
+        claudeActivity(
+          "a2",
+          { status: "allowed", rateLimitType: "seven_day", utilization: 0.4 },
+          "2026-07-25T00:01:00.000Z",
+        ),
+      ],
+      { now: Date.parse("2026-07-25T00:00:00.000Z") },
+    );
+
+    expect(snapshot?.windows.map((window) => window.id)).toEqual(["seven_day"]);
+    expect(snapshot?.updatedAt).toBe("2026-07-25T00:01:00.000Z");
+  });
+
+  it("selects the highest-status constrained window before comparing percentages", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a1", {
+        status: "allowed",
+        rateLimitType: "seven_day",
+        utilization: 0.7,
+      }),
+      claudeActivity(
+        "a2",
+        {
+          status: "allowed_warning",
+          rateLimitType: "five_hour",
+        },
+        "2026-07-25T00:01:00.000Z",
+      ),
+    ]);
+
+    expect(snapshot?.status).toBe("warning");
+    expect(snapshot?.constrainedWindow?.id).toBe("five_hour");
+    expect(snapshot?.constrainedWindow?.usedPercent).toBeNull();
   });
 
   it("drops windows whose reset time has already passed", () => {
@@ -435,6 +645,9 @@ describe("collectProviderUsageAlerts", () => {
     if (!window) return;
     expect(providerUsageAlertKey("Claude", window, "warning")).toBe(
       "Claude:five_hour:warning:1784970000",
+    );
+    expect(providerUsageAlertKey("Claude", window, "warning", "claude-work")).toBe(
+      "Claude@claude-work:five_hour:warning:1784970000",
     );
   });
 });
