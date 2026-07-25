@@ -1334,6 +1334,40 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("keeps an imported binding cwd authoritative on its first resume", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-imported-worktree");
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-imported-thread" },
+        runtimeMode: "full-access",
+        runtimePayload: {
+          cwd: "/tmp/imported-worktree",
+          lastRuntimeEvent: "provider.importConversation",
+        },
+      });
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-root",
+        runtimeMode: "full-access",
+      });
+
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.isDefined(startInput);
+      assert.equal(startInput.cwd, "/tmp/imported-worktree");
+      assert.deepEqual(startInput.resumeCursor, { threadId: "native-imported-thread" });
+    }),
+  );
+
   it.effect("recovers stale claudeAgent sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

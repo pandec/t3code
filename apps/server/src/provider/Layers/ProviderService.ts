@@ -176,6 +176,18 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isImportedSessionBinding(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return false;
+  }
+  return (
+    "lastRuntimeEvent" in runtimePayload &&
+    runtimePayload.lastRuntimeEvent === "provider.importConversation"
+  );
+}
+
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -673,11 +685,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? persistedBinding.resumeCursor
             : undefined);
-        const effectiveCwd =
-          input.cwd ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
+        const persistedCwd =
+          persistedBinding?.providerInstanceId === resolvedInstanceId
             ? readPersistedCwd(persistedBinding.runtimePayload)
-            : undefined);
+            : undefined;
+        const effectiveCwd =
+          persistedCwd !== undefined &&
+          persistedBinding !== undefined &&
+          isImportedSessionBinding(persistedBinding.runtimePayload)
+            ? persistedCwd
+            : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
           "provider.resume_cursor.source":

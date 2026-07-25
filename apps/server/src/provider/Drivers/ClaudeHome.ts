@@ -14,6 +14,17 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   return path.resolve(homePath.length > 0 ? expandHomePath(homePath) : NodeOS.homedir());
 });
 
+/** Resolve the directory Claude uses for config and persisted project sessions. */
+export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+): Effect.fn.Return<string, never, Path.Path> {
+  const path = yield* Path.Path;
+  const homePath = config.homePath.trim();
+  return homePath.length > 0
+    ? path.resolve(expandHomePath(homePath))
+    : path.join(NodeOS.homedir(), ".claude");
+});
+
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   baseEnv?: NodeJS.ProcessEnv,
@@ -36,8 +47,8 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
 
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
   function* (config: Pick<ClaudeSettings, "homePath">): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config);
-    return `claude:home:${resolvedHomePath}`;
+    const configDirPath = yield* resolveClaudeConfigDirPath(config);
+    return `claude:home:${configDirPath}`;
   },
 );
 

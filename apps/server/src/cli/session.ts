@@ -12,6 +12,7 @@ import {
   type SessionImportPayload,
 } from "@t3tools/contracts";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
+import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -21,19 +22,23 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { claudeProjectDirectoryName } from "../provider/Drivers/ClaudeSessionImport.ts";
+import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import {
+  claudeProjectDirectoryName,
+  parseClaudeTranscript,
+} from "../provider/Drivers/ClaudeSessionImport.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import {
   type CliLiveOrchestrationServer,
+  cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
@@ -50,6 +55,8 @@ import {
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
 const SESSION_HTTP_READ_TIMEOUT = Duration.seconds(5);
 const SESSION_HTTP_IMPORT_TIMEOUT = Duration.seconds(30);
+const SESSION_GIT_TIMEOUT = Duration.seconds(30);
+const SESSION_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const jsonFlag = Flag.boolean("json").pipe(
@@ -84,13 +91,44 @@ export class SessionCliServerUnsupportedError extends Schema.TaggedErrorClass<Se
 }
 const isSessionCliError = Schema.is(SessionCliError);
 
-export interface SniffedSession {
-  readonly provider: "codex" | "claudeAgent";
+interface SniffedSessionBase {
   readonly nativeSessionId: string;
   readonly sourceCwd: string;
   readonly lastSeenModel: string | null;
-  readonly timestamp: string | null;
   readonly originalFileName: string;
+}
+
+export type SniffedSession =
+  | (SniffedSessionBase & {
+      readonly provider: "codex";
+      readonly timestamp: string;
+      readonly datePath: {
+        readonly year: string;
+        readonly month: string;
+        readonly day: string;
+      };
+    })
+  | (SniffedSessionBase & {
+      readonly provider: "claudeAgent";
+      readonly timestamp: null;
+    });
+
+interface CodexDatePath {
+  readonly year: string;
+  readonly month: string;
+  readonly day: string;
+}
+
+function parseCodexDatePath(timestamp: string): CodexDatePath | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(timestamp);
+  if (match === null || Number.isNaN(Date.parse(timestamp))) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (daysInMonth === undefined || day < 1 || day > daysInMonth) return null;
+  return { year: match[1]!, month: match[2]!, day: match[3]! };
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -175,10 +213,11 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
         detail: "Codex session metadata must include payload.id, payload.cwd, and a timestamp.",
       });
     }
-    if (Number.isNaN(Date.parse(timestamp))) {
+    const datePath = parseCodexDatePath(timestamp);
+    if (datePath === null) {
       return yield* new SessionCliError({
         operation: "sniffSession",
-        detail: `Codex session timestamp '${timestamp}' is invalid.`,
+        detail: `Codex session timestamp '${timestamp}' must start with a valid ISO calendar date.`,
       });
     }
     let lastSeenModel: string | null = null;
@@ -191,6 +230,7 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
       sourceCwd,
       lastSeenModel,
       timestamp,
+      datePath,
       originalFileName: NodePath.basename(input.fileName),
     };
   }
@@ -226,11 +266,24 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
       detail: "Claude session transcript does not contain a source cwd.",
     });
   }
+  const parsedTranscript = yield* parseClaudeTranscript({
+    sessionId: nativeSessionId,
+    lines: input.content.split(/\r?\n/),
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new SessionCliError({
+          operation: "sniffSession",
+          detail: `Claude session '${nativeSessionId}' line ${cause.line}: ${cause.detail}`,
+          cause,
+        }),
+    ),
+  );
   return {
     provider: "claudeAgent" as const,
     nativeSessionId,
     sourceCwd,
-    lastSeenModel,
+    lastSeenModel: parsedTranscript.model ?? lastSeenModel,
     timestamp: null,
     originalFileName: NodePath.basename(input.fileName),
   };
@@ -300,13 +353,12 @@ export const deriveSessionDestination = (input: {
       `${input.session.nativeSessionId}.jsonl`,
     );
   }
-  const dateParts = /^(\d{4})-(\d{2})-(\d{2})/.exec(input.session.timestamp!);
   return NodePath.join(
     input.instanceHome,
     "sessions",
-    dateParts![1]!,
-    dateParts![2]!,
-    dateParts![3]!,
+    input.session.datePath.year,
+    input.session.datePath.month,
+    input.session.datePath.day,
     input.session.originalFileName,
   );
 };
@@ -511,6 +563,13 @@ function sessionTransportError(operation: string, cause: unknown) {
   });
 }
 
+export function sessionHttpError(operation: string, cause: unknown) {
+  if (isEnvironmentSessionImportError(cause)) return cause;
+  return Cause.isTimeoutError(cause)
+    ? sessionTransportError(operation, cause)
+    : cliOrchestrationErrorFromRequest(cause);
+}
+
 export const fetchProviderCatalog = (origin: string, bearerToken: string) =>
   Effect.gen(function* () {
     const client = yield* makeHttpClient(origin);
@@ -519,7 +578,7 @@ export const fetchProviderCatalog = (origin: string, bearerToken: string) =>
     });
   }).pipe(
     Effect.timeout(SESSION_HTTP_READ_TIMEOUT),
-    Effect.mapError((cause) => sessionTransportError("provider catalog", cause)),
+    Effect.mapError((cause) => sessionHttpError("provider catalog", cause)),
   );
 
 const fetchSessionCandidates = (
@@ -535,11 +594,7 @@ const fetchSessionCandidates = (
     });
   }).pipe(
     Effect.timeout(SESSION_HTTP_READ_TIMEOUT),
-    Effect.mapError((cause) =>
-      isEnvironmentSessionImportError(cause)
-        ? cause
-        : sessionTransportError("session candidate listing", cause),
-    ),
+    Effect.mapError((cause) => sessionHttpError("session candidate listing", cause)),
   );
 
 const importSession = (origin: string, bearerToken: string, payload: SessionImportPayload) =>
@@ -551,11 +606,7 @@ const importSession = (origin: string, bearerToken: string, payload: SessionImpo
     });
   }).pipe(
     Effect.timeout(SESSION_HTTP_IMPORT_TIMEOUT),
-    Effect.mapError((cause) =>
-      isEnvironmentSessionImportError(cause)
-        ? cause
-        : sessionTransportError("session import", cause),
-    ),
+    Effect.mapError((cause) => sessionHttpError("session import", cause)),
   );
 
 interface GitCommandResult {
@@ -568,38 +619,34 @@ const runGitCommand = Effect.fn("session.runGitCommand")(function* (
   cwd: string,
   args: ReadonlyArray<string>,
 ) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  return yield* Effect.scoped(
-    Effect.gen(function* () {
-      const child = yield* spawner.spawn(
-        ChildProcess.make("git", args, {
-          cwd,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-        }),
-      );
-      const [stdout, stderr, exitCode] = yield* Effect.all(
-        [
-          child.stdout.pipe(
-            Stream.decodeText(),
-            Stream.runFold(
-              () => "",
-              (acc, chunk) => acc + chunk,
-            ),
-          ),
-          child.stderr.pipe(
-            Stream.decodeText(),
-            Stream.runFold(
-              () => "",
-              (acc, chunk) => acc + chunk,
-            ),
-          ),
-          child.exitCode.pipe(Effect.map(Number)),
-        ],
-        { concurrency: "unbounded" },
-      );
-      return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode } satisfies GitCommandResult;
-    }),
-  );
+  const processRunner = yield* ProcessRunner.make();
+  const result = yield* processRunner
+    .run({
+      command: "git",
+      args,
+      cwd,
+      env: {
+        ...sanitizeGitRepositoryEnvironment(),
+        GIT_TERMINAL_PROMPT: "0",
+      },
+      timeout: SESSION_GIT_TIMEOUT,
+      maxOutputBytes: SESSION_GIT_MAX_OUTPUT_BYTES,
+    })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new SessionCliError({
+            operation: "runGitCommand",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
+  return {
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+    exitCode: result.code === null ? -1 : Number(result.code),
+  } satisfies GitCommandResult;
 });
 
 const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
@@ -676,7 +723,25 @@ const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
   return { project, shell };
 });
 
-const ensureWorktree = Effect.fn("ensureWorktree")(function* (input: {
+const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
+  cwd: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const result = yield* runGitCommand(cwd, ["rev-parse", "--git-common-dir"]);
+  if (result.exitCode !== 0 || result.stdout.length === 0) {
+    return yield* new SessionCliError({
+      operation: "validateWorktree",
+      detail: `Failed to resolve the Git common directory for '${cwd}': ${result.stderr || "git rev-parse failed"}`,
+    });
+  }
+  const resolved = path.isAbsolute(result.stdout)
+    ? result.stdout
+    : path.resolve(cwd, result.stdout);
+  return yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved));
+});
+
+export const ensureWorktree = Effect.fn("ensureWorktree")(function* (input: {
   readonly baseDir: string;
   readonly workspaceRoot: string;
   readonly branch: string;
@@ -732,6 +797,34 @@ const ensureWorktree = Effect.fn("ensureWorktree")(function* (input: {
         }),
     ),
   );
+  const [projectGitDirectory, worktreeGitDirectory] = yield* Effect.all(
+    [resolveGitCommonDirectory(input.workspaceRoot), resolveGitCommonDirectory(canonicalPath)],
+    { concurrency: "unbounded" },
+  );
+  if (projectGitDirectory !== worktreeGitDirectory) {
+    return yield* new SessionCliError({
+      operation: "createWorktree",
+      detail: `Existing worktree path '${canonicalPath}' belongs to a different Git repository.`,
+    });
+  }
+  const currentBranch = yield* runGitCommand(canonicalPath, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  if (currentBranch.exitCode !== 0) {
+    return yield* new SessionCliError({
+      operation: "createWorktree",
+      detail: `Existing worktree path '${canonicalPath}' has a detached HEAD.`,
+    });
+  }
+  if (currentBranch.stdout !== branch) {
+    return yield* new SessionCliError({
+      operation: "createWorktree",
+      detail: `Existing worktree path '${canonicalPath}' is on branch '${currentBranch.stdout}', not '${branch}'.`,
+    });
+  }
   return { branch, worktreePath: canonicalPath };
 });
 

@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 
 import type { ProviderInstance } from "./ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "./Services/ProviderInstanceRegistry.ts";
-import { getProviderCatalogHttp } from "./http.ts";
+import { getProviderCatalogHttp, providerImportHome } from "./http.ts";
 
 const instanceId = ProviderInstanceId.make("claude-work");
 const instance = {
@@ -20,7 +20,7 @@ const instance = {
   driverKind: ProviderDriverKind.make("claudeAgent"),
   continuationIdentity: {
     driverKind: ProviderDriverKind.make("claudeAgent"),
-    continuationKey: "claude:home:/Users/test",
+    continuationKey: "claude:home:/Users/test/.claude",
   },
   displayName: "Claude Work",
   enabled: true,
@@ -92,4 +92,18 @@ it.layer(NodeServices.layer)("provider catalog HTTP handler", (it) => {
       ]);
     }),
   );
+});
+
+it.layer(NodeServices.layer)("provider import homes", (it) => {
+  it("keeps a custom Claude config directory direct", () => {
+    expect(
+      providerImportHome({
+        ...instance,
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          continuationKey: "claude:home:/Users/test/.claude-work",
+        },
+      }),
+    ).toBe("/Users/test/.claude-work");
+  });
 });

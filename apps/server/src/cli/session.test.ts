@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off - integration fixture setup uses the installed Git binary.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProviderDriverKind,
@@ -6,18 +12,24 @@ import {
   type ProviderCatalogResult,
 } from "@t3tools/contracts";
 import { assert, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
+import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import { claudeProjectDirectoryName } from "../provider/Drivers/ClaudeSessionImport.ts";
 import {
   decideSessionPlacement,
   deriveSessionDestination,
   deriveSessionWorktreePath,
+  ensureWorktree,
   placeSessionFile,
   resolveCliModelSelection,
   resolveImportInstance,
+  SessionCliError,
+  sessionHttpError,
   sniffSessionTranscript,
 } from "./session.ts";
 
@@ -52,6 +64,7 @@ it.effect("sniffs Codex rollout metadata and the last advertised model", () =>
       sourceCwd: "/repo/source",
       lastSeenModel: "gpt-5.6-sol",
       timestamp: "2026-07-25T08:09:10.000Z",
+      datePath: { year: "2026", month: "07", day: "25" },
     });
   }),
 );
@@ -61,8 +74,8 @@ it.effect("sniffs Claude typed JSONL and requires the filename UUID", () =>
     const sniffed = yield* sniffSessionTranscript({
       fileName: `${claudeSessionId}.jsonl`,
       content: [
-        `{"type":"user","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"user","content":"hello"}}`,
-        `{"type":"assistant","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"assistant","model":"claude-sonnet-5","content":[]}}`,
+        `{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-07-25T08:09:10.000Z","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"user","content":"hello"}}`,
+        `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-07-25T08:09:11.000Z","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"assistant","model":"claude-sonnet-5","content":[]}}`,
       ].join("\n"),
     });
 
@@ -88,6 +101,26 @@ it.effect("rejects malformed and unknown transcript formats", () =>
       content: '{"type":"user","cwd":"/repo"}',
     }).pipe(Effect.flip);
     expect(unknown.detail).toContain("Unknown session format");
+
+    const unsupportedClaudeRecord = yield* sniffSessionTranscript({
+      fileName: `${claudeSessionId}.jsonl`,
+      content: `{"type":"adversarial-new-type","sessionId":"${claudeSessionId}","cwd":"/repo"}`,
+    }).pipe(Effect.flip);
+    expect(unsupportedClaudeRecord.detail).toContain("adversarial-new-type");
+
+    const nonIsoCodexTimestamp = yield* sniffSessionTranscript({
+      fileName: "rollout.jsonl",
+      content:
+        '{"timestamp":"July 25, 2026","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo"}}',
+    }).pipe(Effect.flip);
+    expect(nonIsoCodexTimestamp.detail).toContain("valid ISO calendar date");
+
+    const normalizedInvalidCodexDate = yield* sniffSessionTranscript({
+      fileName: "rollout.jsonl",
+      content:
+        '{"timestamp":"2026-02-31T08:09:10.000Z","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo"}}',
+    }).pipe(Effect.flip);
+    expect(normalizedInvalidCodexDate.detail).toContain("valid ISO calendar date");
   }),
 );
 
@@ -147,6 +180,7 @@ it("derives Claude/Codex destinations from per-instance homes and effective cwd"
       sourceCwd: "/old/repo",
       lastSeenModel: null,
       timestamp: "2026-07-05T22:00:00.000Z",
+      datePath: { year: "2026", month: "07", day: "05" },
       originalFileName: "rollout-original.jsonl",
     },
     instanceHome: "/homes/work/.codex",
@@ -163,6 +197,62 @@ it("derives the server worktree naming scheme", () => {
       branch: "feature/session-handover",
     }),
   ).toBe("/state/worktrees/t3code/feature-session-handover");
+});
+
+it.layer(NodeServices.layer)("session worktree validation", (it) => {
+  it.effect("rejects a derived path owned by another repository", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-session-worktree-"))),
+      (baseDir) =>
+        Effect.gen(function* () {
+          const workspaceRoot = NodePath.join(baseDir, "repos", "project");
+          const conflictingPath = deriveSessionWorktreePath({
+            baseDir,
+            workspaceRoot,
+            branch: "feature",
+          });
+          NodeFS.mkdirSync(workspaceRoot, { recursive: true });
+          NodeFS.mkdirSync(conflictingPath, { recursive: true });
+          for (const repository of [workspaceRoot, conflictingPath]) {
+            NodeChildProcess.execFileSync("git", ["init", "-q", repository], {
+              env: sanitizeGitRepositoryEnvironment(),
+            });
+            NodeChildProcess.execFileSync(
+              "git",
+              [
+                "-C",
+                repository,
+                "-c",
+                "user.name=T3 Test",
+                "-c",
+                "user.email=t3@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "fixture",
+              ],
+              { env: sanitizeGitRepositoryEnvironment() },
+            );
+            NodeChildProcess.execFileSync("git", ["-C", repository, "branch", "-M", "feature"], {
+              env: sanitizeGitRepositoryEnvironment(),
+            });
+          }
+
+          const error = yield* ensureWorktree({
+            baseDir,
+            workspaceRoot,
+            branch: "feature",
+          }).pipe(Effect.flip);
+          expect(Schema.is(SessionCliError)(error)).toBe(true);
+          if (!Schema.is(SessionCliError)(error)) return;
+          expect(error.detail).toContain("different Git repository");
+        }),
+      (baseDir) =>
+        Effect.sync(() => {
+          NodeFS.rmSync(baseDir, { recursive: true, force: true });
+        }),
+    ),
+  );
 });
 
 it("decides retry-safe placement without overwriting", () => {
@@ -269,3 +359,13 @@ it.effect("rejects --effort without a concrete model", () =>
     expect(error.detail).toContain("--effort requires");
   }),
 );
+
+it("labels only real transport deadlines as timeouts", () => {
+  const timeout = sessionHttpError("provider catalog", new Cause.TimeoutError());
+  expect(timeout).toBeInstanceOf(SessionCliError);
+  expect(timeout.message).toContain("within the allowed time");
+
+  const requestFailure = sessionHttpError("provider catalog", new Error("connection refused"));
+  expect(requestFailure._tag).toBe("CliOrchestrationRequestError");
+  expect(requestFailure.message).toBe("Failed to call the running server.");
+});

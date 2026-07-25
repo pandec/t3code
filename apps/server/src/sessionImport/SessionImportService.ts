@@ -40,6 +40,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
+import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -191,7 +192,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           ChildProcess.make("git", args, {
             cwd,
             env: {
-              ...process.env,
+              ...sanitizeGitRepositoryEnvironment(),
               GIT_OPTIONAL_LOCKS: "0",
               GIT_TERMINAL_PROMPT: "0",
             },

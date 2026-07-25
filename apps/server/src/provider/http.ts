@@ -5,17 +5,13 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { annotateEnvironmentRequest, requireEnvironmentScope } from "../auth/http.ts";
 import type { ProviderInstance } from "./ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "./Services/ProviderInstanceRegistry.ts";
 
-export function providerImportHome(
-  instance: ProviderInstance,
-  path: Pick<Path.Path, "join">,
-): string | undefined {
+export function providerImportHome(instance: ProviderInstance): string | undefined {
   const prefix =
     instance.driverKind === "claudeAgent"
       ? "claude:home:"
@@ -27,12 +23,11 @@ export function providerImportHome(
   if (!continuationKey.startsWith(prefix)) return undefined;
   const baseHome = continuationKey.slice(prefix.length).trim();
   if (baseHome.length === 0) return undefined;
-  return instance.driverKind === "claudeAgent" ? path.join(baseHome, ".claude") : baseHome;
+  return baseHome;
 }
 
 const buildProviderCatalog = Effect.fn("environment.providers.buildCatalog")(function* (input: {
   readonly registry: ProviderInstanceRegistry["Service"] | undefined;
-  readonly path: Pick<Path.Path, "join">;
 }) {
   const instances: Array<ProviderCatalogInstance> = [];
   const providerInstances = input.registry === undefined ? [] : yield* input.registry.listInstances;
@@ -41,7 +36,7 @@ const buildProviderCatalog = Effect.fn("environment.providers.buildCatalog")(fun
     const importCapable =
       instance.adapter.listImportableSessions !== undefined &&
       instance.adapter.readImportableSession !== undefined;
-    const home = importCapable ? providerImportHome(instance, input.path) : undefined;
+    const home = importCapable ? providerImportHome(instance) : undefined;
     instances.push({
       instanceId: instance.instanceId,
       driverKind: instance.driverKind,
@@ -62,10 +57,8 @@ const buildProviderCatalog = Effect.fn("environment.providers.buildCatalog")(fun
 export const getProviderCatalogHttp = Effect.fn("environment.providers.catalog")(function* () {
   yield* requireEnvironmentScope(AuthOrchestrationReadScope);
   const registry = yield* Effect.serviceOption(ProviderInstanceRegistry);
-  const path = yield* Path.Path;
   return yield* buildProviderCatalog({
     registry: Option.getOrUndefined(registry),
-    path,
   });
 });
 
@@ -74,7 +67,6 @@ export const providerCatalogHttpApiLayer = HttpApiBuilder.group(
   "providers",
   Effect.fnUntraced(function* (handlers) {
     const registry = yield* Effect.serviceOption(ProviderInstanceRegistry);
-    const path = yield* Path.Path;
     return handlers.handle(
       "catalog",
       Effect.fn("environment.providers.catalog")(function* (args) {
@@ -82,7 +74,6 @@ export const providerCatalogHttpApiLayer = HttpApiBuilder.group(
         yield* requireEnvironmentScope(AuthOrchestrationReadScope);
         return yield* buildProviderCatalog({
           registry: Option.getOrUndefined(registry),
-          path,
         });
       }),
     );
