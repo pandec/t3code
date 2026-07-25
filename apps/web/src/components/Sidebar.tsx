@@ -245,7 +245,7 @@ function SidebarThreadProviderIcon(props: {
         render={
           <span
             role="img"
-            tabIndex={0}
+            tabIndex={compact ? undefined : 0}
             data-thread-selection-safe
             aria-label={`${providerInstance.displayName}, ${model}`}
             className={
@@ -512,12 +512,20 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const hasThreadHoverControls = !showProviderAlways
     ? providerInstance !== undefined || !isThreadRunning
     : !isThreadRunning;
+  const threadTouchMetaPaddingClass =
+    providerInstance !== undefined && !showProviderAlways
+      ? isThreadRunning
+        ? "max-sm:pr-7 [@media(hover:none)]:pr-7"
+        : "max-sm:pr-14 [@media(hover:none)]:pr-14"
+      : !isThreadRunning
+        ? "max-sm:pr-6 [@media(hover:none)]:pr-6"
+        : "";
   const threadMetaClassName = isConfirmingArchive
     ? "pointer-events-none opacity-0"
     : hasThreadHoverControls && !showProviderAlways
-      ? "pointer-events-none transition-opacity duration-150 max-sm:pr-6 [@media(hover:none)]:pr-6 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+      ? `pointer-events-none transition-opacity duration-150 ${threadTouchMetaPaddingClass} group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0`
       : showProviderAlways && !isThreadRunning
-        ? "pointer-events-none max-sm:pr-6 [@media(hover:none)]:pr-6"
+        ? `pointer-events-none ${threadTouchMetaPaddingClass}`
         : "pointer-events-none";
   const threadLabelClassName =
     showProviderAlways && !isThreadRunning
