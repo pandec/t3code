@@ -981,7 +981,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerUsageNowMinute,
     ],
   );
-  useProviderUsageAlerts(activeProviderUsage);
+  useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadProviderDisplayName = useMemo(() => {
     if (!activeThreadModelSelection) return null;
     const entry = providerStatuses.find(

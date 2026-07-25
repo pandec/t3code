@@ -133,11 +133,13 @@ function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel:
 function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
   providerLabel: "Claude";
   windows: ProviderUsageWindow[];
+  clearedWindowIds: string[];
 } | null {
   const info = asRecord(payload.rate_limit_info) ?? payload;
 
   // Tolerate both camelCase (current SDK) and snake_case (older releases).
-  const rateLimitType = asString(info.rateLimitType) ?? asString(info.rate_limit_type) ?? "unknown";
+  const reportedRateLimitType = asString(info.rateLimitType) ?? asString(info.rate_limit_type);
+  const rateLimitType = reportedRateLimitType ?? "unknown";
   const status = asString(info.status);
   const resetsAt = asFiniteNumber(info.resetsAt) ?? asFiniteNumber(info.resets_at);
   const utilization = asFiniteNumber(info.utilization);
@@ -145,7 +147,16 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
 
   // "allowed" with no number carries no information worth rendering; a
   // non-allowed status without a number still deserves a (numberless) row.
+  // When the window id is known, retain a tombstone so this newest event clears
+  // an older warning for the same window without fabricating a percentage.
   if (usedPercent === null && (status === null || status === "allowed")) {
+    if (status === "allowed" && reportedRateLimitType !== null) {
+      return {
+        providerLabel: "Claude",
+        windows: [],
+        clearedWindowIds: [reportedRateLimitType],
+      };
+    }
     return null;
   }
 
@@ -157,6 +168,7 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
 
   return {
     providerLabel: "Claude",
+    clearedWindowIds: [],
     windows: [
       { id: rateLimitType, label, shortLabel, usedPercent, resetsAt, status: windowStatus },
     ],
@@ -235,7 +247,7 @@ function normalizeCodexRateLimits(
 
   const limitIdentity = codexLimitIdentity(snapshot) ?? inheritedIdentity;
   const suppressed = isSuppressedCodexLimit(limitIdentity);
-  const rejected = asString(snapshot.rateLimitReachedType) === "rate_limit_reached";
+  const exhausted = asString(snapshot.rateLimitReachedType) !== null;
   const windows: ProviderUsageWindow[] = [];
   const usedIds = new Set<string>();
 
@@ -256,7 +268,7 @@ function normalizeCodexRateLimits(
       shortLabel,
       usedPercent,
       resetsAt: asFiniteNumber(window.resetsAt),
-      status: maxStatus(statusForPercent(usedPercent), rejected ? "critical" : "ok"),
+      status: statusForPercent(usedPercent),
     });
   }
 
@@ -264,7 +276,7 @@ function normalizeCodexRateLimits(
     providerLabel: "Codex",
     windows: suppressed ? [] : windows,
     limitIdentity,
-    forceCritical: rejected,
+    forceCritical: exhausted,
     suppressed,
   };
 }
@@ -277,6 +289,7 @@ type NormalizedRateLimitPayload =
   | {
       readonly providerLabel: "Claude";
       readonly windows: ProviderUsageWindow[];
+      readonly clearedWindowIds: ReadonlyArray<string>;
     }
   | {
       readonly providerLabel: "Codex";
@@ -301,7 +314,12 @@ function normalizeRateLimitPayload(
     const normalized = normalizeClaudeRateLimitEvent(event);
     return normalized ? { ...normalized, providerLabel: "Claude" } : null;
   }
-  if (event.primary || event.secondary || event.rateLimits) {
+  if (
+    event.primary ||
+    event.secondary ||
+    event.rateLimits ||
+    asString(event.rateLimitReachedType) !== null
+  ) {
     return normalizeCodexRateLimits(event, inheritedCodexIdentity);
   }
   if (
@@ -360,6 +378,7 @@ export function deriveLatestProviderUsageSnapshot(
   type MergedWindow = {
     readonly window: ProviderUsageWindow;
     readonly sourceAt: string;
+    readonly forcedCriticalAt: string | null;
   };
 
   const windowsById = new Map<string, MergedWindow>();
@@ -410,21 +429,39 @@ export function deriveLatestProviderUsageSnapshot(
       if (result.suppressed) {
         continue;
       }
+    } else {
+      for (const windowId of result.clearedWindowIds) {
+        windowsById.delete(windowId);
+      }
     }
 
     for (const window of result.windows) {
+      const previous = windowsById.get(window.id);
+      const sameResetPeriod =
+        previous !== undefined &&
+        (previous.window.resetsAt === null ||
+          window.resetsAt === null ||
+          previous.window.resetsAt === window.resetsAt);
+      const forcedCriticalAt =
+        result.providerLabel === "Codex" && result.forceCritical
+          ? activity.createdAt
+          : sameResetPeriod
+            ? (previous?.forcedCriticalAt ?? null)
+            : null;
       windowsById.delete(window.id);
-      windowsById.set(window.id, { window, sourceAt: activity.createdAt });
+      windowsById.set(window.id, {
+        window,
+        sourceAt: activity.createdAt,
+        forcedCriticalAt,
+      });
     }
 
     if (result.providerLabel === "Codex" && result.forceCritical) {
       for (const [id, merged] of windowsById) {
         windowsById.set(id, {
-          window: {
-            ...merged.window,
-            status: maxStatus(merged.window.status, "critical"),
-          },
+          window: merged.window,
           sourceAt: activity.createdAt,
+          forcedCriticalAt: activity.createdAt,
         });
       }
     }
@@ -442,7 +479,9 @@ export function deriveLatestProviderUsageSnapshot(
       const sourceAtMs = Date.parse(sourceAt);
       return !Number.isFinite(sourceAtMs) || nowMs - sourceAtMs < PROVIDER_USAGE_MAX_AGE_MS;
     })
-    .toSorted((a, b) => {
+    // Hermes does not ship ES2023 change-by-copy methods; Array.from already
+    // gave us a safe copy to mutate here.
+    .sort((a, b) => {
       const aMs = Date.parse(a.sourceAt);
       const bMs = Date.parse(b.sourceAt);
       if (!Number.isFinite(aMs) || !Number.isFinite(bMs)) return 0;
@@ -452,7 +491,17 @@ export function deriveLatestProviderUsageSnapshot(
     return null;
   }
 
-  const windows = mergedWindows.map(({ window }) => window);
+  const windows = mergedWindows.map(({ window, forcedCriticalAt }) => {
+    if (forcedCriticalAt === null) return window;
+    const forcedCriticalAtMs = Date.parse(forcedCriticalAt);
+    const forcedCriticalIsFresh =
+      nowMs === undefined ||
+      !Number.isFinite(forcedCriticalAtMs) ||
+      nowMs - forcedCriticalAtMs < PROVIDER_USAGE_MAX_AGE_MS;
+    return forcedCriticalIsFresh
+      ? { ...window, status: maxStatus(window.status, "critical") }
+      : window;
+  });
   let updatedAt = mergedWindows[0]?.sourceAt;
   let updatedAtMs = Number.NEGATIVE_INFINITY;
   for (const { sourceAt } of mergedWindows) {
@@ -510,6 +559,7 @@ export type ProviderUsageAlert = {
 export function collectProviderUsageAlerts(
   snapshot: ProviderUsageSnapshot | null,
   firedKeys: ReadonlySet<string>,
+  alertScope?: string | null,
 ): ProviderUsageAlert[] {
   if (!snapshot) return [];
 
@@ -519,7 +569,13 @@ export function collectProviderUsageAlerts(
     const crossed: Array<"warning" | "critical"> =
       window.status === "critical" ? ["warning", "critical"] : ["warning"];
     const keys = crossed.map((threshold) =>
-      providerUsageAlertKey(snapshot.providerLabel, window, threshold, snapshot.providerInstanceId),
+      providerUsageAlertKey(
+        snapshot.providerLabel,
+        window,
+        threshold,
+        snapshot.providerInstanceId,
+        alertScope,
+      ),
     );
     const freshKeys = keys.filter((key) => !firedKeys.has(key));
     if (freshKeys.length === 0) continue;
@@ -541,7 +597,11 @@ export function providerUsageAlertKey(
   window: ProviderUsageWindow,
   threshold: "warning" | "critical",
   providerInstanceId?: string | null,
+  alertScope?: string | null,
 ): string {
-  const scope = providerInstanceId ? `${providerLabel}@${providerInstanceId}` : providerLabel;
+  const providerScope = providerInstanceId
+    ? `${providerLabel}@${providerInstanceId}`
+    : providerLabel;
+  const scope = alertScope ? `${alertScope}:${providerScope}` : providerScope;
   return `${scope}:${window.id}:${threshold}:${window.resetsAt ?? "unknown"}`;
 }

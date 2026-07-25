@@ -93,14 +93,17 @@ export function buildProviderUsageAlertCopy(
   return { title, body: `${body}.` };
 }
 
-export function useProviderUsageAlerts(snapshot: ProviderUsageSnapshot | null): void {
+export function useProviderUsageAlerts(
+  snapshot: ProviderUsageSnapshot | null,
+  alertScope: string,
+): void {
   const enabled = useClientSettings((settings) => settings.enableRateLimitAlerts);
 
   useEffect(() => {
     if (!enabled || !snapshot) return;
     const nowMs = Date.now();
     const fired = readFiredAlerts(nowMs);
-    const alerts = collectProviderUsageAlerts(snapshot, new Set(fired.keys()));
+    const alerts = collectProviderUsageAlerts(snapshot, new Set(fired.keys()), alertScope);
     if (alerts.length === 0) return;
 
     for (const alert of alerts) {
@@ -128,5 +131,5 @@ export function useProviderUsageAlerts(snapshot: ProviderUsageSnapshot | null): 
       }
     }
     writeFiredAlerts(fired);
-  }, [enabled, snapshot]);
+  }, [alertScope, enabled, snapshot]);
 }
