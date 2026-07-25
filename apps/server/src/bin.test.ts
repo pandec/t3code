@@ -958,7 +958,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const server = NodeHttp.createServer((_request, response) => {
-          response.writeHead(500, { "content-type": "application/json" }).end('{"incomplete":');
+          response.writeHead(404, { "content-type": "application/json" }).end('{"incomplete":');
         });
         yield* Effect.promise(
           () =>
@@ -990,7 +990,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         ).pipe(Effect.flip);
 
         assert.instanceOf(error, CliOrchestrationUndeclaredStatusError);
-        assert.equal(error.status, 500);
+        assert.equal(error.status, 404);
       }),
     ).pipe(Effect.provide(FetchHttpClient.layer)),
   );

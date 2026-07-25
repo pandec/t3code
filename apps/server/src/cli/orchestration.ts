@@ -8,6 +8,7 @@ import {
   type OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
+import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -179,11 +180,11 @@ export const defaultCliLiveServerReadTimeouts: CliLiveServerReadTimeouts = {
 export const cliLiveServerReadTimeoutsFromMillis = (
   overrideMillis: number,
 ): CliLiveServerReadTimeouts => ({
-  // Discovery only probes whether the server answers at all, so it stays short
-  // unless the caller asks for something shorter still.
-  discovery: Duration.millis(
-    Math.min(overrideMillis, Duration.toMillis(CLI_LIVE_SERVER_DISCOVERY_TIMEOUT_DEFAULT)),
-  ),
+  // An explicit override applies to every live read: the shell snapshot behind
+  // thread/status commands runs under the discovery timeout, so clamping it to
+  // the short default would make the override ineffective exactly when the
+  // server is busy.
+  discovery: Duration.millis(overrideMillis),
   read: Duration.millis(overrideMillis),
 });
 
@@ -191,11 +192,21 @@ export const resolveCliLiveServerReadTimeouts = Effect.fn("resolveCliLiveServerR
   function* (flagTimeoutMillis: Option.Option<number>) {
     const envTimeoutMillis = yield* Config.int("T3CODE_CLI_TIMEOUT_MS").pipe(
       Config.option,
-      Effect.orElseSucceed(() => Option.none<number>()),
+      Effect.catch(() =>
+        Console.error("Ignoring invalid T3CODE_CLI_TIMEOUT_MS; using default timeouts.").pipe(
+          Effect.as(Option.none<number>()),
+        ),
+      ),
     );
-    const overrideMillis = Option.firstSomeOf([flagTimeoutMillis, envTimeoutMillis]).pipe(
+    const requestedOverrideMillis = Option.firstSomeOf([flagTimeoutMillis, envTimeoutMillis]);
+    const overrideMillis = requestedOverrideMillis.pipe(
       Option.filter((value) => Number.isFinite(value) && value > 0),
     );
+    if (Option.isSome(requestedOverrideMillis) && Option.isNone(overrideMillis)) {
+      yield* Console.error(
+        `Ignoring non-positive live-read timeout override (${requestedOverrideMillis.value}); using default timeouts.`,
+      );
+    }
     return Option.isSome(overrideMillis)
       ? cliLiveServerReadTimeoutsFromMillis(overrideMillis.value)
       : defaultCliLiveServerReadTimeouts;
@@ -234,6 +245,17 @@ const fetchDispatchAcknowledgement = (
   CliOrchestrationOutcomeUnknownError | CliOrchestrationUndeclaredStatusError
 > =>
   Effect.callback((resume) => {
+    // An undeclared 5xx during dispatch can happen after the command committed
+    // (a defect between commit and response encoding), so the outcome is
+    // unknown; only sub-5xx statuses prove the command was rejected.
+    const undeclaredDispatchFailure = (status: number, cause: unknown) =>
+      status >= 500
+        ? new CliOrchestrationOutcomeUnknownError({ operation: "dispatchLiveServer", cause })
+        : new CliOrchestrationUndeclaredStatusError({
+            operation: "callLiveServer",
+            status,
+            cause,
+          });
     let settled = false;
     let responseStatus: number | undefined;
     let responseOk: boolean | undefined;
@@ -257,11 +279,10 @@ const fetchDispatchAcknowledgement = (
       resume(
         Effect.fail(
           responseOk === false && responseStatus !== undefined
-            ? new CliOrchestrationUndeclaredStatusError({
-                operation: "callLiveServer",
-                status: responseStatus,
-                cause: new Error("Server error acknowledgement timed out."),
-              })
+            ? undeclaredDispatchFailure(
+                responseStatus,
+                new Error("Server error acknowledgement timed out."),
+              )
             : new CliOrchestrationOutcomeUnknownError({
                 operation: "dispatchLiveServer",
                 cause: new Error("Server acknowledgement timed out."),
@@ -294,11 +315,7 @@ const fetchDispatchAcknowledgement = (
                 operation: "dispatchLiveServer",
                 cause,
               })
-            : new CliOrchestrationUndeclaredStatusError({
-                operation: "callLiveServer",
-                status: response.status,
-                cause,
-              });
+            : undeclaredDispatchFailure(response.status, cause);
         }
       })
       .then(
@@ -434,6 +451,14 @@ export const dispatchLiveOrchestrationCommand = (
       const declared = decodeEnvironmentHttpCommonError(responsePayload);
       if (Option.isSome(declared)) {
         return yield* cliOrchestrationErrorFromRequest(declared.value);
+      }
+      // An undeclared 5xx can occur after the command committed, so the
+      // outcome is unknown; sub-5xx statuses prove the command was rejected.
+      if (response.status >= 500) {
+        return yield* new CliOrchestrationOutcomeUnknownError({
+          operation: "dispatchLiveServer",
+          cause: responsePayload,
+        });
       }
       return yield* new CliOrchestrationUndeclaredStatusError({
         operation: "callLiveServer",

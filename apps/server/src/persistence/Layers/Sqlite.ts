@@ -10,6 +10,7 @@ import { ServerConfig } from "../../config.ts";
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
+  readonly readonly?: boolean;
   readonly spanAttributes?: Record<string, unknown>;
 };
 
@@ -66,6 +67,29 @@ export const SqlitePersistenceMemory = Layer.provideMerge(
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
+/**
+ * Read-only connection to an existing database. Runs no pragmas and no
+ * migrations, so it can be opened safely next to a live server process that
+ * owns the schema.
+ */
+export const makeSqliteReadOnlyPersistence = Effect.fn("makeSqliteReadOnlyPersistence")(function* (
+  dbPath: string,
+) {
+  const path = yield* Path.Path;
+  return makeRuntimeSqliteLayer({
+    filename: dbPath,
+    readonly: true,
+    spanAttributes: {
+      "db.name": path.basename(dbPath),
+      "service.name": "t3-server",
+    },
+  });
+}, Layer.unwrap);
+
 export const layerConfig = Layer.unwrap(
   Effect.map(Effect.service(ServerConfig), ({ dbPath }) => makeSqlitePersistenceLive(dbPath)),
+);
+
+export const layerReadOnlyConfig = Layer.unwrap(
+  Effect.map(Effect.service(ServerConfig), ({ dbPath }) => makeSqliteReadOnlyPersistence(dbPath)),
 );

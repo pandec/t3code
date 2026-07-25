@@ -1,4 +1,13 @@
-import { AuthSessionId } from "@t3tools/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - the test deliberately runs a raw HTTP server to shape undeclared status responses.
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
+
+import {
+  AuthSessionId,
+  CommandId,
+  ProjectId,
+  type ClientOrchestrationCommand,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
@@ -11,8 +20,11 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import {
   causeChainHasSqliteBusy,
   cliLiveServerReadTimeoutsFromMillis,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationReadTimeoutError,
+  CliOrchestrationUndeclaredStatusError,
   defaultCliLiveServerReadTimeouts,
+  dispatchLiveOrchestrationCommand,
   resolveCliLiveServerReadTimeouts,
   withCliOrchestrationSession,
 } from "./orchestration.ts";
@@ -27,16 +39,16 @@ it.effect("uses phase-specific defaults when no override is given", () =>
   }),
 );
 
-it.effect("applies the flag override to reads and keeps discovery short", () =>
+it.effect("applies the flag override to every live read, discovery included", () =>
   Effect.gen(function* () {
     const timeouts = yield* resolveCliLiveServerReadTimeouts(Option.some(15_000));
 
     assert.strictEqual(Duration.toMillis(timeouts.read), 15_000);
-    assert.strictEqual(Duration.toMillis(timeouts.discovery), 3_000);
+    assert.strictEqual(Duration.toMillis(timeouts.discovery), 15_000);
   }),
 );
 
-it("shrinks the discovery timeout when the override is below the discovery default", () => {
+it("applies overrides below the discovery default to both phases", () => {
   const timeouts = cliLiveServerReadTimeoutsFromMillis(500);
 
   assert.strictEqual(Duration.toMillis(timeouts.read), 500);
@@ -61,7 +73,17 @@ it.effect("reads the environment override when no flag is given", () =>
     );
 
     assert.strictEqual(Duration.toMillis(timeouts.read), 12_000);
-    assert.strictEqual(Duration.toMillis(timeouts.discovery), 3_000);
+    assert.strictEqual(Duration.toMillis(timeouts.discovery), 12_000);
+  }),
+);
+
+it.effect("falls back to defaults when the environment override is not an integer", () =>
+  Effect.gen(function* () {
+    const timeouts = yield* resolveCliLiveServerReadTimeouts(Option.none()).pipe(
+      withEnv({ T3CODE_CLI_TIMEOUT_MS: "10s" }),
+    );
+
+    assert.deepStrictEqual(timeouts, defaultCliLiveServerReadTimeouts);
   }),
 );
 
@@ -172,6 +194,67 @@ it.effect("does not retry non-busy session issue failures", () =>
     assert.strictEqual(error.message, failure.message);
     assert.strictEqual(issueAttempts, 1);
   }),
+);
+
+const testDispatchCommand: ClientOrchestrationCommand = {
+  type: "project.meta.update",
+  commandId: CommandId.make("019f0000-0000-7000-8000-000000000001"),
+  projectId: ProjectId.make("019f0000-0000-7000-8000-000000000002"),
+  title: "dispatch-outcome-test",
+};
+
+const withStatusServer = <A, E>(
+  status: number,
+  use: (origin: string) => Effect.Effect<A, E>,
+): Effect.Effect<A, E> =>
+  Effect.acquireUseRelease(
+    Effect.callback<http.Server>((resume) => {
+      const server = http.createServer((_request, response) => {
+        response.statusCode = status;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ unexpected: true }));
+      });
+      server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+    }),
+    (server) => {
+      const address = server.address();
+      assert.isNotNull(address);
+      assert.isObject(address);
+      return use(`http://127.0.0.1:${(address as AddressInfo).port}`);
+    },
+    (server) =>
+      Effect.callback<void>((resume) => {
+        server.close(() => resume(Effect.void));
+      }),
+  );
+
+it.effect("treats an undeclared 5xx dispatch response as an unknown outcome", () =>
+  withStatusServer(503, (origin) =>
+    Effect.gen(function* () {
+      const error = yield* dispatchLiveOrchestrationCommand(
+        origin,
+        "test-token",
+        testDispatchCommand,
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(error, CliOrchestrationOutcomeUnknownError);
+    }),
+  ),
+);
+
+it.effect("keeps undeclared sub-5xx dispatch responses as rejected statuses", () =>
+  withStatusServer(404, (origin) =>
+    Effect.gen(function* () {
+      const error = yield* dispatchLiveOrchestrationCommand(
+        origin,
+        "test-token",
+        testDispatchCommand,
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(error, CliOrchestrationUndeclaredStatusError);
+      assert.strictEqual((error as CliOrchestrationUndeclaredStatusError).status, 404);
+    }),
+  ),
 );
 
 it.effect("releases the issued session after the command body fails", () =>

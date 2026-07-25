@@ -105,18 +105,21 @@ export const withCliJsonUsageErrorOutput =
               if (args.length !== 1 || args[0] !== "") parentConsole.error(...args);
             },
           });
+          const emitEnvelope = (error: unknown) =>
+            Effect.sync(() => {
+              parentConsole.log(
+                // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON is a presentation DTO.
+                JSON.stringify({ error: serializeCliError(error) }, null, 2),
+              );
+              process.exitCode = 1;
+            });
           return effect.pipe(
             Effect.provideService(CliOutput.Formatter, silentUsageFormatter),
             Effect.provideService(Console.Console, quietConsole),
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                parentConsole.log(
-                  // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON is a presentation DTO.
-                  JSON.stringify({ error: serializeCliError(error) }, null, 2),
-                );
-                process.exitCode = 1;
-              }),
-            ),
+            Effect.catch(emitEnvelope),
+            // Defects would otherwise bypass the JSON contract and render the
+            // runtime's pretty cause report; interruption stays untouched.
+            Effect.catchDefect(emitEnvelope),
           );
         })
       : effect;

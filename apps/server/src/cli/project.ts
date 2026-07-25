@@ -18,14 +18,20 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
 import * as ServerConfig from "../config.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "../orchestration/runtimeLayer.ts";
-import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
+import { latestMigrationId } from "../persistence/Migrations.ts";
+import {
+  layerConfig as SqlitePersistenceLayerLive,
+  layerReadOnlyConfig as SqliteReadOnlyPersistenceLive,
+} from "../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -42,6 +48,7 @@ import {
   cliOrchestrationErrorFromRequest,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
+  causeChainHasSqliteBusy,
   fetchLiveOrchestrationSnapshot,
   isCliOrchestrationReadTimeoutError,
   resolveCliLiveServerReadTimeouts,
@@ -192,6 +199,28 @@ const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
   return yield* projectionSnapshotQuery.getSnapshot();
 });
 
+/**
+ * The read-only fallback must not read through a schema older than this CLI
+ * expects (a newer CLI next to a not-yet-restarted older server). When the
+ * migration ledger is missing or behind, surface the original live-read
+ * failure instead of a possibly-misdecoded snapshot.
+ */
+export const requireCurrentOfflineSchema = Effect.fn("requireCurrentOfflineSchema")(function* (
+  fallbackError: Error,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    readonly latestApplied: number | bigint | null;
+  }>`SELECT MAX(migration_id) AS latestApplied FROM effect_sql_migrations`.pipe(
+    Effect.orElseSucceed(() => []),
+  );
+  const latestApplied = rows[0]?.latestApplied;
+  const appliedId = typeof latestApplied === "bigint" ? Number(latestApplied) : latestApplied;
+  if (typeof appliedId !== "number" || appliedId < latestMigrationId) {
+    return yield* Effect.fail(fallbackError);
+  }
+});
+
 const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   flags: CliAuthLocationFlags,
   json: boolean,
@@ -256,21 +285,23 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
         return;
       }
 
-      const liveReadTimeout =
+      // A live-but-unresponsive server (slow reads, or a locked auth database
+      // during session issuance) only degrades to the local snapshot for
+      // read-only commands; mutations must never bypass the live server.
+      const liveFallbackError =
         liveAttempt._tag === "Failure" &&
         options?.readOnly === true &&
-        isCliOrchestrationReadTimeoutError(liveAttempt.failure)
+        (isCliOrchestrationReadTimeoutError(liveAttempt.failure) ||
+          causeChainHasSqliteBusy(liveAttempt.failure))
           ? liveAttempt.failure
           : undefined;
 
       if (liveAttempt._tag === "Failure") {
-        // A live-but-slow server only degrades to the local snapshot for
-        // read-only commands; mutations must never bypass the live server.
-        if (liveReadTimeout === undefined) {
+        if (liveFallbackError === undefined) {
           return yield* Effect.fail(liveAttempt.failure);
         }
         yield* Console.error(
-          `${liveAttempt.failure.message} Reading local state instead; it may lag behind the running server.`,
+          `${liveFallbackError.message} Reading local state instead; it may lag behind the running server.`,
         );
       } else if (options?.requireLive) {
         return yield* new CliOrchestrationServerUnavailableError({
@@ -279,24 +310,45 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
         });
       }
 
-      const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
+      if (liveFallbackError === undefined) {
+        // No live server owns the database: the full offline stack may run
+        // migrations and dispatch through the local orchestration engine.
+        const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        );
+
+        return yield* Effect.gen(function* () {
+          const snapshot = yield* getOfflineSnapshot();
+          const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+          const output = yield* run({
+            snapshot,
+            dispatch: (command) => orchestrationEngine.dispatch(command),
+            mode: "offline",
+          });
+          yield* Console.log(output);
+        }).pipe(Effect.provide(offlineRuntimeLayer));
+      }
+
+      // A live server still owns the database: open it strictly read-only —
+      // no migrations, no projection bootstrap, no writes of any kind.
+      const readOnlySnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
+        Layer.provideMerge(RepositoryIdentityResolver.layer),
+        Layer.provideMerge(SqliteReadOnlyPersistenceLive),
         Layer.provide(ServerConfig.layer(config)),
         Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
       );
 
       return yield* Effect.gen(function* () {
+        yield* requireCurrentOfflineSchema(liveFallbackError);
         const snapshot = yield* getOfflineSnapshot();
-        const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
         const output = yield* run({
           snapshot,
-          dispatch:
-            liveReadTimeout === undefined
-              ? (command) => orchestrationEngine.dispatch(command)
-              : () => Effect.fail(liveReadTimeout),
+          dispatch: () => Effect.fail(liveFallbackError),
           mode: "offline",
         });
         yield* Console.log(output);
-      }).pipe(Effect.provide(offlineRuntimeLayer));
+      }).pipe(Effect.provide(readOnlySnapshotLayer));
     }).pipe(
       Effect.provide(
         Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
