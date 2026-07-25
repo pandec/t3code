@@ -11,6 +11,9 @@ import { ServerConfig } from "../../config.ts";
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
   readonly readonly?: boolean;
+  readonly readwrite?: boolean;
+  readonly create?: boolean;
+  readonly disableWAL?: boolean;
   readonly spanAttributes?: Record<string, unknown>;
 };
 
@@ -78,7 +81,13 @@ export const makeSqliteReadOnlyPersistence = Effect.fn("makeSqliteReadOnlyPersis
   const path = yield* Path.Path;
   return makeRuntimeSqliteLayer({
     filename: dbPath,
+    // The bun client defaults readwrite/create to true and runs a WAL pragma
+    // even with readonly set, so every flag must be pinned explicitly for the
+    // connection to actually reject writes on both runtimes.
     readonly: true,
+    readwrite: false,
+    create: false,
+    disableWAL: true,
     spanAttributes: {
       "db.name": path.basename(dbPath),
       "service.name": "t3-server",
