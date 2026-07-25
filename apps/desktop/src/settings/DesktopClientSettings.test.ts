@@ -20,6 +20,7 @@ const clientSettings: ClientSettings = {
   diffIgnoreWhitespace: true,
   enableTurnCompletionToasts: true,
   enableTurnCompletionSystemNotifications: true,
+  enableRateLimitAlerts: false,
   favorites: [],
   glassOpacity: 80,
   providerModelPreferences: {},

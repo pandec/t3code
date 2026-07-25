@@ -92,6 +92,7 @@ import {
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
+import { ProviderUsageMeter } from "./ProviderUsageMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -190,6 +191,8 @@ import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
 } from "../../lib/contextWindow";
+import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
+import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -410,6 +413,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
   activeThreadProviderDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -433,6 +437,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
+      {props.activeProviderUsage ? (
+        <ProviderUsageMeter snapshot={props.activeProviderUsage} />
+      ) : null}
       {props.activeContextWindow ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
@@ -951,6 +958,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
     [activeThreadActivities],
   );
+  const activeThreadProviderDriver = useMemo(() => {
+    if (!activeThreadModelSelection) return null;
+    return (
+      providerStatuses.find((p) => p.instanceId === activeThreadModelSelection.instanceId)
+        ?.driver ?? null
+    );
+  }, [providerStatuses, activeThreadModelSelection]);
+  const activeProviderUsage = useMemo(
+    () =>
+      deriveLatestProviderUsageSnapshot(activeThreadActivities ?? [], {
+        provider: activeThreadProviderDriver,
+        now: Date.now(),
+      }),
+    [activeThreadActivities, activeThreadProviderDriver],
+  );
+  useProviderUsageAlerts(activeProviderUsage);
   const activeThreadProviderDisplayName = useMemo(() => {
     if (!activeThreadModelSelection) return null;
     const entry = providerStatuses.find(
@@ -2827,6 +2850,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
+                  activeProviderUsage={activeProviderUsage}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running" || activeThread?.session?.status === "starting"}

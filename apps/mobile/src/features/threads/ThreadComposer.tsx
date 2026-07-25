@@ -55,7 +55,11 @@ import {
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
+import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { providerUsageMenuActions, providerUsageTriggerLabel } from "../../lib/providerUsageMenu";
+import { useSelectedThreadDetail } from "../../state/use-thread-detail";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -343,6 +347,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  const selectedThreadDetail = useSelectedThreadDetail();
+  const providerUsage = useMemo(
+    () =>
+      deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
+        provider: selectedProviderStatus?.driver ?? null,
+        now: Date.now(),
+      }),
+    [selectedThreadDetail, selectedProviderStatus],
+  );
+  const providerUsageActions = useMemo(
+    () => (providerUsage ? providerUsageMenuActions(providerUsage, Date.now()) : []),
+    [providerUsage],
+  );
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -938,6 +955,31 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     label={configurationLabel}
                   />
                 </ControlPillMenu>
+                {providerUsage ? (
+                  <ControlPillMenu
+                    accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                    actions={providerUsageActions}
+                    title={`${providerUsage.providerLabel} usage`}
+                    onPressAction={() => {}}
+                  >
+                    <ComposerToolbarTrigger
+                      accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                      iconNode={
+                        <View
+                          className={cn(
+                            "h-2 w-2 rounded-full",
+                            providerUsage.status === "critical"
+                              ? "bg-rose-500"
+                              : providerUsage.status === "warning"
+                                ? "bg-amber-500"
+                                : "bg-neutral-400 dark:bg-neutral-500",
+                          )}
+                        />
+                      }
+                      label={providerUsageTriggerLabel(providerUsage)}
+                    />
+                  </ControlPillMenu>
+                ) : null}
                 {showStopAction ? (
                   <ComposerToolbarButton
                     accessibilityLabel="Stop"
