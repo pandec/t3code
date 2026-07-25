@@ -4,6 +4,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   DEFAULT_RUNTIME_MODE,
   type ModelSelection,
@@ -24,6 +25,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   getProjectOrderKey,
   selectProjectGroupingSettings,
+  type ProjectGroupingSettings,
 } from "../logicalProject";
 import { readThreadShell, useProjects, useThread } from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -42,10 +44,10 @@ import { useClientSettings } from "./useSettings";
  *    option memory (effort, context window) still applies unless the stored
  *    default carries its own options.
  * 3. The carried selection — the exact model state of the thread the user was
- *    viewing — but only when that thread belongs to the same logical project
- *    (or the project has no default). Creating a draft in a *different*
- *    project must land on that project's own default, not drag the previous
- *    project's model along.
+ *    viewing — but only when that thread belongs to the same logical project.
+ *    Creating a draft in a *different* project must land on that project's own
+ *    default (or, when none is stored yet, the global sticky memory), not drag
+ *    the previous project's model along.
  */
 export function seedNewDraftModelState(input: {
   draftId: DraftId;
@@ -59,16 +61,47 @@ export function seedNewDraftModelState(input: {
   if (input.projectDefaultModelSelection) {
     setModelSelection(input.draftId, input.projectDefaultModelSelection);
   }
-  const carryWinsOverProjectDefault =
-    input.projectDefaultModelSelection === null ||
-    input.carrySourceLogicalProjectKey === input.logicalProjectKey;
-  if (input.carryModelSelection && carryWinsOverProjectDefault) {
+  const carryIsSameLogicalProject = input.carrySourceLogicalProjectKey === input.logicalProjectKey;
+  if (input.carryModelSelection && carryIsSameLogicalProject) {
     // After sticky state and the project default so the viewed thread's exact
     // selection (model + options like effort and context window) wins.
     // replaceOptions: the carried selection is a complete snapshot — absent
     // options mean "no options", not "keep whatever was just seeded".
     setModelSelection(input.draftId, input.carryModelSelection, { replaceOptions: true });
   }
+}
+
+/**
+ * Resolves the logical project a carried model selection originates from, so
+ * the caller can decide whether the carry may out-rank the target project's
+ * default model: it does within the same logical project, not across projects.
+ * Draft sources record their logical project key directly; server-thread
+ * sources resolve it through the project list, falling back to the scoped
+ * project key when the project is not loaded.
+ */
+export function resolveCarrySourceLogicalProjectKey(input: {
+  carrySourceDraftLogicalProjectKey: string | null;
+  carrySourceShellProjectRef: ScopedProjectRef | null;
+  projects: ReadonlyArray<
+    Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity">
+  >;
+  projectGroupingSettings: ProjectGroupingSettings;
+}): string | null {
+  if (input.carrySourceDraftLogicalProjectKey !== null) {
+    return input.carrySourceDraftLogicalProjectKey;
+  }
+  const carrySourceProjectRef = input.carrySourceShellProjectRef;
+  if (!carrySourceProjectRef) {
+    return null;
+  }
+  const carrySourceProject = input.projects.find(
+    (candidate) =>
+      candidate.id === carrySourceProjectRef.projectId &&
+      candidate.environmentId === carrySourceProjectRef.environmentId,
+  );
+  return carrySourceProject
+    ? deriveLogicalProjectKeyFromSettings(carrySourceProject, input.projectGroupingSettings)
+    : scopedProjectKey(carrySourceProjectRef);
 }
 
 export function useNewThreadHandler() {
@@ -151,29 +184,14 @@ export function useNewThreadHandler() {
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
-      // The logical project the carried model selection originates from. Used
-      // to decide whether the carry may out-rank the target project's default
-      // model: it does within the same logical project, not across projects.
-      const carrySourceLogicalProjectKey = (() => {
-        if (carrySourceDraft) {
-          return carrySourceDraft.logicalProjectKey;
-        }
-        if (!carrySourceShell) {
-          return null;
-        }
-        const carrySourceProjectRef = scopeProjectRef(
-          carrySourceShell.environmentId,
-          carrySourceShell.projectId,
-        );
-        const carrySourceProject = projects.find(
-          (candidate) =>
-            candidate.id === carrySourceProjectRef.projectId &&
-            candidate.environmentId === carrySourceProjectRef.environmentId,
-        );
-        return carrySourceProject
-          ? deriveLogicalProjectKeyFromSettings(carrySourceProject, projectGroupingSettings)
-          : scopedProjectKey(carrySourceProjectRef);
-      })();
+      const carrySourceLogicalProjectKey = resolveCarrySourceLogicalProjectKey({
+        carrySourceDraftLogicalProjectKey: carrySourceDraft?.logicalProjectKey ?? null,
+        carrySourceShellProjectRef: carrySourceShell
+          ? scopeProjectRef(carrySourceShell.environmentId, carrySourceShell.projectId)
+          : null,
+        projects,
+        projectGroupingSettings,
+      });
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
