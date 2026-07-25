@@ -10,7 +10,6 @@ it("hydrates the default Hermes instance from legacy provider settings", () => {
     config: {
       enabled: false,
       binaryPath: "hermes",
-      authMethodId: "openai-codex",
       requireGateway: true,
       customModels: [],
     },

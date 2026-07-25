@@ -70,7 +70,9 @@ export interface AcpSessionRuntimeOptions {
     readonly name: string;
     readonly version: string;
   };
-  readonly authMethodId: string;
+  readonly authMethodId:
+    | string
+    | ((initializeResult: EffectAcpSchema.InitializeResponse) => string | undefined);
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
@@ -79,6 +81,39 @@ export interface AcpSessionRuntimeOptions {
     readonly logger?: (event: EffectAcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
   };
 }
+
+export interface AcpPromptHandle {
+  readonly start: Effect.Effect<void>;
+  readonly awaitResult: Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
+}
+
+type AcpPromptFiber = Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
+
+interface ConcurrentPromptRegistryState {
+  readonly fibers: ReadonlySet<AcpPromptFiber>;
+  readonly cancelBarrier: Deferred.Deferred<void> | undefined;
+}
+
+type ConcurrentPromptRegistration =
+  | {
+      readonly _tag: "Wait";
+      readonly barrier: Deferred.Deferred<void>;
+    }
+  | {
+      readonly _tag: "Started";
+      readonly handle: AcpPromptHandle;
+    };
+
+type ConcurrentCancelRegistration =
+  | {
+      readonly _tag: "Wait";
+      readonly barrier: Deferred.Deferred<void>;
+    }
+  | {
+      readonly _tag: "Owner";
+      readonly barrier: Deferred.Deferred<void>;
+      readonly fibers: ReadonlySet<AcpPromptFiber>;
+    };
 
 export interface AcpSessionRequestLogEvent {
   readonly method: string;
@@ -197,6 +232,13 @@ export class AcpSessionRuntime extends Context.Service<
       payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     /**
+     * Atomically registers a concurrent prompt before returning its result handle.
+     * Prompt starts wait for any in-progress concurrent cancellation to finish.
+     */
+    readonly promptStart: (
+      payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
+    ) => Effect.Effect<AcpPromptHandle, EffectAcpErrors.AcpError>;
+    /**
      * Sends a real ACP `session/cancel` notification for the active session.
      * @see https://agentclientprotocol.com/protocol/schema#session/cancel
      */
@@ -298,6 +340,10 @@ export const make = (
     const activePromptFibersRef = yield* SynchronizedRef.make<
       ReadonlySet<Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>>
     >(new Set());
+    const concurrentPromptRegistryRef = yield* SynchronizedRef.make<ConcurrentPromptRegistryState>({
+      fibers: new Set(),
+      cancelBarrier: undefined,
+    });
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -543,15 +589,21 @@ export const make = (
         acp.agent.initialize(initializePayload),
       );
 
-      const authenticatePayload = {
-        methodId: options.authMethodId,
-      } satisfies EffectAcpSchema.AuthenticateRequest;
+      const authMethodId =
+        typeof options.authMethodId === "function"
+          ? options.authMethodId(initializeResult)
+          : options.authMethodId;
+      if (authMethodId !== undefined) {
+        const authenticatePayload = {
+          methodId: authMethodId,
+        } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
-        "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
-      );
+        yield* runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        );
+      }
 
       let sessionId: string;
       let sessionSetupResult:
@@ -690,6 +742,109 @@ export const make = (
       return yield* effect;
     });
 
+    const cancelledPromptResponse = {
+      stopReason: "cancelled",
+    } satisfies EffectAcpSchema.PromptResponse;
+
+    const promptStart = (
+      payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
+    ): Effect.Effect<AcpPromptHandle, EffectAcpErrors.AcpError> =>
+      Effect.gen(function* () {
+        const started = yield* getStartedState;
+        yield* closeActiveAssistantSegment({
+          queue: eventQueue,
+          assistantSegmentRef,
+        });
+        const requestPayload = {
+          sessionId: started.sessionId,
+          ...payload,
+        } satisfies EffectAcpSchema.PromptRequest;
+
+        const register = (): Effect.Effect<AcpPromptHandle, EffectAcpErrors.AcpError> =>
+          SynchronizedRef.modifyEffect<
+            ConcurrentPromptRegistryState,
+            ConcurrentPromptRegistration,
+            never,
+            never
+          >(concurrentPromptRegistryRef, (registry) => {
+            if (registry.cancelBarrier !== undefined) {
+              return Effect.succeed([
+                {
+                  _tag: "Wait",
+                  barrier: registry.cancelBarrier,
+                } satisfies ConcurrentPromptRegistration,
+                registry,
+              ] as const);
+            }
+            return Deferred.make<void>().pipe(
+              Effect.flatMap((startBarrier) =>
+                Deferred.await(startBarrier).pipe(
+                  Effect.andThen(
+                    runLoggedRequest(
+                      "session/prompt",
+                      requestPayload,
+                      acp.agent.prompt(requestPayload),
+                    ),
+                  ),
+                  Effect.forkIn(runtimeScope, {
+                    startImmediately: true,
+                    uninterruptible: false,
+                  }),
+                  Effect.map((promptRpcFiber) => ({ promptRpcFiber, startBarrier })),
+                ),
+              ),
+              Effect.map(({ promptRpcFiber, startBarrier }) => {
+                const nextFibers = new Set(registry.fibers);
+                nextFibers.add(promptRpcFiber);
+                const awaitResult = Fiber.join(promptRpcFiber).pipe(
+                  Effect.catchCause((cause) =>
+                    Cause.hasInterruptsOnly(cause)
+                      ? Effect.succeed(cancelledPromptResponse)
+                      : Effect.failCause(cause),
+                  ),
+                  Effect.ensuring(
+                    Effect.gen(function* () {
+                      yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
+                      yield* SynchronizedRef.update(concurrentPromptRegistryRef, (current) => {
+                        const fibers = new Set(current.fibers);
+                        fibers.delete(promptRpcFiber);
+                        return { ...current, fibers };
+                      });
+                    }),
+                  ),
+                  Effect.tap(() =>
+                    closeActiveAssistantSegment({
+                      queue: eventQueue,
+                      assistantSegmentRef,
+                    }),
+                  ),
+                );
+                return [
+                  {
+                    _tag: "Started",
+                    handle: {
+                      start: Deferred.succeed(startBarrier, undefined).pipe(Effect.asVoid),
+                      awaitResult,
+                    } satisfies AcpPromptHandle,
+                  } satisfies ConcurrentPromptRegistration,
+                  { ...registry, fibers: nextFibers },
+                ] as const;
+              }),
+              Effect.uninterruptible,
+            );
+          }).pipe(
+            Effect.flatMap((registration) =>
+              registration._tag === "Started"
+                ? Effect.succeed(registration.handle)
+                : Deferred.await(registration.barrier).pipe(
+                    Effect.andThen(Effect.suspend(register)),
+                  ),
+            ),
+          );
+
+        return yield* register();
+      });
+
     const prompt = (
       payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
     ): Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError> => {
@@ -703,9 +858,6 @@ export const make = (
           sessionId: started.sessionId,
           ...payload,
         } satisfies EffectAcpSchema.PromptRequest;
-        const cancelledResponse = {
-          stopReason: "cancelled",
-        } satisfies EffectAcpSchema.PromptResponse;
         const promptRpcFiber = yield* SynchronizedRef.modifyEffect(
           activePromptFibersRef,
           (active) =>
@@ -726,7 +878,7 @@ export const make = (
         return yield* Fiber.join(promptRpcFiber).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
-              ? Effect.succeed(cancelledResponse)
+              ? Effect.succeed(cancelledPromptResponse)
               : Effect.failCause(cause),
           ),
           Effect.ensuring(
@@ -748,7 +900,9 @@ export const make = (
         );
       });
       return options.promptConcurrency === "concurrent"
-        ? runPrompt
+        ? promptStart(payload).pipe(
+            Effect.flatMap((handle) => handle.start.pipe(Effect.andThen(handle.awaitResult))),
+          )
         : promptSerializationSemaphore.withPermit(runPrompt);
     };
 
@@ -781,23 +935,76 @@ export const make = (
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt,
+      promptStart,
       cancel: getStartedState.pipe(
         Effect.flatMap((started) =>
-          Effect.gen(function* () {
-            const activePromptFibers = yield* SynchronizedRef.getAndSet(
-              activePromptFibersRef,
-              new Set(),
-            );
-            yield* Effect.forEach(activePromptFibers, Fiber.interrupt, { discard: true });
-            const cancelNotification = acp.agent
-              .cancel({ sessionId: started.sessionId })
-              .pipe(Effect.ignore);
-            if (options.promptConcurrency === "concurrent") {
-              yield* cancelNotification;
-            } else {
-              yield* cancelNotification.pipe(Effect.forkIn(runtimeScope));
-            }
-          }),
+          options.promptConcurrency === "concurrent"
+            ? Effect.uninterruptible(
+                Effect.gen(function* () {
+                  const registration = yield* SynchronizedRef.modifyEffect<
+                    ConcurrentPromptRegistryState,
+                    ConcurrentCancelRegistration,
+                    never,
+                    never
+                  >(concurrentPromptRegistryRef, (registry) => {
+                    if (registry.cancelBarrier !== undefined) {
+                      return Effect.succeed([
+                        {
+                          _tag: "Wait",
+                          barrier: registry.cancelBarrier,
+                        } satisfies ConcurrentCancelRegistration,
+                        registry,
+                      ] as const);
+                    }
+                    return Deferred.make<void>().pipe(
+                      Effect.map(
+                        (barrier) =>
+                          [
+                            {
+                              _tag: "Owner",
+                              barrier,
+                              fibers: registry.fibers,
+                            } satisfies ConcurrentCancelRegistration,
+                            {
+                              fibers: new Set<AcpPromptFiber>(),
+                              cancelBarrier: barrier,
+                            } satisfies ConcurrentPromptRegistryState,
+                          ] as const,
+                      ),
+                    );
+                  });
+                  if (registration._tag === "Wait") {
+                    yield* Deferred.await(registration.barrier);
+                    return;
+                  }
+                  const finishCancellation = SynchronizedRef.update(
+                    concurrentPromptRegistryRef,
+                    (registry) =>
+                      registry.cancelBarrier === registration.barrier
+                        ? { ...registry, cancelBarrier: undefined }
+                        : registry,
+                  ).pipe(
+                    Effect.andThen(Deferred.succeed(registration.barrier, undefined)),
+                    Effect.asVoid,
+                  );
+                  yield* Effect.gen(function* () {
+                    yield* Effect.forEach(registration.fibers, Fiber.interrupt, {
+                      discard: true,
+                    });
+                    yield* acp.agent.cancel({ sessionId: started.sessionId }).pipe(Effect.ignore);
+                  }).pipe(Effect.ensuring(finishCancellation));
+                }),
+              )
+            : Effect.gen(function* () {
+                const activePromptFibers = yield* SynchronizedRef.getAndSet(
+                  activePromptFibersRef,
+                  new Set(),
+                );
+                yield* Effect.forEach(activePromptFibers, Fiber.interrupt, { discard: true });
+                yield* acp.agent
+                  .cancel({ sessionId: started.sessionId })
+                  .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+              }),
         ),
       ),
       setMode: (modeId) =>

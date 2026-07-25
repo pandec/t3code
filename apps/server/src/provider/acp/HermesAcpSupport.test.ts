@@ -5,10 +5,29 @@ import {
   applyHermesAcpModeSelection,
   applyHermesAcpModelSelection,
   buildHermesAcpSpawnInput,
+  resolveHermesAcpAuthMethodId,
   resolveHermesAcpModelId,
 } from "./HermesAcpSupport.ts";
 
 describe("HermesAcpSupport", () => {
+  it("uses an explicit auth override before the method advertised by Hermes", () => {
+    const initializeResult = {
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: [{ id: "anthropic", name: "Anthropic" }],
+    };
+    expect(resolveHermesAcpAuthMethodId(undefined, initializeResult)).toBe("anthropic");
+    expect(resolveHermesAcpAuthMethodId({ authMethodId: "openrouter" }, initializeResult)).toBe(
+      "openrouter",
+    );
+    expect(
+      resolveHermesAcpAuthMethodId(undefined, {
+        protocolVersion: 1,
+        agentCapabilities: {},
+      }),
+    ).toBeUndefined();
+  });
+
   it("builds the Hermes ACP command and preserves the instance environment", () => {
     expect(
       buildHermesAcpSpawnInput(

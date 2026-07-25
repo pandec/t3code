@@ -358,16 +358,18 @@ export const HermesSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "hermes", clearWhenEmpty: "omit" },
       }),
     ),
-    authMethodId: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("openai-codex")),
-      Schema.annotateKey({
-        title: "Authentication method",
-        description: "Hermes ACP authentication method identifier.",
-        providerSettingsForm: {
-          placeholder: "openai-codex",
-          clearWhenEmpty: "omit",
-        },
-      }),
+    authMethodId: Schema.optionalKey(
+      TrimmedString.pipe(
+        Schema.annotateKey({
+          title: "Authentication method",
+          description:
+            "Optional Hermes ACP authentication method override. By default T3 uses the method advertised by Hermes.",
+          providerSettingsForm: {
+            placeholder: "Automatic",
+            clearWhenEmpty: "omit",
+          },
+        }),
+      ),
     ),
     requireGateway: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),

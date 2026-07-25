@@ -36,6 +36,13 @@ export function buildHermesAcpSpawnInput(
   };
 }
 
+export function resolveHermesAcpAuthMethodId(
+  hermesSettings: Pick<HermesSettings, "authMethodId"> | null | undefined,
+  initializeResult: EffectAcpSchema.InitializeResponse,
+): string | undefined {
+  return hermesSettings?.authMethodId?.trim() || initializeResult.authMethods?.[0]?.id;
+}
+
 export const makeHermesAcpRuntime = (
   input: HermesAcpRuntimeInput,
 ): Effect.Effect<
@@ -49,7 +56,8 @@ export const makeHermesAcpRuntime = (
       AcpSessionRuntime.layer({
         ...runtimeOptions,
         spawn: buildHermesAcpSpawnInput(hermesSettings, input.cwd, environment),
-        authMethodId: hermesSettings?.authMethodId?.trim() || "openai-codex",
+        authMethodId: (initializeResult) =>
+          resolveHermesAcpAuthMethodId(hermesSettings, initializeResult),
         promptConcurrency: "concurrent",
       }).pipe(
         Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),

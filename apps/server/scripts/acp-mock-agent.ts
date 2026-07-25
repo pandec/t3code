@@ -47,6 +47,8 @@ const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const firstPromptDelayMs = Number(process.env.T3_ACP_FIRST_PROMPT_DELAY_MS ?? "0");
+const cancelDelayMs = Number(process.env.T3_ACP_CANCEL_DELAY_MS ?? "0");
+const advertisedAuthMethodId = process.env.T3_ACP_ADVERTISED_AUTH_METHOD_ID;
 const useHermesModes = process.env.T3_ACP_USE_HERMES_MODES === "1";
 const permissionOptionIds = {
   allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
@@ -323,11 +325,25 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true },
+        ...(advertisedAuthMethodId
+          ? {
+              authMethods: [
+                {
+                  id: advertisedAuthMethodId,
+                  name: advertisedAuthMethodId,
+                },
+              ],
+            }
+          : {}),
       };
     }),
   );
 
-  yield* agent.handleAuthenticate(() => Effect.succeed({}));
+  yield* agent.handleAuthenticate((request) =>
+    advertisedAuthMethodId && request.methodId !== advertisedAuthMethodId
+      ? AcpError.AcpRequestError.invalidParams("Unexpected authentication method")
+      : Effect.succeed({}),
+  );
 
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
@@ -500,6 +516,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleCancel(({ sessionId }) =>
     Effect.gen(function* () {
       const cancelledSessionId = String(sessionId ?? "mock-session-1");
+      if (Number.isFinite(cancelDelayMs) && cancelDelayMs > 0) {
+        yield* Effect.sleep(`${cancelDelayMs} millis`);
+      }
       cancelledSessions.add(cancelledSessionId);
       if (emitLateUpdateAfterCancel) {
         yield* Effect.sleep("50 millis");

@@ -921,8 +921,8 @@ export function makeHermesAdapter(
         }).pipe(Effect.scoped),
       );
 
-    const sendTurn: HermesAdapterShape["sendTurn"] = (input) =>
-      Effect.gen(function* () {
+    const sendTurn: HermesAdapterShape["sendTurn"] = (input) => {
+      const runSendTurn = Effect.gen(function* () {
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
@@ -932,242 +932,161 @@ export function makeHermesAdapter(
             // id is reused instead of opening a new turn.
             const steeringTurnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
             const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
+            const turnModelSelection =
+              input.modelSelection?.instanceId === boundInstanceId
+                ? input.modelSelection
+                : undefined;
+            const requestedTurnModelId = turnModelSelection?.model;
+            const currentModelId = yield* applyHermesAcpModelSelection({
+              runtime: ctx.acp,
+              currentModelId: ctx.currentModelId,
+              requestedModelId: requestedTurnModelId,
+              mapError: (cause) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
+            });
+
+            const text = input.input ? rewriteHermesPrompt(input.input) : undefined;
+            const imagePromptParts = yield* Effect.forEach(input.attachments ?? [], (attachment) =>
+              Effect.gen(function* () {
+                const attachmentPath = resolveAttachmentPath({
+                  attachmentsDir: serverConfig.attachmentsDir,
+                  attachment,
+                });
+                if (!attachmentPath) {
+                  return yield* new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "session/prompt",
+                    detail: `Invalid attachment id '${attachment.id}'.`,
+                  });
+                }
+                const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderAdapterRequestError({
+                        provider: PROVIDER,
+                        method: "session/prompt",
+                        detail: cause.message,
+                        cause,
+                      }),
+                  ),
+                );
+                return {
+                  type: "image",
+                  data: Buffer.from(bytes).toString("base64"),
+                  mimeType: attachment.mimeType,
+                } satisfies EffectAcpSchema.ContentBlock;
+              }),
+            );
+            const promptParts: Array<EffectAcpSchema.ContentBlock> = [
+              ...(text ? [{ type: "text" as const, text }] : []),
+              ...imagePromptParts,
+            ];
+
+            if (promptParts.length === 0) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "sendTurn",
+                issue: "Turn requires non-empty text or attachments.",
+              });
+            }
+
+            const promptHandle = yield* ctx.acp
+              .promptStart({ prompt: promptParts })
+              .pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                ),
+              );
             if (steeringTurnId === undefined) {
               ctx.nextPromptSequence = 0;
+              ctx.lastPlanFingerprint = undefined;
+              ctx.openToolCalls = new Map();
             }
             const promptSequence = ctx.nextPromptSequence;
             ctx.nextPromptSequence += 1;
-            // Count this prompt immediately so a superseded in-flight prompt
-            // resolving from here on does not settle the turn; decremented on
-            // preparation failure here, and after the prompt below otherwise.
             ctx.promptsInFlight += 1;
-            // Bind the turn id before cooperative yields so interruptTurn can
-            // settle this prompt even if stop arrives during preparation.
             ctx.activeTurnId = turnId;
+            ctx.currentModelId = currentModelId;
             ctx.session = {
               ...ctx.session,
-              status: steeringTurnId === undefined ? "connecting" : "running",
+              status: "running",
               activeTurnId: turnId,
               updatedAt: yield* nowIso,
+              ...(currentModelId ? { model: currentModelId } : {}),
             };
 
-            return yield* Effect.gen(function* () {
-              const turnModelSelection =
-                input.modelSelection?.instanceId === boundInstanceId
-                  ? input.modelSelection
-                  : undefined;
-              const requestedTurnModelId = turnModelSelection?.model;
-              const currentModelId = yield* applyHermesAcpModelSelection({
-                runtime: ctx.acp,
-                currentModelId: ctx.currentModelId,
-                requestedModelId: requestedTurnModelId,
-                mapError: (cause) =>
-                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
-              });
-
-              const text = input.input ? rewriteHermesPrompt(input.input) : undefined;
-              const imagePromptParts = yield* Effect.forEach(
-                input.attachments ?? [],
-                (attachment) =>
-                  Effect.gen(function* () {
-                    const attachmentPath = resolveAttachmentPath({
-                      attachmentsDir: serverConfig.attachmentsDir,
-                      attachment,
-                    });
-                    if (!attachmentPath) {
-                      return yield* new ProviderAdapterRequestError({
-                        provider: PROVIDER,
-                        method: "session/prompt",
-                        detail: `Invalid attachment id '${attachment.id}'.`,
-                      });
-                    }
-                    const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                      Effect.mapError(
-                        (cause) =>
-                          new ProviderAdapterRequestError({
-                            provider: PROVIDER,
-                            method: "session/prompt",
-                            detail: cause.message,
-                            cause,
-                          }),
-                      ),
-                    );
-                    return {
-                      type: "image",
-                      data: Buffer.from(bytes).toString("base64"),
-                      mimeType: attachment.mimeType,
-                    } satisfies EffectAcpSchema.ContentBlock;
-                  }),
-              );
-              const promptParts: Array<EffectAcpSchema.ContentBlock> = [
-                ...(text ? [{ type: "text" as const, text }] : []),
-                ...imagePromptParts,
-              ];
-
-              if (promptParts.length === 0) {
-                return yield* new ProviderAdapterValidationError({
-                  provider: PROVIDER,
-                  operation: "sendTurn",
-                  issue: "Turn requires non-empty text or attachments.",
-                });
-              }
-
-              ctx.currentModelId = currentModelId;
-              const displayModel = currentModelId;
-              for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
-                yield* Effect.yieldNow;
-              }
-              if (ctx.interruptedTurnIds.has(turnId)) {
-                yield* settlePromptInFlight(input.threadId, turnId, ctx.acpSessionId, {
-                  completedStopReason: "cancelled",
-                  emitTurnCompletion: false,
-                  settleAllPrompts: true,
-                });
-                return yield* new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/prompt",
-                  detail: "Hermes prompt was interrupted during preparation.",
-                });
-              }
-              if (steeringTurnId === undefined) {
-                ctx.lastPlanFingerprint = undefined;
-                ctx.openToolCalls = new Map();
-              }
-              ctx.session = {
-                ...ctx.session,
-                status: "running",
-                activeTurnId: turnId,
-                updatedAt: yield* nowIso,
-                ...(displayModel ? { model: displayModel } : {}),
-              };
-
-              if (steeringTurnId === undefined) {
-                yield* offerRuntimeEvent({
-                  type: "turn.started",
-                  ...(yield* makeEventStamp()),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId,
-                  payload: displayModel ? { model: displayModel } : {},
-                });
-              }
-
-              return {
-                acp: ctx.acp,
-                acpSessionId: ctx.acpSessionId,
-                displayModel,
-                promptParts,
-                promptSequence,
+            if (steeringTurnId === undefined) {
+              yield* offerRuntimeEvent({
+                type: "turn.started",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
                 turnId,
-              };
-            }).pipe(
-              Effect.tapCause(() =>
-                Effect.gen(function* () {
-                  const liveCtx = sessions.get(input.threadId);
-                  if (!liveCtx) {
-                    return;
-                  }
-                  yield* settlePromptInFlight(input.threadId, turnId, liveCtx.acpSessionId, {
-                    errorMessage: "Hermes prompt preparation failed.",
-                    emitTurnCompletion: false,
-                  });
-                }),
-              ),
-            );
+                payload: currentModelId ? { model: currentModelId } : {},
+              });
+            }
+            yield* promptHandle.start;
+
+            return {
+              acp: ctx.acp,
+              acpSessionId: ctx.acpSessionId,
+              displayModel: currentModelId,
+              promptHandle,
+              promptParts,
+              promptSequence,
+              resumeCursor: ctx.session.resumeCursor,
+              scope: ctx.scope,
+              turnId,
+            };
           }),
         );
-        const promptSettled = yield* Ref.make(false);
-        const promptRpcSucceeded = yield* Ref.make(false);
-        const promptResultRef = yield* Ref.make<EffectAcpSchema.PromptResponse | undefined>(
-          undefined,
-        );
-
-        const promptFailureMessageRef = yield* Ref.make<string | undefined>(undefined);
-
-        return yield* Effect.gen(function* () {
-          const result = yield* prepared.acp
-            .prompt({
-              prompt: prepared.promptParts,
-            })
-            .pipe(
-              Effect.tap((promptResult) =>
-                Effect.all([
-                  Ref.set(promptRpcSucceeded, true),
-                  Ref.set(promptResultRef, promptResult),
-                ]),
-              ),
-              Effect.tapError((error) =>
-                Ref.set(
-                  promptFailureMessageRef,
-                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error).message,
-                ).pipe(Effect.andThen(prepared.acp.drainEvents)),
-              ),
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
-              ),
-            );
-
-          return yield* withThreadLock(
+        const completePrompt = Effect.gen(function* () {
+          const outcome = yield* prepared.promptHandle.awaitResult.pipe(
+            Effect.map((result) => ({ _tag: "Success" as const, result })),
+            Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+          );
+          yield* prepared.acp.drainEvents;
+          yield* withThreadLock(
             input.threadId,
             Effect.gen(function* () {
               const ctx = yield* requireSession(input.threadId);
               if (ctx.acpSessionId !== prepared.acpSessionId) {
-                yield* settlePromptInFlight(
-                  input.threadId,
-                  prepared.turnId,
-                  prepared.acpSessionId,
-                  {
-                    errorMessage: "Hermes session changed before the turn completed.",
-                    settleAllPrompts: true,
-                  },
-                );
-                yield* Ref.set(promptSettled, true);
-                return yield* new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/prompt",
-                  detail: "Hermes session changed before the turn completed.",
-                });
+                return;
               }
-              // Keep prompt settlement atomic with respect to Stop and steering.
-              // interruptTurn marks its target before waiting for this lock, so
-              // cancellation can still win while queued ACP events are drained.
-              for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
-                yield* Effect.yieldNow;
-              }
-              yield* prepared.acp.drainEvents;
               if (ctx.interruptedTurnIds.has(prepared.turnId)) {
-                yield* Ref.set(promptSettled, true);
-                return {
-                  threadId: input.threadId,
-                  turnId: prepared.turnId,
-                  resumeCursor: ctx.session.resumeCursor,
-                };
+                return;
               }
-
               if (
                 ctx.promptsInFlight <= 0 ||
                 ctx.activeTurnId !== prepared.turnId ||
                 ctx.session.activeTurnId !== prepared.turnId
               ) {
-                yield* Ref.set(promptSettled, true);
-                return {
-                  threadId: input.threadId,
-                  turnId: prepared.turnId,
-                  resumeCursor: ctx.session.resumeCursor,
-                };
+                return;
+              }
+              if (outcome._tag === "Failure") {
+                yield* settlePromptInFlight(
+                  input.threadId,
+                  prepared.turnId,
+                  prepared.acpSessionId,
+                  {
+                    errorMessage: mapAcpToAdapterError(
+                      PROVIDER,
+                      input.threadId,
+                      "session/prompt",
+                      outcome.error,
+                    ).message,
+                  },
+                );
+                return;
               }
 
-              // Once settlement mutates the prompt count and session state it
-              // must publish the matching terminal events as one
-              // uninterruptible transition. The outer ensuring block handles
-              // interruption before this point.
-              return yield* Effect.uninterruptible(
+              yield* Effect.uninterruptible(
                 Effect.gen(function* () {
                   appendPromptResultToTurn(
                     ctx,
                     prepared.turnId,
                     prepared.promptParts,
-                    result,
+                    outcome.result,
                     prepared.promptSequence,
                   );
                   ctx.session = {
@@ -1189,12 +1108,7 @@ export function makeHermesAdapter(
                     ctx.session.activeTurnId === prepared.turnId
                   ) {
                     if (ctx.interruptedTurnIds.has(prepared.turnId)) {
-                      yield* Ref.set(promptSettled, true);
-                      return {
-                        threadId: input.threadId,
-                        turnId: prepared.turnId,
-                        resumeCursor: ctx.session.resumeCursor,
-                      };
+                      return;
                     }
                     const completedAt = yield* nowIso;
                     const { activeTurnId: _completedTurnId, ...readySession } = ctx.session;
@@ -1205,11 +1119,13 @@ export function makeHermesAdapter(
                       updatedAt: completedAt,
                       ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
                     };
-                    const completedStopReason = completedStopReasonFromPromptResponse(result);
+                    const completedStopReason = completedStopReasonFromPromptResponse(
+                      outcome.result,
+                    );
                     yield* settleOpenToolCalls(
                       ctx,
                       prepared.turnId,
-                      result.stopReason === "cancelled" ? "failed" : "completed",
+                      outcome.result.stopReason === "cancelled" ? "failed" : "completed",
                     );
                     yield* offerRuntimeEvent({
                       type: "turn.completed",
@@ -1218,182 +1134,132 @@ export function makeHermesAdapter(
                       threadId: input.threadId,
                       turnId: prepared.turnId,
                       payload: {
-                        state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                        state:
+                          outcome.result.stopReason === "cancelled" ? "cancelled" : "completed",
                         stopReason: completedStopReason,
                       },
                     });
                     ctx.interruptedTurnIds.delete(prepared.turnId);
-                    yield* Ref.set(promptSettled, true);
-                  } else if (remainingPrompts > 0) {
-                    yield* Ref.set(promptSettled, true);
                   }
-
-                  return {
-                    threadId: input.threadId,
-                    turnId: prepared.turnId,
-                    resumeCursor: ctx.session.resumeCursor,
-                  };
                 }),
               );
             }),
           );
-        }).pipe(
-          Effect.ensuring(
-            Effect.gen(function* () {
-              if (yield* Ref.get(promptSettled)) {
-                return;
-              }
-
-              if (yield* Ref.get(promptRpcSucceeded)) {
-                const promptResult = yield* Ref.get(promptResultRef);
-                if (promptResult === undefined) {
-                  return;
-                }
-                yield* withThreadLock(
-                  input.threadId,
-                  Effect.gen(function* () {
-                    const ctx = yield* requireSession(input.threadId);
-                    if (ctx.acpSessionId !== prepared.acpSessionId) {
-                      yield* settlePromptInFlight(
-                        input.threadId,
-                        prepared.turnId,
-                        prepared.acpSessionId,
-                        {
-                          errorMessage: "Hermes session changed before the turn completed.",
-                          settleAllPrompts: true,
-                        },
-                      );
-                      return;
-                    }
-                    if (ctx.interruptedTurnIds.has(prepared.turnId)) {
-                      return;
-                    }
-                    if (
-                      ctx.promptsInFlight <= 0 ||
-                      ctx.activeTurnId !== prepared.turnId ||
-                      ctx.session.activeTurnId !== prepared.turnId
-                    ) {
-                      return;
-                    }
-                    appendPromptResultToTurn(
-                      ctx,
-                      prepared.turnId,
-                      prepared.promptParts,
-                      promptResult,
-                      prepared.promptSequence,
-                    );
-                    yield* settlePromptInFlight(
-                      input.threadId,
-                      prepared.turnId,
-                      prepared.acpSessionId,
-                      {
-                        completedStopReason: completedStopReasonFromPromptResponse(promptResult),
-                      },
-                    );
-                  }),
-                );
-                return;
-              }
-
-              const errorMessage = yield* Ref.get(promptFailureMessageRef);
-              yield* withThreadLock(
-                input.threadId,
-                settlePromptInFlight(input.threadId, prepared.turnId, prepared.acpSessionId, {
-                  errorMessage: errorMessage ?? "Hermes prompt request failed.",
-                }),
-              );
-            }).pipe(Effect.catch(() => Effect.void)),
+        });
+        yield* completePrompt.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Failed to settle Hermes prompt.", {
+              cause,
+              threadId: input.threadId,
+              turnId: prepared.turnId,
+            }),
           ),
+          Effect.forkIn(prepared.scope, {
+            startImmediately: true,
+            uninterruptible: false,
+          }),
         );
+        return {
+          threadId: input.threadId,
+          turnId: prepared.turnId,
+          resumeCursor: prepared.resumeCursor,
+        };
       });
+      return Effect.uninterruptible(runSendTurn);
+    };
 
     const interruptTurn: HermesAdapterShape["interruptTurn"] = (threadId, turnId) =>
-      Effect.gen(function* () {
-        const observed = yield* Effect.sync(() => {
-          const ctx = sessions.get(threadId);
-          if (!ctx || ctx.stopped) {
-            return {
-              _tag: "Proceed" as const,
-              acpSessionId: undefined,
-              interruptedTurnId: turnId,
-            };
-          }
-          const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
-          if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) {
-            return { _tag: "Ignore" as const };
-          }
-          const interruptedTurnId = turnId ?? activeTurnId;
-          if (interruptedTurnId !== undefined) {
-            ctx.interruptedTurnIds.add(interruptedTurnId);
-          }
-          return {
-            _tag: "Proceed" as const,
-            acpSessionId: ctx.acpSessionId,
-            interruptedTurnId,
-          };
-        });
-        if (observed._tag === "Ignore") {
-          return;
-        }
-
-        yield* withThreadLock(
-          threadId,
-          Effect.gen(function* () {
-            const ctx = yield* requireSession(threadId);
-            if (observed.acpSessionId !== undefined && ctx.acpSessionId !== observed.acpSessionId) {
-              return;
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const observed = yield* Effect.sync(() => {
+            const ctx = sessions.get(threadId);
+            if (!ctx || ctx.stopped) {
+              return {
+                _tag: "Proceed" as const,
+                acpSessionId: undefined,
+                interruptedTurnId: turnId,
+              };
             }
             const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
             if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) {
-              return;
+              return { _tag: "Ignore" as const };
             }
-            if (
-              observed.interruptedTurnId !== undefined &&
-              activeTurnId !== undefined &&
-              activeTurnId !== observed.interruptedTurnId
-            ) {
-              return;
-            }
-            const interruptedTurnId =
-              observed.interruptedTurnId ?? turnId ?? activeTurnId ?? ctx.session.activeTurnId;
-            yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-            yield* Effect.ignore(
-              ctx.acp.cancel.pipe(
-                Effect.mapError((error) =>
-                  mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
-                ),
-              ),
-            );
-            if (interruptedTurnId) {
+            const interruptedTurnId = turnId ?? activeTurnId;
+            if (interruptedTurnId !== undefined) {
               ctx.interruptedTurnIds.add(interruptedTurnId);
-              yield* settlePromptInFlight(threadId, interruptedTurnId, ctx.acpSessionId, {
-                completedStopReason: "cancelled",
-                settleAllPrompts: true,
-              }).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    ctx.interruptedTurnIds.delete(interruptedTurnId);
-                  }),
+            }
+            return {
+              _tag: "Proceed" as const,
+              acpSessionId: ctx.acpSessionId,
+              interruptedTurnId,
+            };
+          });
+          if (observed._tag === "Ignore") {
+            return;
+          }
+
+          yield* withThreadLock(
+            threadId,
+            Effect.gen(function* () {
+              const ctx = yield* requireSession(threadId);
+              if (
+                observed.acpSessionId !== undefined &&
+                ctx.acpSessionId !== observed.acpSessionId
+              ) {
+                return;
+              }
+              const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
+              if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) {
+                return;
+              }
+              if (
+                observed.interruptedTurnId !== undefined &&
+                activeTurnId !== undefined &&
+                activeTurnId !== observed.interruptedTurnId
+              ) {
+                return;
+              }
+              const interruptedTurnId =
+                observed.interruptedTurnId ?? turnId ?? activeTurnId ?? ctx.session.activeTurnId;
+              yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+              yield* Effect.ignore(
+                ctx.acp.cancel.pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
+                  ),
                 ),
               );
-            } else if (
-              ctx.promptsInFlight > 0 ||
-              ctx.session.status === "running" ||
-              ctx.session.status === "connecting"
-            ) {
-              const updatedAt = yield* nowIso;
-              ctx.promptsInFlight = 0;
-              ctx.activeTurnId = undefined;
-              const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
-              ctx.session = {
-                ...readySession,
-                status: "ready",
-                updatedAt,
-              };
-            }
-          }),
-        );
-      });
+              if (interruptedTurnId) {
+                ctx.interruptedTurnIds.add(interruptedTurnId);
+                yield* settlePromptInFlight(threadId, interruptedTurnId, ctx.acpSessionId, {
+                  completedStopReason: "cancelled",
+                  settleAllPrompts: true,
+                }).pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      ctx.interruptedTurnIds.delete(interruptedTurnId);
+                    }),
+                  ),
+                );
+              } else if (
+                ctx.promptsInFlight > 0 ||
+                ctx.session.status === "running" ||
+                ctx.session.status === "connecting"
+              ) {
+                const updatedAt = yield* nowIso;
+                ctx.promptsInFlight = 0;
+                ctx.activeTurnId = undefined;
+                const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
+                ctx.session = {
+                  ...readySession,
+                  status: "ready",
+                  updatedAt,
+                };
+              }
+            }),
+          );
+        }),
+      );
 
     const respondToRequest: HermesAdapterShape["respondToRequest"] = (
       threadId,

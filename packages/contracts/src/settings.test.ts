@@ -151,7 +151,6 @@ describe("HermesSettings", () => {
     expect(decodeHermesSettings({})).toEqual({
       enabled: false,
       binaryPath: "hermes",
-      authMethodId: "openai-codex",
       requireGateway: true,
       customModels: [],
     });

@@ -89,8 +89,13 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       const threadId = ThreadId.make("hermes-core");
       const adapter = yield* makeTestAdapter(yield* Effect.promise(() => makeMockHermesWrapper()));
       const events: Array<ProviderRuntimeEvent> = [];
+      const completed = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        Effect.sync(() => events.push(event)),
+        Effect.sync(() => events.push(event)).pipe(
+          Effect.andThen(
+            event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
+          ),
+        ),
       ).pipe(Effect.forkChild);
 
       const session = yield* adapter.startSession({
@@ -111,10 +116,45 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       });
 
       yield* adapter.sendTurn({ threadId, input: "hello hermes", attachments: [] });
-      yield* Effect.yieldNow;
+      yield* Deferred.await(completed);
       assert.includeMembers(
         events.map((event) => event.type),
         ["session.started", "thread.started", "turn.started", "content.delta", "turn.completed"],
+      );
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("reports prompt failures through terminal events after sendTurn returns", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-prompt-failure");
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() => makeMockHermesWrapper({ T3_ACP_FAIL_PROMPT: "1" })),
+      );
+      const completed =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.completed" }>>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(completed, event) : Effect.void,
+      ).pipe(Effect.forkChild);
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const startedTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "fail in background",
+        attachments: [],
+      });
+      assert.equal(startedTurn.threadId, threadId);
+      const terminal = yield* Deferred.await(completed);
+      assert.equal(terminal.payload.state, "failed");
+      assert.include(
+        terminal.payload.state === "failed" ? terminal.payload.errorMessage : "",
+        "Mock prompt failure",
       );
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
@@ -137,6 +177,7 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         ),
       );
       const threadId = ThreadId.make("hermes-permission");
+      const completed = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         event.type === "request.opened"
           ? adapter.respondToRequest(
@@ -144,7 +185,9 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
               ApprovalRequestId.make(String(event.requestId)),
               "accept",
             )
-          : Effect.void,
+          : event.type === "turn.completed"
+            ? Deferred.succeed(completed, undefined)
+            : Effect.void,
       ).pipe(Effect.forkChild);
       yield* adapter.startSession({
         threadId,
@@ -155,9 +198,10 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       yield* adapter.sendTurn({ threadId, input: "use a tool", attachments: [] });
       const requests = yield* waitForFileContent(requestLogPath, "hermes-allow-once");
       assert.include(requests, "hermes-allow-once");
+      yield* Deferred.await(completed);
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
-    }),
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("settles open Hermes tool cards before the final turn completion", () =>
@@ -169,8 +213,13 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       );
       const threadId = ThreadId.make("hermes-tool-settle");
       const events: Array<ProviderRuntimeEvent> = [];
+      const completed = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        Effect.sync(() => events.push(event)),
+        Effect.sync(() => events.push(event)).pipe(
+          Effect.andThen(
+            event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
+          ),
+        ),
       ).pipe(Effect.forkChild);
       yield* adapter.startSession({
         threadId,
@@ -179,7 +228,7 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         runtimeMode: "full-access",
       });
       yield* adapter.sendTurn({ threadId, input: "leave a tool open", attachments: [] });
-      yield* Effect.yieldNow;
+      yield* Deferred.await(completed);
       const toolCompletionIndex = events.findIndex(
         (event) => event.type === "item.completed" && String(event.itemId) === "hermes-open-tool-1",
       );
@@ -207,8 +256,13 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       );
       const threadId = ThreadId.make("hermes-steer");
       const events: Array<ProviderRuntimeEvent> = [];
+      const completed = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        Effect.sync(() => events.push(event)),
+        Effect.sync(() => events.push(event)).pipe(
+          Effect.andThen(
+            event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
+          ),
+        ),
       ).pipe(Effect.forkChild);
       yield* adapter.startSession({
         threadId,
@@ -230,7 +284,7 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       );
 
       yield* Fiber.join(first);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(completed);
       assert.equal(events.filter((event) => event.type === "turn.started").length, 1);
       assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
       assert.isAtLeast(events.filter((event) => event.type === "content.delta").length, 2);
@@ -324,10 +378,11 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       const send = yield* adapter
         .sendTurn({ threadId, input: "hang", attachments: [] })
         .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Effect.sleep("50 millis");
+      yield* waitForFileContent(requestLogPath, '"text":"hang"');
+      const startedTurn = yield* Fiber.join(send);
+      assert.equal(startedTurn.threadId, threadId);
       yield* adapter.interruptTurn(threadId);
       assert.equal((yield* Deferred.await(completed)).payload.state, "cancelled");
-      yield* Fiber.join(send);
       yield* adapter.sendTurn({ threadId, input: "after cancellation", attachments: [] });
       const requests = yield* waitForFileContent(requestLogPath, "after cancellation");
       assert.isBelow(requests.indexOf("session/cancel"), requests.indexOf("after cancellation"));
