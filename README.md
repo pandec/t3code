@@ -17,7 +17,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Archive undo** — press Command+Z outside the composer after archiving to restore the latest thread; an empty new-thread screen reopens it, while another active conversation stays in place.
 - **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes.
 - **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
-- **Thread naming & sidebar polish** — split thread naming with refined fork titles, and the thread's provider icon shown on sidebar hover.
+- **Thread naming & sidebar polish** — split thread naming with refined fork titles, plus a setting to show each thread's provider icon on hover or at all times.
 - **Conversation navigation rails** — desktop threads keep the existing left-side user-message navigator and add a mirrored right-side navigator for completed agent responses, with hover previews and click-to-jump navigation.
 - **Turn-completion notifications** — optional in-app toast and OS-level notification when an agent turn finishes (both off by default, toggled independently in Settings). System notifications fire only while the app is in the background, and clicking one focuses the window and opens the thread; works in both the desktop app and the browser.
 - **Provider usage meter** — live Claude Code and Codex subscription-quota windows in the web and mobile composers, including local reset times and optional warning/critical alerts on web.
@@ -32,10 +32,12 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Mobile agent steering** — steer an active agent turn directly from the mobile app.
 - **Project-aware Codex skills** — Codex skill discovery respects the active project.
 - **Claude skill picker** — the `$` composer skill picker discovers workspace skills for Claude.
+- **Hermes ACP provider** — use a machine-local Hermes Agent as a first-class provider with native streaming, tool calls, resumable sessions, model and mode selection, slash commands, skills, and steering.
 
 ### CLI & automation
 
 - **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting.
+- **Session-handover CLI primitives** — inspect and import Claude/Codex transcripts (including standard worktrees and explicit model options), create model-specific threads, and archive handed-off source threads.
 
 ### Reliability
 

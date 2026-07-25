@@ -81,6 +81,34 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         });
       }),
     );
+
+    it.effect("uses inherited absolute CODEX_HOME for import and continuation identity", () =>
+      Effect.gen(function* () {
+        const homePath = yield* makeTempDir("t3code-codex-environment-home-");
+        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), {
+          CODEX_HOME: homePath,
+          HOME: "/ignored",
+        });
+
+        expect(layout).toMatchObject({
+          mode: "direct",
+          sharedHomePath: homePath,
+          effectiveHomePath: homePath,
+          continuationKey: `codex:home:${homePath}`,
+        });
+      }),
+    );
+
+    it.effect("groups relative CODEX_HOME without advertising it as a static home", () =>
+      Effect.gen(function* () {
+        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), {
+          CODEX_HOME: ".codex-instance",
+        });
+
+        expect(layout.continuationKey).toBe("codex:relative-home:.codex-instance");
+        expect(layout.effectiveHomePath).toBeUndefined();
+      }),
+    );
   });
 
   describe("materializeCodexShadowHome", () => {

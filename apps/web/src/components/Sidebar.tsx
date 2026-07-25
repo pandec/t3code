@@ -69,6 +69,7 @@ import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
   MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
   type SidebarProjectSortOrder,
+  type SidebarThreadProviderIconVisibility,
   type SidebarThreadPreviewCount,
   type SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
@@ -110,7 +111,7 @@ import { readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
-import { getProviderInstanceEntry } from "../providerInstances";
+import { getProviderInstanceEntry, type ProviderInstanceEntry } from "../providerInstances";
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
@@ -232,6 +233,44 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
   "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-muted-foreground/60 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
 
+function SidebarThreadProviderIcon(props: {
+  providerInstance: ProviderInstanceEntry;
+  model: string;
+  compact: boolean;
+}) {
+  const { providerInstance, model, compact } = props;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            tabIndex={compact ? undefined : 0}
+            data-thread-selection-safe
+            aria-label={`${providerInstance.displayName}, ${model}`}
+            className={
+              compact
+                ? "pointer-events-auto inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                : "inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+            }
+            onDoubleClick={(event) => event.stopPropagation()}
+          />
+        }
+      >
+        <ProviderInstanceIcon
+          driverKind={providerInstance.driverKind}
+          displayName={providerInstance.displayName}
+          accentColor={providerInstance.accentColor}
+          iconClassName={compact ? "size-3" : "size-3.5"}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        {providerInstance.displayName} · {model}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   return null;
@@ -313,6 +352,7 @@ interface SidebarThreadRowProps {
   isActive: boolean;
   jumpLabel: string | null;
   appSettingsConfirmThreadArchive: boolean;
+  providerIconVisibility: SidebarThreadProviderIconVisibility;
   renamingThreadKey: string | null;
   renamingTitle: string;
   setRenamingTitle: (title: string) => void;
@@ -350,6 +390,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     isActive,
     jumpLabel,
     appSettingsConfirmThreadArchive,
+    providerIconVisibility,
     renamingThreadKey,
     renamingTitle,
     setRenamingTitle,
@@ -467,12 +508,29 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
-  const hasThreadHoverControls = providerInstance !== undefined || !isThreadRunning;
+  const showProviderAlways = providerIconVisibility === "always" && providerInstance !== undefined;
+  const hasThreadHoverControls = !showProviderAlways
+    ? providerInstance !== undefined || !isThreadRunning
+    : !isThreadRunning;
+  const threadTouchMetaPaddingClass =
+    providerInstance !== undefined && !showProviderAlways
+      ? isThreadRunning
+        ? "max-sm:pr-7 [@media(hover:none)]:pr-7"
+        : "max-sm:pr-14 [@media(hover:none)]:pr-14"
+      : !isThreadRunning
+        ? "max-sm:pr-6 [@media(hover:none)]:pr-6"
+        : "";
   const threadMetaClassName = isConfirmingArchive
     ? "pointer-events-none opacity-0"
-    : hasThreadHoverControls
-      ? "pointer-events-none transition-opacity duration-150 max-sm:pr-6 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
-      : "pointer-events-none";
+    : hasThreadHoverControls && !showProviderAlways
+      ? `pointer-events-none transition-opacity duration-150 ${threadTouchMetaPaddingClass} group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0`
+      : showProviderAlways && !isThreadRunning
+        ? `pointer-events-none ${threadTouchMetaPaddingClass}`
+        : "pointer-events-none";
+  const threadLabelClassName =
+    showProviderAlways && !isThreadRunning
+      ? "inline-flex min-w-6 justify-end transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+      : undefined;
   const clearConfirmingArchive = useCallback(() => {
     setConfirmingArchiveThreadKey((current) => (current === threadKey ? null : current));
   }, [setConfirmingArchiveThreadKey, threadKey]);
@@ -781,7 +839,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           )}
           <div
             className={`flex min-w-12 justify-end ${
-              isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
+              isRemoteThread
+                ? "max-sm:min-w-24 [@media(hover:none)]:min-w-24"
+                : "max-sm:min-w-20 [@media(hover:none)]:min-w-20"
             }`}
           >
             {isConfirmingArchive ? (
@@ -798,32 +858,13 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 Confirm
               </button>
             ) : hasThreadHoverControls ? (
-              <div className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
-                {providerInstance ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span
-                          role="img"
-                          tabIndex={0}
-                          data-thread-selection-safe
-                          aria-label={`${providerInstance.displayName}, ${thread.modelSelection.model}`}
-                          className="inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                          onDoubleClick={(event) => event.stopPropagation()}
-                        />
-                      }
-                    >
-                      <ProviderInstanceIcon
-                        driverKind={providerInstance.driverKind}
-                        displayName={providerInstance.displayName}
-                        accentColor={providerInstance.accentColor}
-                        iconClassName="size-3.5"
-                      />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">
-                      {providerInstance.displayName} · {thread.modelSelection.model}
-                    </TooltipPopup>
-                  </Tooltip>
+              <div className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+                {providerInstance && !showProviderAlways ? (
+                  <SidebarThreadProviderIcon
+                    providerInstance={providerInstance}
+                    model={thread.modelSelection.model}
+                    compact={false}
+                  />
                 ) : null}
                 {!isThreadRunning && appSettingsConfirmThreadArchive ? (
                   <button
@@ -876,33 +917,42 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
                   </Tooltip>
                 )}
-                {jumpLabel ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span
-                          aria-label={jumpLabel}
-                          className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
-                        />
-                      }
+                {showProviderAlways ? (
+                  <SidebarThreadProviderIcon
+                    providerInstance={providerInstance}
+                    model={thread.modelSelection.model}
+                    compact
+                  />
+                ) : null}
+                <span className={threadLabelClassName}>
+                  {jumpLabel ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span
+                            aria-label={jumpLabel}
+                            className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+                          />
+                        }
+                      >
+                        {jumpLabel}
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">{jumpLabel}</TooltipPopup>
+                    </Tooltip>
+                  ) : (
+                    <span
+                      className={`text-[10px] tabular-nums ${
+                        isHighlighted
+                          ? "text-foreground/72 dark:text-foreground/82"
+                          : "text-muted-foreground/40"
+                      }`}
                     >
-                      {jumpLabel}
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">{jumpLabel}</TooltipPopup>
-                  </Tooltip>
-                ) : (
-                  <span
-                    className={`text-[10px] tabular-nums ${
-                      isHighlighted
-                        ? "text-foreground/72 dark:text-foreground/82"
-                        : "text-muted-foreground/40"
-                    }`}
-                  >
-                    {formatRelativeTimeLabel(
-                      thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
-                    )}
-                  </span>
-                )}
+                      {formatRelativeTimeLabel(
+                        thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+                      )}
+                    </span>
+                  )}
+                </span>
               </span>
             </span>
           </div>
@@ -926,6 +976,7 @@ interface SidebarProjectThreadListProps {
   activeRouteThreadKey: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   appSettingsConfirmThreadArchive: boolean;
+  providerIconVisibility: SidebarThreadProviderIconVisibility;
   renamingThreadKey: string | null;
   renamingTitle: string;
   setRenamingTitle: (title: string) => void;
@@ -977,6 +1028,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     activeRouteThreadKey,
     threadJumpLabelByKey,
     appSettingsConfirmThreadArchive,
+    providerIconVisibility,
     renamingThreadKey,
     renamingTitle,
     setRenamingTitle,
@@ -1029,6 +1081,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               isActive={activeRouteThreadKey === threadKey}
               jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
               appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+              providerIconVisibility={providerIconVisibility}
               renamingThreadKey={renamingThreadKey}
               renamingTitle={renamingTitle}
               setRenamingTitle={setRenamingTitle}
@@ -1136,6 +1189,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
   const appSettingsConfirmThreadArchive = useClientSettings<boolean>(
     (settings) => settings.confirmThreadArchive,
+  );
+  const providerIconVisibility = useClientSettings<SidebarThreadProviderIconVisibility>(
+    (settings) => settings.sidebarThreadProviderIconVisibility,
   );
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const deleteProject = useAtomCommand(projectEnvironment.delete, {
@@ -2430,6 +2486,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         activeRouteThreadKey={activeRouteThreadKey}
         threadJumpLabelByKey={threadJumpLabelByKey}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+        providerIconVisibility={providerIconVisibility}
         renamingThreadKey={renamingThreadKey}
         renamingTitle={renamingTitle}
         setRenamingTitle={setRenamingTitle}

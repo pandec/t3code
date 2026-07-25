@@ -12,7 +12,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+  SidebarThreadProviderIconVisibility,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -133,7 +137,6 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
-import { primaryServerProvidersAtom } from "../state/server";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { CommandDialogTrigger } from "./ui/command";
 import { Button } from "./ui/button";
@@ -355,6 +358,29 @@ function SnoozePopoverButton(props: {
   );
 }
 
+function SidebarV2ProviderIcon(props: {
+  driverKind: ProviderInstanceEntry["driverKind"];
+  displayName: string;
+  visibility: SidebarThreadProviderIconVisibility;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex shrink-0 items-center opacity-60 transition-opacity",
+        props.visibility === "hover" &&
+          "opacity-0 max-sm:opacity-60 [@media(hover:none)]:opacity-60 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
+      )}
+    >
+      <ProviderInstanceIcon
+        driverKind={props.driverKind}
+        displayName={props.displayName}
+        iconClassName="size-3.5"
+      />
+    </span>
+  );
+}
+
 const SidebarV2Row = memo(function SidebarV2Row(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
@@ -377,7 +403,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
-  providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+  providerIconVisibility: SidebarThreadProviderIconVisibility;
+  providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
@@ -517,7 +544,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   }, [onChangeRequestState, prState, threadKey]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
+  const providerEntry =
+    props.providerEntriesByEnvironmentId.get(thread.environmentId)?.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -771,6 +799,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             </span>
             {title}
+            {driverKind ? (
+              <SidebarV2ProviderIcon
+                driverKind={driverKind}
+                displayName={thread.session?.providerName ?? modelInstanceId}
+                visibility={props.providerIconVisibility}
+              />
+            ) : null}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -970,13 +1005,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={thread.session?.providerName ?? modelInstanceId}
-                      iconClassName="size-3.5"
-                    />
-                  </span>
+                  <SidebarV2ProviderIcon
+                    driverKind={driverKind}
+                    displayName={thread.session?.providerName ?? modelInstanceId}
+                    visibility={props.providerIconVisibility}
+                  />
                 ) : null}
               </span>
             </div>
@@ -1008,6 +1041,7 @@ export default function SidebarV2() {
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread, forkThread } =
     useThreadActions();
@@ -1136,16 +1170,23 @@ export default function SidebarV2() {
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
-  const providerEntryByInstanceId = useMemo(
-    () =>
-      new Map(
-        deriveProviderInstanceEntries(serverProviders).map(
-          (entry) => [entry.instanceId as string, entry] as const,
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const providerEntriesByEnvironmentId = useMemo<
+    ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>
+  >(() => {
+    const entriesByEnvironmentId = new Map<string, ReadonlyMap<string, ProviderInstanceEntry>>();
+    for (const [environmentId, config] of serverConfigs) {
+      entriesByEnvironmentId.set(
+        environmentId,
+        new Map(
+          deriveProviderInstanceEntries(config.providers).map(
+            (entry) => [entry.instanceId as string, entry] as const,
+          ),
         ),
-      ),
-    [serverProviders],
-  );
+      );
+    }
+    return entriesByEnvironmentId;
+  }, [serverConfigs]);
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -1387,7 +1428,6 @@ export default function SidebarV2() {
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const { activeThreads, snoozedThreads, settledThreads, snoozeNow } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2476,7 +2516,8 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
-                      providerEntryByInstanceId={providerEntryByInstanceId}
+                      providerIconVisibility={providerIconVisibility}
+                      providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}
                       onThreadClick={handleThreadClick}
                       onThreadActivate={navigateToThread}
                       onStartRename={startThreadRename}
