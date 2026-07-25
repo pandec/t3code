@@ -57,7 +57,7 @@ const SESSION_HTTP_READ_TIMEOUT = Duration.seconds(5);
 const SESSION_HTTP_IMPORT_TIMEOUT = Duration.seconds(30);
 const SESSION_GIT_TIMEOUT = Duration.seconds(30);
 const SESSION_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -213,6 +213,18 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
         detail: "Codex session metadata must include payload.id, payload.cwd, and a timestamp.",
       });
     }
+    const originalFileName = NodePath.basename(input.fileName);
+    if (
+      !UUID_PATTERN.test(nativeSessionId) ||
+      !originalFileName.startsWith("rollout-") ||
+      !originalFileName.endsWith(`-${nativeSessionId}.jsonl`)
+    ) {
+      return yield* new SessionCliError({
+        operation: "sniffSession",
+        detail:
+          "Codex transcripts require a UUID session id matching the canonical rollout filename.",
+      });
+    }
     const datePath = parseCodexDatePath(timestamp);
     if (datePath === null) {
       return yield* new SessionCliError({
@@ -231,7 +243,7 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
       lastSeenModel,
       timestamp,
       datePath,
-      originalFileName: NodePath.basename(input.fileName),
+      originalFileName,
     };
   }
 
@@ -649,6 +661,58 @@ const runGitCommand = Effect.fn("session.runGitCommand")(function* (
   } satisfies GitCommandResult;
 });
 
+const resolveExistingGitWorkspaceRoot = Effect.fn("session.resolveExistingGitWorkspaceRoot")(
+  function* (identifier: string) {
+    const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(identifier).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SessionCliError({
+            operation: "resolveProject",
+            detail: `No active project or existing repository was found for '${identifier}'.`,
+            cause,
+          }),
+      ),
+    );
+    const fileSystem = yield* FileSystem.FileSystem;
+    const info = yield* fileSystem.stat(workspaceRoot).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SessionCliError({
+            operation: "resolveProject",
+            detail: `Project path '${workspaceRoot}' does not exist.`,
+            cause,
+          }),
+      ),
+    );
+    if (info.type !== "Directory") {
+      return yield* new SessionCliError({
+        operation: "resolveProject",
+        detail: `Project path '${workspaceRoot}' is not a directory.`,
+      });
+    }
+    const gitCheck = yield* runGitCommand(workspaceRoot, [
+      "rev-parse",
+      "--is-inside-work-tree",
+    ]).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SessionCliError({
+            operation: "resolveProject",
+            detail: `Failed to inspect git repository '${workspaceRoot}'.`,
+            cause,
+          }),
+      ),
+    );
+    if (gitCheck.exitCode !== 0 || gitCheck.stdout !== "true") {
+      return yield* new SessionCliError({
+        operation: "resolveProject",
+        detail: `Path '${workspaceRoot}' is not an existing git repository.`,
+      });
+    }
+    return workspaceRoot;
+  },
+);
+
 const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
   readonly origin: string;
   readonly bearerToken: string;
@@ -664,49 +728,7 @@ const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
   }
   if (!isProjectNotFoundError(resolved.failure)) return yield* resolved.failure;
 
-  const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(input.identifier).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SessionCliError({
-          operation: "resolveProject",
-          detail: `No active project or existing repository was found for '${input.identifier}'.`,
-          cause,
-        }),
-    ),
-  );
-  const fileSystem = yield* FileSystem.FileSystem;
-  const info = yield* fileSystem.stat(workspaceRoot).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SessionCliError({
-          operation: "resolveProject",
-          detail: `Project path '${workspaceRoot}' does not exist.`,
-          cause,
-        }),
-    ),
-  );
-  if (info.type !== "Directory") {
-    return yield* new SessionCliError({
-      operation: "resolveProject",
-      detail: `Project path '${workspaceRoot}' is not a directory.`,
-    });
-  }
-  const gitCheck = yield* runGitCommand(workspaceRoot, ["rev-parse", "--is-inside-work-tree"]).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SessionCliError({
-          operation: "resolveProject",
-          detail: `Failed to inspect git repository '${workspaceRoot}'.`,
-          cause,
-        }),
-    ),
-  );
-  if (gitCheck.exitCode !== 0 || gitCheck.stdout !== "true") {
-    return yield* new SessionCliError({
-      operation: "resolveProject",
-      detail: `Path '${workspaceRoot}' is not an existing git repository.`,
-    });
-  }
+  const workspaceRoot = yield* resolveExistingGitWorkspaceRoot(input.identifier);
   const added = yield* addProjectToOrchestration({
     projects: input.shell.projects,
     workspaceRoot,
@@ -969,12 +991,6 @@ const sessionImportCommand = Command.make("import", {
               fileName: flags.file,
               content: new TextDecoder().decode(sourceBytes),
             });
-            const { project } = yield* resolveOrAddProject({
-              origin: live.origin,
-              bearerToken: token,
-              shell: live.shell,
-              identifier: flags.project,
-            });
             const catalog = yield* fetchProviderCatalog(live.origin, token);
             const instance = yield* resolveImportInstance({
               catalog,
@@ -989,12 +1005,43 @@ const sessionImportCommand = Command.make("import", {
                 detail: `Provider instance '${instance.instanceId}' did not advertise an import home.`,
               });
             }
+            const modelSelection = yield* resolveCliModelSelection({
+              instance,
+              ...(Option.isSome(flags.model) ? { explicitModel: flags.model.value } : {}),
+              sniffedModel: session.lastSeenModel,
+              ...(Option.isSome(flags.effort) ? { effort: flags.effort.value } : {}),
+            });
+            const existingProject = yield* findActiveProjectTarget({
+              projects: live.shell.projects,
+              identifier: flags.project,
+            }).pipe(Effect.result);
+            if (
+              existingProject._tag === "Failure" &&
+              !isProjectNotFoundError(existingProject.failure)
+            ) {
+              return yield* existingProject.failure;
+            }
+            const preAddWorktree =
+              Option.isSome(flags.worktreeBranch) && existingProject._tag === "Failure"
+                ? yield* ensureWorktree({
+                    baseDir: config.baseDir,
+                    workspaceRoot: yield* resolveExistingGitWorkspaceRoot(flags.project),
+                    branch: flags.worktreeBranch.value,
+                  })
+                : undefined;
+            const { project } = yield* resolveOrAddProject({
+              origin: live.origin,
+              bearerToken: token,
+              shell: live.shell,
+              identifier: flags.project,
+            });
             const worktree = Option.isSome(flags.worktreeBranch)
-              ? yield* ensureWorktree({
+              ? (preAddWorktree ??
+                (yield* ensureWorktree({
                   baseDir: config.baseDir,
                   workspaceRoot: project.workspaceRoot,
                   branch: flags.worktreeBranch.value,
-                })
+                })))
               : undefined;
             const effectiveCwd =
               worktree?.worktreePath ??
@@ -1007,12 +1054,6 @@ const sessionImportCommand = Command.make("import", {
               effectiveCwd,
             });
             yield* placeSessionFile({ destinationPath: placedPath, bytes: sourceBytes });
-            const modelSelection = yield* resolveCliModelSelection({
-              instance,
-              ...(Option.isSome(flags.model) ? { explicitModel: flags.model.value } : {}),
-              sniffedModel: session.lastSeenModel,
-              ...(Option.isSome(flags.effort) ? { effort: flags.effort.value } : {}),
-            });
             const result = yield* importSession(live.origin, token, {
               projectId: project.id,
               instanceId: instance.instanceId,

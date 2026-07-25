@@ -106,4 +106,31 @@ it.layer(NodeServices.layer)("provider import homes", (it) => {
       }),
     ).toBe("/Users/test/.claude-work");
   });
+
+  it.effect("does not advertise relative provider homes as import capable", () =>
+    Effect.gen(function* () {
+      const relativeInstance = {
+        ...instance,
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          continuationKey: "claude:relative-config:.claude-instance",
+        },
+      } as ProviderInstance;
+      const relativeRegistry = Layer.mock(ProviderInstanceRegistry)({
+        getInstance: () => Effect.succeed(relativeInstance),
+        listInstances: Effect.succeed([relativeInstance]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+      });
+      const catalog = yield* getProviderCatalogHttp().pipe(
+        Effect.provide(Layer.merge(relativeRegistry, principalLayer(["orchestration:read"]))),
+      );
+
+      expect(catalog.instances[0]).toMatchObject({
+        instanceId,
+        importCapable: false,
+      });
+      expect(catalog.instances[0]).not.toHaveProperty("home");
+    }),
+  );
 });

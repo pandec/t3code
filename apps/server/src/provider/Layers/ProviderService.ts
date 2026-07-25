@@ -127,6 +127,7 @@ function toRuntimePayloadFromSession(
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly clearHasPendingWork?: boolean;
+    readonly preserveImportedCwd?: boolean;
   },
 ): Record<string, unknown> {
   return {
@@ -143,6 +144,7 @@ function toRuntimePayloadFromSession(
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
+    ...(extra?.preserveImportedCwd === true ? { cwdAuthority: "imported-session" } : {}),
   };
 }
 
@@ -176,15 +178,28 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isImportedSessionBinding(
+function shouldUsePersistedImportedCwd(
   runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
 ): boolean {
   if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
     return false;
   }
   return (
-    "lastRuntimeEvent" in runtimePayload &&
-    runtimePayload.lastRuntimeEvent === "provider.importConversation"
+    ("cwdAuthority" in runtimePayload && runtimePayload.cwdAuthority === "imported-session") ||
+    ("lastRuntimeEvent" in runtimePayload &&
+      runtimePayload.lastRuntimeEvent === "provider.importConversation")
+  );
+}
+
+function hasDurableImportedCwdAuthority(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  return (
+    runtimePayload !== null &&
+    typeof runtimePayload === "object" &&
+    !Array.isArray(runtimePayload) &&
+    "cwdAuthority" in runtimePayload &&
+    runtimePayload.cwdAuthority === "imported-session"
   );
 }
 
@@ -367,6 +382,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
       readonly clearHasPendingWork?: boolean;
+      readonly preserveImportedCwd?: boolean;
     },
   ) =>
     Effect.gen(function* () {
@@ -374,6 +390,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "ProviderService.upsertSessionBinding",
         session,
       );
+      const previousBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const preserveImportedCwd =
+        previousBinding?.provider === session.provider &&
+        previousBinding.providerInstanceId === providerInstanceId &&
+        hasDurableImportedCwdAuthority(previousBinding.runtimePayload);
       yield* directory.upsert({
         threadId,
         provider: session.provider,
@@ -381,7 +402,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
+        runtimePayload: toRuntimePayloadFromSession(session, {
+          ...extra,
+          preserveImportedCwd,
+        }),
       });
     });
 
@@ -692,7 +716,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const effectiveCwd =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
-          isImportedSessionBinding(persistedBinding.runtimePayload)
+          shouldUsePersistedImportedCwd(persistedBinding.runtimePayload)
             ? persistedCwd
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({

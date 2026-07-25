@@ -4136,10 +4136,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const listImportableSessions: NonNullable<ClaudeAdapterShape["listImportableSessions"]> =
     Effect.fn("ClaudeAdapter.listImportableSessions")(function* (input) {
-      const configDirPath = yield* resolveClaudeConfigDirPath(claudeSettings).pipe(
-        Effect.provideService(Path.Path, path),
-      );
       const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listImportableSessions");
+      const configDirPath = yield* resolveClaudeConfigDirPath(
+        claudeSettings,
+        claudeEnvironment,
+        canonicalCwd,
+      ).pipe(Effect.provideService(Path.Path, path));
       const summaries = yield* importDriverContext(
         listClaudeSessionTranscripts({ configDirPath, canonicalCwd }),
       ).pipe(
@@ -4167,10 +4169,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const readImportableSession: NonNullable<ClaudeAdapterShape["readImportableSession"]> = Effect.fn(
     "ClaudeAdapter.readImportableSession",
   )(function* (input) {
-    const configDirPath = yield* resolveClaudeConfigDirPath(claudeSettings).pipe(
-      Effect.provideService(Path.Path, path),
-    );
     const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "readImportableSession");
+    const configDirPath = yield* resolveClaudeConfigDirPath(
+      claudeSettings,
+      claudeEnvironment,
+      canonicalCwd,
+    ).pipe(Effect.provideService(Path.Path, path));
     const transcript = yield* importDriverContext(
       readClaudeSessionTranscript({
         configDirPath,

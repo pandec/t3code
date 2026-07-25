@@ -1334,7 +1334,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("keeps an imported binding cwd authoritative on its first resume", () =>
+  it.effect("keeps an imported worktree cwd authoritative across provider restarts", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -1348,6 +1348,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
         runtimePayload: {
           cwd: "/tmp/imported-worktree",
+          cwdAuthority: "imported-session",
           lastRuntimeEvent: "provider.importConversation",
         },
       });
@@ -1365,6 +1366,17 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.isDefined(startInput);
       assert.equal(startInput.cwd, "/tmp/imported-worktree");
       assert.deepEqual(startInput.resumeCursor, { threadId: "native-imported-thread" });
+
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-root",
+        runtimeMode: "full-access",
+      });
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, "/tmp/imported-worktree");
     }),
   );
 

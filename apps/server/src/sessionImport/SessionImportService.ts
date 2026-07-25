@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -35,12 +36,11 @@ import * as Path from "effect/Path";
 import * as Crypto from "effect/Crypto";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -83,6 +83,8 @@ export class SessionImportService extends Context.Service<
 
 const PREVIEW_MAX_CHARS = 120;
 const TITLE_MAX_CHARS = 80;
+const SESSION_IMPORT_GIT_TIMEOUT = Duration.seconds(30);
+const SESSION_IMPORT_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 function importMessageId(threadId: ThreadId, index: number) {
   return MessageId.make(`import:${threadId}:${String(index).padStart(5, "0")}`);
@@ -152,7 +154,9 @@ export const makeSessionImportService = Effect.gen(function* () {
     return { project: project.value, workspaceRoot };
   });
 
-  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* () {
+  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* (
+    instances: ReadonlyArray<ProviderInstance>,
+  ) {
     const bindings = yield* runtimeRepository.list().pipe(
       Effect.mapError(
         (cause) =>
@@ -163,69 +167,74 @@ export const makeSessionImportService = Effect.gen(function* () {
           }),
       ),
     );
-    const idsByInstance = new Map<string, Map<string, ThreadId>>();
+    const continuationKeyByInstance = new Map<string, string>(
+      instances.map((instance) => [
+        instance.instanceId,
+        instance.continuationIdentity?.continuationKey ??
+          `provider-instance:${instance.instanceId}`,
+      ]),
+    );
+    const idsByContinuationKey = new Map<string, Map<string, ThreadId>>();
     for (const binding of bindings) {
       // Legacy rows without an explicit instance id belong to the default
       // instance, whose id is the provider/driver name.
       const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
-      const ids = idsByInstance.get(ownerInstanceId) ?? new Map<string, ThreadId>();
+      const continuationKey =
+        continuationKeyByInstance.get(ownerInstanceId) ?? `provider-instance:${ownerInstanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ThreadId>();
       for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
         if (!ids.has(id)) ids.set(id, binding.threadId);
       }
       if (ids.size > 0) {
-        idsByInstance.set(ownerInstanceId, ids);
+        idsByContinuationKey.set(continuationKey, ids);
       }
+    }
+    const idsByInstance = new Map<string, Map<string, ThreadId>>();
+    for (const instance of instances) {
+      const continuationKey =
+        instance.continuationIdentity?.continuationKey ??
+        `provider-instance:${instance.instanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey);
+      if (ids !== undefined) idsByInstance.set(instance.instanceId, ids);
     }
     return idsByInstance;
   });
 
   const path = yield* Path.Path;
-  const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const processRunner = yield* ProcessRunner.make();
 
   const runGit = Effect.fn("SessionImportService.runGit")(function* (
     cwd: string,
     args: ReadonlyArray<string>,
   ) {
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const child = yield* commandSpawner.spawn(
-          ChildProcess.make("git", args, {
-            cwd,
-            env: {
-              ...sanitizeGitRepositoryEnvironment(),
-              GIT_OPTIONAL_LOCKS: "0",
-              GIT_TERMINAL_PROMPT: "0",
-            },
-          }),
-        );
-        const [stdout, stderr, exitCode] = yield* Effect.all(
-          [
-            child.stdout.pipe(
-              Stream.decodeText(),
-              Stream.runFold(
-                () => "",
-                (acc, chunk) => acc + chunk,
-              ),
-            ),
-            child.stderr.pipe(
-              Stream.decodeText(),
-              Stream.runFold(
-                () => "",
-                (acc, chunk) => acc + chunk,
-              ),
-            ),
-            child.exitCode.pipe(Effect.map(Number)),
-          ],
-          { concurrency: "unbounded" },
-        );
-        if (exitCode !== 0) {
-          return yield* new SessionImportGitError({
-            detail: stderr.trim() || `git exited with code ${exitCode}`,
-          });
-        }
-        return stdout.trim();
-      }),
-    );
+    const result = yield* processRunner
+      .run({
+        command: "git",
+        args,
+        cwd,
+        env: {
+          ...sanitizeGitRepositoryEnvironment(),
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+        timeout: SESSION_IMPORT_GIT_TIMEOUT,
+        maxOutputBytes: SESSION_IMPORT_GIT_MAX_OUTPUT_BYTES,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SessionImportGitError({
+              detail: cause.message,
+            }),
+        ),
+      );
+    const exitCode = result.code === null ? -1 : Number(result.code);
+    if (exitCode !== 0) {
+      return yield* new SessionImportGitError({
+        detail: result.stderr.trim() || `git exited with code ${exitCode}`,
+      });
+    }
+    return result.stdout.trim();
   });
 
   const invalidWorktree = (detail: string, cause?: unknown) =>
@@ -307,8 +316,8 @@ export const makeSessionImportService = Effect.gen(function* () {
     "SessionImportService.listCandidates",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
     const instances = yield* instanceRegistry.listInstances;
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
     const effectiveCwd =
       input.cwd === undefined
         ? workspaceRoot
@@ -409,7 +418,8 @@ export const makeSessionImportService = Effect.gen(function* () {
     "SessionImportService.importSessionUnlocked",
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance();
+    const instances = yield* instanceRegistry.listInstances;
+    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
     const existingThreadId = boundNativeIdsByInstance
       .get(input.instanceId)
       ?.get(input.nativeSessionId);
@@ -526,6 +536,7 @@ export const makeSessionImportService = Effect.gen(function* () {
             cwd: effectiveCwd,
             modelSelection,
             activeTurnId: null,
+            ...(validatedWorktree === undefined ? {} : { cwdAuthority: "imported-session" }),
             lastRuntimeEvent: "provider.importConversation",
             lastRuntimeEventAt: createdAt,
           },
@@ -602,6 +613,35 @@ export const makeSessionImportService = Effect.gen(function* () {
           worktreePath: validatedWorktree.worktreePath,
           cause: metaResult.cause,
         });
+      } else {
+        // Once canonical worktree metadata is attached, normal thread metadata
+        // can drive later intentional worktree changes. The durable binding
+        // authority is retained only for the accepted warning-only failure path.
+        const binding = Option.getOrUndefined(
+          yield* sessionDirectory.getBinding(threadId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to inspect imported CWD authority.", {
+                threadId,
+                cause,
+              }).pipe(Effect.as(Option.none())),
+            ),
+          ),
+        );
+        if (binding !== undefined) {
+          yield* sessionDirectory
+            .refreshIfUnchanged({
+              binding,
+              runtimePayloadPatch: { cwdAuthority: null },
+            })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Failed to release imported CWD authority.", {
+                  threadId,
+                  cause,
+                }),
+              ),
+            );
+        }
       }
     }
 

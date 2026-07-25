@@ -33,10 +33,14 @@ const buildProviderCatalog = Effect.fn("environment.providers.buildCatalog")(fun
   const providerInstances = input.registry === undefined ? [] : yield* input.registry.listInstances;
   for (const instance of providerInstances) {
     const snapshot = yield* instance.snapshot.getSnapshot;
-    const importCapable =
+    const hasImportAdapter =
       instance.adapter.listImportableSessions !== undefined &&
       instance.adapter.readImportableSession !== undefined;
-    const home = importCapable ? providerImportHome(instance) : undefined;
+    const home = hasImportAdapter ? providerImportHome(instance) : undefined;
+    // File placement requires one static provider home. Relative environment
+    // homes remain valid for runtime use, but resolve per workspace cwd and
+    // therefore cannot satisfy the locked catalog contract safely.
+    const importCapable = hasImportAdapter && home !== undefined;
     instances.push({
       instanceId: instance.instanceId,
       driverKind: instance.driverKind,

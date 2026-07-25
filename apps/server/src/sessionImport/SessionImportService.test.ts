@@ -27,6 +27,7 @@ const instanceId = ProviderInstanceId.make("claude-main");
 const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
 interface HarnessOptions {
+  readonly additionalInstances?: ReadonlyArray<ProviderInstance>;
   readonly bindingStarted?: Deferred.Deferred<void>;
   readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
@@ -75,6 +76,10 @@ const makeHarness = (options?: HarnessOptions) => {
   const instance = {
     instanceId,
     driverKind: ProviderDriverKind.make("claudeAgent"),
+    continuationIdentity: {
+      driverKind: ProviderDriverKind.make("claudeAgent"),
+      continuationKey: "claude:home:/tmp/.claude",
+    },
     displayName: "Claude",
     enabled: true,
     snapshot: {
@@ -130,8 +135,13 @@ const makeHarness = (options?: HarnessOptions) => {
   currentInstance = instance;
 
   const registryLayer = Layer.mock(ProviderInstanceRegistry)({
-    getInstance: (id) => Effect.succeed(id === instanceId ? currentInstance : undefined),
-    listInstances: Effect.sync(() => [currentInstance]),
+    getInstance: (id) =>
+      Effect.succeed(
+        id === instanceId
+          ? currentInstance
+          : options?.additionalInstances?.find((candidate) => candidate.instanceId === id),
+      ),
+    listInstances: Effect.sync(() => [currentInstance, ...(options?.additionalInstances ?? [])]),
     listUnavailable: Effect.succeed([]),
     streamChanges: Stream.empty,
   });
@@ -184,6 +194,49 @@ const makeHarness = (options?: HarnessOptions) => {
         if (options?.releaseBinding) {
           yield* Deferred.await(options.releaseBinding);
         }
+      }),
+    getBinding: (threadId) =>
+      Effect.succeed(
+        Option.fromNullishOr(state.bindings.get(threadId)).pipe(
+          Option.map((binding) => ({
+            threadId: binding.threadId,
+            provider: ProviderDriverKind.make(binding.providerName),
+            ...(binding.providerInstanceId === null
+              ? {}
+              : { providerInstanceId: binding.providerInstanceId }),
+            adapterKey: binding.adapterKey,
+            status: binding.status,
+            resumeCursor: binding.resumeCursor,
+            runtimePayload: binding.runtimePayload,
+            runtimeMode: binding.runtimeMode,
+            lastSeenAt: binding.lastSeenAt,
+            revision: binding.revision,
+            providerInstanceIdWasLegacyNull: binding.providerInstanceId === null,
+          })),
+        ),
+      ),
+    refreshIfUnchanged: ({ binding, runtimePayloadPatch }) =>
+      Effect.sync(() => {
+        const current = state.bindings.get(binding.threadId);
+        if (current === undefined || current.revision !== binding.revision) return false;
+        const currentPayload =
+          current.runtimePayload !== null &&
+          typeof current.runtimePayload === "object" &&
+          !Array.isArray(current.runtimePayload)
+            ? current.runtimePayload
+            : {};
+        const patch =
+          runtimePayloadPatch !== null &&
+          typeof runtimePayloadPatch === "object" &&
+          !Array.isArray(runtimePayloadPatch)
+            ? runtimePayloadPatch
+            : {};
+        state.bindings.set(binding.threadId, {
+          ...current,
+          runtimePayload: { ...currentPayload, ...patch },
+          revision: current.revision + 1,
+        });
+        return true;
       }),
   });
 
@@ -470,6 +523,43 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     }),
   );
 
+  it.effect("deduplicates native sessions across instances sharing one continuation home", () =>
+    Effect.gen(function* () {
+      const secondaryInstanceId = ProviderInstanceId.make("claude-secondary");
+      const secondary = {
+        instanceId: secondaryInstanceId,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          continuationKey: "claude:home:/tmp/.claude",
+        },
+        enabled: false,
+      } as unknown as ProviderInstance;
+      const { state, layer } = makeHarness({ additionalInstances: [secondary] });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const existingBinding = state.bindings.get(existing.threadId);
+      state.bindings.set(existing.threadId, {
+        ...existingBinding!,
+        providerInstanceId: secondaryInstanceId,
+      });
+
+      expect(yield* service.listCandidates({ projectId })).toHaveLength(0);
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "already-imported",
+        existingThreadId: existing.threadId,
+      });
+    }),
+  );
+
   it.effect("serializes concurrent imports of the same native session", () =>
     Effect.gen(function* () {
       const { state, layer } = makeHarness({ yieldBeforeRead: true });
@@ -582,6 +672,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(state.readCwds).toEqual([canonicalWorktree]);
       expect(state.bindings.get(result.threadId)?.runtimePayload).toMatchObject({
         cwd: canonicalWorktree,
+        cwdAuthority: null,
       });
       expect(state.dispatched[1]).toMatchObject({
         type: "thread.meta.update",
@@ -758,6 +849,9 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
         },
       ]);
       expect(state.bindings.has(result.threadId)).toBe(true);
+      expect(state.bindings.get(result.threadId)?.runtimePayload).toMatchObject({
+        cwdAuthority: "imported-session",
+      });
       expect(state.dispatched[0]).toMatchObject({ type: "thread.import" });
     }),
   );

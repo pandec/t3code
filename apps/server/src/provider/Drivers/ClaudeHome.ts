@@ -17,12 +17,24 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
 /** Resolve the directory Claude uses for config and persisted project sessions. */
 export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
+  environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
   const homePath = config.homePath.trim();
-  return homePath.length > 0
-    ? path.resolve(expandHomePath(homePath))
-    : path.join(NodeOS.homedir(), ".claude");
+  if (homePath.length > 0) {
+    return path.resolve(expandHomePath(homePath));
+  }
+  const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  if (environmentConfigDir.length > 0) {
+    return cwd ? path.resolve(cwd, environmentConfigDir) : path.resolve(environmentConfigDir);
+  }
+  const environmentHome = environment.HOME?.trim() ?? "";
+  if (environmentHome.length > 0) {
+    const resolvedHome = cwd ? path.resolve(cwd, environmentHome) : path.resolve(environmentHome);
+    return path.join(resolvedHome, ".claude");
+  }
+  return path.join(NodeOS.homedir(), ".claude");
 });
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
@@ -46,8 +58,26 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
 });
 
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
-  function* (config: Pick<ClaudeSettings, "homePath">): Effect.fn.Return<string, never, Path.Path> {
-    const configDirPath = yield* resolveClaudeConfigDirPath(config);
+  function* (
+    config: Pick<ClaudeSettings, "homePath">,
+    environment: NodeJS.ProcessEnv = process.env,
+  ): Effect.fn.Return<string, never, Path.Path> {
+    const homePath = config.homePath.trim();
+    const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+    if (homePath.length === 0 && environmentConfigDir.length > 0) {
+      const path = yield* Path.Path;
+      if (!path.isAbsolute(environmentConfigDir)) {
+        return `claude:relative-config:${environmentConfigDir}`;
+      }
+    }
+    const environmentHome = environment.HOME?.trim() ?? "";
+    if (homePath.length === 0 && environmentConfigDir.length === 0 && environmentHome.length > 0) {
+      const path = yield* Path.Path;
+      if (!path.isAbsolute(environmentHome)) {
+        return `claude:relative-home:${environmentHome}`;
+      }
+    }
+    const configDirPath = yield* resolveClaudeConfigDirPath(config, environment);
     return `claude:home:${configDirPath}`;
   },
 );

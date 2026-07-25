@@ -33,7 +33,10 @@ import {
   sniffSessionTranscript,
 } from "./session.ts";
 
+const isSessionCliError = Schema.is(SessionCliError);
 const claudeSessionId = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
+const codexSessionId = "019dcef1-5a56-7250-b50e-d62b129552f4";
+const codexFileName = `rollout-2026-07-25T08-09-10-${codexSessionId}.jsonl`;
 
 const providerInstance = (
   input: Partial<ProviderCatalogInstance> &
@@ -51,16 +54,16 @@ const providerInstance = (
 it.effect("sniffs Codex rollout metadata and the last advertised model", () =>
   Effect.gen(function* () {
     const sniffed = yield* sniffSessionTranscript({
-      fileName: "rollout-2026-07-25.jsonl",
+      fileName: codexFileName,
       content: [
-        '{"timestamp":"2026-07-25T08:09:10.000Z","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo/source"}}',
+        `{"timestamp":"2026-07-25T08:09:10.000Z","type":"session_meta","payload":{"id":"${codexSessionId}","cwd":"/repo/source"}}`,
         '{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}',
       ].join("\n"),
     });
 
     expect(sniffed).toMatchObject({
       provider: "codex",
-      nativeSessionId: "codex-native-id",
+      nativeSessionId: codexSessionId,
       sourceCwd: "/repo/source",
       lastSeenModel: "gpt-5.6-sol",
       timestamp: "2026-07-25T08:09:10.000Z",
@@ -109,18 +112,29 @@ it.effect("rejects malformed and unknown transcript formats", () =>
     expect(unsupportedClaudeRecord.detail).toContain("adversarial-new-type");
 
     const nonIsoCodexTimestamp = yield* sniffSessionTranscript({
-      fileName: "rollout.jsonl",
-      content:
-        '{"timestamp":"July 25, 2026","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo"}}',
+      fileName: codexFileName,
+      content: `{"timestamp":"July 25, 2026","type":"session_meta","payload":{"id":"${codexSessionId}","cwd":"/repo"}}`,
     }).pipe(Effect.flip);
     expect(nonIsoCodexTimestamp.detail).toContain("valid ISO calendar date");
 
     const normalizedInvalidCodexDate = yield* sniffSessionTranscript({
-      fileName: "rollout.jsonl",
-      content:
-        '{"timestamp":"2026-02-31T08:09:10.000Z","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo"}}',
+      fileName: codexFileName,
+      content: `{"timestamp":"2026-02-31T08:09:10.000Z","type":"session_meta","payload":{"id":"${codexSessionId}","cwd":"/repo"}}`,
     }).pipe(Effect.flip);
     expect(normalizedInvalidCodexDate.detail).toContain("valid ISO calendar date");
+
+    const mismatchedCodexFilename = yield* sniffSessionTranscript({
+      fileName: "rollout-2026-07-25T08-09-10-019dcef1-5a56-7250-b50e-d62b129552f5.jsonl",
+      content: `{"timestamp":"2026-07-25T08:09:10.000Z","type":"session_meta","payload":{"id":"${codexSessionId}","cwd":"/repo"}}`,
+    }).pipe(Effect.flip);
+    expect(mismatchedCodexFilename.detail).toContain("matching the canonical rollout filename");
+
+    const nonUuidCodexId = yield* sniffSessionTranscript({
+      fileName: "rollout-2026-07-25T08-09-10-codex-native-id.jsonl",
+      content:
+        '{"timestamp":"2026-07-25T08:09:10.000Z","type":"session_meta","payload":{"id":"codex-native-id","cwd":"/repo"}}',
+    }).pipe(Effect.flip);
+    expect(nonUuidCodexId.detail).toContain("UUID session id");
   }),
 );
 
@@ -243,8 +257,8 @@ it.layer(NodeServices.layer)("session worktree validation", (it) => {
             workspaceRoot,
             branch: "feature",
           }).pipe(Effect.flip);
-          expect(Schema.is(SessionCliError)(error)).toBe(true);
-          if (!Schema.is(SessionCliError)(error)) return;
+          expect(isSessionCliError(error)).toBe(true);
+          if (!isSessionCliError(error)) return;
           expect(error.detail).toContain("different Git repository");
         }),
       (baseDir) =>
