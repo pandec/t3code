@@ -12,7 +12,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+  SidebarThreadProviderIconVisibility,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -377,6 +381,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  providerIconVisibility: SidebarThreadProviderIconVisibility;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -970,7 +975,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
+                  <span
+                    className={cn(
+                      "inline-flex shrink-0 items-center opacity-60 transition-opacity",
+                      props.providerIconVisibility === "hover" &&
+                        "opacity-0 group-focus-within/v2-row:opacity-60 group-hover/v2-row:opacity-60",
+                    )}
+                  >
                     <ProviderInstanceIcon
                       driverKind={driverKind}
                       displayName={thread.session?.providerName ?? modelInstanceId}
@@ -1008,6 +1019,7 @@ export default function SidebarV2() {
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread, forkThread } =
     useThreadActions();
@@ -2476,6 +2488,7 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
+                      providerIconVisibility={providerIconVisibility}
                       providerEntryByInstanceId={providerEntryByInstanceId}
                       onThreadClick={handleThreadClick}
                       onThreadActivate={navigateToThread}

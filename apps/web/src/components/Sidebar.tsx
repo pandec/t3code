@@ -250,7 +250,7 @@ function SidebarThreadProviderIcon(props: {
             aria-label={`${providerInstance.displayName}, ${model}`}
             className={
               compact
-                ? "pointer-events-auto inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                ? "pointer-events-auto inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 : "inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
             }
             onDoubleClick={(event) => event.stopPropagation()}
@@ -521,7 +521,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         : "pointer-events-none";
   const threadLabelClassName =
     showProviderAlways && !isThreadRunning
-      ? "transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+      ? "inline-flex min-w-6 justify-end transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
       : undefined;
   const clearConfirmingArchive = useCallback(() => {
     setConfirmingArchiveThreadKey((current) => (current === threadKey ? null : current));
