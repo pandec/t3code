@@ -30,6 +30,7 @@ import {
   resolveImportInstance,
   SessionCliError,
   sessionHttpError,
+  rewriteCodexTranscriptCwd,
   sniffSessionTranscript,
 } from "./session.ts";
 
@@ -118,6 +119,42 @@ it.effect("rejects Claude transcripts mixing session ids", () =>
     expect(mixed.detail).toContain("one UUID sessionId");
   }),
 );
+
+it("retargets only the recorded cwd of a transferred Codex rollout", () => {
+  const from = "/Users/me/.t3/worktrees/repo/feature";
+  const to = "/home/me/.t3/worktrees/repo/feature";
+  const untouched = `{"type":"response_item","payload":{"type":"message","content":[{"text":"I ran it in ${from}"}]}}`;
+  const notJson = "not-json-but-mentions-" + from;
+  const { content, rewritten } = rewriteCodexTranscriptCwd({
+    content: [
+      `{"type":"session_meta","payload":{"id":"x","cwd":"${from}"}}`,
+      `{"type":"turn_context","payload":{"cwd":"${from}"}}`,
+      `{"type":"turn_context","payload":{"cwd":"/other/workspace"}}`,
+      untouched,
+      notJson,
+    ].join("\n"),
+    from,
+    to,
+  });
+  const lines = content.split("\n");
+
+  expect(rewritten).toBe(2);
+  expect(lines[0]).toContain(`"cwd":"${to}"`);
+  expect(lines[1]).toContain(`"cwd":"${to}"`);
+  expect(lines[2]).toContain('"cwd":"/other/workspace"');
+  // Path mentions inside message text and unparsable lines stay byte-identical.
+  expect(lines[3]).toBe(untouched);
+  expect(lines[4]).toBe(notJson);
+});
+
+it("leaves a Codex rollout untouched when the cwd already matches", () => {
+  const path = "/home/me/repo";
+  const content = `{"type":"session_meta","payload":{"cwd":"${path}"}}`;
+  expect(rewriteCodexTranscriptCwd({ content, from: path, to: path })).toEqual({
+    content,
+    rewritten: 0,
+  });
+});
 
 it.effect("rejects malformed and unknown transcript formats", () =>
   Effect.gen(function* () {

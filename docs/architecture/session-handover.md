@@ -1,6 +1,6 @@
 # Cross-machine session handover
 
-Status: **agent-driven v0 shipped**. CLI primitives are merged; the `t3-session-handover` agent skill lives in the user's dotfiles (both Claude and `.agents` harnesses share one workflow file); a Claude thread was handed over space-mac → ubuntu-dell on 2026-07-26 and resumed natively with full history. Remaining: a Codex-session handover and a T3-managed-worktree handover as live tests. The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
+Status: **agent-driven v0 shipped and verified**. CLI primitives are merged; the `t3-session-handover` agent skill lives in the user's dotfiles (both Claude and `.agents` harnesses share one workflow file). Two live handovers ran space-mac → ubuntu-dell on 2026-07-26, both resuming natively with full history: a Claude thread in a main checkout, and a Codex thread in a T3-managed worktree (which is what exposed the Codex cwd retargeting below). The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
 
 ## Motivation
 
@@ -45,7 +45,8 @@ Insight from practice: an agent with SSH access to all machines can already perf
    - **Does the placement itself**: computes the target escaped-cwd dir for the effective project path and installs the Claude file there, or drops the Codex rollout into `~/.codex/sessions/<date>/`. Path translation is the most error-prone step — code owns it. Never overwrites an existing file.
    - `--worktree-branch` derives and creates the standard T3 worktree path; free-form worktree paths are not accepted. It fails clearly if the branch is absent locally — the CLI never fetches. Unlike the UI bootstrap flow, this CLI path does not run the project setup script or trigger a git-status refresh.
    - Defaults model selection from the transcript, overridable.
-   - Validates defensively: session id UUID pattern, records agreeing on one session id, size caps, provider instance/model options, and server-side worktree identity. The transcript's own records are authoritative for identity, so a file renamed in transit still imports and is placed under its record-derived id.
+   - Validates defensively: session id UUID pattern, records agreeing on one session id, size caps, provider instance/model options, and server-side worktree identity. For Claude the transcript's records are authoritative for identity, so a file renamed in transit still imports and is placed under its record-derived id; Codex rollouts still require their canonical `rollout-<timestamp>-<id>.jsonl` filename.
+   - Codex rollouts are retargeted on placement: the `cwd` recorded in the transcript is rewritten to the workspace being imported into (mentions inside message text are left alone), because Codex validates a thread's recorded cwd against the selected workspace. Claude transcripts need no content edit — only their project directory name is path-derived.
    - Uses authenticated HTTP session-import endpoints while retaining the existing binding-first transaction and deterministic duplicate recovery.
    - `--title` carries a T3 thread title across a handover (T3 titles live in the database and never travel inside a transcript); without it the provider session name is used.
    - History beyond `THREAD_IMPORT_MAX_MESSAGES` is trimmed to the most recent messages with a `history-truncated` warning rather than failing: the cap bounds imported display history, while the provider keeps the full transcript that the resume cursor binds to.
@@ -91,5 +92,5 @@ Client-mediated transport (no server↔server channel exists or is needed): the 
 
 ## Next steps
 
-1. Write the `t3-session-handover` skill.
-2. Verify end-to-end with a real working session across machines: clean tree, dirty tree, Case A and Case B worktrees, and the failure paths (missing commit, dirty target, oversized import).
+1. Exercise the paths not yet run live: a dirty source tree (patch transfer), and the failure paths (missing commit, dirty target, oversized transcript).
+2. Consider whether `--worktree-branch` should create a missing local branch from an existing remote-tracking ref; today it requires the local branch and never fetches, so the caller creates it.

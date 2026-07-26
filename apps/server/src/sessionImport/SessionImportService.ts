@@ -68,12 +68,16 @@ export interface SessionImportServiceShape {
     readonly projectId: ProjectId;
     readonly instanceId: ProviderInstanceId;
     readonly nativeSessionId: string;
-    readonly title?: string;
-    readonly modelSelection?: ModelSelection;
-    readonly worktree?: {
-      readonly branch: string;
-      readonly worktreePath: string;
-    };
+    // Optionals accept `undefined` so a decoded transport payload forwards
+    // verbatim instead of being re-listed field by field at each boundary.
+    readonly title?: string | undefined;
+    readonly modelSelection?: ModelSelection | undefined;
+    readonly worktree?:
+      | {
+          readonly branch: string;
+          readonly worktreePath: string;
+        }
+      | undefined;
   }) => Effect.Effect<SessionImportResult, SessionImportError>;
 }
 

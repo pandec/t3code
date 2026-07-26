@@ -63,15 +63,12 @@ export const sessionImportHttpApiLayer = HttpApiBuilder.group(
         "importSession",
         Effect.fn("environment.sessionImport.import")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          return yield* importSessionHttp({
-            projectId: args.payload.projectId,
-            instanceId: args.payload.instanceId,
-            nativeSessionId: args.payload.nativeSessionId,
-            ...(args.payload.modelSelection === undefined
-              ? {}
-              : { modelSelection: args.payload.modelSelection }),
-            ...(args.payload.worktree === undefined ? {} : { worktree: args.payload.worktree }),
-          }).pipe(Effect.provideService(SessionImportService, sessionImport));
+          // Forward the decoded payload verbatim: the contract's optional fields
+          // (title, modelSelection, worktree) are the service input, and
+          // re-listing them here silently drops any field added later.
+          return yield* importSessionHttp(args.payload).pipe(
+            Effect.provideService(SessionImportService, sessionImport),
+          );
         }),
       );
   }),
