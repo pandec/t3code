@@ -691,16 +691,12 @@ export function mergeClaudeSkills(
   userInvocableSkillNames?: ReadonlySet<string>,
 ): ReadonlyArray<ServerProviderSkill> {
   const skillsByName = new Map<string, ServerProviderSkill>();
-  const isUserInvocable = (name: string) =>
-    userInvocableSkillNames === undefined || userInvocableSkillNames.has(name.toLowerCase());
 
-  for (const skill of discoveredSkills) {
-    if (!isUserInvocable(skill.name)) continue;
+  for (const skill of gateClaudeSkillsByUserInvocation(discoveredSkills, userInvocableSkillNames)) {
     skillsByName.set(skill.name.toLowerCase(), { ...skill, modelInvocable: false });
   }
 
-  for (const skill of nativeSkills) {
-    if (!isUserInvocable(skill.name)) continue;
+  for (const skill of gateClaudeSkillsByUserInvocation(nativeSkills, userInvocableSkillNames)) {
     const key = skill.name.toLowerCase();
     const discovered = skillsByName.get(key);
     skillsByName.set(key, {
@@ -712,6 +708,29 @@ export function mergeClaudeSkills(
   }
 
   return [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/**
+ * Drop skills the CLI does not report as user-invocable.
+ *
+ * Used on its own when `skills/reload` failed but the initialization handshake
+ * succeeded: the command list is still the authority on what `/name` resolves,
+ * so serving the raw scan would surface skills disabled through
+ * `skillOverrides` or conditional `paths:` skills that never activated.
+ * Unlike the merged path this preserves each skill's frontmatter-derived
+ * `modelInvocable`, because without the SDK list there is no evidence about
+ * what the model can reach.
+ *
+ * An absent or empty name set carries no information and gates nothing.
+ */
+export function gateClaudeSkillsByUserInvocation(
+  skills: ReadonlyArray<ServerProviderSkill>,
+  userInvocableSkillNames: ReadonlySet<string> | undefined,
+): ReadonlyArray<ServerProviderSkill> {
+  if (userInvocableSkillNames === undefined || userInvocableSkillNames.size === 0) {
+    return skills;
+  }
+  return skills.filter((skill) => userInvocableSkillNames.has(skill.name.toLowerCase()));
 }
 
 function dedupeSlashCommands(

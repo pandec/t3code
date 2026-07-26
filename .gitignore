@@ -49,3 +49,4 @@ node_modules/
 .nexus/
 docs/codex-results/
 rev/
+.cy-review-run/

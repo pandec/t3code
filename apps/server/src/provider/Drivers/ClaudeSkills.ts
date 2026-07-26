@@ -145,13 +145,13 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
     // Leave `record` empty and fall through to the raw line scan below.
   }
 
-  const readString = (field: string): string => {
+  /** True when a value came from the YAML parse rather than the line scan. */
+  const parsedString = (field: string): string | undefined => {
     const value = record[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-    return readRawFrontmatterField(frontmatter, field)?.trim() ?? "";
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
+  const readString = (field: string): string =>
+    parsedString(field) ?? readRawFrontmatterField(frontmatter, field)?.trim() ?? "";
   const readBoolean = (field: string): boolean | undefined => {
     const value = record[field];
     if (typeof value === "boolean") {
@@ -160,11 +160,16 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
     return parseBooleanField(readRawFrontmatterField(frontmatter, field));
   };
 
-  // A recovered `name` is only trustworthy when it looks like a bare skill
-  // identifier; anything else (`name: [unclosed`) is genuine breakage, and the
-  // directory name is the safer answer.
-  const rawName = readString("name");
-  const name = SKILL_NAME_PATTERN.test(rawName) ? rawName : "";
+  // Claude Code takes a parsed `name` verbatim, so match it — the CLI reports
+  // that exact string as the command name, and rewriting it here would put the
+  // skill under a name no other surface uses. A name *recovered* from a failed
+  // parse is only trustworthy when it looks like a bare identifier; anything
+  // else (`name: [unclosed`) is genuine breakage, and the directory name is the
+  // safer answer.
+  const parsedName = parsedString("name");
+  const recoveredName = parsedName ?? readString("name");
+  const name =
+    parsedName !== undefined || SKILL_NAME_PATTERN.test(recoveredName) ? recoveredName : "";
   const description = readString("description");
   const userInvocable = readBoolean("user-invocable");
   const disableModelInvocation = readBoolean("disable-model-invocation");

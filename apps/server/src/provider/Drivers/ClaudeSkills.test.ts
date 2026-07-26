@@ -365,3 +365,30 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 });
+
+it.layer(NodeServices.layer)("discoverClaudeSkills name handling", (it) => {
+  it.effect("uses a parsed frontmatter name verbatim, matching the CLI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+
+      // Claude Code takes `name` verbatim and reports it as the command name,
+      // so a dot (or a space) must not be rewritten to the directory name —
+      // that would put the skill under a name no other surface uses.
+      yield* writeSkill(
+        path.join(configDir, "skills"),
+        "t3-setup",
+        ["---", "name: t3.setup", "description: Set T3 up.", "---"].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["t3.setup"],
+      );
+    }),
+  );
+});
