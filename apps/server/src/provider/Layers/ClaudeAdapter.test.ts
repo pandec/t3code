@@ -66,6 +66,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
   public initializationResultOverride: (() => Promise<SDKControlInitializeResponse>) | undefined;
+  public initializationCommands: SDKControlInitializeResponse["commands"] = [];
   public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
   public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
@@ -124,7 +125,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     if (this.initializationResultOverride) {
       return this.initializationResultOverride();
     }
-    return {} as SDKControlInitializeResponse;
+    return { commands: this.initializationCommands } as SDKControlInitializeResponse;
   };
 
   readonly reloadSkills = async (): Promise<SDKControlReloadSkillsResponse> => {
@@ -317,6 +318,9 @@ describe("ClaudeAdapterLive", () => {
         },
       ],
     };
+    harness.query.initializationCommands = [
+      { name: "project-review", description: "Review this project", argumentHint: "" },
+    ];
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -372,10 +376,27 @@ describe("ClaudeAdapterLive", () => {
         "---",
       ].join("\n"),
     );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "internal-only"),
+      [
+        "---",
+        "name: internal-only",
+        "description: Model use only.",
+        "user-invocable: false",
+        "---",
+      ].join("\n"),
+    );
     const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     harness.query.reloadSkillsResult = {
-      skills: [{ name: "project-review", description: "Review this project", argumentHint: "" }],
+      skills: [
+        { name: "project-review", description: "Review this project", argumentHint: "" },
+        { name: "internal-only", description: "Model use only", argumentHint: "" },
+      ],
     };
+    harness.query.initializationCommands = [
+      { name: "dotfiles-sync", description: "Sync dotfiles.", argumentHint: "" },
+      { name: "project-review", description: "Review this project", argumentHint: "" },
+    ];
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -471,7 +492,10 @@ describe("ClaudeAdapterLive", () => {
 
   it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));
-    const harness = makeHarness({ cwd });
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-home-"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     let abortObserved = false;
     let markInitializationStarted: () => void = () => {};
     const initializationStarted = new Promise<void>((resolve) => {
@@ -504,7 +528,12 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 

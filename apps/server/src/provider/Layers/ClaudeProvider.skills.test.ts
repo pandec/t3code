@@ -46,6 +46,11 @@ describe("parseClaudeSkills", () => {
 });
 
 describe("mergeClaudeSkills", () => {
+  const userInvocableSkillNames = new Set([
+    "deploy",
+    "dotfiles-sync",
+    "frontend-design:frontend-design",
+  ]);
   const discovered: ReadonlyArray<ServerProviderSkill> = [
     {
       name: "deploy",
@@ -70,6 +75,7 @@ describe("mergeClaudeSkills", () => {
         { name: "deploy", description: "Deploy the app. (user)", argumentHint: "" },
       ]),
       discovered,
+      userInvocableSkillNames,
     );
 
     expect(merged.map((skill) => skill.name)).toEqual(["deploy", "dotfiles-sync"]);
@@ -89,6 +95,7 @@ describe("mergeClaudeSkills", () => {
         { name: "deploy", description: "Deploy the app. (user)", argumentHint: "" },
       ]),
       discovered,
+      userInvocableSkillNames,
     );
 
     expect(merged[0]).toEqual({
@@ -109,6 +116,7 @@ describe("mergeClaudeSkills", () => {
         { name: "dotfiles-sync", description: "Sync dotfiles. (user)", argumentHint: "" },
       ]),
       discovered,
+      userInvocableSkillNames,
     );
 
     expect(merged.find((skill) => skill.name === "dotfiles-sync")?.modelInvocable).toBe(true);
@@ -120,6 +128,7 @@ describe("mergeClaudeSkills", () => {
         { name: "frontend-design:frontend-design", description: "Design UI", argumentHint: "" },
       ]),
       discovered,
+      userInvocableSkillNames,
     );
 
     expect(merged.map((skill) => skill.name)).toEqual([
@@ -128,5 +137,18 @@ describe("mergeClaudeSkills", () => {
       "frontend-design:frontend-design",
     ]);
     expect(merged[2]?.path).toBeUndefined();
+  });
+
+  it("drops model-only skills absent from the user-invocable command list", () => {
+    const merged = mergeClaudeSkills(
+      parseClaudeSkills([
+        { name: "deploy", description: "Deploy the app.", argumentHint: "" },
+        { name: "internal-only", description: "Model use only.", argumentHint: "" },
+      ]),
+      discovered,
+      userInvocableSkillNames,
+    );
+
+    expect(merged.map((skill) => skill.name)).toEqual(["deploy", "dotfiles-sync"]);
   });
 });

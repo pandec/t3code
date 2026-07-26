@@ -76,8 +76,8 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       yield* writeSkill(
         path.join(configDir, "skills"),
-        "deploy",
-        ["---", "name: deploy", "description: User deploy.", "---"].join("\n"),
+        "Deploy",
+        ["---", "name: Deploy", "description: User deploy.", "---"].join("\n"),
       );
       yield* writeSkill(
         path.join(workspace, ".claude", "skills"),
@@ -90,6 +90,37 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
       assert.equal(skills.length, 1);
       assert.equal(skills[0]?.scope, "project");
       assert.equal(skills[0]?.description, "Project deploy.");
+    }),
+  );
+
+  it.effect("lets a project model-only skill hide a same-name user skill", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const workspace = path.join(tempDir, "workspace");
+
+      yield* writeSkill(
+        path.join(configDir, "skills"),
+        "Deploy",
+        ["---", "name: Deploy", "description: User deploy.", "---"].join("\n"),
+      );
+      yield* writeSkill(
+        path.join(workspace, ".claude", "skills"),
+        "deploy",
+        [
+          "---",
+          "name: deploy",
+          "description: Model-only project deploy.",
+          "user-invocable: false",
+          "---",
+        ].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace);
+
+      assert.deepEqual(skills, []);
     }),
   );
 
@@ -147,7 +178,35 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         [
           "---",
           "name: nexus",
-          "description: Manage Nexus streams.",
+          'description: "Manage \\"Nexus\\" streams." # shown in picker',
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "duplicate-name",
+        [
+          "---",
+          "name: stale-name",
+          "name: final-name",
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "nested-name",
+        ["---", "metadata:", "  name: nested", "argument-hint: [command] [args]", "---"].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "block-description",
+        [
+          "---",
+          "name: block-description",
+          "description: |2-",
+          "  Folded text",
           "argument-hint: [command] [args]",
           "---",
         ].join("\n"),
@@ -157,13 +216,18 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       assert.deepEqual(
         skills.map((skill) => skill.name),
-        ["codex-computer-use", "nexus"],
+        ["block-description", "codex-computer-use", "final-name", "nested-name", "nexus"],
       );
+      assert.equal(skills[0]?.description, undefined);
       assert.equal(
-        skills[0]?.description,
+        skills[1]?.description,
         "Run verification that needs computer use: browser automation.",
       );
-      assert.equal(skills[1]?.description, "Manage Nexus streams.");
+      // Duplicate top-level keys use the last value; indented nested keys are
+      // never recovered as top-level metadata.
+      assert.equal(skills[2]?.scope, "user");
+      assert.equal(skills[3]?.name, "nested-name");
+      assert.equal(skills[4]?.description, 'Manage "Nexus" streams.');
     }),
   );
 
@@ -194,7 +258,8 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           "---",
           "name: internal-only",
           "description: Not for humans.",
-          "user-invocable: false",
+          "user-invocable: false # model use only",
+          "argument-hint: [command] [args]",
           "---",
         ].join("\n"),
       );

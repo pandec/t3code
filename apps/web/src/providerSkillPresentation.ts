@@ -1,4 +1,8 @@
 import type { ServerProviderSkill } from "@t3tools/contracts";
+export {
+  isProviderSkillManualOnly,
+  resolveEffectiveProviderSkills,
+} from "@t3tools/client-runtime/state/server";
 
 function titleCaseWords(value: string): string {
   const words: string[] = [];
@@ -21,38 +25,6 @@ export function formatProviderSkillDisplayName(
     return displayName;
   }
   return titleCaseWords(skill.name);
-}
-
-const NO_PROVIDER_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
-
-/**
- * Pick which skill list the composer should show.
- *
- * The workspace lookup answers with a bare array, so a failed lookup arrives
- * as `[]` and is indistinguishable from a provider that genuinely has none.
- * Treating empty as "no answer" keeps the provider snapshot's skills on screen
- * instead of blanking the picker; when the provider really has no skills the
- * snapshot is empty too, so the outcome is the same either way.
- */
-export function resolveEffectiveProviderSkills(
-  workspaceSkills: ReadonlyArray<ServerProviderSkill> | undefined,
-  snapshotSkills: ReadonlyArray<ServerProviderSkill> | undefined,
-): ReadonlyArray<ServerProviderSkill> {
-  if (workspaceSkills && workspaceSkills.length > 0) {
-    return workspaceSkills;
-  }
-  return snapshotSkills ?? NO_PROVIDER_SKILLS;
-}
-
-/**
- * Skills the model cannot invoke on its own — Claude's
- * `disable-model-invocation: true` — still belong in the picker, but the
- * agent will not act on the inserted `$name` reference by itself.
- */
-export function isProviderSkillManualOnly(
-  skill: Pick<ServerProviderSkill, "modelInvocable">,
-): boolean {
-  return skill.modelInvocable === false;
 }
 
 export function formatProviderSkillInstallSource(

@@ -4078,13 +4078,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   )(function* (input) {
     const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
 
-    // Scanned against the requested workspace rather than the server's own
-    // cwd, so project-scoped skills belong to the project being asked about.
-    const discoveredSkills = yield* importDriverContext(
-      discoverClaudeSkills(claudeSettings, canonicalCwd, claudeEnvironment),
-    );
-
-    const nativeSkills = yield* Effect.tryPromise({
+    const nativeSkillsEffect = Effect.tryPromise({
       try: async (signal) => {
         const abortController = new AbortController();
         let claudeQuery: ClaudeQueryRuntime | undefined;
@@ -4126,9 +4120,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               stderr: () => {},
             },
           });
-          await claudeQuery.initializationResult();
+          const initialization = await claudeQuery.initializationResult();
           const result = await claudeQuery.reloadSkills();
-          return parseClaudeSkills(result.skills);
+          const userInvocableSkillNames = Array.isArray(initialization.commands)
+            ? new Set(
+                initialization.commands
+                  .map((command) => command.name.trim().toLowerCase())
+                  .filter((name) => name.length > 0),
+              )
+            : undefined;
+          return {
+            skills: parseClaudeSkills(result.skills),
+            userInvocableSkillNames,
+          };
         } finally {
           cleanup();
         }
@@ -4142,8 +4146,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }),
     }).pipe(Effect.result);
 
+    // Scanning and SDK initialization are independent. Start both together so
+    // filesystem latency does not consume Claude's cold-start budget.
+    const [discoveredSkills, nativeSkills] = yield* Effect.all(
+      [
+        // Scanned against the requested workspace rather than the server's
+        // cwd, so project-scoped skills belong to the project being asked about.
+        importDriverContext(discoverClaudeSkills(claudeSettings, canonicalCwd, claudeEnvironment)),
+        nativeSkillsEffect,
+      ],
+      { concurrency: "unbounded" },
+    );
+
     if (Result.isSuccess(nativeSkills)) {
-      return mergeClaudeSkills(nativeSkills.success, discoveredSkills);
+      return mergeClaudeSkills(
+        nativeSkills.success.skills,
+        discoveredSkills,
+        nativeSkills.success.userInvocableSkillNames,
+      );
     }
 
     // The scan alone still beats the provider snapshot, which is built against

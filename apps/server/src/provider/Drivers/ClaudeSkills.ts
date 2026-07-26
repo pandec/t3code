@@ -27,7 +27,7 @@ type ClaudeSkillScope = "user" | "project";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
-const BLOCK_SCALAR_HEADER_PATTERN = /^[>|][+-]?\d*$/;
+const BLOCK_SCALAR_HEADER_PATTERN = /^[>|](?:[+-]?\d*|\d+[+-]?)$/;
 
 type SkillFrontmatter =
   | { readonly kind: "missing" }
@@ -49,14 +49,52 @@ type SkillFrontmatter =
  * user can actually run. Falling back to a line scan keeps such skills
  * discoverable with their real metadata.
  */
+function stripRawYamlComment(value: string): string {
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value.charAt(index);
+    if (quote === '"') {
+      if (character === "\\") {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (character === quote && value.charAt(index + 1) === quote) {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "#" && (index === 0 || /\s/.test(value.charAt(index - 1)))) {
+      return value.slice(0, index).trimEnd();
+    }
+  }
+  return value;
+}
+
 function readRawFrontmatterField(frontmatter: string, field: string): string | undefined {
-  const pattern = new RegExp(`^${field}[ \\t]*:[ \\t]*(.*)$`, "m");
-  const match = pattern.exec(frontmatter);
-  if (!match) {
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escapedField}[ \\t]*:[ \\t]*(.*)$`, "gm");
+  let match: RegExpExecArray | null;
+  let matchedValue: string | undefined;
+  while ((match = pattern.exec(frontmatter)) !== null) {
+    // Match only column-zero keys, and use the last duplicate just like the
+    // effective value in tolerant last-write-wins YAML loaders.
+    matchedValue = match[1] ?? "";
+  }
+  if (matchedValue === undefined) {
     return undefined;
   }
 
-  const raw = (match[1] ?? "").trim();
+  const raw = stripRawYamlComment(matchedValue).trim();
   // A block-scalar header carries no value of its own, and the folded lines
   // that follow are out of reach of a single-line scan.
   if (BLOCK_SCALAR_HEADER_PATTERN.test(raw)) {
@@ -65,6 +103,14 @@ function readRawFrontmatterField(frontmatter: string, field: string): string | u
   if (raw.length >= 2) {
     const first = raw.charAt(0);
     if ((first === '"' || first === "'") && raw.endsWith(first)) {
+      try {
+        const decoded = parseYamlDocument(raw);
+        if (typeof decoded === "string") {
+          return decoded.trim();
+        }
+      } catch {
+        // Keep the tolerant legacy fallback for malformed quoted scalars.
+      }
       return raw.slice(1, -1).trim();
     }
   }
@@ -173,18 +219,21 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
       }
 
       const frontmatter = parseSkillFrontmatter(contents);
-      if (frontmatter.kind === "parsed" && frontmatter.userInvocable === false) {
-        continue;
-      }
-
       const name = (frontmatter.kind === "parsed" ? frontmatter.name : undefined) ?? entry.trim();
       if (!name) {
+        continue;
+      }
+      const key = name.toLowerCase();
+      if (frontmatter.kind === "parsed" && frontmatter.userInvocable === false) {
+        // A project-scoped model-only skill still shadows a same-name user
+        // skill; deleting the earlier entry preserves most-specific-wins.
+        skillsByName.delete(key);
         continue;
       }
 
       const description = frontmatter.kind === "parsed" ? frontmatter.description : undefined;
       const modelInvocable = frontmatter.kind === "parsed" ? frontmatter.modelInvocable : undefined;
-      skillsByName.set(name, {
+      skillsByName.set(key, {
         name,
         path: skillPath,
         enabled: true,

@@ -678,20 +678,29 @@ export function parseClaudeSkills(
  * contributes plugin- and bundle-provided skills that live outside the two
  * directories the scan walks, so neither source is a superset of the other.
  *
+ * The initialization command list is the authority on user invocation. It
+ * removes model-only skills (`user-invocable: false`) and effective `off`
+ * overrides even when `skills/reload` reports them to the model.
+ *
  * Anything the scan found but the SDK did not is, by construction, invisible
  * to the model — that outranks whatever the frontmatter claimed.
  */
 export function mergeClaudeSkills(
   nativeSkills: ReadonlyArray<ServerProviderSkill>,
   discoveredSkills: ReadonlyArray<ServerProviderSkill>,
+  userInvocableSkillNames?: ReadonlySet<string>,
 ): ReadonlyArray<ServerProviderSkill> {
   const skillsByName = new Map<string, ServerProviderSkill>();
+  const isUserInvocable = (name: string) =>
+    userInvocableSkillNames === undefined || userInvocableSkillNames.has(name.toLowerCase());
 
   for (const skill of discoveredSkills) {
+    if (!isUserInvocable(skill.name)) continue;
     skillsByName.set(skill.name.toLowerCase(), { ...skill, modelInvocable: false });
   }
 
   for (const skill of nativeSkills) {
+    if (!isUserInvocable(skill.name)) continue;
     const key = skill.name.toLowerCase();
     const discovered = skillsByName.get(key);
     skillsByName.set(key, {

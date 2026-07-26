@@ -32,7 +32,8 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - **Mobile agent steering** — steer an active agent turn directly from the mobile app.
 - **Project-aware Codex skills** — Codex skill discovery respects the active project.
-- **Claude skill picker** — the `$` composer skill picker discovers workspace skills for Claude.
+- **Claude skill picker** — the `$` composer skill picker discovers workspace and user-invocable
+  manual-only skills for Claude.
 - **Hermes ACP provider** — use a machine-local Hermes Agent as a first-class provider with native streaming, tool calls, resumable sessions, model and mode selection, slash commands, skills, and steering.
 
 ### CLI & automation
