@@ -72,7 +72,8 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("hermes");
-const HERMES_RESUME_VERSION = 1 as const;
+const HERMES_LEGACY_RESUME_VERSION = 1 as const;
+const HERMES_RESUME_VERSION = 2 as const;
 const HERMES_DEFAULT_MODEL_SELECTION = "default";
 
 /**
@@ -88,6 +89,12 @@ function hermesSelectionModelId(
   return (
     requestedModelId?.trim() || currentSelectionModelId?.trim() || HERMES_DEFAULT_MODEL_SELECTION
   );
+}
+
+function hermesRestorableDefaultModelId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") return undefined;
+  const trimmed = modelId.trim();
+  return trimmed && trimmed !== HERMES_DEFAULT_MODEL_SELECTION ? trimmed : undefined;
 }
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
@@ -192,21 +199,31 @@ const resolveSessionCallbackTurnId = (
   return ctx ? resolveCallbackTurnId(ctx) : undefined;
 };
 
-function parseHermesResume(
-  raw: unknown,
-): { sessionId: string; defaultModelId?: string } | undefined {
+function parseHermesResume(raw: unknown):
+  | {
+      sessionId: string;
+      defaultModelId?: string;
+      inferDefaultModelIdFromSetup: boolean;
+    }
+  | undefined {
   if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== HERMES_RESUME_VERSION) return undefined;
+  if (
+    raw.schemaVersion !== HERMES_LEGACY_RESUME_VERSION &&
+    raw.schemaVersion !== HERMES_RESUME_VERSION
+  ) {
+    return undefined;
+  }
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  const defaultModelId =
-    typeof raw.defaultModelId === "string" &&
-    raw.defaultModelId.trim() &&
-    raw.defaultModelId.trim() !== HERMES_DEFAULT_MODEL_SELECTION
-      ? raw.defaultModelId.trim()
-      : undefined;
+  const defaultModelId = hermesRestorableDefaultModelId(raw.defaultModelId);
   return {
     sessionId: raw.sessionId.trim(),
     ...(defaultModelId ? { defaultModelId } : {}),
+    // Version 1 predates explicit known/unknown default identity. For backward
+    // compatibility, its setup model is the only recoverable migration signal.
+    // Version 2 writes `null` when Hermes did not expose a restorable default,
+    // so that state must never be inferred later.
+    inferDefaultModelIdFromSetup:
+      raw.schemaVersion === HERMES_LEGACY_RESUME_VERSION && defaultModelId === undefined,
   };
 }
 
@@ -804,12 +821,23 @@ export function makeHermesAdapter(
           // still the sentinel.
           const defaultModelId =
             hermesResume?.defaultModelId ??
-            (resumeSessionId !== undefined &&
-            selectedStartModelId !== HERMES_DEFAULT_MODEL_SELECTION
-              ? undefined
-              : sessionSetupModelId === HERMES_DEFAULT_MODEL_SELECTION
-                ? undefined
-                : sessionSetupModelId);
+            (resumeSessionId === undefined ||
+            (hermesResume?.inferDefaultModelIdFromSetup === true &&
+              selectedStartModelId === HERMES_DEFAULT_MODEL_SELECTION)
+              ? hermesRestorableDefaultModelId(sessionSetupModelId)
+              : undefined);
+          if (
+            resumeSessionId !== undefined &&
+            selectedStartModelId === HERMES_DEFAULT_MODEL_SELECTION &&
+            defaultModelId === undefined
+          ) {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/load",
+              detail:
+                "Hermes did not report a restorable default model for this saved session. Select a concrete model or start a new thread.",
+            });
+          }
           const acpStartModelId =
             selectedStartModelId === HERMES_DEFAULT_MODEL_SELECTION
               ? defaultModelId
@@ -834,7 +862,7 @@ export function makeHermesAdapter(
             resumeCursor: {
               schemaVersion: HERMES_RESUME_VERSION,
               sessionId: started.sessionId,
-              ...(defaultModelId ? { defaultModelId } : {}),
+              defaultModelId: defaultModelId ?? null,
             },
             createdAt: now,
             updatedAt: now,
@@ -1014,43 +1042,6 @@ export function makeHermesAdapter(
                       ? input.modelSelection
                       : undefined;
                   const requestedTurnModelId = turnModelSelection?.model?.trim() || undefined;
-                  if (
-                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION &&
-                    ctx.defaultModelId === undefined &&
-                    ctx.currentModelId !== undefined &&
-                    ctx.currentModelId !== HERMES_DEFAULT_MODEL_SELECTION
-                  ) {
-                    return yield* new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "session/set_model",
-                      detail:
-                        "Hermes did not report the configured default model for this session, so T3 Code cannot safely restore it. Start a new thread to use the Hermes default.",
-                    });
-                  }
-                  // Selecting the sentinel mid-thread must actually put Hermes
-                  // back on its own configured model, not silently keep the
-                  // concrete model a previous turn switched to.
-                  const acpTurnModelId =
-                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION
-                      ? ctx.defaultModelId
-                      : requestedTurnModelId;
-                  const currentModelId = yield* restore(
-                    applyHermesAcpModelSelection({
-                      runtime: ctx.acp,
-                      currentModelId: ctx.currentModelId,
-                      requestedModelId: acpTurnModelId,
-                      mapError: (cause) =>
-                        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
-                    }),
-                  );
-                  // Keep the resolved Hermes model only in ACP state. Session and
-                  // runtime-event sinks feed T3's selection projections, so they
-                  // must echo the user's sentinel or concrete selection.
-                  const selectedTurnModelId = hermesSelectionModelId(
-                    requestedTurnModelId,
-                    ctx.session.model,
-                  );
-
                   const text = input.input ? rewriteHermesPrompt(input.input) : undefined;
                   const imagePromptParts = yield* restore(
                     Effect.forEach(input.attachments ?? [], (attachment) =>
@@ -1098,6 +1089,54 @@ export function makeHermesAdapter(
                     });
                   }
 
+                  if (
+                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION &&
+                    ctx.defaultModelId === undefined &&
+                    ctx.currentModelId !== undefined &&
+                    ctx.currentModelId !== HERMES_DEFAULT_MODEL_SELECTION
+                  ) {
+                    return yield* new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/set_model",
+                      detail:
+                        "Hermes did not report the configured default model for this session, so T3 Code cannot safely restore it. Start a new thread to use the Hermes default.",
+                    });
+                  }
+                  // Selecting the sentinel mid-thread must actually put Hermes
+                  // back on its own configured model, not silently keep the
+                  // concrete model a previous turn switched to.
+                  const acpTurnModelId =
+                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION
+                      ? ctx.defaultModelId
+                      : requestedTurnModelId;
+                  // Selection order is serialized by the thread semaphore. If
+                  // cancellation races the RPC response, the remote model is
+                  // unknowable, so discard the ACP session rather than reuse a
+                  // possibly divergent local projection. Once Hermes answers,
+                  // the surrounding mask commits local state before observing a
+                  // pending interruption.
+                  yield* restore(Effect.void);
+                  const selectedTurnModelId = hermesSelectionModelId(
+                    requestedTurnModelId,
+                    ctx.session.model,
+                  );
+                  const currentModelId = yield* restore(
+                    applyHermesAcpModelSelection({
+                      runtime: ctx.acp,
+                      currentModelId: ctx.currentModelId,
+                      requestedModelId: acpTurnModelId,
+                      mapError: (cause) =>
+                        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
+                    }),
+                  ).pipe(Effect.onInterrupt(() => stopSessionInternal(ctx)));
+                  ctx.currentModelId = currentModelId;
+                  ctx.session = {
+                    ...ctx.session,
+                    model: selectedTurnModelId,
+                    updatedAt: yield* nowIso,
+                  };
+                  yield* restore(Effect.void);
+
                   const promptHandle = yield* ctx.acp
                     .promptStart({ prompt: promptParts })
                     .pipe(
@@ -1116,13 +1155,11 @@ export function makeHermesAdapter(
                   ctx.nextPromptSequence += 1;
                   ctx.promptsInFlight += 1;
                   ctx.activeTurnId = turnId;
-                  ctx.currentModelId = currentModelId;
                   ctx.session = {
                     ...ctx.session,
                     status: "running",
                     activeTurnId: turnId,
                     updatedAt: yield* nowIso,
-                    model: selectedTurnModelId,
                   };
 
                   if (steeringTurnId === undefined) {

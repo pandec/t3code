@@ -133,7 +133,7 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       assert.equal(session.provider, "hermes");
       assert.equal(session.model, "anthropic:claude-sonnet-5");
       assert.deepEqual(session.resumeCursor, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         sessionId: "mock-session-1",
         defaultModelId: "openai-codex:gpt-5.6-sol",
       });
@@ -392,17 +392,11 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
     }),
   );
 
-  it.effect("rejects restoring the sentinel after Hermes omits its configured model", () =>
+  it.effect("upgrades a legacy default cursor using the reported setup model", () =>
     Effect.gen(function* () {
-      const threadId = ThreadId.make("hermes-unknown-default-model");
-      const adapter = yield* makeTestAdapter(
-        yield* Effect.promise(() => makeMockHermesWrapper({ T3_ACP_OMIT_SESSION_MODELS: "1" })),
-      );
-      const completed = yield* Deferred.make<void>();
-      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
-      ).pipe(Effect.forkChild);
-      yield* adapter.startSession({
+      const adapter = yield* makeTestAdapter(yield* Effect.promise(() => makeMockHermesWrapper()));
+      const threadId = ThreadId.make("hermes-legacy-default-resume");
+      const session = yield* adapter.startSession({
         threadId,
         provider: ProviderDriverKind.make("hermes"),
         cwd: process.cwd(),
@@ -411,6 +405,99 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
           instanceId: ProviderInstanceId.make("hermes"),
           model: "default",
         },
+        resumeCursor: { schemaVersion: 1, sessionId: "legacy-session" },
+      });
+      assert.deepEqual(session.resumeCursor, {
+        schemaVersion: 2,
+        sessionId: "legacy-session",
+        defaultModelId: "openai-codex:gpt-5.6-sol",
+      });
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect(
+    "rejects default resume when neither legacy nor v2 cursors can recover its identity",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          {
+            threadId: ThreadId.make("hermes-legacy-unknown-default"),
+            resumeCursor: { schemaVersion: 1, sessionId: "legacy-unknown-session" },
+          },
+          {
+            threadId: ThreadId.make("hermes-v2-unknown-default"),
+            resumeCursor: {
+              schemaVersion: 2,
+              sessionId: "v2-unknown-session",
+              defaultModelId: null,
+            },
+          },
+        ] as const;
+        yield* Effect.forEach(
+          cases,
+          ({ threadId, resumeCursor }) =>
+            Effect.gen(function* () {
+              const adapter = yield* makeTestAdapter(
+                yield* Effect.promise(() =>
+                  makeMockHermesWrapper({ T3_ACP_OMIT_SESSION_MODELS: "1" }),
+                ),
+              );
+              const error = yield* Effect.flip(
+                adapter.startSession({
+                  threadId,
+                  provider: ProviderDriverKind.make("hermes"),
+                  cwd: process.cwd(),
+                  runtimeMode: "full-access",
+                  modelSelection: {
+                    instanceId: ProviderInstanceId.make("hermes"),
+                    model: "default",
+                  },
+                  resumeCursor,
+                }),
+              );
+              assert.equal(error._tag, "ProviderAdapterRequestError");
+              assert.include(error.message, "did not report a restorable default model");
+            }),
+          { discard: true },
+        );
+      }),
+  );
+
+  it.effect("rejects a concurrent sentinel steer after Hermes omits its configured model", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-unknown-default-model-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
+      const threadId = ThreadId.make("hermes-unknown-default-model");
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            T3_ACP_OMIT_SESSION_MODELS: "1",
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+            T3_ACP_FIRST_PROMPT_DELAY_MS: "300",
+          }),
+        ),
+      );
+      const completed = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "default",
+        },
+      });
+      assert.deepEqual(session.resumeCursor, {
+        schemaVersion: 2,
+        sessionId: "mock-session-1",
+        defaultModelId: null,
       });
       yield* adapter.sendTurn({
         threadId,
@@ -421,7 +508,7 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
           model: "anthropic:claude-sonnet-5",
         },
       });
-      yield* Deferred.await(completed);
+      yield* waitForFileContent(requestLogPath, "switch to a concrete model");
 
       const error = yield* Effect.flip(
         adapter.sendTurn({
@@ -436,11 +523,16 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       );
       assert.equal(error._tag, "ProviderAdapterRequestError");
       assert.include(error.message, "cannot safely restore it");
+      const requestsAfterRejectedSteer = yield* Effect.promise(() =>
+        NodeFSP.readFile(requestLogPath, "utf8"),
+      );
+      assert.equal((requestsAfterRejectedSteer.match(/session\/prompt/gu) ?? []).length, 1);
+      yield* Deferred.await(completed);
       const [updatedSession] = yield* adapter.listSessions();
       assert.equal(updatedSession?.model, "anthropic:claude-sonnet-5");
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
-    }),
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("reports prompt failures through terminal events after sendTurn returns", () =>
@@ -747,6 +839,58 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
     }),
   );
 
+  it.effect("validates attachments before mutating the Hermes model", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-model-attachment-failure-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
+      const adapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+        ),
+      );
+      const threadId = ThreadId.make("hermes-model-attachment-failure");
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "default",
+        },
+      });
+
+      const error = yield* Effect.flip(
+        adapter.sendTurn({
+          threadId,
+          input: "must not switch",
+          attachments: [
+            {
+              type: "image",
+              id: "missing-image",
+              name: "missing.png",
+              mimeType: "image/png",
+              sizeBytes: 1,
+            },
+          ],
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("hermes"),
+            model: "anthropic:claude-sonnet-5",
+          },
+        }),
+      );
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      const requests = yield* Effect.promise(() => NodeFSP.readFile(requestLogPath, "utf8"));
+      assert.notInclude(requests, "session/set_model");
+      assert.notInclude(requests, "session/prompt");
+      const [session] = yield* adapter.listSessions();
+      assert.equal(session?.model, "default");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("does not launch a prompt when sendTurn is interrupted during model preparation", () =>
     Effect.gen(function* () {
       const directory = yield* Effect.promise(() =>
@@ -762,7 +906,11 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         ),
       );
       const threadId = ThreadId.make("hermes-send-interrupt");
-      yield* adapter.startSession({
+      const completed = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(completed, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+      const initialSession = yield* adapter.startSession({
         threadId,
         provider: ProviderDriverKind.make("hermes"),
         cwd: process.cwd(),
@@ -781,9 +929,45 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         .pipe(Effect.forkChild({ startImmediately: true }));
       yield* waitForFileContent(requestLogPath, "session/set_model");
       yield* Fiber.interrupt(sendFiber);
-      yield* Effect.sleep("300 millis");
+      const requestsAfterInterrupt = yield* Effect.promise(() =>
+        NodeFSP.readFile(requestLogPath, "utf8"),
+      );
+      assert.notInclude(requestsAfterInterrupt, "session/prompt");
+      assert.isEmpty(yield* adapter.listSessions());
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        resumeCursor: initialSession.resumeCursor,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "anthropic:claude-sonnet-5",
+        },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "restore default after interrupted recovery",
+        attachments: [],
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "default",
+        },
+      });
+      yield* Deferred.await(completed);
       const requests = yield* Effect.promise(() => NodeFSP.readFile(requestLogPath, "utf8"));
-      assert.notInclude(requests, "session/prompt");
+      const setModelIds = requests
+        .split(/\r?\n/u)
+        .filter((line) => line.includes('"session/set_model"'))
+        .flatMap((line) => line.match(/"modelId":"([^"]+)"/u)?.[1] ?? []);
+      assert.deepEqual(setModelIds.slice(-2), [
+        "anthropic:claude-sonnet-5",
+        "openai-codex:gpt-5.6-sol",
+      ]);
+      const [restoredSession] = yield* adapter.listSessions();
+      assert.equal(restoredSession?.model, "default");
+      yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),
   );
