@@ -5257,6 +5257,10 @@ function ChatViewContent(props: ChatViewProps) {
           prompt: nextPrompt,
           detectTrigger: false,
         });
+        // Safe only because the removal above awaited: focusing the editor
+        // reports its own snapshot back through `onPromptChange`, so the draft
+        // write has to have been committed first or a pre-load snapshot would
+        // be written back over the message. Keep an await between the two.
         focusComposer();
       } catch (error) {
         if (removed) {

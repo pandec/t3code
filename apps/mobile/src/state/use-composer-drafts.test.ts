@@ -3,6 +3,7 @@ import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
 import { appAtomRegistry } from "./atom-registry";
 import {
+  appendedComposerDraftText,
   clearComposerDraftContentIfUnchangedState,
   clearComposerDraftContentState,
   composerDraftsAtom,
@@ -259,5 +260,30 @@ describe("mobile composer drafts", () => {
       [`${retainedEnvironmentId}:thread-local`]: DRAFT,
       [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
     });
+  });
+});
+
+describe("appendedComposerDraftText", () => {
+  it("separates an addition from existing text with a blank line", () => {
+    expect(appendedComposerDraftText("hello", "queued")).toBe("hello\n\nqueued");
+  });
+
+  it("keeps an existing trailing newline as the separator", () => {
+    expect(appendedComposerDraftText("hello\n", "queued")).toBe("hello\nqueued");
+  });
+
+  it("adds no separator to blank existing text", () => {
+    expect(appendedComposerDraftText("", "queued")).toBe("queued");
+    expect(appendedComposerDraftText("   ", "queued")).toBe("   queued");
+  });
+
+  it("leaves existing text untouched when there is nothing to add", () => {
+    expect(appendedComposerDraftText("hello", "")).toBe("hello");
+  });
+
+  it("grows the text even when the addition repeats what is already there", () => {
+    // The queued-message edit verifies its append by comparing against this
+    // result, so re-editing identical text must not look like a no-op.
+    expect(appendedComposerDraftText("queued", "queued")).toBe("queued\n\nqueued");
   });
 });

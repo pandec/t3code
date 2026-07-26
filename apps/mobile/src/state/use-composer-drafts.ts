@@ -288,6 +288,19 @@ export function setComposerDraftText(
   });
 }
 
+/**
+ * Separator rule for appending a block of text to an existing draft. Exported so
+ * a caller can predict the exact result and verify its append actually landed
+ * before it destroys the only other copy of the content.
+ */
+export function appendedComposerDraftText(existing: string, addition: string): string {
+  if (addition.length === 0) {
+    return existing;
+  }
+  const separator = existing.trim().length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
+  return `${existing}${separator}${addition}`;
+}
+
 export function appendComposerDraftText(draftKey: string, value: string): void {
   updateComposerDrafts((current) => {
     const existing = normalizeDraft(current[draftKey]);

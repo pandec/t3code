@@ -6,6 +6,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import {
+  appendedComposerDraftText,
   getComposerDraftSnapshot,
   replaceComposerDraftAttachments,
   setComposerDraftText,
@@ -73,12 +74,13 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
   // Set before the first await: once the queued row is gone the draft holds the
   // only copy, so a later failure must never revert it away.
   let removed = false;
-  const draftBeforeAppend = getComposerDraftSnapshot(threadKey);
-  const revertAppend = () => {
-    replaceComposerDraftAttachments(threadKey, draftBeforeAppend.attachments);
-    setComposerDraftText(threadKey, draftBeforeAppend.text, draftBeforeAppend.inputOrigin);
-  };
+  let revertAppend: (() => void) | null = null;
   try {
+    const draftBeforeAppend = getComposerDraftSnapshot(threadKey);
+    revertAppend = () => {
+      replaceComposerDraftAttachments(threadKey, draftBeforeAppend.attachments);
+      setComposerDraftText(threadKey, draftBeforeAppend.text, draftBeforeAppend.inputOrigin);
+    };
     // Append to the draft FIRST, then drop the queued row. Removal is durable
     // (the row leaves persisted storage too), so removing first would destroy
     // the message outright whenever the append does not land.
@@ -89,10 +91,14 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
       attachments: message.attachments,
     });
 
+    // Confirm the content really is in the draft before the queued copy is
+    // destroyed. Compare against the exact text the append should have produced:
+    // a substring check would also pass when nothing was appended at all, which
+    // is precisely the case that loses a message re-edited without changes.
     const draftAfterAppend = getComposerDraftSnapshot(threadKey);
     const appendedAttachmentIds = new Set(draftAfterAppend.attachments.map(({ id }) => id));
     const contentAppended =
-      (message.text.length === 0 || draftAfterAppend.text.includes(message.text)) &&
+      draftAfterAppend.text === appendedComposerDraftText(draftBeforeAppend.text, message.text) &&
       message.attachments.every(({ id }) => appendedAttachmentIds.has(id));
     if (!contentAppended) {
       revertAppend();
@@ -124,7 +130,7 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
       // message — reverting here would destroy it.
       console.warn("[thread-outbox] queued message appended but its setup failed", error);
     } else {
-      revertAppend();
+      revertAppend?.();
       Alert.alert(
         "Could not open this message for editing",
         "It is still queued — try again, or delete it if you no longer need it.",

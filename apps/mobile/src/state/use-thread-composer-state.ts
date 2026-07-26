@@ -36,6 +36,7 @@ import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
+  appendedComposerDraftText,
   clearComposerDraftContentIfUnchanged,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
@@ -63,8 +64,7 @@ export function appendContentToThreadDraft(input: {
   const threadKey = scopedThreadKey(input.environmentId, input.threadId);
   if (input.text.length > 0) {
     const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
-    const separator = existing.trim().length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
-    setComposerDraftText(threadKey, `${existing}${separator}${input.text}`);
+    setComposerDraftText(threadKey, appendedComposerDraftText(existing, input.text));
   }
   if (input.attachments && input.attachments.length > 0) {
     appendComposerDraftAttachments(threadKey, input.attachments);
