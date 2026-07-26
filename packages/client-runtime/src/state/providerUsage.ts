@@ -176,6 +176,128 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
 }
 
 // ---------------------------------------------------------------------------
+// Claude structured /usage API
+//
+// The passive event stream omits utilization at normal usage levels, so the
+// adapter also pulls the structured `/usage` payload. Its `limits` array is the
+// authoritative source and the only place the model-scoped weekly window (e.g.
+// Fable) appears with a percentage:
+//   { kind: "weekly_scoped", group: "weekly", percent: 44, severity: "normal",
+//     resets_at: "2026-07-31T02:59:59Z", is_active: true,
+//     scope: { model: { display_name: "Fable" } } }
+// `is_active` marks the window the account is actually constrained by, which
+// beats inferring it from the highest percentage.
+//
+// The sibling flat map (five_hour/seven_day/…) is the fallback for payloads
+// without `limits`; it also carries a long tail of codenamed placeholder
+// windows that are always null, so null entries must be skipped rather than
+// rendered.
+// ---------------------------------------------------------------------------
+
+function claudeUsageApiWindowLabels(
+  kind: string,
+  scopeLabel: string | null,
+): { label: string; shortLabel: string } {
+  if (scopeLabel !== null) {
+    return { label: `Weekly (${scopeLabel})`, shortLabel: scopeLabel };
+  }
+  switch (kind) {
+    case "session":
+      return { label: "Session (5h)", shortLabel: "5h" };
+    case "weekly_all":
+      return { label: "Weekly (all models)", shortLabel: "Wk" };
+    default:
+      return claudeWindowLabels(kind);
+  }
+}
+
+/** ISO 8601 (usage API) → unix seconds, matching the event stream's units. */
+function isoToUnixSeconds(value: unknown): number | null {
+  const text = asString(value);
+  if (text === null) return null;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? Math.round(parsed / 1_000) : null;
+}
+
+function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
+  providerLabel: "Claude";
+  windows: ProviderUsageWindow[];
+  clearedWindowIds: string[];
+  activeWindowId: string | null;
+} | null {
+  const rateLimits = asRecord(payload.rateLimits);
+  if (!rateLimits) return null;
+
+  const windows: ProviderUsageWindow[] = [];
+  let activeWindowId: string | null = null;
+
+  const limits = Array.isArray(rateLimits.limits) ? rateLimits.limits : null;
+  if (limits) {
+    for (const [index, entry] of limits.entries()) {
+      const limit = asRecord(entry);
+      if (!limit) continue;
+      const percent = asFiniteNumber(limit.percent);
+      if (percent === null) continue;
+      const kind = asString(limit.kind) ?? "unknown";
+      const scopeLabel = asString(asRecord(asRecord(limit.scope)?.model)?.display_name);
+      const { label, shortLabel } = claudeUsageApiWindowLabels(kind, scopeLabel);
+      // Several entries can share a kind (one per scoped model), so the scope
+      // label — or failing that, the position — keeps ids distinct and stable.
+      const id =
+        scopeLabel !== null
+          ? `${kind}:${scopeLabel}`
+          : kind === "unknown"
+            ? `${kind}:${index}`
+            : kind;
+      const usedPercent = clampPercent(percent);
+      if (limit.is_active === true) {
+        activeWindowId = id;
+      }
+      windows.push({
+        id,
+        label,
+        shortLabel,
+        usedPercent,
+        resetsAt: isoToUnixSeconds(limit.resets_at),
+        status: maxStatus(
+          statusForPercent(usedPercent),
+          asString(limit.severity) === "critical" ? "critical" : "ok",
+        ),
+      });
+    }
+  } else {
+    // Fallback: the flat window map, skipping the always-null placeholders.
+    for (const [key, value] of Object.entries(rateLimits)) {
+      const window = asRecord(value);
+      if (!window) continue;
+      const utilization = asFiniteNumber(window.utilization);
+      if (utilization === null) continue;
+      const { label, shortLabel } = claudeWindowLabels(key);
+      const usedPercent = clampPercent(utilization);
+      windows.push({
+        id: key,
+        label,
+        shortLabel,
+        usedPercent,
+        resetsAt: isoToUnixSeconds(window.resets_at),
+        status: statusForPercent(usedPercent),
+      });
+    }
+  }
+
+  if (windows.length === 0) return null;
+
+  return {
+    providerLabel: "Claude",
+    windows,
+    // The usage API reports every window at once, so it is authoritative:
+    // windows it omits no longer exist and must not linger from older events.
+    clearedWindowIds: [],
+    activeWindowId,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Codex
 //
 // The app-server notification is `{ rateLimits: { limitId?, limitName?,
@@ -290,6 +412,10 @@ type NormalizedRateLimitPayload =
       readonly providerLabel: "Claude";
       readonly windows: ProviderUsageWindow[];
       readonly clearedWindowIds: ReadonlyArray<string>;
+      /** Usage-API payloads report every window at once and replace the merge state. */
+      readonly authoritative?: boolean;
+      /** Window the provider flags as currently binding, when it says so. */
+      readonly activeWindowId?: string | null;
     }
   | {
       readonly providerLabel: "Codex";
@@ -310,6 +436,12 @@ function normalizeRateLimitPayload(
   // ingestion layer); tolerate the unwrapped shape too.
   const event = asRecord(record.rateLimits) ?? record;
 
+  // Checked before the Codex branch: the usage-API payload also nests a
+  // `rateLimits` key and would otherwise be misread as a Codex snapshot.
+  if (asString(event.source) === "claude.usage-api") {
+    const normalized = normalizeClaudeUsageApiPayload(event);
+    return normalized ? { ...normalized, authoritative: true } : null;
+  }
   if (event.rate_limit_info || event.type === "rate_limit_event") {
     const normalized = normalizeClaudeRateLimitEvent(event);
     return normalized ? { ...normalized, providerLabel: "Claude" } : null;
@@ -386,12 +518,14 @@ export function deriveLatestProviderUsageSnapshot(
   let providerLabel: string | null = null;
   let providerInstanceId: string | null = requestedInstanceId;
   let inheritedCodexIdentity: string | null = null;
+  let activeWindowId: string | null = null;
 
   const resetMergeState = (nextProviderLabel: string, nextProviderInstanceId: string | null) => {
     windowsById.clear();
     providerLabel = nextProviderLabel;
     providerInstanceId = requestedInstanceId ?? nextProviderInstanceId;
     inheritedCodexIdentity = null;
+    activeWindowId = null;
   };
 
   // Oldest first: Map#set gives newest-wins semantics per semantic window id
@@ -429,9 +563,19 @@ export function deriveLatestProviderUsageSnapshot(
       if (result.suppressed) {
         continue;
       }
+    } else if (result.authoritative === true) {
+      // A full quota report supersedes everything merged so far, including
+      // windows the account no longer has.
+      windowsById.clear();
+      activeWindowId = result.activeWindowId ?? null;
     } else {
       for (const windowId of result.clearedWindowIds) {
         windowsById.delete(windowId);
+      }
+      // A single-window event cannot confirm which window is binding overall;
+      // keep the last authoritative answer only while that window survives.
+      if (activeWindowId !== null && result.windows.some((w) => w.id === activeWindowId)) {
+        activeWindowId = null;
       }
     }
 
@@ -517,14 +661,21 @@ export function deriveLatestProviderUsageSnapshot(
     (acc, window) => maxStatus(acc, window.status),
     "ok",
   );
+  // The provider's own "active" flag beats inferring the binding window from
+  // percentages — a 44% Fable weekly can bind while a 24% all-models weekly
+  // does not. Only trust it while that window is itself noteworthy.
+  const flaggedActiveWindow =
+    activeWindowId !== null ? (windows.find((w) => w.id === activeWindowId) ?? null) : null;
   const constrainedWindow =
     status === "ok"
       ? null
-      : windows.reduce((worst, window) => {
-          const severityDelta = statusRank(window.status) - statusRank(worst.status);
-          if (severityDelta !== 0) return severityDelta > 0 ? window : worst;
-          return (window.usedPercent ?? 0) > (worst.usedPercent ?? 0) ? window : worst;
-        });
+      : flaggedActiveWindow !== null && flaggedActiveWindow.status !== "ok"
+        ? flaggedActiveWindow
+        : windows.reduce((worst, window) => {
+            const severityDelta = statusRank(window.status) - statusRank(worst.status);
+            if (severityDelta !== 0) return severityDelta > 0 ? window : worst;
+            return (window.usedPercent ?? 0) > (worst.usedPercent ?? 0) ? window : worst;
+          });
 
   return {
     providerLabel,

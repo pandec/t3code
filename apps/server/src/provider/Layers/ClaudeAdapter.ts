@@ -16,6 +16,7 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlGetUsageResponse,
   type SDKControlInitializeResponse,
   type SDKControlReloadSkillsResponse,
   type SDKResultMessage,
@@ -226,6 +227,20 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  /**
+   * Structured `/usage` data — the only source of subscription quota
+   * *percentages* for Claude. The passive `rate_limit_event` stream carries a
+   * window type and reset time but omits `utilization` at normal usage levels
+   * (verified against CLI 2.1.220), so the usage meter has nothing to render
+   * without this call.
+   *
+   * The SDK marks this API experimental and says the method will be renamed
+   * when it stabilizes, hence the optional declaration: every call site
+   * feature-detects and degrades to the passive event instead of breaking.
+   */
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?:
+    | (() => Promise<SDKControlGetUsageResponse>)
+    | undefined;
   readonly close: () => void;
 }
 
@@ -1823,6 +1838,59 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return normalizeClaudeContextUsageApiSnapshot(usage, totalProcessedTokens);
   });
 
+  /**
+   * Pulls subscription quota from the structured `/usage` API and emits it as
+   * a rate-limit update. Mirrors the cadence of providers that push quota
+   * (session start + turn end) rather than polling on a timer.
+   *
+   * Every failure mode is silent by design: an SDK rename, an API-key session
+   * (`rate_limits_available: false`), or a transport error must not disturb
+   * the turn — the meter simply shows nothing, exactly as before this call
+   * existed.
+   */
+  const emitSubscriptionUsage = Effect.fn("emitSubscriptionUsage")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (!readUsage) {
+      return;
+    }
+
+    const usage = yield* Effect.promise(async () => {
+      try {
+        return await readUsage();
+      } catch {
+        return undefined;
+      }
+    });
+    if (!usage?.rate_limits_available || !usage.rate_limits) {
+      return;
+    }
+
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      providerInstanceId: boundInstanceId,
+      payload: {
+        rateLimits: {
+          source: "claude.usage-api",
+          subscriptionType: usage.subscription_type,
+          rateLimits: usage.rate_limits,
+        },
+      },
+      providerRefs: nativeProviderRefs(context),
+      raw: {
+        source: "claude.sdk.message",
+        method: "usage",
+        payload: usage.rate_limits,
+      },
+    });
+  });
+
   const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (
     context: ClaudeSessionContext,
     input: {
@@ -2106,6 +2174,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
+    // After the turn, so the quota reflects the work just done.
+    yield* emitSubscriptionUsage(context);
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -3756,6 +3826,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
         providerRefs: {},
       });
+
+      // Seed the usage meter before the first turn: without this the meter
+      // stays blank for a fresh session until a turn completes.
+      yield* emitSubscriptionUsage(context);
 
       let streamFiber: Fiber.Fiber<void, never>;
       streamFiber = runFork(

@@ -694,6 +694,191 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
     expect(snapshot).toBeNull();
   });
+
+  describe("Claude structured /usage payloads", () => {
+    // Captured live from the SDK usage API (subscription_type "max").
+    function usageActivity(
+      id: string,
+      rateLimits: Record<string, unknown>,
+      createdAt?: string,
+    ): OrchestrationThreadActivity {
+      return makeActivity(
+        id,
+        { rateLimits: { source: "claude.usage-api", subscriptionType: "max", rateLimits } },
+        createdAt,
+      );
+    }
+
+    const LIVE_LIMITS = {
+      limits: [
+        {
+          kind: "session",
+          group: "session",
+          percent: 3,
+          severity: "normal",
+          resets_at: "2026-07-26T07:00:00.990433+00:00",
+          scope: null,
+          is_active: false,
+        },
+        {
+          kind: "weekly_all",
+          group: "weekly",
+          percent: 24,
+          severity: "normal",
+          resets_at: "2026-07-31T02:59:59.990456+00:00",
+          scope: null,
+          is_active: false,
+        },
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 44,
+          severity: "normal",
+          resets_at: "2026-07-31T02:59:59.990712+00:00",
+          scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          is_active: true,
+        },
+      ],
+    };
+
+    it("derives all three windows, labelling the model-scoped weekly one", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", LIVE_LIMITS)]);
+
+      expect(snapshot?.providerLabel).toBe("Claude");
+      expect(snapshot?.windows).toEqual([
+        {
+          id: "session",
+          label: "Session (5h)",
+          shortLabel: "5h",
+          usedPercent: 3,
+          resetsAt: Math.round(Date.parse("2026-07-26T07:00:00.990433+00:00") / 1_000),
+          status: "ok",
+        },
+        {
+          id: "weekly_all",
+          label: "Weekly (all models)",
+          shortLabel: "Wk",
+          usedPercent: 24,
+          resetsAt: Math.round(Date.parse("2026-07-31T02:59:59.990456+00:00") / 1_000),
+          status: "ok",
+        },
+        {
+          id: "weekly_scoped:Fable",
+          label: "Weekly (Fable)",
+          shortLabel: "Fable",
+          usedPercent: 44,
+          resetsAt: Math.round(Date.parse("2026-07-31T02:59:59.990712+00:00") / 1_000),
+          status: "ok",
+        },
+      ]);
+    });
+
+    it("prefers the provider's active window over the highest percentage", () => {
+      const limits = {
+        limits: [
+          { kind: "session", percent: 97, severity: "normal", resets_at: null, is_active: false },
+          {
+            kind: "weekly_scoped",
+            percent: 85,
+            severity: "normal",
+            resets_at: null,
+            scope: { model: { display_name: "Fable" } },
+            is_active: true,
+          },
+        ],
+      };
+      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
+
+      expect(snapshot?.status).toBe("critical");
+      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (Fable)");
+    });
+
+    it("falls back to the worst window when no window is flagged active", () => {
+      const limits = {
+        limits: [
+          { kind: "session", percent: 97, severity: "normal", resets_at: null, is_active: false },
+          {
+            kind: "weekly_all",
+            percent: 85,
+            severity: "normal",
+            resets_at: null,
+            is_active: false,
+          },
+        ],
+      };
+      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
+
+      expect(snapshot?.constrainedWindow?.label).toBe("Session (5h)");
+    });
+
+    it("replaces windows from earlier events — the usage API is authoritative", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([
+        claudeActivity(
+          "a1",
+          {
+            status: "allowed_warning",
+            resetsAt: 1784970000,
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+          },
+          "2026-07-25T00:00:00.000Z",
+        ),
+        usageActivity("a2", LIVE_LIMITS, "2026-07-25T00:01:00.000Z"),
+      ]);
+
+      expect(snapshot?.windows.map((w) => w.id)).toEqual([
+        "session",
+        "weekly_all",
+        "weekly_scoped:Fable",
+      ]);
+      expect(snapshot?.status).toBe("ok");
+    });
+
+    it("reads the flat window map when no limits array is present", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([
+        usageActivity("a1", {
+          five_hour: { utilization: 3, resets_at: "2026-07-26T07:00:00Z" },
+          seven_day: { utilization: 88, resets_at: "2026-07-31T02:59:59Z" },
+          // The always-null codenamed placeholders must not become rows.
+          seven_day_opus: null,
+          tangelo: null,
+          nimbus_quill: null,
+          extra_usage: { is_enabled: false, utilization: null },
+        }),
+      ]);
+
+      expect(snapshot?.windows.map((w) => w.id)).toEqual(["five_hour", "seven_day"]);
+      expect(snapshot?.status).toBe("warning");
+      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (all models)");
+    });
+
+    it("escalates a window the provider marks critical", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([
+        usageActivity("a1", {
+          limits: [{ kind: "session", percent: 20, severity: "critical", resets_at: null }],
+        }),
+      ]);
+
+      expect(snapshot?.status).toBe("critical");
+    });
+
+    it("ignores usage payloads that carry no usable window", () => {
+      expect(deriveLatestProviderUsageSnapshot([usageActivity("a1", { limits: [] })])).toBeNull();
+      expect(
+        deriveLatestProviderUsageSnapshot([
+          usageActivity("a2", { limits: [{ kind: "session", percent: null }] }),
+        ]),
+      ).toBeNull();
+    });
+
+    it("is not mistaken for a Codex snapshot despite the nested rateLimits key", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", LIVE_LIMITS)], {
+        provider: "claudeAgent",
+      });
+
+      expect(snapshot?.providerLabel).toBe("Claude");
+    });
+  });
 });
 
 describe("collectProviderUsageAlerts", () => {
