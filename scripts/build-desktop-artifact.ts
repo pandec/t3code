@@ -47,6 +47,7 @@ const WorkspaceConfig = Schema.Struct({
   overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  minimumReleaseAgeExclude: Schema.optional(Schema.Array(Schema.String)),
 });
 type WorkspaceConfig = typeof WorkspaceConfig.Type;
 
@@ -62,6 +63,7 @@ const StageWorkspaceConfig = Schema.Struct({
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  minimumReleaseAgeExclude: Schema.optional(Schema.Array(Schema.String)),
 });
 type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 
@@ -896,8 +898,10 @@ export function createStageWorkspaceConfig(input: {
   readonly allowBuilds?: Record<string, boolean>;
   readonly patchedDependencies?: Record<string, string>;
   readonly overrides?: Record<string, string>;
+  readonly minimumReleaseAgeExclude?: ReadonlyArray<string>;
 }): StageWorkspaceConfig {
-  const { platform, arch, allowBuilds, patchedDependencies, overrides } = input;
+  const { platform, arch, allowBuilds, patchedDependencies, overrides, minimumReleaseAgeExclude } =
+    input;
   const hostOs = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";
   const hostCpu = arch === "universal" ? ["arm64", "x64"] : [arch];
   // Linux AppImages and Windows WSL backends both execute a Linux/glibc Node
@@ -929,6 +933,9 @@ export function createStageWorkspaceConfig(input: {
       ? { patchedDependencies }
       : {}),
     ...(overrides && Object.keys(overrides).length > 0 ? { overrides } : {}),
+    ...(minimumReleaseAgeExclude && minimumReleaseAgeExclude.length > 0
+      ? { minimumReleaseAgeExclude: [...minimumReleaseAgeExclude] }
+      : {}),
   };
 }
 
@@ -1604,6 +1611,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const workspaceOverrides = workspaceConfig.overrides ?? {};
   const workspacePatchedDependencies = workspaceConfig.patchedDependencies ?? {};
   const workspaceAllowBuilds = workspaceConfig.allowBuilds ?? {};
+  const workspaceMinimumReleaseAgeExclude = workspaceConfig.minimumReleaseAgeExclude ?? [];
 
   const platformConfig = PLATFORM_CONFIG[options.platform];
   if (!platformConfig) {
@@ -1823,6 +1831,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     allowBuilds: workspaceAllowBuilds,
     patchedDependencies: stagePatchedDependencies,
     overrides: resolvedOverrides,
+    minimumReleaseAgeExclude: workspaceMinimumReleaseAgeExclude,
   });
   const stageWorkspaceConfigString = yield* encodeStageWorkspaceConfig(stageWorkspaceConfig);
   yield* fs.writeFileString(

@@ -317,6 +317,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         overrides: {
           effect: "4.0.0-beta.73",
         },
+        minimumReleaseAgeExclude: ["@clerk/electron@0.0.18"],
       }),
       {
         supportedArchitectures: {
@@ -335,6 +336,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         overrides: {
           effect: "4.0.0-beta.73",
         },
+        minimumReleaseAgeExclude: ["@clerk/electron@0.0.18"],
       },
     );
 
@@ -348,6 +350,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         allowBuilds: {},
         patchedDependencies: {},
         overrides: {},
+        minimumReleaseAgeExclude: [],
       }),
       {
         supportedArchitectures: {
