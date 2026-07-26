@@ -68,11 +68,16 @@ export interface SessionImportServiceShape {
     readonly projectId: ProjectId;
     readonly instanceId: ProviderInstanceId;
     readonly nativeSessionId: string;
-    readonly modelSelection?: ModelSelection;
-    readonly worktree?: {
-      readonly branch: string;
-      readonly worktreePath: string;
-    };
+    // Optionals accept `undefined` so a decoded transport payload forwards
+    // verbatim instead of being re-listed field by field at each boundary.
+    readonly title?: string | undefined;
+    readonly modelSelection?: ModelSelection | undefined;
+    readonly worktree?:
+      | {
+          readonly branch: string;
+          readonly worktreePath: string;
+        }
+      | undefined;
   }) => Effect.Effect<SessionImportResult, SessionImportError>;
 }
 
@@ -491,10 +496,20 @@ export const makeSessionImportService = Effect.gen(function* () {
         detail: `Session '${input.nativeSessionId}' contains no importable messages.`,
       });
     }
-    if (history.messages.length > THREAD_IMPORT_MAX_MESSAGES) {
-      return yield* new SessionImportError({
-        reason: "import-failed",
-        detail: `Session '${input.nativeSessionId}' has ${history.messages.length} messages, above the ${THREAD_IMPORT_MAX_MESSAGES} import limit.`,
+    const warnings: Array<SessionImportWarning> = [];
+    // The cap bounds imported *display* history only: the provider keeps the full
+    // transcript, and the resume cursor binds to it, so a long session stays
+    // continuable instead of being rejected outright.
+    const importedMessages =
+      history.messages.length > THREAD_IMPORT_MAX_MESSAGES
+        ? history.messages.slice(history.messages.length - THREAD_IMPORT_MAX_MESSAGES)
+        : history.messages;
+    if (importedMessages.length !== history.messages.length) {
+      const message = `Imported the most recent ${THREAD_IMPORT_MAX_MESSAGES} of ${history.messages.length} messages; the provider session retains the full history.`;
+      warnings.push({ code: "history-truncated", message });
+      yield* Effect.logWarning(message, {
+        nativeSessionId: input.nativeSessionId,
+        messageCount: history.messages.length,
       });
     }
 
@@ -510,7 +525,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         detail: `Provider instance '${input.instanceId}' changed while the session was being read. Retry the import with the current provider configuration.`,
       });
     }
-    const messages: ReadonlyArray<ThreadImportMessage> = history.messages.map((message, index) => ({
+    const messages: ReadonlyArray<ThreadImportMessage> = importedMessages.map((message, index) => ({
       messageId: importMessageId(threadId, index),
       role: message.role,
       text: message.text,
@@ -560,7 +575,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           commandId: CommandId.make(`import:${threadId}`),
           threadId,
           projectId: input.projectId,
-          title: titleForImport(history.name, history.messages),
+          title: input.title?.trim() || titleForImport(history.name, importedMessages),
           modelSelection,
           runtimeMode: DEFAULT_RUNTIME_MODE,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -593,7 +608,6 @@ export const makeSessionImportService = Effect.gen(function* () {
       }
     }).pipe(Effect.uninterruptible);
 
-    const warnings: Array<SessionImportWarning> = [];
     if (validatedWorktree !== undefined) {
       const metaResult = yield* orchestrationEngine
         .dispatch({

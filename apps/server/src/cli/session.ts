@@ -255,18 +255,19 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
     .map((record) => nonEmptyString(record.sessionId))
     .filter((value): value is string => value !== null);
   const nativeSessionId = sessionIds[0] ?? null;
-  const expectedSessionId = NodePath.parse(NodePath.basename(input.fileName)).name;
+  // The records carry the session identity, so a transferred transcript imports
+  // even when its filename was changed in transit; placement always uses the
+  // record-derived id.
   if (
     typedRecords.length !== records.length ||
     nativeSessionId === null ||
     !UUID_PATTERN.test(nativeSessionId) ||
-    nativeSessionId !== expectedSessionId ||
     sessionIds.some((sessionId) => sessionId !== nativeSessionId)
   ) {
     return yield* new SessionCliError({
       operation: "sniffSession",
       detail:
-        "Unknown session format. Claude transcripts require typed JSONL records whose UUID sessionId matches the filename.",
+        "Unknown session format. Claude transcripts require typed JSONL records sharing one UUID sessionId.",
     });
   }
   let sourceCwd: string | null = null;
@@ -390,6 +391,58 @@ export function decideSessionPlacement(
   if (existing === null) return "write";
   return bytesEqual(source, existing) ? "skip-identical" : "error-different";
 }
+
+/**
+ * Retargets the `cwd` recorded in a Codex rollout to the workspace it is being
+ * imported into. Codex validates a thread's recorded cwd against the selected
+ * workspace (`CodexAdapter.readImportableSession`), so a rollout moved between
+ * machines — or into a differently-named worktree — is rejected until its own
+ * metadata agrees with where it now lives. Lines without the old path, and
+ * mentions of it inside message text, are left byte-identical.
+ */
+export const rewriteCodexTranscriptCwd = (input: {
+  readonly content: string;
+  readonly from: string;
+  readonly to: string;
+}): { readonly content: string; readonly rewritten: number } => {
+  if (input.from === input.to) return { content: input.content, rewritten: 0 };
+  let rewritten = 0;
+  const retarget = (value: unknown): boolean => {
+    let changed = false;
+    if (Array.isArray(value)) {
+      for (const item of value) changed = retarget(item) || changed;
+      return changed;
+    }
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      for (const [key, nested] of Object.entries(record)) {
+        if (key === "cwd" && nested === input.from) {
+          record[key] = input.to;
+          rewritten += 1;
+          changed = true;
+          continue;
+        }
+        changed = retarget(nested) || changed;
+      }
+    }
+    return changed;
+  };
+  const content = input.content
+    .split("\n")
+    .map((line) => {
+      if (!line.includes(input.from)) return line;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return line;
+      }
+      // Only rewritten lines are re-serialised; every other line passes through untouched.
+      return retarget(parsed) ? JSON.stringify(parsed) : line;
+    })
+    .join("\n");
+  return { content, rewritten };
+};
 
 export const placeSessionFile = Effect.fn("placeSessionFile")(function* (input: {
   readonly destinationPath: string;
@@ -970,6 +1023,10 @@ const sessionImportCommand = Command.make("import", {
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
+  title: Flag.string("title").pipe(
+    Flag.withDescription("Thread title; defaults to the provider session name."),
+    Flag.optional,
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Place and import a Claude or Codex CLI session transcript."),
@@ -1069,11 +1126,26 @@ const sessionImportCommand = Command.make("import", {
             instanceHome: instance.home,
             effectiveCwd,
           });
-          yield* placeSessionFile({ destinationPath: placedPath, bytes: sourceBytes });
+          // Codex validates a thread's recorded cwd against the workspace it is
+          // imported into, so a transferred rollout is retargeted before placement.
+          const retargeted =
+            session.provider === "codex"
+              ? rewriteCodexTranscriptCwd({
+                  content: new TextDecoder().decode(sourceBytes),
+                  from: session.sourceCwd,
+                  to: effectiveCwd,
+                })
+              : { content: null, rewritten: 0 };
+          const placedBytes =
+            retargeted.content === null || retargeted.rewritten === 0
+              ? sourceBytes
+              : new TextEncoder().encode(retargeted.content);
+          yield* placeSessionFile({ destinationPath: placedPath, bytes: placedBytes });
           const result = yield* importSession(live.origin, token, {
             projectId: project.id,
             instanceId: instance.instanceId,
             nativeSessionId: session.nativeSessionId,
+            ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
             ...(modelSelection === undefined ? {} : { modelSelection }),
             ...(worktree === undefined ? {} : { worktree }),
           }).pipe(Effect.result);
@@ -1109,6 +1181,7 @@ const sessionImportCommand = Command.make("import", {
             instanceId: instance.instanceId,
             nativeSessionId: session.nativeSessionId,
             placedPath,
+            ...(retargeted.rewritten === 0 ? {} : { retargetedCwdFields: retargeted.rewritten }),
             ...(worktree === undefined ? {} : { worktreePath: worktree.worktreePath }),
             ...(result.success.warnings === undefined ? {} : { warnings: result.success.warnings }),
           };

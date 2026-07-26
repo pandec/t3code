@@ -61,6 +61,8 @@ export const SessionImportPayload = Schema.Struct({
   projectId: ProjectId,
   instanceId: ProviderInstanceId,
   nativeSessionId: TrimmedNonEmptyString,
+  /** Overrides the title derived from the provider session (e.g. to carry a T3 thread title across a handover). */
+  title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   worktree: Schema.optional(
     Schema.Struct({
@@ -72,7 +74,7 @@ export const SessionImportPayload = Schema.Struct({
 export type SessionImportPayload = typeof SessionImportPayload.Type;
 
 export const SessionImportWarning = Schema.Struct({
-  code: Schema.Literal("meta-update-failed"),
+  code: Schema.Literals(["meta-update-failed", "history-truncated"]),
   message: Schema.String,
 });
 export type SessionImportWarning = typeof SessionImportWarning.Type;

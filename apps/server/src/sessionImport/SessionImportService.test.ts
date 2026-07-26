@@ -2,7 +2,13 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
-import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  THREAD_IMPORT_MAX_MESSAGES,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -31,6 +37,11 @@ interface HarnessOptions {
   readonly bindingStarted?: Deferred.Deferred<void>;
   readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
+  readonly historyMessages?: ReadonlyArray<{
+    readonly role: "user" | "assistant";
+    readonly text: string;
+    readonly createdAt: string;
+  }>;
   readonly importedModel?: string | null;
   readonly listedSessionName?: string | null;
   readonly metaUpdateFails?: boolean;
@@ -114,7 +125,7 @@ const makeHarness = (options?: HarnessOptions) => {
             nativeSessionId: NATIVE_SESSION_ID,
             nativeCwd: "/private/tmp",
             name: options?.sessionName ?? null,
-            messages: [
+            messages: options?.historyMessages ?? [
               {
                 role: "user" as const,
                 text: "Remember the codeword PINEAPPLE-42.",
@@ -444,6 +455,52 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
 
       expect(state.dispatched[0]).toMatchObject({ title: "Payment retry spike" });
+    }),
+  );
+
+  it.effect("prefers an explicit title over the provider-assigned session name", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ sessionName: "Payment retry spike" });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        title: "💡 Carried title",
+      });
+
+      expect(state.dispatched[0]).toMatchObject({ title: "💡 Carried title" });
+    }),
+  );
+
+  it.effect("imports the most recent messages and warns when history exceeds the cap", () =>
+    Effect.gen(function* () {
+      const overCap = THREAD_IMPORT_MAX_MESSAGES + 5;
+      const { state, layer } = makeHarness({
+        historyMessages: Array.from({ length: overCap }, (_, index) => ({
+          role: (index % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+          text: `message ${index}`,
+          createdAt: "2026-07-16T10:00:00.000Z",
+        })),
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const result = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      expect(result.warnings).toMatchObject([{ code: "history-truncated" }]);
+      const dispatched = state.dispatched[0] as unknown as {
+        messages: ReadonlyArray<{ text: string }>;
+      };
+      expect(dispatched.messages).toHaveLength(THREAD_IMPORT_MAX_MESSAGES);
+      expect(dispatched.messages[0]?.text).toBe("message 5");
+      expect(dispatched.messages[THREAD_IMPORT_MAX_MESSAGES - 1]?.text).toBe(
+        `message ${overCap - 1}`,
+      );
     }),
   );
 
