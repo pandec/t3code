@@ -2,6 +2,8 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
+import { sharedTestDefaults } from "./scripts/lib/vitest-shared.ts";
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -17,8 +19,7 @@ export default defineConfig({
       "**/dist-electron/**",
       "**/.{idea,git,cache,output,temp}/**",
     ],
-    hookTimeout: 60_000,
-    testTimeout: 60_000,
+    ...sharedTestDefaults,
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.

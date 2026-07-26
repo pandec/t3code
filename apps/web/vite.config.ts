@@ -8,6 +8,7 @@ import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -55,13 +56,9 @@ const buildSourcemap: boolean | "hidden" =
 const unitTestProject = {
   extends: true,
   test: {
+    ...sharedTestDefaults,
     name: "unit",
     include: ["src/**/*.test.{ts,tsx}"],
-    // The web runtime suite exercises auth bootstrap, saved environments,
-    // and websocket subscription lifecycles. Under the full monorepo test
-    // run, those async tests can exceed Vitest's default 5s budget.
-    hookTimeout: 15_000,
-    testTimeout: 15_000,
   },
 } satisfies TestProjectInlineConfiguration;
 

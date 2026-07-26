@@ -28,7 +28,7 @@
     "lint:mobile": "node scripts/mobile-native-static-check.ts",
     "ios:local": "vp run @t3tools/mobile#ios:local",
     "ios:local:release": "vp run @t3tools/mobile#ios:local:release",
-    "test": "vp run -r test",
+    "test": "vp run -r --concurrency-limit 4 test",
     "test:desktop-smoke": "vp run --filter @t3tools/desktop smoke-test",
     "fmt": "vp fmt",
     "fmt:check": "vp fmt --check",
