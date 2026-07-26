@@ -192,11 +192,22 @@ const resolveSessionCallbackTurnId = (
   return ctx ? resolveCallbackTurnId(ctx) : undefined;
 };
 
-function parseHermesResume(raw: unknown): { sessionId: string } | undefined {
+function parseHermesResume(
+  raw: unknown,
+): { sessionId: string; defaultModelId?: string } | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.schemaVersion !== HERMES_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  const defaultModelId =
+    typeof raw.defaultModelId === "string" &&
+    raw.defaultModelId.trim() &&
+    raw.defaultModelId.trim() !== HERMES_DEFAULT_MODEL_SELECTION
+      ? raw.defaultModelId.trim()
+      : undefined;
+  return {
+    sessionId: raw.sessionId.trim(),
+    ...(defaultModelId ? { defaultModelId } : {}),
+  };
 }
 
 function selectPermissionOptionId(
@@ -631,7 +642,8 @@ export function makeHermesAdapter(
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
 
-          const resumeSessionId = parseHermesResume(input.resumeCursor)?.sessionId;
+          const hermesResume = parseHermesResume(input.resumeCursor);
+          const resumeSessionId = hermesResume?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -781,17 +793,34 @@ export function makeHermesAdapter(
           });
 
           const requestedStartModelId = hermesModelSelection?.model;
-          // Hermes's own configured model at session setup. The `"default"`
-          // sentinel means "track this", so remember it for later turns.
-          const defaultModelId = currentHermesModelIdFromSessionSetup(started.sessionSetupResult);
+          const selectedStartModelId = hermesSelectionModelId(requestedStartModelId, undefined);
+          const sessionSetupModelId = currentHermesModelIdFromSessionSetup(
+            started.sessionSetupResult,
+          );
+          // On a fresh session, Hermes reports its configured model before T3
+          // applies a concrete override. Preserve that identity in the opaque
+          // cursor because session/load reports the persisted override instead.
+          // Old cursors can safely infer it only when the persisted selection is
+          // still the sentinel.
+          const defaultModelId =
+            hermesResume?.defaultModelId ??
+            (resumeSessionId !== undefined &&
+            selectedStartModelId !== HERMES_DEFAULT_MODEL_SELECTION
+              ? undefined
+              : sessionSetupModelId === HERMES_DEFAULT_MODEL_SELECTION
+                ? undefined
+                : sessionSetupModelId);
+          const acpStartModelId =
+            selectedStartModelId === HERMES_DEFAULT_MODEL_SELECTION
+              ? defaultModelId
+              : requestedStartModelId;
           const boundModelId = yield* applyHermesAcpModelSelection({
             runtime: acp,
-            currentModelId: defaultModelId,
-            requestedModelId: requestedStartModelId,
+            currentModelId: sessionSetupModelId,
+            requestedModelId: acpStartModelId,
             mapError: (cause) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
           });
-          const selectedStartModelId = hermesSelectionModelId(requestedStartModelId, undefined);
 
           const now = yield* nowIso;
           const session: ProviderSession = {
@@ -805,6 +834,7 @@ export function makeHermesAdapter(
             resumeCursor: {
               schemaVersion: HERMES_RESUME_VERSION,
               sessionId: started.sessionId,
+              ...(defaultModelId ? { defaultModelId } : {}),
             },
             createdAt: now,
             updatedAt: now,
@@ -984,6 +1014,19 @@ export function makeHermesAdapter(
                       ? input.modelSelection
                       : undefined;
                   const requestedTurnModelId = turnModelSelection?.model?.trim() || undefined;
+                  if (
+                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION &&
+                    ctx.defaultModelId === undefined &&
+                    ctx.currentModelId !== undefined &&
+                    ctx.currentModelId !== HERMES_DEFAULT_MODEL_SELECTION
+                  ) {
+                    return yield* new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/set_model",
+                      detail:
+                        "Hermes did not report the configured default model for this session, so T3 Code cannot safely restore it. Start a new thread to use the Hermes default.",
+                    });
+                  }
                   // Selecting the sentinel mid-thread must actually put Hermes
                   // back on its own configured model, not silently keep the
                   // concrete model a previous turn switched to.
@@ -1097,7 +1140,6 @@ export function makeHermesAdapter(
                   return {
                     acp: ctx.acp,
                     acpSessionId: ctx.acpSessionId,
-                    displayModel: selectedTurnModelId,
                     promptHandle,
                     promptParts,
                     promptSequence,
@@ -1163,7 +1205,6 @@ export function makeHermesAdapter(
                         status: "running",
                         activeTurnId: prepared.turnId,
                         updatedAt: yield* nowIso,
-                        model: prepared.displayModel,
                       };
                       const remainingPrompts = Math.max(0, ctx.promptsInFlight - 1);
                       ctx.promptsInFlight = remainingPrompts;
@@ -1186,7 +1227,6 @@ export function makeHermesAdapter(
                           ...readySession,
                           status: "ready",
                           updatedAt: completedAt,
-                          model: prepared.displayModel,
                         };
                         const completedStopReason = completedStopReasonFromPromptResponse(
                           outcome.result,
