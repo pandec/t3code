@@ -392,6 +392,105 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
     }),
   );
 
+  // ProviderService recovery omits `modelSelection` when the persisted binding
+  // carries none. That is NOT a request for the sentinel: it must leave the
+  // Hermes model alone rather than reset a concrete pin back to the default.
+  it.effect("leaves the model untouched when resume carries no model selection", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-resume-without-selection");
+      const firstAdapter = yield* makeTestAdapter(
+        yield* Effect.promise(() => makeMockHermesWrapper()),
+      );
+      const firstSession = yield* firstAdapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "anthropic:claude-sonnet-5",
+        },
+      });
+      assert.deepEqual(firstSession.resumeCursor, {
+        schemaVersion: 2,
+        sessionId: "mock-session-1",
+        defaultModelId: "openai-codex:gpt-5.6-sol",
+      });
+      yield* firstAdapter.stopSession(threadId);
+
+      const directory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-resume-no-selection-")),
+      );
+      const requestLogPath = NodePath.join(directory, "requests.ndjson");
+      const resumedAdapter = yield* makeTestAdapter(
+        yield* Effect.promise(() =>
+          makeMockHermesWrapper({
+            // Hermes persisted the concrete override this thread was pinned to.
+            T3_ACP_INITIAL_MODEL_ID: "anthropic:claude-sonnet-5",
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          }),
+        ),
+      );
+      const resumedSession = yield* resumedAdapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        resumeCursor: firstSession.resumeCursor,
+      });
+
+      // No selection carried => no needless switch back to the Hermes default,
+      // and the effective model is reported rather than collapsed to "default".
+      const requests = yield* Effect.promise(() => NodeFSP.readFile(requestLogPath, "utf8"));
+      // Guards the notInclude below from passing on an empty/unwritten log.
+      assert.include(requests, "session/load");
+      assert.notInclude(requests, "session/set_model");
+      assert.equal(resumedSession.model, "anthropic:claude-sonnet-5");
+      assert.deepEqual(resumedSession.resumeCursor, firstSession.resumeCursor);
+      yield* resumedAdapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("resumes without a model selection even when no default was restorable", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-resume-no-selection-unknown-default");
+      const firstAdapter = yield* makeTestAdapter(
+        yield* Effect.promise(() => makeMockHermesWrapper({ T3_ACP_OMIT_SESSION_MODELS: "1" })),
+      );
+      const firstSession = yield* firstAdapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "default",
+        },
+      });
+      assert.deepEqual(firstSession.resumeCursor, {
+        schemaVersion: 2,
+        sessionId: "mock-session-1",
+        defaultModelId: null,
+      });
+      yield* firstAdapter.stopSession(threadId);
+
+      // A null default only blocks an explicit sentinel request. Recovery that
+      // carries no selection at all must not be hard-failed.
+      const resumedAdapter = yield* makeTestAdapter(
+        yield* Effect.promise(() => makeMockHermesWrapper({ T3_ACP_OMIT_SESSION_MODELS: "1" })),
+      );
+      const resumedSession = yield* resumedAdapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        resumeCursor: firstSession.resumeCursor,
+      });
+      assert.equal(resumedSession.model, "default");
+      yield* resumedAdapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("upgrades a legacy default cursor using the reported setup model", () =>
     Effect.gen(function* () {
       const adapter = yield* makeTestAdapter(yield* Effect.promise(() => makeMockHermesWrapper()));

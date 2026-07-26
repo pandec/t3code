@@ -411,6 +411,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     ],
     { concurrency: 2 },
   );
+  const gatewayUnavailable = !gatewayIsRunning;
   let discovery: HermesAcpDiscovery | undefined;
   let authenticationUnavailable = false;
   if (Exit.isFailure(discoveryExit)) {
@@ -435,7 +436,6 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
           ...discovery.models,
         ])
       : fallbackModels;
-  const gatewayUnavailable = !gatewayIsRunning;
 
   return buildServerProvider({
     presentation: HERMES_PRESENTATION,
