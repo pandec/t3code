@@ -244,6 +244,9 @@ const PersistedComposerDraftStoreStorage = Schema.Struct({
   version: Schema.Number,
   state: PersistedComposerDraftStoreState,
 });
+const decodePersistedComposerDraftStoreStorage = Schema.decodeUnknownSync(
+  PersistedComposerDraftStoreStorage,
+);
 
 /**
  * Composer content keyed by either a draft session (`DraftId`) or a real server
@@ -638,7 +641,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
   };
 }
 
-export function composerImageDedupKey(image: ComposerImageAttachment): string {
+function composerImageDedupKey(image: ComposerImageAttachment): string {
   // Keep this independent from File.lastModified so dedupe is stable for hydrated
   // images reconstructed from localStorage (which get a fresh lastModified value).
   return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
@@ -3419,6 +3422,84 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 );
 
 export const useComposerDraftStore = composerDraftStore;
+
+function persistedComposerAttachmentsMatch(
+  persisted: ReadonlyArray<PersistedComposerImageAttachment>,
+  expected: ReadonlyArray<PersistedComposerImageAttachment>,
+): boolean {
+  const persistedById = new Map(persisted.map((attachment) => [attachment.id, attachment]));
+  return expected.every((attachment) => {
+    const candidate = persistedById.get(attachment.id);
+    return (
+      candidate !== undefined &&
+      candidate.name === attachment.name &&
+      candidate.mimeType === attachment.mimeType &&
+      candidate.sizeBytes === attachment.sizeBytes &&
+      candidate.dataUrl === attachment.dataUrl
+    );
+  });
+}
+
+/**
+ * Flushes queued-message content to localStorage and reads it back before a
+ * caller destroys the durable outbox copy. Queued attachments already carry
+ * data URLs, so they can bypass the composer's asynchronous File serializer.
+ */
+export function persistComposerDraftContentNow(
+  threadRef: ComposerThreadTarget,
+  expected: {
+    readonly prompt: string;
+    readonly attachments: ReadonlyArray<PersistedComposerImageAttachment>;
+  },
+): boolean {
+  const store = useComposerDraftStore.getState();
+  const threadKey = resolveComposerDraftKey(store, threadRef);
+  if (!threadKey) {
+    return false;
+  }
+  const current = store.draftsByThreadKey[threadKey];
+  if (!current || current.prompt !== expected.prompt) {
+    return false;
+  }
+  const currentImageIds = new Set(current.images.map((image) => image.id));
+  if (expected.attachments.some((attachment) => !currentImageIds.has(attachment.id))) {
+    return false;
+  }
+
+  const expectedIds = new Set(expected.attachments.map((attachment) => attachment.id));
+  store.syncPersistedAttachments(threadRef, [
+    ...current.persistedAttachments.filter((attachment) => !expectedIds.has(attachment.id)),
+    ...expected.attachments,
+  ]);
+
+  try {
+    composerDebouncedStorage.flush();
+    const rawPersisted = composerDebouncedStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY);
+    if (typeof rawPersisted !== "string") {
+      return false;
+    }
+    const persisted = decodePersistedComposerDraftStoreStorage(JSON.parse(rawPersisted) as unknown);
+    const persistedDraft = persisted?.state.draftsByThreadKey[threadKey];
+    return (
+      persisted?.version === COMPOSER_DRAFT_STORAGE_VERSION &&
+      persistedDraft?.prompt === current.prompt &&
+      persistedDraft.inputOrigin === current.inputOrigin &&
+      persistedComposerAttachmentsMatch(persistedDraft.attachments, expected.attachments)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Flushes a compensating composer write after a queued-message transfer fails. */
+export function flushComposerDraftPersistence(): boolean {
+  try {
+    composerDebouncedStorage.flush();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): void {
   useComposerDraftStore.setState((state) => {

@@ -61,11 +61,13 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
   finalizePromotedDraftThreadByRef,
+  hydrateImagesFromPersisted,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
   type ComposerImageAttachment,
+  persistComposerDraftContentNow,
   useComposerDraftStore,
   DraftId,
 } from "./composerDraftStore";
@@ -342,6 +344,88 @@ describe("composerDraftStore syncPersistedAttachments", () => {
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
+  });
+});
+
+describe("persistComposerDraftContentNow", () => {
+  const threadId = ThreadId.make("thread-queued-edit-persist");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("flushes queued text and exact attachment bytes before acknowledging", () => {
+    const image = makeImage({
+      id: "queued-image",
+      previewUrl: "data:image/png;base64,YWJj",
+      sizeBytes: 3,
+    });
+    const attachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: image.previewUrl,
+    };
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "queued text");
+    store.addImage(threadRef, image);
+
+    expect(
+      persistComposerDraftContentNow(threadRef, {
+        prompt: "queued text",
+        attachments: [attachment],
+      }),
+    ).toBe(true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([attachment]);
+  });
+
+  it("rejects a metadata-deduped image whose source id is absent", () => {
+    const existing = makeImage({
+      id: "existing-image",
+      previewUrl: "data:image/png;base64,YWJj",
+      name: "same.png",
+      sizeBytes: 3,
+    });
+    const queued = makeImage({
+      id: "queued-image",
+      previewUrl: "data:image/png;base64,ZGVm",
+      name: "same.png",
+      sizeBytes: 3,
+    });
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "queued text");
+    store.addImages(threadRef, [existing, queued]);
+
+    expect(
+      persistComposerDraftContentNow(threadRef, {
+        prompt: "queued text",
+        attachments: [
+          {
+            id: queued.id,
+            name: queued.name,
+            mimeType: queued.mimeType,
+            sizeBytes: queued.sizeBytes,
+            dataUrl: queued.previewUrl,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("exposes failed source hydration instead of treating it as an empty attachment list", () => {
+    expect(
+      hydrateImagesFromPersisted([
+        {
+          id: "broken-image",
+          name: "broken.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          dataUrl: "data:image/png;base64,",
+        },
+      ]),
+    ).toEqual([]);
   });
 });
 

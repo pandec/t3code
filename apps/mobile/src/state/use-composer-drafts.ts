@@ -301,6 +301,109 @@ export function appendedComposerDraftText(existing: string, addition: string): s
   return `${existing}${separator}${addition}`;
 }
 
+export interface DurableComposerDraftAppend {
+  readonly before: ComposerDraft;
+  readonly appended: ComposerDraft;
+  readonly status: "committed" | "persist-failed";
+}
+
+/**
+ * Publishes an append to the live draft and acknowledges it only after the
+ * destination file contains the same snapshot. Unlike normal typing, this
+ * write is not debounced or best-effort because callers may destroy a durable
+ * source as soon as it succeeds.
+ */
+export async function appendComposerDraftContentDurably(
+  draftKey: string,
+  input: {
+    readonly text: string;
+    readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  },
+): Promise<DurableComposerDraftAppend> {
+  ensureComposerDraftsLoaded();
+  if (loadPromise !== null) {
+    await loadPromise;
+  }
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+
+  const current = appAtomRegistry.get(composerDraftsAtom);
+  const before = normalizeDraft(current[draftKey]);
+  const appended: ComposerDraft = {
+    ...before,
+    text: appendedComposerDraftText(before.text, input.text),
+    attachments: [...before.attachments, ...input.attachments],
+  };
+  const next = {
+    ...current,
+    [draftKey]: appended,
+  };
+  appAtomRegistry.set(composerDraftsAtom, next);
+
+  try {
+    await persistenceQueue.run(() => writePersistedComposerDrafts(next));
+    return { before, appended, status: "committed" };
+  } catch (error) {
+    console.warn("[composer-drafts] failed to durably append queued message", error);
+    return { before, appended, status: "persist-failed" };
+  }
+}
+
+/**
+ * Compensates one append without restoring a stale whole-draft snapshot.
+ * Text/origin are restored only while the appended text is untouched; exact
+ * attachment objects introduced by the append are removed from the latest
+ * array so later user additions and removals survive.
+ */
+export function revertComposerDraftAppend(
+  draftKey: string,
+  transaction: Pick<DurableComposerDraftAppend, "before" | "appended">,
+): boolean {
+  let fullyReverted = true;
+  updateComposerDrafts((current) => {
+    const latest = normalizeDraft(current[draftKey]);
+    const appendedAttachments = transaction.appended.attachments.slice(
+      transaction.before.attachments.length,
+    );
+    const attachments = [...latest.attachments];
+    for (let index = appendedAttachments.length - 1; index >= 0; index -= 1) {
+      const attachment = appendedAttachments[index];
+      const currentIndex = attachments.lastIndexOf(attachment);
+      if (currentIndex >= 0) {
+        attachments.splice(currentIndex, 1);
+      }
+    }
+
+    const canRestoreText = latest.text === transaction.appended.text;
+    if (!canRestoreText) {
+      fullyReverted = false;
+    }
+    const { inputOrigin: _latestInputOrigin, ...latestWithoutInputOrigin } = latest;
+    const draft: ComposerDraft = {
+      ...latestWithoutInputOrigin,
+      text: canRestoreText ? transaction.before.text : latest.text,
+      attachments,
+      ...(canRestoreText && transaction.before.inputOrigin !== undefined
+        ? { inputOrigin: transaction.before.inputOrigin }
+        : !canRestoreText && latest.inputOrigin !== undefined
+          ? { inputOrigin: latest.inputOrigin }
+          : {}),
+    };
+    if (isEmptyDraft(draft)) {
+      const next = { ...current };
+      delete next[draftKey];
+      return next;
+    }
+    return {
+      ...current,
+      [draftKey]: draft,
+    };
+  });
+  return fullyReverted;
+}
+
 export function appendComposerDraftText(draftKey: string, value: string): void {
   updateComposerDrafts((current) => {
     const existing = normalizeDraft(current[draftKey]);

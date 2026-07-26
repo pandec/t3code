@@ -12,6 +12,7 @@ import {
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
   removeComposerDraftsForEnvironment,
+  revertComposerDraftAppend,
   restoreComposerDraftSnapshotState,
 } from "./use-composer-drafts";
 
@@ -285,5 +286,72 @@ describe("appendedComposerDraftText", () => {
     // The queued-message edit verifies its append by comparing against this
     // result, so re-editing identical text must not look like a no-op.
     expect(appendedComposerDraftText("queued", "queued")).toBe("queued\n\nqueued");
+  });
+});
+
+describe("revertComposerDraftAppend", () => {
+  const draftKey = "environment-1:thread-1";
+  const image = (id: string) => ({
+    id,
+    type: "image" as const,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    sizeBytes: 3,
+    dataUrl: "data:image/png;base64,YWJj",
+    previewUri: "data:image/png;base64,YWJj",
+  });
+
+  it("restores an untouched append exactly", () => {
+    const existing = image("existing");
+    const queued = image("queued");
+    const before: ComposerDraft = {
+      text: "draft",
+      inputOrigin: "voice-transcription",
+      attachments: [existing],
+    };
+    const appended: ComposerDraft = {
+      ...before,
+      text: "draft\n\nqueued",
+      attachments: [existing, queued],
+    };
+    appAtomRegistry.set(composerDraftsAtom, { [draftKey]: appended });
+
+    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(true);
+    expect(getComposerDraftSnapshot(draftKey)).toEqual(before);
+  });
+
+  it("keeps newer text and attachments while removing only this append's image", () => {
+    const existing = image("existing");
+    const queued = image("queued");
+    const newer = image("newer");
+    const before: ComposerDraft = { text: "draft", attachments: [existing] };
+    const appended: ComposerDraft = {
+      ...before,
+      text: "draft\n\nqueued",
+      attachments: [existing, queued],
+    };
+    appAtomRegistry.set(composerDraftsAtom, {
+      [draftKey]: {
+        ...appended,
+        text: "draft\n\nqueued plus my edit",
+        attachments: [existing, queued, newer],
+      },
+    });
+
+    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(false);
+    expect(getComposerDraftSnapshot(draftKey)).toMatchObject({
+      text: "draft\n\nqueued plus my edit",
+      attachments: [existing, newer],
+    });
+  });
+
+  it("removes only the later occurrence when the same image object already existed", () => {
+    const repeated = image("same");
+    const before: ComposerDraft = { text: "", attachments: [repeated] };
+    const appended: ComposerDraft = { text: "", attachments: [repeated, repeated] };
+    appAtomRegistry.set(composerDraftsAtom, { [draftKey]: appended });
+
+    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(true);
+    expect(getComposerDraftSnapshot(draftKey).attachments).toEqual([repeated]);
   });
 });

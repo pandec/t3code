@@ -73,12 +73,14 @@ export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, 
   Atom.withLabel("web:thread-outbox:editing-message-ids"),
 );
 
-export function holdEditingQueuedMessage(messageId: MessageId): void {
+/** Acquires the edit hold and reports whether this caller owns it. */
+export function holdEditingQueuedMessage(messageId: MessageId): boolean {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (current[messageId]) {
-    return;
+    return false;
   }
   appAtomRegistry.set(editingQueuedMessageIdsAtom, { ...current, [messageId]: true });
+  return true;
 }
 
 export function releaseEditingQueuedMessage(messageId: MessageId): void {

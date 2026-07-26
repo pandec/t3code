@@ -186,10 +186,11 @@ import {
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
-  composerImageDedupKey,
   type DraftThreadEnvMode,
+  flushComposerDraftPersistence,
   hasComposerDraftContent,
   hydrateImagesFromPersisted,
+  persistComposerDraftContentNow,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -5141,20 +5142,25 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       // Hold the message so the drain cannot deliver it while its content is
-      // being moved back into the composer.
-      holdEditingQueuedMessage(message.messageId);
+      // being moved back into the composer. The acquisition also rejects a
+      // second pencil click before it can append the same message twice.
+      if (!holdEditingQueuedMessage(message.messageId)) {
+        return;
+      }
       // Set before the first await: once the queued row is gone the composer
       // holds the only copy, so a later failure must never revert it away.
       let removed = false;
-      let revertComposerLoad: (() => void) | null = null;
-      const reportLoadFailure = (error?: unknown) => {
+      let revertComposerLoad: (() => boolean) | null = null;
+      const reportLoadFailure = (error?: unknown, fullyReverted = true) => {
         if (error !== undefined) {
           console.warn("[thread-outbox] failed to load queued message into the composer", error);
         }
         toastManager.add({
           type: "error",
           title: "Could not open this message for editing",
-          description: "It is still queued — try again, or delete it if you no longer need it.",
+          description: fullyReverted
+            ? "It is still queued — try again, or delete it if you no longer need it."
+            : "It is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
         });
       };
       try {
@@ -5171,6 +5177,11 @@ function ChatViewContent(props: ChatViewProps) {
             if (imageIdsBeforeLoad.has(image.id)) continue;
             removeComposerDraftImage(composerDraftTarget, image.id);
           }
+          const latestPrompt = readDraft()?.prompt ?? "";
+          if (latestPrompt !== nextPrompt) {
+            flushComposerDraftPersistence();
+            return false;
+          }
           promptRef.current = previousPrompt;
           // An empty prompt clears the stored origin, so a draft that had none
           // does not inherit the queued message's.
@@ -5183,6 +5194,8 @@ function ChatViewContent(props: ChatViewProps) {
             prompt: previousPrompt,
             detectTrigger: false,
           });
+          flushComposerDraftPersistence();
+          return true;
         };
         // Load the composer FIRST, then drop the queued row. Removal is
         // durable (the row leaves local storage too), so removing first would
@@ -5199,45 +5212,35 @@ function ChatViewContent(props: ChatViewProps) {
 
         // Confirm the content really is in the composer before the queued copy
         // is destroyed. An empty draft is pruned outright, so read the prompt
-        // defensively; images are matched on the store's own dedup identity
-        // because `addImages` drops a byte-identical duplicate under its
-        // existing id rather than adding the incoming one.
+        // defensively. Every source attachment must hydrate and appear under
+        // its own id: the store's name/MIME/size dedup key is not a content
+        // identity, so accepting a dedup-only match could lose different bytes.
         const loadedDraft = readDraft();
         const loadedImages = loadedDraft?.images ?? [];
         const loadedImageIds = new Set(loadedImages.map((image) => image.id));
-        const loadedImageDedupKeys = new Set(loadedImages.map(composerImageDedupKey));
         const contentLoaded =
+          hydratedImages.length === message.attachments.length &&
           (loadedDraft?.prompt ?? "") === nextPrompt &&
           hydratedImages.every(
-            (image) =>
-              loadedImageIds.has(image.id) ||
-              loadedImageDedupKeys.has(composerImageDedupKey(image)),
-          );
+            (image) => !imageIdsBeforeLoad.has(image.id) && loadedImageIds.has(image.id),
+          ) &&
+          persistComposerDraftContentNow(composerDraftTarget, {
+            prompt: nextPrompt,
+            attachments: message.attachments,
+          });
         if (!contentLoaded) {
-          revertComposerLoad();
-          reportLoadFailure();
+          const fullyReverted = revertComposerLoad();
+          reportLoadFailure(undefined, fullyReverted);
           return;
         }
 
         removed = await removeThreadOutboxMessage(message);
         if (!removed) {
-          // Deleted, or claimed by a second edit, while the composer loaded;
-          // keeping the content would send it twice.
+          // The atomic edit hold rules out a second local edit. Another action
+          // already removed the queued row, so the durable composer copy is the
+          // only copy this handler still owns and must not be reverted.
           console.debug("[thread-outbox] queued message vanished before the edit claimed it");
-          revertComposerLoad();
           return;
-        }
-
-        const droppedAttachmentCount = message.attachments.length - hydratedImages.length;
-        if (droppedAttachmentCount > 0) {
-          toastManager.add({
-            type: "warning",
-            title:
-              droppedAttachmentCount === 1
-                ? "1 image could not be restored"
-                : `${droppedAttachmentCount} images could not be restored`,
-            description: "Re-attach it before sending if you still need it.",
-          });
         }
 
         const draftStore = useComposerDraftStore.getState();
@@ -5268,8 +5271,8 @@ function ChatViewContent(props: ChatViewProps) {
           // copy of the message — reverting here would destroy it.
           console.warn("[thread-outbox] queued message loaded but its setup failed", error);
         } else {
-          revertComposerLoad?.();
-          reportLoadFailure(error);
+          const fullyReverted = revertComposerLoad?.() ?? true;
+          reportLoadFailure(error, fullyReverted);
         }
       } finally {
         releaseEditingQueuedMessage(message.messageId);
