@@ -27,6 +27,7 @@ type ClaudeSkillScope = "user" | "project";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
+const BLOCK_SCALAR_HEADER_PATTERN = /^[>|][+-]?\d*$/;
 
 type SkillFrontmatter =
   | { readonly kind: "missing" }
@@ -56,6 +57,11 @@ function readRawFrontmatterField(frontmatter: string, field: string): string | u
   }
 
   const raw = (match[1] ?? "").trim();
+  // A block-scalar header carries no value of its own, and the folded lines
+  // that follow are out of reach of a single-line scan.
+  if (BLOCK_SCALAR_HEADER_PATTERN.test(raw)) {
+    return undefined;
+  }
   if (raw.length >= 2) {
     const first = raw.charAt(0);
     if ((first === '"' || first === "'") && raw.endsWith(first)) {
