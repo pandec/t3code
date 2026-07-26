@@ -93,7 +93,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
-  it.effect("falls back to the directory name and skips malformed frontmatter", () =>
+  it.effect("falls back to the directory name when frontmatter cannot be trusted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -109,14 +109,111 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
 
-      // A skill with no frontmatter falls back to its directory name; a skill
-      // whose frontmatter fails to parse is skipped entirely (Claude Code
-      // won't load it either).
+      // Both surface under their directory name: one has no frontmatter, the
+      // other's `name` is not a usable identifier.
       assert.deepEqual(
         skills.map((skill) => skill.name),
-        ["no-frontmatter"],
+        ["broken-yaml", "no-frontmatter"],
       );
       assert.equal(skills[0]?.description, undefined);
+      assert.equal(skills[1]?.description, undefined);
+    }),
+  );
+
+  it.effect("recovers metadata from frontmatter that strict YAML rejects", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const skillsDir = path.join(configDir, "skills");
+
+      // `description` holds an unquoted `": "`, which YAML reads as a nested
+      // mapping. Claude Code loads this skill, so discovery must too.
+      yield* writeSkill(
+        skillsDir,
+        "codex-computer-use",
+        [
+          "---",
+          "name: codex-computer-use",
+          "description: Run verification that needs computer use: browser automation.",
+          "---",
+        ].join("\n"),
+      );
+      // An unquoted flow-sequence-looking `argument-hint` breaks the scanner.
+      yield* writeSkill(
+        skillsDir,
+        "nexus",
+        [
+          "---",
+          "name: nexus",
+          "description: Manage Nexus streams.",
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["codex-computer-use", "nexus"],
+      );
+      assert.equal(
+        skills[0]?.description,
+        "Run verification that needs computer use: browser automation.",
+      );
+      assert.equal(skills[1]?.description, "Manage Nexus streams.");
+    }),
+  );
+
+  it.effect("flags model-invocation opt-outs and drops user-invocation opt-outs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const skillsDir = path.join(configDir, "skills");
+
+      yield* writeSkill(
+        skillsDir,
+        "dotfiles-sync",
+        [
+          "---",
+          "name: dotfiles-sync",
+          "description: Sync dotfiles.",
+          "user-invocable: true",
+          "disable-model-invocation: true",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "internal-only",
+        [
+          "---",
+          "name: internal-only",
+          "description: Not for humans.",
+          "user-invocable: false",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "deploy",
+        ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy", "dotfiles-sync"],
+      );
+      // Unspecified means "no opt-out recorded"; the merge with the SDK list
+      // decides the final answer.
+      assert.equal(skills[0]?.modelInvocable, undefined);
+      assert.equal(skills[1]?.modelInvocable, false);
     }),
   );
 

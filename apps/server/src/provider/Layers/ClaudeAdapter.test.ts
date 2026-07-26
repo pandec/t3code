@@ -290,13 +290,19 @@ async function readFirstPromptMessage(
   return next.value;
 }
 
+function writeSkillFile(skillDirectory: string, contents: string): void {
+  NodeFS.mkdirSync(skillDirectory, { recursive: true });
+  NodeFS.writeFileSync(NodePath.join(skillDirectory, "SKILL.md"), contents);
+}
+
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
   it.effect("lists genuine Claude skills for the active workspace", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-"));
-    const harness = makeHarness({ cwd });
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-home-"));
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     harness.query.reloadSkillsResult = {
       skills: [
         {
@@ -324,6 +330,7 @@ describe("ClaudeAdapterLive", () => {
           name: "project-review",
           description: "Review this project",
           enabled: true,
+          modelInvocable: true,
         },
       ]);
       assert.equal(harness.getLastCreateQueryInput()?.options.cwd, NodeFS.realpathSync(cwd));
@@ -340,28 +347,127 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 
-  it.effect("closes the discovery query when Claude skill reload fails", () => {
-    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
-    const harness = makeHarness({ cwd });
+  it.effect("surfaces user-invocable-only skills the SDK skill list omits", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-manual-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-manual-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "dotfiles-sync"),
+      [
+        "---",
+        "name: dotfiles-sync",
+        "description: Sync dotfiles.",
+        "user-invocable: true",
+        "disable-model-invocation: true",
+        "---",
+      ].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsResult = {
+      skills: [{ name: "project-review", description: "Review this project", argumentHint: "" }],
+    };
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      // `skills/reload` never reports `disable-model-invocation: true` skills,
+      // so the picker would lose them without the filesystem scan.
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["dotfiles-sync", "project-review"],
+      );
+      assert.equal(skills[0]?.modelInvocable, false);
+      assert.equal(skills[0]?.scope, "user");
+      assert.equal(skills[1]?.modelInvocable, true);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect("falls back to scanned skills when Claude skill reload fails", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-degraded-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-degraded-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "deploy"),
+      ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     harness.query.reloadSkillsFailure = new Error("reload failed");
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const listSkills = adapter.listSkills;
       if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
-      const error = yield* Effect.flip(listSkills({ cwd }));
+      const skills = yield* listSkills({ cwd });
 
-      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy"],
+      );
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
+
+  it.effect(
+    "closes the discovery query when Claude skill reload fails with nothing on disk",
+    () => {
+      const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
+      const homePath = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-home-"),
+      );
+      const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+      harness.query.reloadSkillsFailure = new Error("reload failed");
+
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const listSkills = adapter.listSkills;
+        if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+        const error = yield* Effect.flip(listSkills({ cwd }));
+
+        // Nothing to serve, so the caller must see the failure and fall back to
+        // the provider snapshot rather than cache an empty list.
+        assert.equal(error._tag, "ProviderAdapterRequestError");
+        assert.equal(harness.query.closeCalls, 1);
+      }).pipe(
+        Effect.provide(harness.layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            NodeFS.rmSync(cwd, { recursive: true, force: true });
+            NodeFS.rmSync(homePath, { recursive: true, force: true });
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));

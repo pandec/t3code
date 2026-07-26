@@ -13,6 +13,12 @@ export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(fu
 ) {
   const instance = yield* registry.getInstance(input.instanceId);
   if (instance === undefined) {
+    // Callers cannot tell this apart from "this provider has no skills", so
+    // say so in the log; the client keeps showing its own snapshot skills.
+    yield* Effect.logWarning("Cannot list provider skills for an unknown instance.", {
+      instanceId: input.instanceId,
+      cwd: input.cwd,
+    });
     return { skills: [] } satisfies ServerProviderSkillsResult;
   }
 

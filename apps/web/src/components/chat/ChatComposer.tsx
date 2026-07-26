@@ -193,7 +193,10 @@ import {
 } from "../../lib/contextWindow";
 import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
-import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
+import {
+  formatProviderSkillDisplayName,
+  resolveEffectiveProviderSkills,
+} from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -202,8 +205,6 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
-
-const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 
 const runtimeModeConfig: Record<
   RuntimeMode,
@@ -886,8 +887,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         })
       : null,
   );
-  const effectiveProviderSkills =
-    providerSkillsQuery.data?.skills ?? selectedProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS;
+  const effectiveProviderSkills = resolveEffectiveProviderSkills(
+    providerSkillsQuery.data?.skills,
+    selectedProviderStatus?.skills,
+  );
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],
