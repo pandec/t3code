@@ -1,6 +1,6 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - the test deliberately runs a raw HTTP server to shape undeclared status responses.
-import * as http from "node:http";
-import type { AddressInfo } from "node:net";
+import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
 
 import {
   AuthSessionId,
@@ -208,8 +208,8 @@ const withStatusServer = <A, E>(
   use: (origin: string) => Effect.Effect<A, E>,
 ): Effect.Effect<A, E> =>
   Effect.acquireUseRelease(
-    Effect.callback<http.Server>((resume) => {
-      const server = http.createServer((_request, response) => {
+    Effect.callback<NodeHttp.Server>((resume) => {
+      const server = NodeHttp.createServer((_request, response) => {
         response.statusCode = status;
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ unexpected: true }));
@@ -220,7 +220,7 @@ const withStatusServer = <A, E>(
       const address = server.address();
       assert.isNotNull(address);
       assert.isObject(address);
-      return use(`http://127.0.0.1:${(address as AddressInfo).port}`);
+      return use(`http://127.0.0.1:${(address as NodeNet.AddressInfo).port}`);
     },
     (server) =>
       Effect.callback<void>((resume) => {
