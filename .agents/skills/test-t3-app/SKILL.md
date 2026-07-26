@@ -68,10 +68,13 @@ Read [references/sqlite-fixtures.md](references/sqlite-fixtures.md) before chang
 
 - Use `node apps/server/scripts/t3-sqlite-state.ts query` for schema discovery and read-only checks.
 - Stop the dev server before using `node apps/server/scripts/t3-sqlite-state.ts exec`, then restart it with the same base directory.
+- Pass one statement per `exec` call; a multi-statement `--file` runs only the first and still reports success with a backup path.
+- Reload the page after a direct write. Table edits emit no events, so a live tab keeps rendering the pre-write projection.
 - Seed projection tables only for disposable UI fixtures. Use application commands and APIs when testing business behavior or projection correctness.
 - Use the auth CLI, not direct `auth_*` table edits, for pairing and sessions.
 - Give every seeded thread a real `model_selection_json`; the row schema decodes it non-nullable, so a null there fails the whole `/api/orchestration/shell` response and the UI reports no projects.
 - Name a provider the local catalog actually installs in both the thread's model selection and the session's `provider_name`/`provider_instance_id`; the composer locks to the session's provider and otherwise offers no model and disables sending.
+- Drive pending approvals and questions from `projection_thread_activities` rows — that is where the composer reads them, not `projection_pending_approvals`. Update the denormalized `pending_approval_count` and `pending_user_input_count` on `projection_threads` to match, since the sidebar and settled-state logic read those instead.
 
 The helper refuses to write to the shared `~/.t3` directory by default and creates a database backup before each mutation.
 
@@ -81,7 +84,7 @@ Tear down when the user explicitly asks, confirms the iteration is finished, or 
 
 When teardown is appropriate:
 
-1. Stop the dev process with its terminal interrupt.
+1. Stop the dev process with its terminal interrupt. A stack started in the background outlives a signal to its launcher, so confirm both ports stopped answering before treating it as down — and before starting a replacement whose results you intend to trust.
 2. Preserve the isolated base directory when it contains useful reproduction evidence or state for a likely follow-up.
 3. Otherwise remove only a path created for this test after resolving and verifying the exact target.
 
