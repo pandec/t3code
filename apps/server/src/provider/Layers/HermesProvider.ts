@@ -39,7 +39,7 @@ const HERMES_PRESENTATION = {
   displayName: "Hermes",
   badgeLabel: "Early Access",
   showInteractionModeToggle: false,
-  requiresNewThreadForModelChange: true,
+  requiresNewThreadForModelChange: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -245,17 +245,49 @@ export function parseHermesVersionOutput(output: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * Deliberate MACHINE-IDENTITY heuristic — not a health or reachability check.
+ *
+ * T3 drives Hermes over ACP via `hermes acp` on stdio, which never involves the
+ * gateway, so a stopped gateway does not make Hermes unusable. The gateway does
+ * however run on exactly one machine, which makes "is the gateway up" a decent
+ * proxy for "is this the machine where Hermes actually lives". That is why this
+ * is opt-in and default-off (`HermesSettings.requireGateway`).
+ *
+ * `hermes gateway status` has no machine-readable mode and exits 0 in every
+ * branch, so this matches the literal marker lines the CLI prints. Branches
+ * covered (hermes_cli/gateway.py + gateway_windows.py): launchd, systemd,
+ * detached launchd fallback, process/service mismatch, no-service-installed,
+ * and Windows.
+ */
 export function hermesGatewayStatusIsRunning(input: {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
 }): boolean {
   const output = `${input.stdout}\n${input.stderr}`;
-  return (
-    input.code === 0 &&
-    !/\b(?:inactive|not\s+(?:active|running)|stopped)\b/iu.test(output) &&
-    /\b(?:active|running)\b/iu.test(output)
-  );
+  if (
+    input.code !== 0 ||
+    /✗ No fallback process is running/iu.test(output) ||
+    /✗ Gateway service is not loaded/iu.test(output)
+  ) {
+    return false;
+  }
+
+  const hasDirectRunningMarker =
+    /✓ Gateway is supervised by launchd \(PID \d+\)/u.test(output) ||
+    /✓ Detached fallback process is running \(PID \d+\)/u.test(output) ||
+    /^✓ [^\r\n]+ gateway service is running\s*$/imu.test(output) ||
+    // No service manager installed: manual foreground/tmux/nohup run.
+    /✓ Gateway is running \(PID: [^)\r\n]+\)/u.test(output) ||
+    // Windows scheduled task / login item.
+    /✓ Gateway process running \(PID: [^)\r\n]+\)/u.test(output) ||
+    /⚠ Gateway is running as a detached fallback process/iu.test(output) ||
+    /⚠ Gateway process is running for this profile, but the service is not active/iu.test(output);
+  const hasRegisteredDetachedRunningMarker =
+    /✓ Gateway service is registered with launchd/iu.test(output) &&
+    /^\s*Detached gateway process is running \(PID \d+\)\s*$/imu.test(output);
+  return hasDirectRunningMarker || hasRegisteredDetachedRunningMarker;
 }
 
 export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(function* (
@@ -352,38 +384,34 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
   }
 
   const skills = yield* readHermesSkillsSnapshot({ environment });
-  if (hermesSettings.requireGateway) {
-    const gatewayResult = yield* runHermesGatewayStatusCommand(hermesSettings, environment).pipe(
-      Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
-      Effect.result,
-    );
-    const gatewayIsRunning =
-      Result.isSuccess(gatewayResult) &&
-      Option.isSome(gatewayResult.success) &&
-      hermesGatewayStatusIsRunning(gatewayResult.success.value);
-    if (!gatewayIsRunning) {
-      return buildServerProvider({
-        presentation: HERMES_PRESENTATION,
-        enabled: hermesSettings.enabled,
-        checkedAt,
-        models: fallbackModels,
-        skills,
-        probe: {
-          installed: true,
-          version,
-          status: "warning",
-          auth: { status: "unknown" },
-          message:
-            "Hermes gateway is not running on this machine — enable Hermes only where it actually lives, or disable the gateway check in settings.",
-        },
-      });
-    }
-  }
 
-  const discoveryExit = yield* discoverHermesViaAcp(hermesSettings, environment).pipe(
-    Effect.timeoutOption(HERMES_ACP_DISCOVERY_TIMEOUT_MS),
-    Effect.exit,
+  // The gateway probe is an opt-in machine-identity signal only; it must never
+  // gate model/command discovery, so both run concurrently and the gateway
+  // result only downgrades the reported status.
+  const gatewayProbe = hermesSettings.requireGateway
+    ? runHermesGatewayStatusCommand(hermesSettings, environment).pipe(
+        Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
+        Effect.result,
+        Effect.map(
+          (gatewayResult) =>
+            Result.isSuccess(gatewayResult) &&
+            Option.isSome(gatewayResult.success) &&
+            hermesGatewayStatusIsRunning(gatewayResult.success.value),
+        ),
+      )
+    : Effect.succeed(true);
+
+  const [gatewayIsRunning, discoveryExit] = yield* Effect.all(
+    [
+      gatewayProbe,
+      discoverHermesViaAcp(hermesSettings, environment).pipe(
+        Effect.timeoutOption(HERMES_ACP_DISCOVERY_TIMEOUT_MS),
+        Effect.exit,
+      ),
+    ],
+    { concurrency: 2 },
   );
+  const gatewayUnavailable = !gatewayIsRunning;
   let discovery: HermesAcpDiscovery | undefined;
   let authenticationUnavailable = false;
   if (Exit.isFailure(discoveryExit)) {
@@ -419,7 +447,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     probe: {
       installed: true,
       version,
-      status: authenticationUnavailable ? "warning" : "ready",
+      status: gatewayUnavailable || authenticationUnavailable ? "warning" : "ready",
       auth: {
         status: authenticationUnavailable
           ? "unauthenticated"
@@ -427,12 +455,18 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
             ? "authenticated"
             : "unknown",
       },
+      // Authentication is the more actionable failure, so it wins when both apply.
       ...(authenticationUnavailable
         ? {
             message:
               "Hermes provider credentials are not configured. Run `hermes --setup`, then refresh provider status.",
           }
-        : {}),
+        : gatewayUnavailable
+          ? {
+              message:
+                "This machine does not look like your Hermes host — its gateway is not running. Enable Hermes only where you actually use it, or turn off the gateway check in settings.",
+            }
+          : {}),
     },
   });
 });

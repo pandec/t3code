@@ -63,22 +63,87 @@ describe("Hermes provider probe helpers", () => {
     expect(parseHermesVersionOutput("Hermes Agent unknown\nv9.9.9")).toBeNull();
   });
 
-  it("requires a successful, parseable running gateway status", () => {
-    expect(hermesGatewayStatusIsRunning({ code: 0, stdout: "Gateway running", stderr: "" })).toBe(
-      true,
-    );
-    expect(hermesGatewayStatusIsRunning({ code: 0, stdout: "Gateway stopped", stderr: "" })).toBe(
-      false,
-    );
+  it.each([
+    [
+      "launchd supervision",
+      `Launchd plist: /Users/example/Library/LaunchAgents/ai.hermes.gateway.plist
+✓ Service definition matches the current Hermes install
+✓ Gateway is supervised by launchd (PID 91722)
+  Auto-start at login and auto-restart on crash are available.`,
+    ],
+    ["detached launchd fallback", "✓ Detached fallback process is running (PID 91722)"],
+    ["systemd service", "✓ User gateway service is running"],
+    [
+      "unsupported-launchd fallback warning",
+      `⚠ Gateway is running as a detached fallback process — launchd cannot supervise it
+  PID(s): 91722`,
+    ],
+    [
+      "manual process warning",
+      `⚠ Gateway process is running for this profile, but the service is not active
+  PID(s): 91722`,
+    ],
+    [
+      "registered launchd service with detached process",
+      `✓ Gateway service is registered with launchd
+{
+  "PID" = 0;
+}
+  Detached gateway process is running (PID 91722)`,
+    ],
+    [
+      "no-service-installed manual run",
+      `✓ Gateway is running (PID: 91722, 91723)
+  (Running manually, not as a system service)`,
+    ],
+    [
+      "Windows scheduled task",
+      `✓ Scheduled Task registered: HermesGateway
+✓ Gateway process running (PID: 91722)`,
+    ],
+  ])("recognizes the %s running marker", (_branch, stdout) => {
+    expect(hermesGatewayStatusIsRunning({ code: 0, stdout, stderr: "" })).toBe(true);
+  });
+
+  it.each([
+    [
+      "missing fallback",
+      `⚠ Gateway service is registered but launchd is not supervising it
+✗ No fallback process is running`,
+    ],
+    [
+      "unloaded launchd service",
+      `✗ Gateway service is not loaded
+  Note: a detached gateway process is running (PID 91722)`,
+    ],
+    [
+      "unsupervised launchd service without a process",
+      "⚠ Gateway service is registered but launchd is not supervising it",
+    ],
+    [
+      "no-service-installed with no process",
+      `✗ Gateway is not running
+
+To start:
+  hermes gateway run      # Run in foreground`,
+    ],
+    [
+      "Windows task without a process",
+      `✓ Scheduled Task registered: HermesGateway
+✗ No gateway process detected`,
+    ],
+  ])("rejects the %s not-running marker", (_branch, stdout) => {
+    expect(hermesGatewayStatusIsRunning({ code: 0, stdout, stderr: "" })).toBe(false);
+  });
+
+  it("requires exit code zero even with an affirmative marker", () => {
     expect(
-      hermesGatewayStatusIsRunning({ code: 0, stdout: "Gateway is not running", stderr: "" }),
+      hermesGatewayStatusIsRunning({
+        code: 1,
+        stdout: "✓ Gateway is supervised by launchd (PID 91722)",
+        stderr: "",
+      }),
     ).toBe(false);
-    expect(hermesGatewayStatusIsRunning({ code: 0, stdout: "Gateway inactive", stderr: "" })).toBe(
-      false,
-    );
-    expect(hermesGatewayStatusIsRunning({ code: 1, stdout: "Gateway running", stderr: "" })).toBe(
-      false,
-    );
   });
 });
 
@@ -88,6 +153,17 @@ describe("buildInitialHermesProviderSnapshot", () => {
       const snapshot = yield* buildInitialHermesProviderSnapshot(decodeHermesSettings({}));
       expect(snapshot.enabled).toBe(false);
       expect(snapshot.models.map((model) => model.slug)).toEqual(["default"]);
+    }),
+  );
+
+  // Hermes applies `session/set_model` to a live ACP session, so the model
+  // picker must stay usable mid-thread. (This is a Hermes product choice, not a
+  // universal rule: Grok reports `sessionModelSwitch: "in-session"` and still
+  // sets `requiresNewThreadForModelChange: true` on purpose.)
+  it.effect("allows mid-thread model changes", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialHermesProviderSnapshot(decodeHermesSettings({}));
+      expect(snapshot.requiresNewThreadForModelChange).toBe(false);
     }),
   );
 });
@@ -128,7 +204,20 @@ it.layer(NodeServices.layer)("checkHermesProviderStatus", (it) => {
       );
       expect(snapshot.status).toBe("warning");
       expect(snapshot.message).toContain("gateway is not running");
-    }),
+      expect(snapshot.models.map((model) => model.slug)).toEqual([
+        "default",
+        "openai-codex:gpt-5.6-sol",
+        "anthropic:claude-sonnet-5",
+      ]);
+      expect(snapshot.slashCommands).toEqual([
+        {
+          name: "version",
+          description: "Show Hermes version",
+          input: { hint: "[--verbose]" },
+        },
+      ]);
+      expect(snapshot.auth.status).toBe("authenticated");
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("keeps fallback models when ACP discovery fails", () =>

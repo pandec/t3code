@@ -26,6 +26,7 @@ const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
+const omitSessionModels = process.env.T3_ACP_OMIT_SESSION_MODELS === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
 const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
 const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
@@ -62,7 +63,7 @@ const permissionOptionIds = {
 const sessionId = "mock-session-1";
 
 let currentModeId = process.env.T3_ACP_INITIAL_MODE_ID ?? (useHermesModes ? "default" : "ask");
-let currentModelId = "default";
+let currentModelId = process.env.T3_ACP_INITIAL_MODEL_ID ?? "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
@@ -319,6 +320,12 @@ function modelState(): AcpSchema.SessionModelState {
   };
 }
 
+function optionalSessionModels():
+  | { readonly models: AcpSchema.SessionModelState }
+  | Record<string, never> {
+  return omitSessionModels ? {} : { models: modelState() };
+}
+
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
 
@@ -394,7 +401,7 @@ const program = Effect.gen(function* () {
       return {
         sessionId,
         modes: modeState(),
-        models: modelState(),
+        ...optionalSessionModels(),
         configOptions: configOptions(),
       };
     }),
@@ -443,7 +450,7 @@ const program = Effect.gen(function* () {
         yield* Effect.sleep(loadSessionDelayMs);
         return {
           modes: modeState(),
-          models: modelState(),
+          ...optionalSessionModels(),
           configOptions: configOptions(),
         };
       }
@@ -459,7 +466,7 @@ const program = Effect.gen(function* () {
       });
       return {
         modes: modeState(),
-        models: modelState(),
+        ...optionalSessionModels(),
         configOptions: configOptions(),
       };
     }),

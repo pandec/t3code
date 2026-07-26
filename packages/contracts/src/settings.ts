@@ -381,10 +381,11 @@ export const HermesSettings = makeProviderSettingsSchema(
       ),
     ),
     requireGateway: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({
         title: "Require local gateway",
-        description: "Only make Hermes available while its gateway is running on this machine.",
+        description:
+          "When enabled, only make Hermes available while its gateway is running on this machine.",
         providerSettingsForm: { control: "switch" },
       }),
     ),

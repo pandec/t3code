@@ -173,7 +173,7 @@ describe("HermesSettings", () => {
     expect(decodeHermesSettings({})).toEqual({
       enabled: false,
       binaryPath: "hermes",
-      requireGateway: true,
+      requireGateway: false,
       customModels: [],
     });
     expect(decodeServerSettings({}).providers.hermes).toEqual(decodeHermesSettings({}));

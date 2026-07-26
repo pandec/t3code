@@ -37,6 +37,24 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("derives Hermes gateway enforcement as an opt-in switch", () => {
+    const hermes = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermes")];
+    expect(hermes).toBeDefined();
+
+    const requireGateway = deriveProviderSettingsFields(hermes!).find(
+      (field) => field.key === "requireGateway",
+    );
+
+    expect(requireGateway).toMatchObject({
+      control: "switch",
+      defaultBooleanValue: false,
+    });
+    expect(nextProviderConfigWithFieldValue(undefined, requireGateway!, false)).toBeUndefined();
+    expect(nextProviderConfigWithFieldValue(undefined, requireGateway!, true)).toEqual({
+      requireGateway: true,
+    });
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();
