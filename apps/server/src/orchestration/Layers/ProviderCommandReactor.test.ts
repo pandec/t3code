@@ -1251,6 +1251,121 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  // Regression guard for the Hermes sentinel bug: T3 believed the user was
+  // switching models on every turn, so with requiresNewThreadForModelChange the
+  // second message was persisted to the transcript but never delivered.
+  effectIt.effect("delivers a repeated turn with an unchanged model selection", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ requiresNewThreadForModelChange: true }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      const unchangedModelSelection = {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      };
+
+      for (const index of [1, 2, 3]) {
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-unchanged-${index}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-unchanged-${index}`),
+            role: "user",
+            text: `message ${index}`,
+            attachments: [],
+          },
+          modelSelection: unchangedModelSelection,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === index));
+      }
+
+      expect(harness.sendTurn).toHaveBeenCalledTimes(3);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toBe(false);
+    }),
+  );
+
+  // Characterization test for the contract documented on `ProviderSession.model`
+  // (packages/contracts/src/provider.ts): the reject check compares the client's
+  // selection directly against whatever the adapter stored, so an adapter that
+  // reports a provider-internal id instead of echoing the selection makes every
+  // turn look like a model switch. This pins that dependency so it cannot regress
+  // silently. If the reactor is ever changed to compare selection-to-selection,
+  // this test should be inverted rather than deleted.
+  effectIt.effect("treats an adapter-rewritten session model as a model change", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          requiresNewThreadForModelChange: true,
+          startSessionEffect: (session) =>
+            Effect.succeed({ ...session, model: "provider-internal:gpt-5-codex" }),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      const unchangedModelSelection = {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      };
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-rewritten-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-rewritten-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        modelSelection: unchangedModelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-rewritten-2"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-rewritten-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        modelSelection: unchangedModelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads
+              .find((entry) => entry.id === ThreadId.make("thread-1"))
+              ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
+      );
+
+      // The second message never reaches the provider — this is the silent context
+      // loss that `ProviderSession.model` echoing the selection prevents.
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    }),
+  );
+
   it("starts a first turn on the requested provider instance even when it differs from the thread model", async () => {
     const harness = await createHarness({
       threadModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
