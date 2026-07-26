@@ -39,16 +39,7 @@ type SkillFrontmatter =
       readonly modelInvocable?: boolean;
     };
 
-/**
- * Read one scalar field out of raw frontmatter without a YAML parser.
- *
- * Claude Code tolerates frontmatter that strict YAML rejects — an unquoted
- * `description` containing `": "` parses as a nested mapping, and an
- * `argument-hint: [cmd] [args]` trips the flow-sequence scanner. Those skills
- * load fine in Claude Code, so scanning them out here would hide skills the
- * user can actually run. Falling back to a line scan keeps such skills
- * discoverable with their real metadata.
- */
+/** Drop a trailing `# comment`, honouring quoted spans that may contain `#`. */
 function stripRawYamlComment(value: string): string {
   let quote: '"' | "'" | undefined;
   for (let index = 0; index < value.length; index += 1) {
@@ -80,6 +71,16 @@ function stripRawYamlComment(value: string): string {
   return value;
 }
 
+/**
+ * Read one scalar field out of raw frontmatter without a YAML parser.
+ *
+ * Claude Code tolerates frontmatter that strict YAML rejects — an unquoted
+ * `description` containing `": "` parses as a nested mapping, and an
+ * `argument-hint: [cmd] [args]` trips the flow-sequence scanner. Those skills
+ * load fine in Claude Code, so scanning them out here would hide skills the
+ * user can actually run. Falling back to a line scan keeps such skills
+ * discoverable with their real metadata.
+ */
 function readRawFrontmatterField(frontmatter: string, field: string): string | undefined {
   const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`^${escapedField}[ \\t]*:[ \\t]*(.*)$`, "gm");

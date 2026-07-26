@@ -4122,16 +4122,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           });
           const initialization = await claudeQuery.initializationResult();
           const result = await claudeQuery.reloadSkills();
-          const userInvocableSkillNames = Array.isArray(initialization.commands)
-            ? new Set(
-                initialization.commands
-                  .map((command) => command.name.trim().toLowerCase())
-                  .filter((name) => name.length > 0),
-              )
-            : undefined;
+          const commandNames = new Set(
+            (Array.isArray(initialization.commands) ? initialization.commands : [])
+              .map((command) => command.name.trim().toLowerCase())
+              .filter((name) => name.length > 0),
+          );
           return {
             skills: parseClaudeSkills(result.skills),
-            userInvocableSkillNames,
+            // An empty command list carries no information about user
+            // invocation, and using it as a filter would discard every skill.
+            // Only a populated list may gate the merge.
+            ...(commandNames.size > 0 ? { userInvocableSkillNames: commandNames } : {}),
           };
         } finally {
           cleanup();

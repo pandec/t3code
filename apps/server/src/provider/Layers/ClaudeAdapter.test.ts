@@ -424,6 +424,44 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("keeps reported skills when the initialization command list is empty", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-nocommands-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-nocommands-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "deploy"),
+      ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsResult = {
+      skills: [{ name: "project-review", description: "Review this project", argumentHint: "" }],
+    };
+    harness.query.initializationCommands = [];
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      // An empty command list says nothing about user invocation. Using it to
+      // gate the merge would discard every skill we just discovered.
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy", "project-review"],
+      );
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
   it.effect("falls back to scanned skills when Claude skill reload fails", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-degraded-"));
     const homePath = NodeFS.mkdtempSync(
