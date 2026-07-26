@@ -41,6 +41,14 @@ export function holdEditingQueuedMessage(messageId: MessageId): boolean {
   return true;
 }
 
+/** Ensures a retained drain latch exists when ownership may be adopted later. */
+export function ensureEditingQueuedMessageHeld(messageId: MessageId): void {
+  const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
+  if (!current[messageId]) {
+    appAtomRegistry.set(editingQueuedMessageIdsAtom, { ...current, [messageId]: true });
+  }
+}
+
 export function releaseEditingQueuedMessage(messageId: MessageId): void {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (!current[messageId]) {

@@ -53,6 +53,7 @@ import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
+import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
 
 /** Appends text and attachments to a thread's composer draft (review comments, queued-message edits). */
 export function appendContentToThreadDraft(input: {
@@ -153,6 +154,13 @@ export function useThreadComposerState() {
       }
 
       const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      if (isQueuedMessageEditTransferring(threadKey)) {
+        Alert.alert(
+          "Queued message is still opening",
+          "Wait for it to finish moving into the composer, then send.",
+        );
+        return null;
+      }
       const draft = getComposerDraftSnapshot(threadKey);
       const thread = selectedThreadDetail ?? selectedThreadShell;
       const text = draft.text.trim();

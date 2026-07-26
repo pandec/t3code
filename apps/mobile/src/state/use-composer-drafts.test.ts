@@ -1,11 +1,54 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { vi } from "vite-plus/test";
+
+const persistedFiles = new Map<string, string>();
+const corruptNextWrite = { value: false };
+
+vi.mock("expo-file-system", () => ({
+  Paths: { document: "file:///document" },
+  Directory: class {
+    readonly uri: string;
+
+    constructor(base: string, name: string) {
+      this.uri = `${base}/${name}`;
+    }
+
+    create(): void {}
+  },
+  File: class {
+    readonly uri: string;
+
+    constructor(directory: { uri: string }, name: string) {
+      this.uri = `${directory.uri}/${name}`;
+    }
+
+    get exists(): boolean {
+      return persistedFiles.has(this.uri);
+    }
+
+    create(): void {
+      persistedFiles.set(this.uri, "");
+    }
+
+    write(value: string): void {
+      persistedFiles.set(this.uri, corruptNextWrite.value ? `${value.slice(0, 8)}!` : value);
+      corruptNextWrite.value = false;
+    }
+
+    async text(): Promise<string> {
+      return persistedFiles.get(this.uri) ?? "";
+    }
+  },
+}));
 
 import { appAtomRegistry } from "./atom-registry";
 import {
   appendedComposerDraftText,
+  appendComposerDraftContentDurably,
   clearComposerDraftContentIfUnchangedState,
   clearComposerDraftContentState,
+  composerDraftStillContainsAppend,
   composerDraftsAtom,
   decodePersistedComposerDrafts,
   type ComposerDraft,
@@ -23,6 +66,8 @@ const DRAFT: ComposerDraft = {
 
 afterEach(() => {
   appAtomRegistry.set(composerDraftsAtom, {});
+  persistedFiles.clear();
+  corruptNextWrite.value = false;
 });
 
 describe("mobile composer drafts", () => {
@@ -289,6 +334,21 @@ describe("appendedComposerDraftText", () => {
   });
 });
 
+describe("appendComposerDraftContentDurably", () => {
+  it("rejects a non-throwing partial write after readback", async () => {
+    const draftKey = "environment-1:thread-durable";
+    corruptNextWrite.value = true;
+
+    const result = await appendComposerDraftContentDurably(draftKey, {
+      text: "queued",
+      attachments: [],
+    });
+
+    expect(result.status).toBe("persist-failed");
+    expect(getComposerDraftSnapshot(draftKey).text).toBe("queued");
+  });
+});
+
 describe("revertComposerDraftAppend", () => {
   const draftKey = "environment-1:thread-1";
   const image = (id: string) => ({
@@ -301,7 +361,7 @@ describe("revertComposerDraftAppend", () => {
     previewUri: "data:image/png;base64,YWJj",
   });
 
-  it("restores an untouched append exactly", () => {
+  it("restores an untouched append exactly", async () => {
     const existing = image("existing");
     const queued = image("queued");
     const before: ComposerDraft = {
@@ -316,11 +376,14 @@ describe("revertComposerDraftAppend", () => {
     };
     appAtomRegistry.set(composerDraftsAtom, { [draftKey]: appended });
 
-    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(true);
+    await expect(revertComposerDraftAppend(draftKey, { before, appended })).resolves.toEqual({
+      fullyReverted: true,
+      persisted: true,
+    });
     expect(getComposerDraftSnapshot(draftKey)).toEqual(before);
   });
 
-  it("keeps newer text and attachments while removing only this append's image", () => {
+  it("keeps newer text and attachments while removing only this append's image", async () => {
     const existing = image("existing");
     const queued = image("queued");
     const newer = image("newer");
@@ -338,20 +401,56 @@ describe("revertComposerDraftAppend", () => {
       },
     });
 
-    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(false);
+    await expect(revertComposerDraftAppend(draftKey, { before, appended })).resolves.toEqual({
+      fullyReverted: false,
+      persisted: true,
+    });
     expect(getComposerDraftSnapshot(draftKey)).toMatchObject({
       text: "draft\n\nqueued plus my edit",
       attachments: [existing, newer],
     });
   });
 
-  it("removes only the later occurrence when the same image object already existed", () => {
+  it("removes only the later occurrence when the same image object already existed", async () => {
     const repeated = image("same");
     const before: ComposerDraft = { text: "", attachments: [repeated] };
     const appended: ComposerDraft = { text: "", attachments: [repeated, repeated] };
     appAtomRegistry.set(composerDraftsAtom, { [draftKey]: appended });
 
-    expect(revertComposerDraftAppend(draftKey, { before, appended })).toBe(true);
+    await expect(revertComposerDraftAppend(draftKey, { before, appended })).resolves.toEqual({
+      fullyReverted: true,
+      persisted: true,
+    });
     expect(getComposerDraftSnapshot(draftKey).attachments).toEqual([repeated]);
+  });
+});
+
+describe("composerDraftStillContainsAppend", () => {
+  const image = {
+    id: "queued",
+    type: "image" as const,
+    name: "queued.png",
+    mimeType: "image/png",
+    sizeBytes: 3,
+    dataUrl: "data:image/png;base64,YWJj",
+    previewUri: "data:image/png;base64,YWJj",
+  };
+  const before: ComposerDraft = { text: "draft", attachments: [] };
+  const appended: ComposerDraft = {
+    text: "draft\n\nqueued",
+    attachments: [image],
+  };
+
+  it("accepts an untouched live append", () => {
+    expect(composerDraftStillContainsAppend(appended, { before, appended })).toBe(true);
+  });
+
+  it("rejects text or attachments consumed while persistence was pending", () => {
+    expect(composerDraftStillContainsAppend({ ...appended, text: "" }, { before, appended })).toBe(
+      false,
+    );
+    expect(
+      composerDraftStillContainsAppend({ ...appended, attachments: [] }, { before, appended }),
+    ).toBe(false);
   });
 });

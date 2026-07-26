@@ -8,6 +8,7 @@ import type { QueuedThreadMessage } from "./thread-outbox-model";
 import {
   appendComposerDraftContentDurably,
   appendedComposerDraftText,
+  composerDraftStillContainsAppend,
   getComposerDraftSnapshot,
   revertComposerDraftAppend,
   updateComposerDraftSettings,
@@ -18,6 +19,12 @@ import {
   releaseEditingQueuedMessage,
 } from "./use-thread-outbox";
 import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
+
+const editingComposerThreadKeys = new Set<string>();
+
+export function isQueuedMessageEditTransferring(threadKey: string): boolean {
+  return editingComposerThreadKeys.has(threadKey);
+}
 
 /**
  * Row actions for the queued-messages list. Pending-task creations are
@@ -47,7 +54,14 @@ export async function deleteQueuedMessage(message: QueuedThreadMessage): Promise
   if (!isActionableQueuedMessage(message)) {
     return;
   }
-  await removeThreadOutboxMessage(message);
+  if (!holdEditingQueuedMessage(message.messageId)) {
+    return;
+  }
+  try {
+    await removeThreadOutboxMessage(message);
+  } finally {
+    releaseEditingQueuedMessage(message.messageId);
+  }
 }
 
 /**
@@ -61,6 +75,9 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
     return;
   }
   const threadKey = scopedThreadKey(message.environmentId, message.threadId);
+  if (editingComposerThreadKeys.has(threadKey)) {
+    return;
+  }
   const currentAttachmentCount = getComposerDraftSnapshot(threadKey).attachments.length;
   if (currentAttachmentCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
     Alert.alert(
@@ -72,10 +89,19 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
   if (!holdEditingQueuedMessage(message.messageId)) {
     return;
   }
+  editingComposerThreadKeys.add(threadKey);
   // Set before the first await: once the queued row is gone the draft holds the
   // only copy, so a later failure must never revert it away.
   let removed = false;
-  let revertAppend: (() => boolean) | null = null;
+  let revertAppend: (() => ReturnType<typeof revertComposerDraftAppend>) | null = null;
+  const reportLoadFailure = (fullyReverted: boolean) => {
+    Alert.alert(
+      "Could not open this message for editing",
+      fullyReverted
+        ? "It is still queued — try again, or delete it if you no longer need it."
+        : "It is still queued, and newer composer changes or a send were kept. Check the composer and queued messages before sending again.",
+    );
+  };
   try {
     // Append to the draft FIRST, then drop the queued row. Removal is durable
     // (the row leaves persisted storage too), so removing first would destroy
@@ -93,15 +119,11 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
     const contentAppended =
       append.status === "committed" &&
       append.appended.text === appendedComposerDraftText(append.before.text, message.text) &&
-      message.attachments.every(({ id }) => appendedAttachmentIds.has(id));
+      message.attachments.every(({ id }) => appendedAttachmentIds.has(id)) &&
+      composerDraftStillContainsAppend(getComposerDraftSnapshot(threadKey), append);
     if (!contentAppended) {
-      const fullyReverted = revertAppend();
-      Alert.alert(
-        "Could not open this message for editing",
-        fullyReverted
-          ? "It is still queued — try again, or delete it if you no longer need it."
-          : "It is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
-      );
+      const revert = await revertAppend();
+      reportLoadFailure(revert.fullyReverted && revert.persisted);
       return;
     }
 
@@ -126,15 +148,11 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
       // message — reverting here would destroy it.
       console.warn("[thread-outbox] queued message appended but its setup failed", error);
     } else {
-      const fullyReverted = revertAppend?.() ?? true;
-      Alert.alert(
-        "Could not open this message for editing",
-        fullyReverted
-          ? "It is still queued — try again, or delete it if you no longer need it."
-          : "It is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
-      );
+      const revert = revertAppend ? await revertAppend() : { fullyReverted: true, persisted: true };
+      reportLoadFailure(revert.fullyReverted && revert.persisted);
     }
   } finally {
+    editingComposerThreadKeys.delete(threadKey);
     releaseEditingQueuedMessage(message.messageId);
   }
 }

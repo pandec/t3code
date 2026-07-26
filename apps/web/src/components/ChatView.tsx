@@ -1341,6 +1341,7 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const queuedMessageEditsInProgressRef = useRef(new Set<MessageId>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
@@ -4469,6 +4470,14 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    if (queuedMessageEditsInProgressRef.current.size > 0) {
+      toastManager.add({
+        type: "warning",
+        title: "Queued message is still opening",
+        description: "Wait for it to finish moving into the composer, then send.",
+      });
+      return;
+    }
     if (
       !activeThread ||
       isSendBusy ||
@@ -5107,9 +5116,14 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
-    void removeThreadOutboxMessage(message).catch((error) => {
-      console.warn("[thread-outbox] failed to delete queued message", error);
-    });
+    if (!holdEditingQueuedMessage(message.messageId)) return;
+    void removeThreadOutboxMessage(message)
+      .catch((error) => {
+        console.warn("[thread-outbox] failed to delete queued message", error);
+      })
+      .finally(() => {
+        releaseEditingQueuedMessage(message.messageId);
+      });
   }, []);
 
   const onEditQueuedMessage = useCallback(
@@ -5144,14 +5158,22 @@ function ChatViewContent(props: ChatViewProps) {
       // Hold the message so the drain cannot deliver it while its content is
       // being moved back into the composer. The acquisition also rejects a
       // second pencil click before it can append the same message twice.
+      if (queuedMessageEditsInProgressRef.current.size > 0) {
+        return;
+      }
       if (!holdEditingQueuedMessage(message.messageId)) {
         return;
       }
+      queuedMessageEditsInProgressRef.current.add(message.messageId);
       // Set before the first await: once the queued row is gone the composer
       // holds the only copy, so a later failure must never revert it away.
       let removed = false;
       let revertComposerLoad: (() => boolean) | null = null;
-      const reportLoadFailure = (error?: unknown, fullyReverted = true) => {
+      const reportLoadFailure = (
+        error?: unknown,
+        fullyReverted = true,
+        fullyRevertedDescription?: string,
+      ) => {
         if (error !== undefined) {
           console.warn("[thread-outbox] failed to load queued message into the composer", error);
         }
@@ -5159,7 +5181,8 @@ function ChatViewContent(props: ChatViewProps) {
           type: "error",
           title: "Could not open this message for editing",
           description: fullyReverted
-            ? "It is still queued — try again, or delete it if you no longer need it."
+            ? (fullyRevertedDescription ??
+              "It is still queued — try again, or delete it if you no longer need it.")
             : "It is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
         });
       };
@@ -5194,8 +5217,7 @@ function ChatViewContent(props: ChatViewProps) {
             prompt: previousPrompt,
             detectTrigger: false,
           });
-          flushComposerDraftPersistence();
-          return true;
+          return flushComposerDraftPersistence();
         };
         // Load the composer FIRST, then drop the queued row. Removal is
         // durable (the row leaves local storage too), so removing first would
@@ -5210,27 +5232,29 @@ function ChatViewContent(props: ChatViewProps) {
           addComposerDraftImages(composerDraftTarget, hydratedImages);
         }
 
-        // Confirm the content really is in the composer before the queued copy
-        // is destroyed. An empty draft is pruned outright, so read the prompt
-        // defensively. Every source attachment must hydrate and appear under
-        // its own id: the store's name/MIME/size dedup key is not a content
-        // identity, so accepting a dedup-only match could lose different bytes.
+        // Confirm the live content first, then make a separate durable
+        // acknowledgement before destroying the queued copy. An empty draft is
+        // pruned outright, so read the prompt defensively. A source image may be
+        // represented by another id only when the persisted bytes match exactly;
+        // the store's name/MIME/size dedup key alone is not a content identity.
         const loadedDraft = readDraft();
-        const loadedImages = loadedDraft?.images ?? [];
-        const loadedImageIds = new Set(loadedImages.map((image) => image.id));
-        const contentLoaded =
+        const contentLoadedInMemory =
           hydratedImages.length === message.attachments.length &&
-          (loadedDraft?.prompt ?? "") === nextPrompt &&
-          hydratedImages.every(
-            (image) => !imageIdsBeforeLoad.has(image.id) && loadedImageIds.has(image.id),
-          ) &&
-          persistComposerDraftContentNow(composerDraftTarget, {
+          (loadedDraft?.prompt ?? "") === nextPrompt;
+        let contentPersisted = false;
+        if (contentLoadedInMemory) {
+          contentPersisted = persistComposerDraftContentNow(composerDraftTarget, {
             prompt: nextPrompt,
             attachments: message.attachments,
           });
-        if (!contentLoaded) {
+        }
+        if (!contentPersisted) {
           const fullyReverted = revertComposerLoad();
-          reportLoadFailure(undefined, fullyReverted);
+          const failureDescription =
+            hydratedImages.length !== message.attachments.length
+              ? "One or more queued images are damaged. The message is still queued, but it cannot be opened safely."
+              : "It is still queued. If the same image is already in the composer, remove that image and try again.";
+          reportLoadFailure(undefined, fullyReverted, failureDescription);
           return;
         }
 
@@ -5275,6 +5299,7 @@ function ChatViewContent(props: ChatViewProps) {
           reportLoadFailure(error, fullyReverted);
         }
       } finally {
+        queuedMessageEditsInProgressRef.current.delete(message.messageId);
         releaseEditingQueuedMessage(message.messageId);
       }
     },

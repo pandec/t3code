@@ -47,7 +47,7 @@ import {
   type QueuedThreadMessage,
 } from "../../state/thread-outbox";
 import {
-  holdEditingQueuedMessage,
+  ensureEditingQueuedMessageHeld,
   releaseEditingQueuedMessage,
   useThreadOutboxMessages,
 } from "../../state/use-thread-outbox";
@@ -679,7 +679,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     editingPendingTaskRef.current = message;
     setEditingPendingTask(message);
     // Hold the outbox drain off this task while it is open in the editor.
-    holdEditingQueuedMessage(message.messageId);
+    ensureEditingQueuedMessageHeld(message.messageId);
     return true;
   }, []);
 

@@ -3440,6 +3440,18 @@ function persistedComposerAttachmentsMatch(
   });
 }
 
+function persistedComposerAttachmentContentMatches(
+  left: PersistedComposerImageAttachment,
+  right: PersistedComposerImageAttachment,
+): boolean {
+  return (
+    left.name === right.name &&
+    left.mimeType === right.mimeType &&
+    left.sizeBytes === right.sizeBytes &&
+    left.dataUrl === right.dataUrl
+  );
+}
+
 /**
  * Flushes queued-message content to localStorage and reads it back before a
  * caller destroys the durable outbox copy. Queued attachments already carry
@@ -3462,14 +3474,31 @@ export function persistComposerDraftContentNow(
     return false;
   }
   const currentImageIds = new Set(current.images.map((image) => image.id));
-  if (expected.attachments.some((attachment) => !currentImageIds.has(attachment.id))) {
-    return false;
+  const usedRepresentativeIds = new Set<string>();
+  const representedAttachments: PersistedComposerImageAttachment[] = [];
+  for (const attachment of expected.attachments) {
+    if (currentImageIds.has(attachment.id) && !usedRepresentativeIds.has(attachment.id)) {
+      representedAttachments.push(attachment);
+      usedRepresentativeIds.add(attachment.id);
+      continue;
+    }
+    const representative = current.persistedAttachments.find(
+      (candidate) =>
+        currentImageIds.has(candidate.id) &&
+        !usedRepresentativeIds.has(candidate.id) &&
+        persistedComposerAttachmentContentMatches(candidate, attachment),
+    );
+    if (!representative) {
+      return false;
+    }
+    representedAttachments.push(representative);
+    usedRepresentativeIds.add(representative.id);
   }
 
-  const expectedIds = new Set(expected.attachments.map((attachment) => attachment.id));
+  const expectedIds = new Set(representedAttachments.map((attachment) => attachment.id));
   store.syncPersistedAttachments(threadRef, [
     ...current.persistedAttachments.filter((attachment) => !expectedIds.has(attachment.id)),
-    ...expected.attachments,
+    ...representedAttachments,
   ]);
 
   try {
@@ -3484,7 +3513,7 @@ export function persistComposerDraftContentNow(
       persisted?.version === COMPOSER_DRAFT_STORAGE_VERSION &&
       persistedDraft?.prompt === current.prompt &&
       persistedDraft.inputOrigin === current.inputOrigin &&
-      persistedComposerAttachmentsMatch(persistedDraft.attachments, expected.attachments)
+      persistedComposerAttachmentsMatch(persistedDraft.attachments, representedAttachments)
     );
   } catch {
     return false;

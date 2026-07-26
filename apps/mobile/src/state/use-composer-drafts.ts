@@ -27,7 +27,7 @@ const PERSIST_DEBOUNCE_MS = 200;
 export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<ComposerDraftPersistenceError>()(
   "ComposerDraftPersistenceError",
   {
-    operation: Schema.Literals(["open", "read", "decode", "encode", "write", "hydrate"]),
+    operation: Schema.Literals(["open", "read", "decode", "encode", "write", "verify", "hydrate"]),
     directory: Schema.String,
     fileName: Schema.String,
     cause: Schema.Defect(),
@@ -206,6 +206,35 @@ async function writePersistedComposerDrafts(drafts: Record<string, ComposerDraft
   }
 }
 
+async function writeAndVerifyPersistedComposerDrafts(
+  drafts: Record<string, ComposerDraft>,
+): Promise<void> {
+  await writePersistedComposerDrafts(drafts);
+  const expected = decodePersistedComposerDrafts({
+    schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
+    drafts: Object.fromEntries(Object.entries(drafts).filter(([, draft]) => !isEmptyDraft(draft))),
+  });
+  let operation: ComposerDraftPersistenceError["operation"] = "open";
+  try {
+    const file = await getComposerDraftsFile();
+    operation = "read";
+    const raw = await file.text();
+    operation = "decode";
+    const persisted = decodePersistedComposerDrafts(JSON.parse(raw) as unknown);
+    operation = "verify";
+    if (JSON.stringify(persisted) !== JSON.stringify(expected)) {
+      throw new Error("Persisted composer draft snapshot did not match the requested write.");
+    }
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation,
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: COMPOSER_DRAFTS_FILE,
+      cause,
+    });
+  }
+}
+
 async function savePersistedComposerDrafts(drafts: Record<string, ComposerDraft>): Promise<void> {
   try {
     await persistenceQueue.run(() => writePersistedComposerDrafts(drafts));
@@ -343,7 +372,7 @@ export async function appendComposerDraftContentDurably(
   appAtomRegistry.set(composerDraftsAtom, next);
 
   try {
-    await persistenceQueue.run(() => writePersistedComposerDrafts(next));
+    await persistenceQueue.run(() => writeAndVerifyPersistedComposerDrafts(next));
     return { before, appended, status: "committed" };
   } catch (error) {
     console.warn("[composer-drafts] failed to durably append queued message", error);
@@ -357,10 +386,15 @@ export async function appendComposerDraftContentDurably(
  * attachment objects introduced by the append are removed from the latest
  * array so later user additions and removals survive.
  */
-export function revertComposerDraftAppend(
+export interface DurableComposerDraftRevert {
+  readonly fullyReverted: boolean;
+  readonly persisted: boolean;
+}
+
+export async function revertComposerDraftAppend(
   draftKey: string,
   transaction: Pick<DurableComposerDraftAppend, "before" | "appended">,
-): boolean {
+): Promise<DurableComposerDraftRevert> {
   let fullyReverted = true;
   updateComposerDrafts((current) => {
     const latest = normalizeDraft(current[draftKey]);
@@ -401,7 +435,47 @@ export function revertComposerDraftAppend(
       [draftKey]: draft,
     };
   });
-  return fullyReverted;
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    await persistenceQueue.run(() =>
+      writeAndVerifyPersistedComposerDrafts(appAtomRegistry.get(composerDraftsAtom)),
+    );
+    return { fullyReverted, persisted: true };
+  } catch (error) {
+    console.warn("[composer-drafts] failed to durably revert queued message append", error);
+    return { fullyReverted, persisted: false };
+  }
+}
+
+export function composerDraftStillContainsAppend(
+  latest: ComposerDraft,
+  transaction: Pick<DurableComposerDraftAppend, "before" | "appended">,
+): boolean {
+  if (latest.text !== transaction.appended.text) {
+    return false;
+  }
+  const appendedAttachments = transaction.appended.attachments.slice(
+    transaction.before.attachments.length,
+  );
+  const remaining = [...latest.attachments];
+  for (const attachment of appendedAttachments) {
+    const index = remaining.findIndex(
+      (candidate) =>
+        candidate.id === attachment.id &&
+        candidate.name === attachment.name &&
+        candidate.mimeType === attachment.mimeType &&
+        candidate.sizeBytes === attachment.sizeBytes &&
+        candidate.dataUrl === attachment.dataUrl,
+    );
+    if (index < 0) {
+      return false;
+    }
+    remaining.splice(index, 1);
+  }
+  return true;
 }
 
 export function appendComposerDraftText(draftKey: string, value: string): void {

@@ -414,6 +414,50 @@ describe("persistComposerDraftContentNow", () => {
     ).toBe(false);
   });
 
+  it("accepts a metadata-deduped image when staged bytes prove exact content on readback", () => {
+    const existing = makeImage({
+      id: "existing-image",
+      previewUrl: "data:image/png;base64,YWJj",
+      name: "same.png",
+      sizeBytes: 3,
+    });
+    const queued = makeImage({
+      id: "queued-image",
+      previewUrl: "data:image/png;base64,YWJj",
+      name: "same.png",
+      sizeBytes: 3,
+    });
+    const existingAttachment = {
+      id: existing.id,
+      name: existing.name,
+      mimeType: existing.mimeType,
+      sizeBytes: existing.sizeBytes,
+      dataUrl: existing.previewUrl,
+    };
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "queued text");
+    store.addImages(threadRef, [existing, queued]);
+    store.syncPersistedAttachments(threadRef, [existingAttachment]);
+
+    expect(
+      persistComposerDraftContentNow(threadRef, {
+        prompt: "queued text",
+        attachments: [
+          {
+            id: queued.id,
+            name: queued.name,
+            mimeType: queued.mimeType,
+            sizeBytes: queued.sizeBytes,
+            dataUrl: queued.previewUrl,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([
+      existingAttachment,
+    ]);
+  });
+
   it("exposes failed source hydration instead of treating it as an empty attachment list", () => {
     expect(
       hydrateImagesFromPersisted([
