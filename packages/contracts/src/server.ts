@@ -89,6 +89,14 @@ export const ServerProviderSkill = Schema.Struct({
   path: Schema.optional(TrimmedNonEmptyString),
   scope: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.Boolean,
+  /**
+   * Whether the agent itself can invoke this skill mid-turn. Claude skills
+   * that set `disable-model-invocation: true` in their frontmatter are
+   * user-invocable only: they resolve as `/name` slash commands but never
+   * reach the model's skill tool. Absent means "unknown / assume invocable",
+   * which is what provider-native discovery reports.
+   */
+  modelInvocable: Schema.optional(Schema.Boolean),
   displayName: Schema.optional(TrimmedNonEmptyString),
   shortDescription: Schema.optional(TrimmedNonEmptyString),
 });

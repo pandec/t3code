@@ -1,4 +1,5 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
@@ -242,7 +243,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         })
       : null,
   );
-  const selectedProviderSkills = providerSkillsQuery.data?.skills ?? providerSnapshotSkills;
+  const selectedProviderSkills = resolveEffectiveProviderSkills(
+    providerSkillsQuery.data?.skills,
+    providerSnapshotSkills,
+  );
 
   useLayoutEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;

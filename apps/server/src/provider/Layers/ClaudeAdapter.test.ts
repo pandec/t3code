@@ -66,6 +66,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
   public initializationResultOverride: (() => Promise<SDKControlInitializeResponse>) | undefined;
+  public initializationCommands: SDKControlInitializeResponse["commands"] = [];
   public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
   public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
@@ -124,7 +125,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     if (this.initializationResultOverride) {
       return this.initializationResultOverride();
     }
-    return {} as SDKControlInitializeResponse;
+    return { commands: this.initializationCommands } as SDKControlInitializeResponse;
   };
 
   readonly reloadSkills = async (): Promise<SDKControlReloadSkillsResponse> => {
@@ -290,13 +291,19 @@ async function readFirstPromptMessage(
   return next.value;
 }
 
+function writeSkillFile(skillDirectory: string, contents: string): void {
+  NodeFS.mkdirSync(skillDirectory, { recursive: true });
+  NodeFS.writeFileSync(NodePath.join(skillDirectory, "SKILL.md"), contents);
+}
+
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
   it.effect("lists genuine Claude skills for the active workspace", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-"));
-    const harness = makeHarness({ cwd });
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-home-"));
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     harness.query.reloadSkillsResult = {
       skills: [
         {
@@ -311,6 +318,9 @@ describe("ClaudeAdapterLive", () => {
         },
       ],
     };
+    harness.query.initializationCommands = [
+      { name: "project-review", description: "Review this project", argumentHint: "" },
+    ];
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -324,6 +334,7 @@ describe("ClaudeAdapterLive", () => {
           name: "project-review",
           description: "Review this project",
           enabled: true,
+          modelInvocable: true,
         },
       ]);
       assert.equal(harness.getLastCreateQueryInput()?.options.cwd, NodeFS.realpathSync(cwd));
@@ -340,14 +351,177 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 
-  it.effect("closes the discovery query when Claude skill reload fails", () => {
-    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
-    const harness = makeHarness({ cwd });
+  it.effect("surfaces user-invocable-only skills the SDK skill list omits", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-manual-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-manual-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "dotfiles-sync"),
+      [
+        "---",
+        "name: dotfiles-sync",
+        "description: Sync dotfiles.",
+        "user-invocable: true",
+        "disable-model-invocation: true",
+        "---",
+      ].join("\n"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "internal-only"),
+      [
+        "---",
+        "name: internal-only",
+        "description: Model use only.",
+        "user-invocable: false",
+        "---",
+      ].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsResult = {
+      skills: [
+        { name: "project-review", description: "Review this project", argumentHint: "" },
+        { name: "internal-only", description: "Model use only", argumentHint: "" },
+      ],
+    };
+    harness.query.initializationCommands = [
+      { name: "dotfiles-sync", description: "Sync dotfiles.", argumentHint: "" },
+      { name: "project-review", description: "Review this project", argumentHint: "" },
+    ];
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      // `skills/reload` never reports `disable-model-invocation: true` skills,
+      // so the picker would lose them without the filesystem scan.
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["dotfiles-sync", "project-review"],
+      );
+      assert.equal(skills[0]?.modelInvocable, false);
+      assert.equal(skills[0]?.scope, "user");
+      assert.equal(skills[1]?.modelInvocable, true);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect("keeps reported skills when the initialization command list is empty", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-nocommands-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-nocommands-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "deploy"),
+      ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsResult = {
+      skills: [{ name: "project-review", description: "Review this project", argumentHint: "" }],
+    };
+    harness.query.initializationCommands = [];
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      // An empty command list says nothing about user invocation. Using it to
+      // gate the merge would discard every skill we just discovered.
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy", "project-review"],
+      );
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect("still gates scanned skills by the command list when only reload fails", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-gated-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-gated-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "deploy"),
+      ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+    );
+    // Disabled through settings: present on disk, absent from the CLI's
+    // command list, and `/turned-off` does not resolve.
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "turned-off"),
+      ["---", "name: turned-off", "description: Switched off.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     harness.query.reloadSkillsFailure = new Error("reload failed");
+    harness.query.initializationCommands = [
+      { name: "deploy", description: "Deploy the app.", argumentHint: "" },
+    ];
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      // Initialization succeeded, so its command list survives the reload
+      // failure and still filters what the picker offers.
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy"],
+      );
+      // No SDK skill list means no evidence about model reachability.
+      assert.equal(skills[0]?.modelInvocable, undefined);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect("fails when reload fails and the command list gates the scan to nothing", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-gated-empty-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-gated-empty-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "turned-off"),
+      ["---", "name: turned-off", "description: Switched off.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsFailure = new Error("reload failed");
+    harness.query.initializationCommands = [
+      { name: "help", description: "Built-in", argumentHint: "" },
+    ];
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -359,13 +533,87 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 
+  it.effect("falls back to scanned skills when Claude skill reload fails", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-degraded-"));
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-degraded-home-"),
+    );
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "deploy"),
+      ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+    harness.query.reloadSkillsFailure = new Error("reload failed");
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listSkills = adapter.listSkills;
+      if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+      const skills = yield* listSkills({ cwd });
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy"],
+      );
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect(
+    "closes the discovery query when Claude skill reload fails with nothing on disk",
+    () => {
+      const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-"));
+      const homePath = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "claude-skills-failure-home-"),
+      );
+      const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+      harness.query.reloadSkillsFailure = new Error("reload failed");
+
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const listSkills = adapter.listSkills;
+        if (!listSkills) return yield* Effect.die("Claude adapter does not support skill listing");
+        const error = yield* Effect.flip(listSkills({ cwd }));
+
+        // Nothing to serve, so the caller must see the failure and fall back to
+        // the provider snapshot rather than cache an empty list.
+        assert.equal(error._tag, "ProviderAdapterRequestError");
+        assert.equal(harness.query.closeCalls, 1);
+      }).pipe(
+        Effect.provide(harness.layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            NodeFS.rmSync(cwd, { recursive: true, force: true });
+            NodeFS.rmSync(homePath, { recursive: true, force: true });
+          }),
+        ),
+      );
+    },
+  );
+
   it.effect("aborts and closes a pending Claude skill discovery when interrupted", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-"));
-    const harness = makeHarness({ cwd });
+    const homePath = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "claude-skills-interrupt-home-"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
     let abortObserved = false;
     let markInitializationStarted: () => void = () => {};
     const initializationStarted = new Promise<void>((resolve) => {
@@ -398,7 +646,12 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(cwd, { recursive: true, force: true }))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 

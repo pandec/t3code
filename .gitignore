@@ -50,3 +50,4 @@ node_modules/
 .playwright-cli/
 docs/codex-results/
 rev/
+.cy-review-run/

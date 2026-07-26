@@ -56,6 +56,7 @@ import {
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 
 type WorkspaceMode = "local" | "worktree";
@@ -411,8 +412,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         })
       : null,
   );
-  const selectedProviderSkills =
-    selectedProviderSkillsQuery.data?.skills ?? selectedProviderSnapshotSkills;
+  const selectedProviderSkills = resolveEffectiveProviderSkills(
+    selectedProviderSkillsQuery.data?.skills,
+    selectedProviderSnapshotSkills,
+  );
   const setSelectedModelKey = useCallback(
     (key: string | null) => {
       if (!key || !selectedProjectDraftKey) {
