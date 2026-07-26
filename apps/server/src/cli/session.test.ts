@@ -72,7 +72,7 @@ it.effect("sniffs Codex rollout metadata and the last advertised model", () =>
   }),
 );
 
-it.effect("sniffs Claude typed JSONL and requires the filename UUID", () =>
+it.effect("sniffs Claude typed JSONL for its session identity", () =>
   Effect.gen(function* () {
     const sniffed = yield* sniffSessionTranscript({
       fileName: `${claudeSessionId}.jsonl`,
@@ -88,6 +88,34 @@ it.effect("sniffs Claude typed JSONL and requires the filename UUID", () =>
       sourceCwd: "/repo/source",
       lastSeenModel: "claude-sonnet-5",
     });
+  }),
+);
+
+it.effect("sniffs a Claude transcript whose filename was changed in transit", () =>
+  Effect.gen(function* () {
+    const sniffed = yield* sniffSessionTranscript({
+      fileName: "handover-copy.jsonl",
+      content: `{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-07-25T08:09:10.000Z","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"user","content":"hello"}}`,
+    });
+
+    expect(sniffed).toMatchObject({
+      provider: "claudeAgent",
+      nativeSessionId: claudeSessionId,
+      sourceCwd: "/repo/source",
+    });
+  }),
+);
+
+it.effect("rejects Claude transcripts mixing session ids", () =>
+  Effect.gen(function* () {
+    const mixed = yield* sniffSessionTranscript({
+      fileName: `${claudeSessionId}.jsonl`,
+      content: [
+        `{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-07-25T08:09:10.000Z","sessionId":"${claudeSessionId}","cwd":"/repo/source","message":{"role":"user","content":"hello"}}`,
+        `{"type":"user","uuid":"u2","parentUuid":"u1","timestamp":"2026-07-25T08:09:12.000Z","sessionId":"${codexSessionId}","cwd":"/repo/source","message":{"role":"user","content":"other"}}`,
+      ].join("\n"),
+    }).pipe(Effect.flip);
+    expect(mixed.detail).toContain("one UUID sessionId");
   }),
 );
 

@@ -255,18 +255,19 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
     .map((record) => nonEmptyString(record.sessionId))
     .filter((value): value is string => value !== null);
   const nativeSessionId = sessionIds[0] ?? null;
-  const expectedSessionId = NodePath.parse(NodePath.basename(input.fileName)).name;
+  // The records carry the session identity, so a transferred transcript imports
+  // even when its filename was changed in transit; placement always uses the
+  // record-derived id.
   if (
     typedRecords.length !== records.length ||
     nativeSessionId === null ||
     !UUID_PATTERN.test(nativeSessionId) ||
-    nativeSessionId !== expectedSessionId ||
     sessionIds.some((sessionId) => sessionId !== nativeSessionId)
   ) {
     return yield* new SessionCliError({
       operation: "sniffSession",
       detail:
-        "Unknown session format. Claude transcripts require typed JSONL records whose UUID sessionId matches the filename.",
+        "Unknown session format. Claude transcripts require typed JSONL records sharing one UUID sessionId.",
     });
   }
   let sourceCwd: string | null = null;
@@ -970,6 +971,10 @@ const sessionImportCommand = Command.make("import", {
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
+  title: Flag.string("title").pipe(
+    Flag.withDescription("Thread title; defaults to the provider session name."),
+    Flag.optional,
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Place and import a Claude or Codex CLI session transcript."),
@@ -1074,6 +1079,7 @@ const sessionImportCommand = Command.make("import", {
             projectId: project.id,
             instanceId: instance.instanceId,
             nativeSessionId: session.nativeSessionId,
+            ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
             ...(modelSelection === undefined ? {} : { modelSelection }),
             ...(worktree === undefined ? {} : { worktree }),
           }).pipe(Effect.result);

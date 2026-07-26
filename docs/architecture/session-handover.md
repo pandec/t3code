@@ -1,6 +1,6 @@
 # Cross-machine session handover
 
-Status: **agent-driven v0 CLI primitives implemented; agent skill and integrated cross-machine verification remain**. The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
+Status: **agent-driven v0 shipped**. CLI primitives are merged; the `t3-session-handover` agent skill lives in the user's dotfiles (both Claude and `.agents` harnesses share one workflow file); a Claude thread was handed over space-mac → ubuntu-dell on 2026-07-26 and resumed natively with full history. Remaining: a Codex-session handover and a T3-managed-worktree handover as live tests. The in-app "Hand off to →" UI is deferred to v2. Feasibility empirically verified 2026-07-24; design reviewed against the codebase by an independent agent pass on 2026-07-24 (findings folded in below).
 
 ## Motivation
 
@@ -27,7 +27,7 @@ Caveats found (experiment + code review):
 - Session-scoped side state (todos, rewind/file-history checkpoints, shell snapshots, background shells) does not travel. Continuation is unaffected; rewind cannot reach back before the handover.
 - Handover must be **one-shot/directional**: two machines resuming the same session id fork the transcript. (Enforced at the T3 layer only — nothing stops `claude --resume` in a terminal on the source; acceptable.)
 - **Never blind-copy the Claude project dir**: the target usually already has `~/.claude/projects/<escaped-cwd>/` for the same repo with its own `memory/`. Copy the session `.jsonl` always; other files (e.g. `memory/`) copy-missing-only, never overwrite.
-- Import pipeline caps: `THREAD_IMPORT_MAX_MESSAGES` = 5,000 messages, `MAX_SESSION_FILE_BYTES` = 256 MB. Beyond the cap, import fails even though native resume works.
+- Import pipeline caps: `THREAD_IMPORT_MAX_MESSAGES` = 5,000 messages, `MAX_SESSION_FILE_BYTES` = 256 MB. Past the message cap the import keeps the most recent messages and warns; past the byte cap it fails, though native resume still works.
 - The Claude transcript parser is deliberately strict (`ClaudeSessionImport.ts:228-232`): one unknown record type fails the parse. Claude Code version skew between machines can therefore break _import_ while native resume still works. Codex skew verified tolerant; Claude parser skew untested.
 
 ## v0: agent-driven handover (CLI + skill) — the implementation target
@@ -40,14 +40,15 @@ Insight from practice: an agent with SSH access to all machines can already perf
 
 ### CLI additions (fork, PR to dev)
 
-1. **`t3 session import --file <transcript> --project <id-or-path> [--worktree-branch B] [--model M] [--effort E] [--instance I] [--json]`**
+1. **`t3 session import --file <transcript> --project <id-or-path> [--worktree-branch B] [--model M] [--effort E] [--instance I] [--title T] [--json]`**
    - Sniffs provider, native session id, source cwd, and last-used model from the file itself (Codex rollouts start with `session_meta`; Claude JSONLs are typed message lines). No provider/id flags needed.
    - **Does the placement itself**: computes the target escaped-cwd dir for the effective project path and installs the Claude file there, or drops the Codex rollout into `~/.codex/sessions/<date>/`. Path translation is the most error-prone step — code owns it. Never overwrites an existing file.
    - `--worktree-branch` derives and creates the standard T3 worktree path; free-form worktree paths are not accepted. It fails clearly if the branch is absent locally — the CLI never fetches. Unlike the UI bootstrap flow, this CLI path does not run the project setup script or trigger a git-status refresh.
    - Defaults model selection from the transcript, overridable.
-   - Validates defensively: session id UUID pattern, id-inside-transcript matches filename claim, size caps, provider instance/model options, and server-side worktree identity.
+   - Validates defensively: session id UUID pattern, records agreeing on one session id, size caps, provider instance/model options, and server-side worktree identity. The transcript's own records are authoritative for identity, so a file renamed in transit still imports and is placed under its record-derived id.
    - Uses authenticated HTTP session-import endpoints while retaining the existing binding-first transaction and deterministic duplicate recovery.
-   - `--title` is intentionally absent; imported provider names remain authoritative, and later renames use `t3 thread rename`.
+   - `--title` carries a T3 thread title across a handover (T3 titles live in the database and never travel inside a transcript); without it the provider session name is used.
+   - History beyond `THREAD_IMPORT_MAX_MESSAGES` is trimmed to the most recent messages with a `history-truncated` warning rather than failing: the cap bounds imported display history, while the provider keeps the full transcript that the resume cursor binds to.
 2. **`t3 session candidates --project <id-or-path> [--cwd <worktree>] [--json]`** — standalone candidate inspection for a project or validated existing worktree.
 3. **`t3 thread new ... --model M [--effort E] [--instance I]`** — explicitly selects an advertised provider model; with no model flags, project-default behavior is unchanged.
 4. **`t3 thread archive <thread-id>`** — required so the agent can mark the source thread handed-off (archive exists in the UI multi-select only).
@@ -79,7 +80,7 @@ Recipe the skill encodes:
 | 3   | Direction                 | Agent-driven flow is inherently direction-agnostic (SSH both ways). Note: pull does **not** rescue a closed-laptop source — both ends must be reachable at handover time regardless |
 | 4   | Mid-turn                  | Require quiescence; interrupt only with user consent; queued messages (fork feature) are T3-side state and do not travel — surface them before interrupting                         |
 | 5   | Memory/side files         | Session file always; everything else copy-missing-only; never overwrite target files                                                                                                |
-| 6   | Caps/parser skew          | Fail clearly, leave files placed (native resume + later import both remain available); revisit raising `THREAD_IMPORT_MAX_MESSAGES` if hit in practice                              |
+| 6   | Caps/parser skew          | Trim past the message cap with a warning; fail clearly on parse errors or the byte cap, leaving files placed (native resume + later import both remain available)                   |
 | 7   | Provider scope            | Claude + Codex only (verified). Cursor/Grok/OpenCode untested                                                                                                                       |
 | 8   | Missing project on target | Repo exists at translated path → auto-add project; repo missing → fail, no cloning                                                                                                  |
 | 9   | Handover note             | Inject "this session was handed over; repo now lives at `<path>`; worktree recreated at `<path>`" into the first resumed turn                                                       |
