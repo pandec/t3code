@@ -5,7 +5,12 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
-import { getComposerDraftSnapshot, updateComposerDraftSettings } from "./use-composer-drafts";
+import {
+  getComposerDraftSnapshot,
+  replaceComposerDraftAttachments,
+  setComposerDraftText,
+  updateComposerDraftSettings,
+} from "./use-composer-drafts";
 import { appendContentToThreadDraft } from "./use-thread-composer-state";
 import {
   editingQueuedMessageIdsAtom,
@@ -47,8 +52,9 @@ export async function deleteQueuedMessage(message: QueuedThreadMessage): Promise
 
 /**
  * Moves a queued message back into the thread's composer draft: content is
- * appended, settings carried over, and the queue entry removed. The edit hold
- * keeps the drain from delivering the message mid-move.
+ * appended, verified, and only then the queue entry removed, so a failed move
+ * leaves the message queued rather than destroying it. The edit hold keeps the
+ * drain from delivering the message mid-move.
  */
 export async function editQueuedMessage(message: QueuedThreadMessage): Promise<void> {
   if (!isActionableQueuedMessage(message)) {
@@ -64,17 +70,47 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
     return;
   }
   holdEditingQueuedMessage(message.messageId);
+  // Set before the first await: once the queued row is gone the draft holds the
+  // only copy, so a later failure must never revert it away.
+  let removed = false;
+  const draftBeforeAppend = getComposerDraftSnapshot(threadKey);
+  const revertAppend = () => {
+    replaceComposerDraftAttachments(threadKey, draftBeforeAppend.attachments);
+    setComposerDraftText(threadKey, draftBeforeAppend.text, draftBeforeAppend.inputOrigin);
+  };
   try {
-    // Remove first: if this fails the message simply stays queued, whereas
-    // appending first could leave the content both queued and in the draft.
-    const removed = await removeThreadOutboxMessage(message);
-    if (!removed) return;
+    // Append to the draft FIRST, then drop the queued row. Removal is durable
+    // (the row leaves persisted storage too), so removing first would destroy
+    // the message outright whenever the append does not land.
     appendContentToThreadDraft({
       environmentId: message.environmentId,
       threadId: message.threadId,
       text: message.text,
       attachments: message.attachments,
     });
+
+    const draftAfterAppend = getComposerDraftSnapshot(threadKey);
+    const appendedAttachmentIds = new Set(draftAfterAppend.attachments.map(({ id }) => id));
+    const contentAppended =
+      (message.text.length === 0 || draftAfterAppend.text.includes(message.text)) &&
+      message.attachments.every(({ id }) => appendedAttachmentIds.has(id));
+    if (!contentAppended) {
+      revertAppend();
+      Alert.alert(
+        "Could not open this message for editing",
+        "It is still queued — try again, or delete it if you no longer need it.",
+      );
+      return;
+    }
+
+    removed = await removeThreadOutboxMessage(message);
+    if (!removed) {
+      // Deleted, or claimed by a second edit, while the draft was appended;
+      // keeping the content would send it twice.
+      revertAppend();
+      return;
+    }
+
     updateComposerDraftSettings(threadKey, {
       ...(message.modelSelection !== undefined ? { modelSelection: message.modelSelection } : {}),
       ...(message.runtimeMode !== undefined ? { runtimeMode: message.runtimeMode } : {}),
@@ -82,6 +118,18 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
         ? { interactionMode: message.interactionMode }
         : {}),
     });
+  } catch (error) {
+    if (removed) {
+      // The queued row is already gone, so the draft holds the only copy of the
+      // message — reverting here would destroy it.
+      console.warn("[thread-outbox] queued message appended but its setup failed", error);
+    } else {
+      revertAppend();
+      Alert.alert(
+        "Could not open this message for editing",
+        "It is still queued — try again, or delete it if you no longer need it.",
+      );
+    }
   } finally {
     releaseEditingQueuedMessage(message.messageId);
   }
