@@ -145,6 +145,19 @@ export function ContextWindowMeter(props: {
   const quotaColor = QUOTA_RING_COLOR[quotaWindow?.status ?? quotaStatus];
   const quotaPercentage = Math.max(0, Math.min(100, quotaWindow?.usedPercent ?? 0));
   const quotaPercentLabel = quotaWindow ? formatPercentage(quotaWindow.usedPercent) : null;
+  const quotaAriaLabel = quotaWindow
+    ? quotaPercentLabel
+      ? `${providerUsage?.providerLabel ?? "Provider"} ${quotaWindow.label} at ${quotaPercentLabel}`
+      : `${providerUsage?.providerLabel ?? "Provider"} ${quotaWindow.label} ${
+          quotaWindow.status === "critical"
+            ? "limit reached"
+            : quotaWindow.status === "warning"
+              ? "limit warning"
+              : "usage"
+        }`
+    : providerUsage
+      ? `${providerUsage.providerLabel} usage`
+      : null;
 
   const ariaLabel = [
     usage
@@ -152,9 +165,7 @@ export function ContextWindowMeter(props: {
         ? `Context window ${usedPercentage} used`
         : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
       : null,
-    quotaWindow && quotaPercentLabel
-      ? `${providerUsage?.providerLabel ?? "Provider"} ${quotaWindow.label} at ${quotaPercentLabel}`
-      : null,
+    quotaAriaLabel,
   ]
     .filter(Boolean)
     .join(", ");

@@ -234,6 +234,22 @@ function claudeUsageApiWindowLabels(
   }
 }
 
+function claudeUsageApiBaseWindowId(kind: string, scopeLabel: string | null): string {
+  // Use the passive event stream's established ids so interleaved pull/push
+  // updates address the same semantic window instead of creating duplicates.
+  if (kind === "session") return "five_hour";
+  if (kind === "weekly_all") return "seven_day";
+  if (kind.startsWith("weekly") && scopeLabel !== null) {
+    const scopeId = scopeLabel
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (scopeId.length > 0) return `seven_day_${scopeId}`;
+  }
+  return kind;
+}
+
 /** ISO 8601 (usage API) → unix seconds, matching the event stream's units. */
 function isoToUnixSeconds(value: unknown): number | null {
   const text = asString(value);
@@ -256,22 +272,61 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
 
   const limits = Array.isArray(rateLimits.limits) ? rateLimits.limits : null;
   if (limits) {
+    const candidates: Array<{
+      index: number;
+      limit: Record<string, unknown>;
+      kind: string;
+      scopeLabel: string | null;
+      scopeModelId: string | null;
+      scopeSurface: string | null;
+      baseId: string;
+      percent: number;
+    }> = [];
     for (const [index, entry] of limits.entries()) {
       const limit = asRecord(entry);
       if (!limit) continue;
       const percent = asFiniteNumber(limit.percent);
       if (percent === null) continue;
       const kind = asString(limit.kind) ?? "unknown";
-      const scopeLabel = asString(asRecord(asRecord(limit.scope)?.model)?.display_name);
+      const scope = asRecord(limit.scope);
+      const scopeModel = asRecord(scope?.model);
+      const scopeLabel = asString(scopeModel?.display_name);
+      candidates.push({
+        index,
+        limit,
+        kind,
+        scopeLabel,
+        scopeModelId: asString(scopeModel?.id),
+        scopeSurface: asString(scope?.surface),
+        baseId: claudeUsageApiBaseWindowId(kind, scopeLabel),
+        percent,
+      });
+    }
+
+    const baseIdCounts = new Map<string, number>();
+    for (const candidate of candidates) {
+      baseIdCounts.set(candidate.baseId, (baseIdCounts.get(candidate.baseId) ?? 0) + 1);
+    }
+    const usedIds = new Set<string>();
+    for (const candidate of candidates) {
+      const { index, limit, kind, scopeLabel, baseId, percent } = candidate;
       const { label, shortLabel } = claudeUsageApiWindowLabels(kind, scopeLabel);
-      // Several entries can share a kind (one per scoped model), so the scope
-      // label — or failing that, the position — keeps ids distinct and stable.
-      const id =
-        scopeLabel !== null
-          ? `${kind}:${scopeLabel}`
-          : kind === "unknown"
-            ? `${kind}:${index}`
-            : kind;
+      // A display label normally identifies a scoped model and keeps parity
+      // with passive ids. If the API repeats that identity, prefer stable scope
+      // metadata and use the position only as the final defensive fallback.
+      const repeatedBaseId = (baseIdCounts.get(baseId) ?? 0) > 1;
+      const scopeIdentity =
+        [candidate.scopeModelId, candidate.scopeSurface]
+          .filter((value): value is string => value !== null)
+          .join(":") || null;
+      let id =
+        repeatedBaseId && scopeIdentity !== null
+          ? `${baseId}:${scopeIdentity}`
+          : repeatedBaseId || kind === "unknown"
+            ? `${baseId}:${index}`
+            : baseId;
+      if (usedIds.has(id)) id = `${id}:${index}`;
+      usedIds.add(id);
       const usedPercent = clampPercent(percent);
       if (limit.is_active === true) {
         activeWindowId = id;
@@ -319,8 +374,6 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
       });
     }
   }
-
-  if (windows.length === 0) return null;
 
   return {
     providerLabel: "Claude",

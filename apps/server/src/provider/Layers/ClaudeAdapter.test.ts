@@ -151,7 +151,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     if (!usageResult) {
       return undefined;
     }
-    return async () => {
+    return async function (this: FakeClaudeQuery) {
       this.usageCalls += 1;
       return (await usageResult()) as SDKControlGetUsageResponse;
     };
@@ -751,6 +751,27 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
       assert.equal(secondSession.status, "ready");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("does not let a stalled usage request block session startup", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () => new Promise<never>(() => undefined);
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.timeout("1 second"));
+
+      assert.equal(session.status, "ready");
+      yield* Effect.yieldNow;
+      assert.equal(harness.query.usageCalls, 1);
+      yield* adapter.stopSession(THREAD_ID);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 

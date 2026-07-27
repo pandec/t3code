@@ -217,6 +217,10 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  subscriptionUsageFiber: Fiber.Fiber<void, never> | undefined;
+  subscriptionUsageInFlight: boolean;
+  subscriptionUsageRefreshPending: boolean;
+  readonly scheduleSubscriptionUsage: () => void;
   readonly pendingWorkState: {
     hasPendingWork: boolean | undefined;
   };
@@ -1862,11 +1866,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     const usage = yield* Effect.promise(async () => {
       try {
-        return await readUsage();
+        return await readUsage.call(context.query);
       } catch {
         return undefined;
       }
     });
+    if (context.stopped) {
+      return;
+    }
     if (!usage?.rate_limits_available || !usage.rate_limits) {
       return;
     }
@@ -2179,7 +2186,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     };
     yield* updateResumeCursor(context);
     // After the turn, so the quota reflects the work just done.
-    yield* emitSubscriptionUsage(context);
+    context.scheduleSubscriptionUsage();
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -3149,6 +3156,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     context.stopped = true;
 
+    const subscriptionUsageFiber = context.subscriptionUsageFiber;
+    context.subscriptionUsageFiber = undefined;
+    if (subscriptionUsageFiber && subscriptionUsageFiber.pollUnsafe() === undefined) {
+      yield* Fiber.interrupt(subscriptionUsageFiber);
+    }
+
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
       const stamp = yield* makeEventStamp();
@@ -3782,6 +3795,45 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        subscriptionUsageFiber: undefined,
+        subscriptionUsageInFlight: false,
+        subscriptionUsageRefreshPending: false,
+        scheduleSubscriptionUsage: () => {
+          if (context.stopped) {
+            return;
+          }
+          if (context.subscriptionUsageInFlight) {
+            context.subscriptionUsageRefreshPending = true;
+            return;
+          }
+
+          context.subscriptionUsageInFlight = true;
+          const usageFiber = runFork(
+            emitSubscriptionUsage(context).pipe(
+              // SDK control requests have no response timeout. Keep this
+              // best-effort pull off the provider lifecycle and bound a lost
+              // response without allowing concurrent requests to accumulate.
+              Effect.timeoutOption("10 seconds"),
+              Effect.catchCause(() => Effect.void),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  context.subscriptionUsageInFlight = false;
+                  if (context.subscriptionUsageRefreshPending && !context.stopped) {
+                    context.subscriptionUsageRefreshPending = false;
+                    context.scheduleSubscriptionUsage();
+                  }
+                }),
+              ),
+              Effect.asVoid,
+            ),
+          );
+          context.subscriptionUsageFiber = usageFiber;
+          usageFiber.addObserver(() => {
+            if (context.subscriptionUsageFiber === usageFiber) {
+              context.subscriptionUsageFiber = undefined;
+            }
+          });
+        },
         pendingWorkState,
         stopped: false,
       };
@@ -3831,10 +3883,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         providerRefs: {},
       });
 
-      // Seed the usage meter before the first turn: without this the meter
-      // stays blank for a fresh session until a turn completes.
-      yield* emitSubscriptionUsage(context);
-
       let streamFiber: Fiber.Fiber<void, never>;
       streamFiber = runFork(
         Effect.exit(runSdkStream(context)).pipe(
@@ -3859,6 +3907,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+
+      // Seed the usage meter without delaying session startup or SDK stream
+      // consumption. A later turn completion coalesces behind this single
+      // in-flight request when necessary.
+      context.scheduleSubscriptionUsage();
 
       return {
         ...session,
