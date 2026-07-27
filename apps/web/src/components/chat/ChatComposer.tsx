@@ -92,7 +92,6 @@ import {
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
-import { ProviderUsageMeter } from "./ProviderUsageMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -439,12 +438,10 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeProviderUsage ? (
-        <ProviderUsageMeter snapshot={props.activeProviderUsage} />
-      ) : null}
-      {props.activeContextWindow ? (
+      {props.activeContextWindow || props.activeProviderUsage ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
+          providerUsage={props.activeProviderUsage}
           providerDisplayName={props.activeThreadProviderDisplayName}
         />
       ) : null}

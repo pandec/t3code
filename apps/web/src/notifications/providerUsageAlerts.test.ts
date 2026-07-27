@@ -12,6 +12,7 @@ function makeNumberlessAlert(threshold: ProviderUsageAlert["threshold"]): Provid
     threshold,
     window: {
       id: "five_hour",
+      group: "session",
       label: "Session (5h)",
       shortLabel: "5h",
       usedPercent: null,

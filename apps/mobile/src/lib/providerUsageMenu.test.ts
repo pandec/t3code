@@ -28,6 +28,7 @@ describe("providerUsageTriggerLabel", () => {
         status: "warning",
         constrainedWindow: {
           id: "five_hour",
+          group: "session",
           label: "Session (5h)",
           shortLabel: "5h",
           usedPercent: 88,
@@ -45,6 +46,7 @@ describe("providerUsageTriggerLabel", () => {
         status: "warning",
         constrainedWindow: {
           id: "five_hour",
+          group: "session",
           label: "Session (5h)",
           shortLabel: "5h",
           usedPercent: null,
@@ -65,6 +67,7 @@ describe("providerUsageMenuActions", () => {
         windows: [
           {
             id: "five_hour",
+            group: "session",
             label: "Session (5h)",
             shortLabel: "5h",
             usedPercent: 42,
@@ -73,6 +76,7 @@ describe("providerUsageMenuActions", () => {
           },
           {
             id: "seven_day",
+            group: "weekly",
             label: "Weekly (all models)",
             shortLabel: "Wk",
             usedPercent: null,
@@ -96,6 +100,7 @@ describe("providerUsageMenuActions", () => {
         windows: [
           {
             id: "five_hour",
+            group: "session",
             label: "Session (5h)",
             shortLabel: "5h",
             usedPercent: null,

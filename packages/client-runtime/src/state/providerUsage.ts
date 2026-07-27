@@ -19,9 +19,16 @@ const PROVIDER_USAGE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export type ProviderUsageStatus = "ok" | "warning" | "critical";
 
+/**
+ * Coarse window class, normalized across providers so surfaces can pick a
+ * window to feature without matching provider-specific ids or labels.
+ */
+export type ProviderUsageWindowGroup = "session" | "weekly" | "other";
+
 export type ProviderUsageWindow = {
   /** Stable identity for merging events and de-duping alerts, e.g. "five_hour". */
   readonly id: string;
+  readonly group: ProviderUsageWindowGroup;
   /** Popover row label, e.g. "Session (5h)" or "Weekly (Fable)". */
   readonly label: string;
   /** Compact label for the inline trigger, e.g. "5h" or "Wk". */
@@ -114,6 +121,14 @@ const CLAUDE_WINDOW_LABELS: Record<string, { label: string; shortLabel: string }
   overage: { label: "Overage", shortLabel: "Overage" },
 };
 
+function claudeWindowGroup(rateLimitType: string): ProviderUsageWindowGroup {
+  // Hour windows are spelled out ("five_hour") today but have been numeric in
+  // other payloads, so match on the suffix rather than a fixed value.
+  if (/_hours?$/.test(rateLimitType)) return "session";
+  if (rateLimitType.startsWith("seven_day") || /_days?$/.test(rateLimitType)) return "weekly";
+  return "other";
+}
+
 function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel: string } {
   const known = CLAUDE_WINDOW_LABELS[rateLimitType];
   if (known) return known;
@@ -170,7 +185,15 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
     providerLabel: "Claude",
     clearedWindowIds: [],
     windows: [
-      { id: rateLimitType, label, shortLabel, usedPercent, resetsAt, status: windowStatus },
+      {
+        id: rateLimitType,
+        group: claudeWindowGroup(rateLimitType),
+        label,
+        shortLabel,
+        usedPercent,
+        resetsAt,
+        status: windowStatus,
+      },
     ],
   };
 }
@@ -253,8 +276,19 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
       if (limit.is_active === true) {
         activeWindowId = id;
       }
+      // The payload's own `group` ("session" / "weekly") is authoritative when
+      // present; otherwise infer it from the window kind.
+      const reportedGroup = asString(limit.group);
       windows.push({
         id,
+        group:
+          reportedGroup === "session" || reportedGroup === "weekly"
+            ? reportedGroup
+            : kind === "session"
+              ? "session"
+              : kind.startsWith("weekly")
+                ? "weekly"
+                : "other",
         label,
         shortLabel,
         usedPercent,
@@ -276,6 +310,7 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
       const usedPercent = clampPercent(utilization);
       windows.push({
         id: key,
+        group: claudeWindowGroup(key),
         label,
         shortLabel,
         usedPercent,
@@ -384,7 +419,10 @@ function normalizeCodexRateLimits(
     const baseId = durationMins === null ? `${slot}:${semanticId}` : semanticId;
     const id = usedIds.has(baseId) ? `${baseId}#${slot}` : baseId;
     usedIds.add(id);
+    const group: ProviderUsageWindowGroup =
+      durationMins === null ? "other" : durationMins < 24 * 60 ? "session" : "weekly";
     windows.push({
+      group,
       id,
       label,
       shortLabel,
@@ -685,6 +723,28 @@ export function deriveLatestProviderUsageSnapshot(
     constrainedWindow,
     updatedAt,
   };
+}
+
+/**
+ * The single window a compact surface (a ring, a pill) should represent.
+ *
+ * Prefers the session window and falls back to the weekly one — the session
+ * window is the actionable near-term constraint, and it is often absent
+ * (Codex reports weekly only today). A window in warning or critical state
+ * always wins regardless of class: a calm 3% session window must never mask
+ * a Fable weekly window sitting at 96%.
+ */
+export function primaryProviderUsageWindow(
+  snapshot: ProviderUsageSnapshot,
+): ProviderUsageWindow | null {
+  if (snapshot.windows.length === 0) return null;
+  if (snapshot.constrainedWindow !== null) return snapshot.constrainedWindow;
+  return (
+    snapshot.windows.find((window) => window.group === "session") ??
+    snapshot.windows.find((window) => window.group === "weekly") ??
+    snapshot.windows[0] ??
+    null
+  );
 }
 
 // ---------------------------------------------------------------------------

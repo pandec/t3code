@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   collectProviderUsageAlerts,
   deriveLatestProviderUsageSnapshot,
+  primaryProviderUsageWindow,
   providerUsageAlertKey,
 } from "./providerUsage.ts";
 
@@ -55,6 +56,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows).toEqual([
       {
         id: "five_hour",
+        group: "session",
         label: "Session (5h)",
         shortLabel: "5h",
         usedPercent: 42,
@@ -181,6 +183,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows).toEqual([
       {
         id: "seven_day",
+        group: "weekly",
         label: "Weekly (all models)",
         shortLabel: "Wk",
         usedPercent: 90,
@@ -237,6 +240,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.windows).toEqual([
       {
         id: "codex-10080m",
+        group: "weekly",
         label: "Weekly",
         shortLabel: "Wk",
         usedPercent: 28,
@@ -748,6 +752,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
       expect(snapshot?.windows).toEqual([
         {
           id: "session",
+          group: "session",
           label: "Session (5h)",
           shortLabel: "5h",
           usedPercent: 3,
@@ -756,6 +761,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
         },
         {
           id: "weekly_all",
+          group: "weekly",
           label: "Weekly (all models)",
           shortLabel: "Wk",
           usedPercent: 24,
@@ -764,6 +770,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
         },
         {
           id: "weekly_scoped:Fable",
+          group: "weekly",
           label: "Weekly (Fable)",
           shortLabel: "Fable",
           usedPercent: 44,
@@ -878,6 +885,68 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
       expect(snapshot?.providerLabel).toBe("Claude");
     });
+  });
+});
+
+describe("primaryProviderUsageWindow", () => {
+  function usageApiSnapshot(limits: ReadonlyArray<Record<string, unknown>>) {
+    return deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: { source: "claude.usage-api", subscriptionType: "max", rateLimits: { limits } },
+      }),
+    ]);
+  }
+
+  it("prefers the session window when one is reported", () => {
+    const snapshot = usageApiSnapshot([
+      { kind: "weekly_all", percent: 24, resets_at: null },
+      { kind: "session", percent: 3, resets_at: null },
+    ]);
+
+    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Session (5h)");
+  });
+
+  it("falls back to the weekly window when no session window exists", () => {
+    // Codex reports weekly-only today; the ring must still show something.
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 28, windowDurationMins: 10080, resetsAt: 1785475320 },
+          },
+        },
+      }),
+    ]);
+
+    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly");
+  });
+
+  it("surfaces a constrained window even when a calm session window exists", () => {
+    const snapshot = usageApiSnapshot([
+      { kind: "session", percent: 3, resets_at: null },
+      {
+        kind: "weekly_scoped",
+        percent: 96,
+        resets_at: null,
+        scope: { model: { display_name: "Fable" } },
+      },
+    ]);
+
+    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly (Fable)");
+  });
+
+  it("returns null for a snapshot with no windows", () => {
+    expect(
+      primaryProviderUsageWindow({
+        providerLabel: "Claude",
+        providerInstanceId: null,
+        windows: [],
+        status: "ok",
+        constrainedWindow: null,
+        updatedAt: "2026-07-25T00:00:00.000Z",
+      }),
+    ).toBeNull();
   });
 });
 
