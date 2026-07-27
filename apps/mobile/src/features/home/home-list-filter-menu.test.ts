@@ -11,12 +11,15 @@ describe("buildHomeListFilterMenu", () => {
         { key: "environment-1:project-1", label: "Codething" },
         { key: "environment-1:project-2", label: "Website" },
       ],
+      models: [],
       selectedEnvironmentId: null,
       selectedProjectKey: "environment-1:project-1",
+      selectedModel: null,
       projectSortOrder: "updated_at",
       threadSortOrder: "updated_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange,
+      onModelChange: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
@@ -39,5 +42,63 @@ describe("buildHomeListFilterMenu", () => {
     projectMenu.items[2]?.onPress();
     expect(onProjectChange).toHaveBeenNthCalledWith(1, null);
     expect(onProjectChange).toHaveBeenNthCalledWith(2, "environment-1:project-2");
+  });
+
+  it("adds a model submenu that pins and clears the model filter", () => {
+    const onModelChange = vi.fn();
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      models: [
+        { key: "claude-opus-4-5", label: "Opus 4.5" },
+        { key: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+      ],
+      selectedEnvironmentId: null,
+      selectedProjectKey: null,
+      selectedModel: "claude-opus-4-5",
+      projectSortOrder: "updated_at",
+      threadSortOrder: "updated_at",
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+      onModelChange,
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    const modelMenu = menu.items.find((item) => item.type === "submenu" && item.title === "Model");
+    expect(modelMenu).toMatchObject({
+      type: "submenu",
+      items: [
+        { title: "All models", state: "off" },
+        { title: "Opus 4.5", state: "on" },
+        { title: "GPT-5.6 Sol", state: "off" },
+      ],
+    });
+    if (modelMenu?.type !== "submenu") throw new Error("Expected model submenu");
+
+    modelMenu.items[0]?.onPress();
+    modelMenu.items[2]?.onPress();
+    expect(onModelChange).toHaveBeenNthCalledWith(1, null);
+    expect(onModelChange).toHaveBeenNthCalledWith(2, "gpt-5.6-sol");
+  });
+
+  it("omits the model submenu until a second model can discriminate", () => {
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      models: [{ key: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      selectedEnvironmentId: null,
+      selectedProjectKey: null,
+      selectedModel: null,
+      projectSortOrder: "updated_at",
+      threadSortOrder: "updated_at",
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    expect(menu.items.some((item) => item.title === "Model")).toBe(false);
   });
 });

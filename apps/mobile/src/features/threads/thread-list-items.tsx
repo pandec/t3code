@@ -13,6 +13,7 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -20,6 +21,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { providerDisplayName } from "./thread-provider";
 import { resolveThreadStatus } from "./threadPresentation";
 
 /**
@@ -415,6 +417,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly variant: ThreadListVariant;
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
+  /** Provider driver id ("claudeAgent", "codex", …); null hides the mark. */
+  readonly providerDriver?: string | null;
   readonly projectCwd: string | null;
   readonly isLast: boolean;
   /** Sidebar only: the thread currently open in the detail pane. */
@@ -451,7 +455,14 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
-  const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
+  const providerDriver = props.providerDriver ?? null;
+  // The subtitle text is inside the row's Pressable, so it is not announced
+  // separately; the provider mark is the only NEW information the row shows,
+  // and it has no non-visual equivalent unless it is named here.
+  const providerName = providerDisplayName(providerDriver);
+  const threadAccessibilityLabel = [thread.title, providerName, pr ? pr.accessibilityLabel : null]
+    .filter((part): part is string => Boolean(part))
+    .join(", ");
   const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
     Boolean(part),
   );
@@ -493,20 +504,27 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const subtitleRow =
     subtitleParts.length > 0 || pr !== null ? (
       <View className="mt-px flex-row items-center gap-1.5">
+        {/* Leads the line like PendingTaskListRow's glyph, and never stands
+            alone: a lone mark on an otherwise empty line carries nothing.
+            Muted to the same weight as the v2 row's trailing mark so a
+            brand color does not outrank the row title. */}
+        {providerDriver !== null ? (
+          <View className="opacity-60">
+            <ProviderIcon provider={providerDriver} size={compact ? 13 : 11} />
+          </View>
+        ) : null}
         {subtitleParts.length > 0 ? (
-          <>
-            <Text
-              className={cn(
-                "shrink",
-                compact ? "text-sm text-foreground-muted" : "text-xs",
-                !compact &&
-                  (selected ? "text-user-bubble-foreground-muted" : "text-foreground-muted"),
-              )}
-              numberOfLines={1}
-            >
-              {subtitleParts.join(" · ")}
-            </Text>
-          </>
+          <Text
+            className={cn(
+              "shrink",
+              compact ? "text-sm text-foreground-muted" : "text-xs",
+              !compact &&
+                (selected ? "text-user-bubble-foreground-muted" : "text-foreground-muted"),
+            )}
+            numberOfLines={1}
+          >
+            {subtitleParts.join(" · ")}
+          </Text>
         ) : null}
         {pr !== null ? (
           <View className="flex-row items-center gap-0.5">

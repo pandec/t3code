@@ -23,6 +23,8 @@ import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export interface HomeListOptions {
   readonly selectedEnvironmentId: EnvironmentId | null;
+  /** Model slug the list is pinned to (`thread.modelSelection.model`). */
+  readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
 }
@@ -56,6 +58,7 @@ export const THREAD_SORT_OPTIONS: ReadonlyArray<{
 function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentId: null,
+    selectedModel: null,
     projectSortOrder:
       DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
         ? "updated_at"
@@ -96,13 +99,26 @@ export function hasCustomHomeListOptions(
       : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
   return (
     options.selectedEnvironmentId !== null ||
+    options.selectedModel !== null ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
     options.projectSortOrder !== defaultProjectSortOrder ||
     options.threadSortOrder !== DEFAULT_SIDEBAR_THREAD_SORT_ORDER
   );
 }
 
-export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<EnvironmentId>) {
+/**
+ * A pin whose environment or model is not currently available is MASKED, not
+ * cleared: the stored value survives so the filter comes back when the
+ * environment reconnects or a thread on that model reappears, instead of
+ * being silently dropped while a machine is offline. Masking is per consumer,
+ * but both shells derive availability from the same thread list, and only one
+ * is mounted at a time.
+ */
+export function useHomeListOptions(
+  availableEnvironmentIds: ReadonlySet<EnvironmentId>,
+  /** Model slugs still present in the list; a stale pin falls back to "all". */
+  availableModels: ReadonlySet<string>,
+) {
   const shared = useContext(HomeListOptionsContext);
   const [localOptions, setLocalOptions] = useState<HomeListOptions>(defaultHomeListOptions);
   const options = shared?.options ?? localOptions;
@@ -112,10 +128,15 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     availableEnvironmentIds.has(options.selectedEnvironmentId)
       ? options.selectedEnvironmentId
       : null;
+  const selectedModel =
+    options.selectedModel !== null && availableModels.has(options.selectedModel)
+      ? options.selectedModel
+      : null;
   const availableOptions =
-    selectedEnvironmentId === options.selectedEnvironmentId
+    selectedEnvironmentId === options.selectedEnvironmentId &&
+    selectedModel === options.selectedModel
       ? options
-      : { ...options, selectedEnvironmentId };
+      : { ...options, selectedEnvironmentId, selectedModel };
   const resolvedOptions: ResolvedHomeListOptions = {
     ...availableOptions,
     projectGroupingMode: shared?.projectGroupingMode ?? "repository",
@@ -123,6 +144,9 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
 
   const setSelectedEnvironmentId = useCallback((value: EnvironmentId | null) => {
     setOptions((current) => ({ ...current, selectedEnvironmentId: value }));
+  }, []);
+  const setSelectedModel = useCallback((value: string | null) => {
+    setOptions((current) => ({ ...current, selectedModel: value }));
   }, []);
   const setProjectSortOrder = useCallback((value: HomeProjectSortOrder) => {
     setOptions((current) => ({ ...current, projectSortOrder: value }));
@@ -133,6 +157,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   return {
     options: resolvedOptions,
     setSelectedEnvironmentId,
+    setSelectedModel,
     setProjectSortOrder,
     setThreadSortOrder,
   } as const;

@@ -15,6 +15,7 @@ import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
+import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
@@ -51,13 +52,17 @@ export function HomeRouteScreen() {
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
+  const { modelFilterOptions, availableModels } = useHomeModelFilterOptions(threads);
   const {
     options: listOptions,
     setSelectedEnvironmentId,
+    setSelectedModel,
     setProjectSortOrder,
     setThreadSortOrder,
-  } = useHomeListOptions(availableEnvironmentIds);
+  } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const selectedModelLabel =
+    modelFilterOptions.find((model) => model.key === listOptions.selectedModel)?.label ?? null;
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
@@ -112,13 +117,16 @@ export function HomeRouteScreen() {
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
+          models={modelFilterOptions}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
+          selectedModel={listOptions.selectedModel}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onModelChange={setSelectedModel}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -173,6 +181,8 @@ export function HomeRouteScreen() {
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
+          selectedModel={listOptions.selectedModel}
+          selectedModelLabel={selectedModelLabel}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
           threadSortOrder={listOptions.threadSortOrder}

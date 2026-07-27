@@ -21,6 +21,7 @@ import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
+  type HomeListFilterMenuModel,
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
 import {
@@ -34,14 +35,17 @@ export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+  readonly models: ReadonlyArray<HomeListFilterMenuModel>;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onModelChange: (model: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
@@ -76,7 +80,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const mutedColor = useThemeColor("--color-foreground-muted");
   const threadListV2Enabled = useThreadListV2FilterGate();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
+    ? props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      props.selectedModel !== null
     : hasCustomHomeListOptions(props);
   const menuActions = useMemo<MenuAction[]>(
     () => [
@@ -116,6 +122,30 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
+      // One model across every thread makes the section a no-op; it appears
+      // only once it can discriminate (same rule as the shared iOS builder).
+      ...(props.models.length < 2
+        ? []
+        : ([
+            {
+              id: "model",
+              title: "Model",
+              subactions: [
+                {
+                  // "clear", not "all": a model slug could legitimately be
+                  // "all" and would then be unselectable.
+                  id: "model:clear",
+                  title: "All models",
+                  state: checkedMenuState(props.selectedModel === null),
+                },
+                ...props.models.map((model) => ({
+                  id: `model:${model.key}`,
+                  title: model.label,
+                  state: checkedMenuState(props.selectedModel === model.key),
+                })),
+              ],
+            },
+          ] satisfies MenuAction[])),
       ...(threadListV2Enabled
         ? []
         : ([
@@ -141,9 +171,11 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     ],
     [
       props.environments,
+      props.models,
       props.projectSortOrder,
       props.projects,
       props.selectedEnvironmentId,
+      props.selectedModel,
       props.selectedProjectKey,
       props.threadSortOrder,
       threadListV2Enabled,
@@ -177,6 +209,19 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         const projectKey = id.slice("project:".length);
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
+        }
+        return;
+      }
+
+      if (id === "model:clear") {
+        props.onModelChange(null);
+        return;
+      }
+
+      if (id.startsWith("model:")) {
+        const modelKey = id.slice("model:".length);
+        if (props.models.some((model) => model.key === modelKey)) {
+          props.onModelChange(modelKey);
         }
         return;
       }
@@ -294,7 +339,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const iconColor = useThemeColor("--color-icon");
   const threadListV2Enabled = useThreadListV2FilterGate();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
+    ? props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      props.selectedModel !== null
     : hasCustomHomeListOptions(props);
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
@@ -378,6 +425,10 @@ function IosHomeHeader(props: HomeHeaderProps) {
         </NativeHeaderToolbar>
       )}
 
+      {/* Currently unreachable: HomeHeader routes Android to AndroidHomeHeader
+          and the app ships ios + android only (app.config.ts), so this branch
+          never renders. Kept as-is rather than extended — the live iOS menu is
+          buildHomeListFilterMenu above. */}
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
@@ -432,6 +483,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             ) : null}
 
+            {/* No Model section here: this whole toolbar is unreachable on
+                the shipping platforms (see the comment above), and a fourth
+                hand-synced copy of the filter menu would only rot. */}
             <NativeHeaderToolbar.Menu title="Sort projects">
               <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
               {PROJECT_SORT_OPTIONS.map((option) => (
