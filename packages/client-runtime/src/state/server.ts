@@ -3,6 +3,7 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
+  type ServerProviderSkill,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -31,6 +32,28 @@ export interface ServerConfigProjection {
   readonly config: ServerConfig;
   readonly latestEvent: ServerConfigStreamEvent;
   readonly source: "cache" | "live";
+}
+
+const NO_PROVIDER_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
+
+/**
+ * Prefer a non-empty workspace answer, while retaining snapshot skills when
+ * an empty response means the workspace lookup could not answer.
+ */
+export function resolveEffectiveProviderSkills(
+  workspaceSkills: ReadonlyArray<ServerProviderSkill> | undefined,
+  snapshotSkills: ReadonlyArray<ServerProviderSkill> | undefined,
+): ReadonlyArray<ServerProviderSkill> {
+  if (workspaceSkills && workspaceSkills.length > 0) {
+    return workspaceSkills;
+  }
+  return snapshotSkills ?? NO_PROVIDER_SKILLS;
+}
+
+export function isProviderSkillManualOnly(
+  skill: Pick<ServerProviderSkill, "modelInvocable">,
+): boolean {
+  return skill.modelInvocable === false;
 }
 
 export function applyServerConfigProjection(

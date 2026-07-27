@@ -8,7 +8,10 @@ import { BotIcon } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
-import { formatProviderSkillInstallSource } from "~/providerSkillPresentation";
+import {
+  formatProviderSkillInstallSource,
+  isProviderSkillManualOnly,
+} from "~/providerSkillPresentation";
 import { cn } from "~/lib/utils";
 import {
   Command,
@@ -203,8 +206,17 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  const skillSourceLabel =
-    props.item.type === "skill" ? formatProviderSkillInstallSource(props.item.skill) : null;
+  // "Manual" flags a skill the agent cannot invoke on its own, so the
+  // inserted reference is a pointer for the user rather than a trigger.
+  const skillMetaLabel =
+    props.item.type === "skill"
+      ? [
+          isProviderSkillManualOnly(props.item.skill) ? "Manual" : null,
+          formatProviderSkillInstallSource(props.item.skill),
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" · ") || null
+      : null;
 
   return (
     <CommandItem
@@ -250,8 +262,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           {props.item.description}
         </span>
       </span>
-      {skillSourceLabel ? (
-        <span className="shrink-0 pl-2 text-muted-foreground/70 text-xs">{skillSourceLabel}</span>
+      {skillMetaLabel ? (
+        <span className="shrink-0 pl-2 text-muted-foreground/70 text-xs">{skillMetaLabel}</span>
       ) : null}
     </CommandItem>
   );

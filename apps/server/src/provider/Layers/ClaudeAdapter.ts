@@ -68,6 +68,7 @@ import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -82,10 +83,13 @@ import {
 } from "../Drivers/ClaudeSessionImport.ts";
 import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
+import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import {
   CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
   getClaudeModelCapabilities,
+  gateClaudeSkillsByUserInvocation,
   isClaudeUltracodeEffort,
+  mergeClaudeSkills,
   normalizeClaudeCliEffort,
   parseClaudeSkills,
   resolveClaudeApiModelId,
@@ -4136,12 +4140,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     );
   });
 
+  const importDriverContext = <A, E>(
+    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
+
   const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = Effect.fn(
     "ClaudeAdapter.listSkills",
   )(function* (input) {
     const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
 
-    return yield* Effect.tryPromise({
+    const nativeSkillsEffect = Effect.tryPromise({
       try: async (signal) => {
         const abortController = new AbortController();
         let claudeQuery: ClaudeQueryRuntime | undefined;
@@ -4183,9 +4195,30 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               stderr: () => {},
             },
           });
-          await claudeQuery.initializationResult();
-          const result = await claudeQuery.reloadSkills();
-          return parseClaudeSkills(result.skills);
+          const initialization = await claudeQuery.initializationResult();
+          const commandNames = new Set(
+            (Array.isArray(initialization.commands) ? initialization.commands : [])
+              .map((command) => command.name.trim().toLowerCase())
+              .filter((name) => name.length > 0),
+          );
+          // An empty command list carries no information about user invocation,
+          // and using it as a filter would discard every skill. Only a
+          // populated list may gate the merge.
+          const userInvocableSkillNames = commandNames.size > 0 ? commandNames : undefined;
+
+          // Initialization already succeeded here, so a reload failure must not
+          // take the command list down with it — that list is what tells the
+          // degraded path which scanned skills `/name` can still resolve.
+          try {
+            const result = await claudeQuery.reloadSkills();
+            return { skills: parseClaudeSkills(result.skills), userInvocableSkillNames };
+          } catch (cause) {
+            return {
+              reloadFailure:
+                cause instanceof Error ? cause.message : String(cause ?? "skills/reload failed"),
+              userInvocableSkillNames,
+            };
+          }
         } finally {
           cleanup();
         }
@@ -4197,16 +4230,54 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           detail: cause instanceof Error ? cause.message : String(cause),
           cause,
         }),
-    });
-  });
+    }).pipe(Effect.result);
 
-  const importDriverContext = <A, E>(
-    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
+    // Scanning and SDK initialization are independent. Start both together so
+    // filesystem latency does not consume Claude's cold-start budget.
+    const [discoveredSkills, nativeSkills] = yield* Effect.all(
+      [
+        // Scanned against the requested workspace rather than the server's
+        // cwd, so project-scoped skills belong to the project being asked about.
+        importDriverContext(discoverClaudeSkills(claudeSettings, canonicalCwd, claudeEnvironment)),
+        nativeSkillsEffect,
+      ],
+      { concurrency: "unbounded" },
     );
+
+    // The scan alone still beats the provider snapshot, which is built against
+    // the server's cwd. Only surface a failure when it left us with nothing, so
+    // the caller can fall back instead of caching an empty list.
+    if (Result.isFailure(nativeSkills)) {
+      // Initialization itself failed, so there is no command list to gate with.
+      if (discoveredSkills.length === 0) {
+        return yield* nativeSkills.failure;
+      }
+      yield* Effect.logWarning("Claude skill discovery failed; serving scanned skills.", {
+        cwd: canonicalCwd,
+        cause: nativeSkills.failure,
+      });
+      return discoveredSkills;
+    }
+
+    const { skills, reloadFailure, userInvocableSkillNames } = nativeSkills.success;
+    if (skills !== undefined) {
+      return mergeClaudeSkills(skills, discoveredSkills, userInvocableSkillNames);
+    }
+
+    const gatedSkills = gateClaudeSkillsByUserInvocation(discoveredSkills, userInvocableSkillNames);
+    if (gatedSkills.length === 0) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "skills/reload",
+        detail: reloadFailure ?? "skills/reload failed",
+      });
+    }
+    yield* Effect.logWarning("Claude skills/reload failed; serving filesystem-scanned skills.", {
+      cwd: canonicalCwd,
+      detail: reloadFailure,
+    });
+    return gatedSkills;
+  });
 
   const listImportableSessions: NonNullable<ClaudeAdapterShape["listImportableSessions"]> =
     Effect.fn("ClaudeAdapter.listImportableSessions")(function* (input) {

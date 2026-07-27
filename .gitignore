@@ -47,5 +47,7 @@ node_modules/
 
 # Local review/planning artifacts (kept out of the repo)
 .nexus/
+.playwright-cli/
 docs/codex-results/
 rev/
+.cy-review-run/

@@ -58,6 +58,7 @@ import {
   currentHermesModeIdFromSessionSetup,
   currentHermesModelIdFromSessionSetup,
   makeHermesAcpRuntime,
+  resolveHermesAcpModelId,
 } from "../acp/HermesAcpSupport.ts";
 import {
   isPrunedHermesSessionLoad,
@@ -72,7 +73,73 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("hermes");
-const HERMES_RESUME_VERSION = 1 as const;
+const HERMES_LEGACY_RESUME_VERSION = 1 as const;
+const HERMES_RESUME_VERSION = 2 as const;
+const HERMES_DEFAULT_MODEL_SELECTION = "default";
+
+/**
+ * `ProviderSession.model` lives in the client selection namespace, so it must
+ * echo whatever the user picked — including the `"default"` sentinel. A turn
+ * that carries no Hermes selection must leave the existing selection alone
+ * rather than collapse it back to the sentinel.
+ */
+function hermesSelectionModelId(
+  requestedModelId: string | undefined,
+  currentSelectionModelId: string | undefined,
+): string {
+  return (
+    requestedModelId?.trim() || currentSelectionModelId?.trim() || HERMES_DEFAULT_MODEL_SELECTION
+  );
+}
+
+function hermesRestorableDefaultModelId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") return undefined;
+  const trimmed = modelId.trim();
+  return trimmed && trimmed !== HERMES_DEFAULT_MODEL_SELECTION ? trimmed : undefined;
+}
+
+/**
+ * Which concrete Hermes model the `"default"` sentinel resolves to for this
+ * session, or `undefined` when that identity is not recoverable.
+ *
+ * - **Fresh session** (no resume cursor): Hermes reports its configured model
+ *   before T3 applies any override, so the setup model *is* the default.
+ *   Always trustworthy.
+ * - **Resume from a v2 cursor**: the identity was captured at session creation
+ *   and is authoritative — including the explicit "Hermes exposed no restorable
+ *   default" case, which the cursor stores as `null` and which must never be
+ *   re-inferred later.
+ * - **Resume from a v1 cursor** (pre-dates this field): `session/load` reports
+ *   the model *persisted* for the Hermes session, which equals the configured
+ *   default only when T3 never overrode it. A v1 cursor carries no record of
+ *   the selection that was in force when it was written, so the only signal
+ *   available is the selection the caller is making *right now*.
+ *
+ *   That makes the inference correct for the threads the sentinel bug actually
+ *   broke: a pre-fix `"default"` thread never issued `session/set_model` at all
+ *   (`resolveHermesAcpModelId` maps the sentinel to `undefined`), so its
+ *   persisted model really is Hermes's configured one.
+ *
+ *   Residual known-wrong case, accepted rather than fixed because v1 cursors
+ *   cannot distinguish it: a pre-fix thread pinned to a *concrete* model,
+ *   resumed cold after upgrading, where the user picks `"default"` on that
+ *   first turn. The stale concrete override is then inferred as the default and
+ *   frozen into the upgraded v2 cursor. The consequence is a wrong target model
+ *   for that one thread — no context loss — and it cannot affect any thread
+ *   created after this fix. Do not widen this inference.
+ */
+function resolveHermesDefaultModelId(input: {
+  readonly resume: ReturnType<typeof parseHermesResume>;
+  readonly selectionIsSentinel: boolean;
+  readonly sessionSetupModelId: string | undefined;
+}): string | undefined {
+  const setupDefaultModelId = hermesRestorableDefaultModelId(input.sessionSetupModelId);
+  if (input.resume === undefined) return setupDefaultModelId;
+  if (input.resume.defaultModelId !== undefined) return input.resume.defaultModelId;
+  return input.resume.inferDefaultModelIdFromSetup && input.selectionIsSentinel
+    ? setupDefaultModelId
+    : undefined;
+}
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -120,6 +187,9 @@ interface HermesSessionContext {
   nextPromptSequence: number;
   openToolCalls: ReadonlyMap<string, AcpToolCallState>;
   currentModelId: string | undefined;
+  /** Concrete model Hermes itself was configured with, observed at session
+   * setup. This is what the `"default"` sentinel resolves to. */
+  readonly defaultModelId: string | undefined;
   stopped: boolean;
 }
 
@@ -173,11 +243,32 @@ const resolveSessionCallbackTurnId = (
   return ctx ? resolveCallbackTurnId(ctx) : undefined;
 };
 
-function parseHermesResume(raw: unknown): { sessionId: string } | undefined {
+function parseHermesResume(raw: unknown):
+  | {
+      sessionId: string;
+      defaultModelId?: string;
+      inferDefaultModelIdFromSetup: boolean;
+    }
+  | undefined {
   if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== HERMES_RESUME_VERSION) return undefined;
+  if (
+    raw.schemaVersion !== HERMES_LEGACY_RESUME_VERSION &&
+    raw.schemaVersion !== HERMES_RESUME_VERSION
+  ) {
+    return undefined;
+  }
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  const defaultModelId = hermesRestorableDefaultModelId(raw.defaultModelId);
+  return {
+    sessionId: raw.sessionId.trim(),
+    ...(defaultModelId ? { defaultModelId } : {}),
+    // Version 1 predates explicit known/unknown default identity. For backward
+    // compatibility, its setup model is the only recoverable migration signal.
+    // Version 2 writes `null` when Hermes did not expose a restorable default,
+    // so that state must never be inferred later.
+    inferDefaultModelIdFromSetup:
+      raw.schemaVersion === HERMES_LEGACY_RESUME_VERSION && defaultModelId === undefined,
+  };
 }
 
 function selectPermissionOptionId(
@@ -612,7 +703,8 @@ export function makeHermesAdapter(
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
 
-          const resumeSessionId = parseHermesResume(input.resumeCursor)?.sessionId;
+          const hermesResume = parseHermesResume(input.resumeCursor);
+          const resumeSessionId = hermesResume?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -761,11 +853,44 @@ export function makeHermesAdapter(
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_mode", cause),
           });
 
-          const requestedStartModelId = hermesModelSelection?.model;
+          const requestedStartModelId = hermesModelSelection?.model?.trim() || undefined;
+          // An explicit `"default"` is a request to use Hermes's own configured
+          // model. NO selection at all is a different thing: ProviderService
+          // recovery legitimately omits `modelSelection` when the persisted
+          // binding carries none, and that must leave the model untouched
+          // rather than be read as a sentinel request — otherwise recovery
+          // either resets a concrete pin or hard-fails a thread that never
+          // asked for the default. This mirrors sendTurn's carry-over rule.
+          const startSelectionIsSentinel = requestedStartModelId === HERMES_DEFAULT_MODEL_SELECTION;
+          const sessionSetupModelId = currentHermesModelIdFromSessionSetup(
+            started.sessionSetupResult,
+          );
+          const selectedStartModelId =
+            requestedStartModelId ?? sessionSetupModelId ?? HERMES_DEFAULT_MODEL_SELECTION;
+          const defaultModelId = resolveHermesDefaultModelId({
+            resume: hermesResume,
+            selectionIsSentinel: startSelectionIsSentinel,
+            sessionSetupModelId,
+          });
+          if (
+            resumeSessionId !== undefined &&
+            startSelectionIsSentinel &&
+            defaultModelId === undefined
+          ) {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/load",
+              detail:
+                "Hermes did not report a restorable default model for this saved session. Select a concrete model or start a new thread.",
+            });
+          }
+          // No selection carried => `undefined` => applyHermesAcpModelSelection
+          // no-ops, leaving Hermes on whatever model it already has.
+          const acpStartModelId = startSelectionIsSentinel ? defaultModelId : requestedStartModelId;
           const boundModelId = yield* applyHermesAcpModelSelection({
             runtime: acp,
-            currentModelId: currentHermesModelIdFromSessionSetup(started.sessionSetupResult),
-            requestedModelId: requestedStartModelId,
+            currentModelId: sessionSetupModelId,
+            requestedModelId: acpStartModelId,
             mapError: (cause) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
           });
@@ -777,11 +902,12 @@ export function makeHermesAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            ...(boundModelId ? { model: boundModelId } : {}),
+            model: selectedStartModelId,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: HERMES_RESUME_VERSION,
               sessionId: started.sessionId,
+              defaultModelId: defaultModelId ?? null,
             },
             createdAt: now,
             updatedAt: now,
@@ -805,6 +931,7 @@ export function makeHermesAdapter(
             nextPromptSequence: 0,
             openToolCalls: new Map(),
             currentModelId: boundModelId,
+            defaultModelId,
             stopped: false,
           };
 
@@ -959,17 +1086,7 @@ export function makeHermesAdapter(
                     input.modelSelection?.instanceId === boundInstanceId
                       ? input.modelSelection
                       : undefined;
-                  const requestedTurnModelId = turnModelSelection?.model;
-                  const currentModelId = yield* restore(
-                    applyHermesAcpModelSelection({
-                      runtime: ctx.acp,
-                      currentModelId: ctx.currentModelId,
-                      requestedModelId: requestedTurnModelId,
-                      mapError: (cause) =>
-                        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
-                    }),
-                  );
-
+                  const requestedTurnModelId = turnModelSelection?.model?.trim() || undefined;
                   const text = input.input ? rewriteHermesPrompt(input.input) : undefined;
                   const imagePromptParts = yield* restore(
                     Effect.forEach(input.attachments ?? [], (attachment) =>
@@ -1017,6 +1134,82 @@ export function makeHermesAdapter(
                     });
                   }
 
+                  if (
+                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION &&
+                    ctx.defaultModelId === undefined &&
+                    ctx.currentModelId !== undefined
+                  ) {
+                    return yield* new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/set_model",
+                      detail:
+                        "Hermes did not report the configured default model for this session, so T3 Code cannot safely restore it. Start a new thread to use the Hermes default.",
+                    });
+                  }
+                  // Selecting the sentinel mid-thread must actually put Hermes
+                  // back on its own configured model, not silently keep the
+                  // concrete model a previous turn switched to.
+                  const acpTurnModelId =
+                    requestedTurnModelId === HERMES_DEFAULT_MODEL_SELECTION
+                      ? ctx.defaultModelId
+                      : requestedTurnModelId;
+
+                  // NOT dead code. Inside `uninterruptibleMask`, `restore` flips
+                  // the fiber back to interruptible, and Effect observes any
+                  // already-pending interrupt at exactly that moment. Yielding
+                  // this is therefore an interruption CHECKPOINT. Deleting these
+                  // two yields silently removes the cancellation-safety of the
+                  // model switch below.
+                  const interruptionCheckpoint = restore(Effect.void);
+
+                  // Checkpoint 1: abort before touching anything remote, so an
+                  // interrupt that is already pending cannot trigger the
+                  // teardown finalizer below.
+                  yield* interruptionCheckpoint;
+
+                  const selectedTurnModelId = hermesSelectionModelId(
+                    requestedTurnModelId,
+                    ctx.session.model,
+                  );
+                  // Only a real `session/set_model` RPC can leave the remote
+                  // model unknowable under cancellation, so only that case gets
+                  // the teardown finalizer. A turn that changes no model must
+                  // not destroy the ACP session on an unlucky interrupt. This
+                  // mirrors applyHermesAcpModelSelection's own no-op condition.
+                  const acpModelIdToApply = resolveHermesAcpModelId(acpTurnModelId);
+                  const willIssueSetModel =
+                    acpModelIdToApply !== undefined && acpModelIdToApply !== ctx.currentModelId;
+                  // Selection order is serialized by the thread semaphore. If
+                  // cancellation races the RPC response, the remote model is
+                  // unknowable, so discard the ACP session rather than reuse a
+                  // possibly divergent local projection. Once Hermes answers,
+                  // the surrounding mask commits local state before observing a
+                  // pending interruption.
+                  const applyTurnModelSelection = restore(
+                    applyHermesAcpModelSelection({
+                      runtime: ctx.acp,
+                      currentModelId: ctx.currentModelId,
+                      requestedModelId: acpTurnModelId,
+                      mapError: (cause) =>
+                        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
+                    }),
+                  );
+                  const currentModelId = yield* willIssueSetModel
+                    ? applyTurnModelSelection.pipe(
+                        Effect.onInterrupt(() => stopSessionInternal(ctx)),
+                      )
+                    : applyTurnModelSelection;
+                  ctx.currentModelId = currentModelId;
+                  ctx.session = {
+                    ...ctx.session,
+                    model: selectedTurnModelId,
+                    updatedAt: yield* nowIso,
+                  };
+                  // Checkpoint 2: the successful switch is now committed to local
+                  // state, so an interrupt observed here leaves Hermes and T3
+                  // agreeing on the model and simply skips the prompt.
+                  yield* interruptionCheckpoint;
+
                   const promptHandle = yield* ctx.acp
                     .promptStart({ prompt: promptParts })
                     .pipe(
@@ -1035,13 +1228,11 @@ export function makeHermesAdapter(
                   ctx.nextPromptSequence += 1;
                   ctx.promptsInFlight += 1;
                   ctx.activeTurnId = turnId;
-                  ctx.currentModelId = currentModelId;
                   ctx.session = {
                     ...ctx.session,
                     status: "running",
                     activeTurnId: turnId,
                     updatedAt: yield* nowIso,
-                    ...(currentModelId ? { model: currentModelId } : {}),
                   };
 
                   if (steeringTurnId === undefined) {
@@ -1051,7 +1242,7 @@ export function makeHermesAdapter(
                       provider: PROVIDER,
                       threadId: input.threadId,
                       turnId,
-                      payload: currentModelId ? { model: currentModelId } : {},
+                      payload: { model: selectedTurnModelId },
                     });
                   }
                   yield* promptHandle.start;
@@ -1059,7 +1250,6 @@ export function makeHermesAdapter(
                   return {
                     acp: ctx.acp,
                     acpSessionId: ctx.acpSessionId,
-                    displayModel: currentModelId,
                     promptHandle,
                     promptParts,
                     promptSequence,
@@ -1125,7 +1315,6 @@ export function makeHermesAdapter(
                         status: "running",
                         activeTurnId: prepared.turnId,
                         updatedAt: yield* nowIso,
-                        ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
                       };
                       const remainingPrompts = Math.max(0, ctx.promptsInFlight - 1);
                       ctx.promptsInFlight = remainingPrompts;
@@ -1148,7 +1337,6 @@ export function makeHermesAdapter(
                           ...readySession,
                           status: "ready",
                           updatedAt: completedAt,
-                          ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
                         };
                         const completedStopReason = completedStopReasonFromPromptResponse(
                           outcome.result,

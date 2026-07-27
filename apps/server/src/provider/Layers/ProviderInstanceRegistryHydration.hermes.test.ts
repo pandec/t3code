@@ -10,7 +10,7 @@ it("hydrates the default Hermes instance from legacy provider settings", () => {
     config: {
       enabled: false,
       binaryPath: "hermes",
-      requireGateway: true,
+      requireGateway: false,
       customModels: [],
     },
   });

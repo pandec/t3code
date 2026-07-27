@@ -1,6 +1,7 @@
 import { defineConfig } from "vite-plus";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
 
 const repoEnv = loadRepoEnv();
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
@@ -13,6 +14,9 @@ const publicConfigDefine = {
 };
 
 export default defineConfig({
+  test: {
+    ...sharedTestDefaults,
+  },
   run: {
     tasks: {
       build: {

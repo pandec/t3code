@@ -1570,10 +1570,15 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "sessionImport",
             },
           ),
-        [WS_METHODS.sessionImportImport]: ({ projectId, instanceId, nativeSessionId }) =>
+        [WS_METHODS.sessionImportImport]: ({ projectId, instanceId, nativeSessionId, title }) =>
           observeRpcEffect(
             WS_METHODS.sessionImportImport,
-            sessionImport.importSession({ projectId, instanceId, nativeSessionId }),
+            sessionImport.importSession({
+              projectId,
+              instanceId,
+              nativeSessionId,
+              ...(title === undefined ? {} : { title }),
+            }),
             {
               "rpc.aggregate": "sessionImport",
             },

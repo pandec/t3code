@@ -76,8 +76,8 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       yield* writeSkill(
         path.join(configDir, "skills"),
-        "deploy",
-        ["---", "name: deploy", "description: User deploy.", "---"].join("\n"),
+        "Deploy",
+        ["---", "name: Deploy", "description: User deploy.", "---"].join("\n"),
       );
       yield* writeSkill(
         path.join(workspace, ".claude", "skills"),
@@ -93,7 +93,38 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
-  it.effect("falls back to the directory name and skips malformed frontmatter", () =>
+  it.effect("lets a project model-only skill hide a same-name user skill", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const workspace = path.join(tempDir, "workspace");
+
+      yield* writeSkill(
+        path.join(configDir, "skills"),
+        "Deploy",
+        ["---", "name: Deploy", "description: User deploy.", "---"].join("\n"),
+      );
+      yield* writeSkill(
+        path.join(workspace, ".claude", "skills"),
+        "deploy",
+        [
+          "---",
+          "name: deploy",
+          "description: Model-only project deploy.",
+          "user-invocable: false",
+          "---",
+        ].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace);
+
+      assert.deepEqual(skills, []);
+    }),
+  );
+
+  it.effect("falls back to the directory name when frontmatter cannot be trusted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -109,14 +140,145 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
 
-      // A skill with no frontmatter falls back to its directory name; a skill
-      // whose frontmatter fails to parse is skipped entirely (Claude Code
-      // won't load it either).
+      // Both surface under their directory name: one has no frontmatter, the
+      // other's `name` is not a usable identifier.
       assert.deepEqual(
         skills.map((skill) => skill.name),
-        ["no-frontmatter"],
+        ["broken-yaml", "no-frontmatter"],
       );
       assert.equal(skills[0]?.description, undefined);
+      assert.equal(skills[1]?.description, undefined);
+    }),
+  );
+
+  it.effect("recovers metadata from frontmatter that strict YAML rejects", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const skillsDir = path.join(configDir, "skills");
+
+      // `description` holds an unquoted `": "`, which YAML reads as a nested
+      // mapping. Claude Code loads this skill, so discovery must too.
+      yield* writeSkill(
+        skillsDir,
+        "codex-computer-use",
+        [
+          "---",
+          "name: codex-computer-use",
+          "description: Run verification that needs computer use: browser automation.",
+          "---",
+        ].join("\n"),
+      );
+      // An unquoted flow-sequence-looking `argument-hint` breaks the scanner.
+      yield* writeSkill(
+        skillsDir,
+        "nexus",
+        [
+          "---",
+          "name: nexus",
+          'description: "Manage \\"Nexus\\" streams." # shown in picker',
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "duplicate-name",
+        [
+          "---",
+          "name: stale-name",
+          "name: final-name",
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "nested-name",
+        ["---", "metadata:", "  name: nested", "argument-hint: [command] [args]", "---"].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "block-description",
+        [
+          "---",
+          "name: block-description",
+          "description: |2-",
+          "  Folded text",
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["block-description", "codex-computer-use", "final-name", "nested-name", "nexus"],
+      );
+      assert.equal(skills[0]?.description, undefined);
+      assert.equal(
+        skills[1]?.description,
+        "Run verification that needs computer use: browser automation.",
+      );
+      // Duplicate top-level keys use the last value; indented nested keys are
+      // never recovered as top-level metadata.
+      assert.equal(skills[2]?.scope, "user");
+      assert.equal(skills[3]?.name, "nested-name");
+      assert.equal(skills[4]?.description, 'Manage "Nexus" streams.');
+    }),
+  );
+
+  it.effect("flags model-invocation opt-outs and drops user-invocation opt-outs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const skillsDir = path.join(configDir, "skills");
+
+      yield* writeSkill(
+        skillsDir,
+        "dotfiles-sync",
+        [
+          "---",
+          "name: dotfiles-sync",
+          "description: Sync dotfiles.",
+          "user-invocable: true",
+          "disable-model-invocation: true",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "internal-only",
+        [
+          "---",
+          "name: internal-only",
+          "description: Not for humans.",
+          "user-invocable: false # model use only",
+          "argument-hint: [command] [args]",
+          "---",
+        ].join("\n"),
+      );
+      yield* writeSkill(
+        skillsDir,
+        "deploy",
+        ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["deploy", "dotfiles-sync"],
+      );
+      // Unspecified means "no opt-out recorded"; the merge with the SDK list
+      // decides the final answer.
+      assert.equal(skills[0]?.modelInvocable, undefined);
+      assert.equal(skills[1]?.modelInvocable, false);
     }),
   );
 
@@ -200,6 +362,33 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
       );
 
       assert.deepEqual(skills, []);
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("discoverClaudeSkills name handling", (it) => {
+  it.effect("uses a parsed frontmatter name verbatim, matching the CLI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+
+      // Claude Code takes `name` verbatim and reports it as the command name,
+      // so a dot (or a space) must not be rewritten to the directory name —
+      // that would put the skill under a name no other surface uses.
+      yield* writeSkill(
+        path.join(configDir, "skills"),
+        "t3-setup",
+        ["---", "name: t3.setup", "description: Set T3 up.", "---"].join("\n"),
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["t3.setup"],
+      );
     }),
   );
 });

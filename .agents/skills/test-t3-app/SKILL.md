@@ -7,6 +7,8 @@ description: Launch, retain, and test the T3 Code web app in isolated developmen
 
 Use this skill for the web client. For iOS Simulator, Android Emulator, or physical-device testing against an isolated T3 backend, use the sibling [`test-t3-mobile`](../test-t3-mobile/SKILL.md) skill.
 
+When something here proves wrong, slow, or missing — a dead end, a trap worth encoding, a step that could be simpler — tell the user what you hit and ask whether to fold it back into this skill.
+
 ## Start an isolated web environment
 
 1. Run commands from the repository root.
@@ -33,7 +35,10 @@ Treat the overall testing or implementation loop—not an assistant turn or one 
 ## Authenticate the browser on the first navigation
 
 1. Wait for the server log that says authentication is required and includes a URL ending in `/pair#token=...`.
-2. Use the controlled in-app browser or browser-automation surface available to the agent. Do not use a system-browser launch command during automated testing.
+2. Drive a browser the agent controls, taking the first of these that works:
+   - `playwright-cli` — its own Chrome, headless by default. `-s=<session>` holds the paired session across calls, and `drop <ref> --path=<file>` attaches a file where the page exposes no file input. It ships as a standalone binary, so probe it with `playwright-cli --version`, not `pnpm exec playwright`.
+   - The T3 in-app preview, which needs an assigned tab and reports when it has none.
+   - The user's debug Chrome on port 9222 — invoke the `chrome-debug` skill for its launch alias and CDP helpers.
 3. Open that complete URL exactly once as the controlled browser's first navigation. Preserve the fragment and token verbatim.
 4. Wait for the pairing exchange and redirect to finish before navigating elsewhere.
 5. Continue in the same browser context so its stored bearer session remains available.
@@ -65,6 +70,8 @@ Read [references/sqlite-fixtures.md](references/sqlite-fixtures.md) before chang
 - Stop the dev server before using `node apps/server/scripts/t3-sqlite-state.ts exec`, then restart it with the same base directory.
 - Seed projection tables only for disposable UI fixtures. Use application commands and APIs when testing business behavior or projection correctness.
 - Use the auth CLI, not direct `auth_*` table edits, for pairing and sessions.
+- Give every seeded thread a real `model_selection_json`; the row schema decodes it non-nullable, so a null there fails the whole `/api/orchestration/shell` response and the UI reports no projects.
+- Name a provider the local catalog actually installs in both the thread's model selection and the session's `provider_name`/`provider_instance_id`; the composer locks to the session's provider and otherwise offers no model and disables sending.
 
 The helper refuses to write to the shared `~/.t3` directory by default and creates a database backup before each mutation.
 

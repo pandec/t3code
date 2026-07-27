@@ -40,6 +40,20 @@ export const ProviderSession = Schema.Struct({
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * MUST echo the client-visible `ModelSelection.model` for this session —
+   * including sentinel slugs such as Hermes's `"default"`. Never a
+   * provider-internal resolved id.
+   *
+   * Orchestration compares this field directly against the selection the client
+   * sends with each turn (see `ProviderCommandReactor`:
+   * `rejectStartedThreadModelChangeIfRequired` and the `modelChanged` restart
+   * check). An adapter that stores a resolved id here makes every turn look
+   * like a mid-thread model switch, which can silently reject the turn after
+   * the user's message has already been persisted. Adapters that talk to a
+   * provider using a different id space must keep that id in adapter-local
+   * state and map back to the selection before writing it here.
+   */
   model: Schema.optional(TrimmedNonEmptyString),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),

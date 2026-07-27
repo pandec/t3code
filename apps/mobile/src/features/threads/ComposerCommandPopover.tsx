@@ -1,4 +1,5 @@
 import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
+import { isProviderSkillManualOnly } from "@t3tools/client-runtime/state/server";
 import type { ComposerTriggerKind } from "@t3tools/shared/composerTrigger";
 import type { ServerProviderSkill, ServerProviderSlashCommand } from "@t3tools/contracts";
 import { SymbolView } from "../../components/AppSymbol";
@@ -134,6 +135,7 @@ const CommandRow = memo(function CommandRow(props: {
 }) {
   const iconName = itemIcon(props.item);
   const iconColor = "#a1a1aa";
+  const isManualSkill = props.item.type === "skill" && isProviderSkillManualOnly(props.item.skill);
 
   return (
     <Pressable
@@ -160,6 +162,11 @@ const CommandRow = memo(function CommandRow(props: {
       {props.item.description ? (
         <Text className="min-w-0 flex-1 text-xs text-zinc-400" numberOfLines={1}>
           {props.item.description}
+        </Text>
+      ) : null}
+      {isManualSkill ? (
+        <Text className="shrink-0 text-xs text-zinc-400" numberOfLines={1}>
+          Manual
         </Text>
       ) : null}
     </Pressable>

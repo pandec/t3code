@@ -32,13 +32,14 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - **Mobile agent steering** — steer an active agent turn directly from the mobile app.
 - **Project-aware Codex skills** — Codex skill discovery respects the active project.
-- **Claude skill picker** — the `$` composer skill picker discovers workspace skills for Claude.
+- **Claude skill picker** — the `$` composer skill picker discovers workspace and user-invocable
+  manual-only skills for Claude.
 - **Hermes ACP provider** — use a machine-local Hermes Agent as a first-class provider with native streaming, tool calls, resumable sessions, model and mode selection, slash commands, skills, and steering.
 
 ### CLI & automation
 
 - **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting. Live reads use configurable phase-specific timeouts (`--timeout-ms` / `T3CODE_CLI_TIMEOUT_MS`), commands reuse one auth session, `--json` failures emit a stable machine-readable error document, and read-only listings fall back to local state when the server is busy.
-- **Session-handover CLI primitives** — inspect and import Claude/Codex transcripts (including standard worktrees and explicit model options), create model-specific threads, and archive handed-off source threads.
+- **Session-handover CLI primitives** — inspect and import Claude/Codex transcripts (including standard worktrees, explicit model options, and an explicit thread title), create model-specific threads, and archive handed-off source threads. Claude transcript identity comes from the records themselves, so a file renamed in transit still imports; Codex rollouts are retargeted to the workspace they are imported into; and history past the import cap is trimmed with a warning instead of rejected.
 
 ### Reliability
 
