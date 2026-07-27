@@ -1322,6 +1322,112 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("points Claude at the SKILL.md of a user-invocable-only skill reference", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skill-ref-"));
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skill-ref-home-"));
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "writing-great-skills"),
+      [
+        "---",
+        "name: writing-great-skills",
+        "description: How to write skills.",
+        "disable-model-invocation: true",
+        "---",
+      ].join("\n"),
+    );
+    // Model-invocable: Claude reaches this one through its skill tool, so the
+    // reference must survive untouched.
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "codex-review"),
+      ["---", "name: codex-review", "description: Ask Codex.", "---"].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Rewrite it per $writing-great-skills then run $codex-review",
+        attachments: [],
+      });
+
+      const promptText = yield* Effect.promise(() =>
+        readFirstPromptText(harness.getLastCreateQueryInput()),
+      );
+      assert.equal(
+        promptText,
+        `Rewrite it per /writing-great-skills [Read: ${NodePath.join(
+          homePath,
+          "skills",
+          "writing-great-skills",
+          "SKILL.md",
+        )}] then run $codex-review`,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
+  it.effect("leaves a message without skill references untouched", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skill-noref-"));
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skill-noref-home-"));
+    writeSkillFile(
+      NodePath.join(homePath, "skills", "writing-great-skills"),
+      [
+        "---",
+        "name: writing-great-skills",
+        "description: How to write skills.",
+        "disable-model-invocation: true",
+        "---",
+      ].join("\n"),
+    );
+    const harness = makeHarness({ cwd, claudeConfig: { homePath } });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Just a normal message",
+        attachments: [],
+      });
+
+      const promptText = yield* Effect.promise(() =>
+        readFirstPromptText(harness.getLastCreateQueryInput()),
+      );
+      assert.equal(promptText, "Just a normal message");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(cwd, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
   it.effect("treats ultrathink as a prompt keyword instead of a session effort", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
