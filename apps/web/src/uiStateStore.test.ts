@@ -322,6 +322,18 @@ describe("uiStateStore persistence", () => {
     });
   });
 
+  it("round-trips a selected sidebar environment filter", () => {
+    const state = makeUiState({ sidebarEnvironmentFilterId: "env-a" });
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.sidebarEnvironmentFilterId).toBe("env-a");
+    expect(parsePersistedState(persisted).sidebarEnvironmentFilterId).toBe("env-a");
+  });
+
   it("drops the temporary expanded-only migration fallback when rewriting state", () => {
     const migrated = parsePersistedState({
       expandedProjectCwds: ["/repo/a"],

@@ -3336,9 +3336,14 @@ export default function Sidebar() {
   );
   const handleEnvironmentFilterChange = useCallback(
     (environmentId: EnvironmentId | null) => {
+      // Selected threads can be hidden by the new filter. The global mousedown
+      // handler only covers pointer activation, so clear here as well —
+      // otherwise a keyboard-driven filter change leaves invisible threads
+      // selected and a later Cmd-click sweeps them into a bulk archive/delete.
+      clearSelection();
       setSidebarEnvironmentFilterId(environmentId);
     },
-    [setSidebarEnvironmentFilterId],
+    [clearSelection, setSidebarEnvironmentFilterId],
   );
   const projects = useMemo(
     () =>
