@@ -16,6 +16,7 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlGetUsageResponse,
   type SDKControlInitializeResponse,
   type SDKControlReloadSkillsResponse,
   type SDKResultMessage,
@@ -220,6 +221,10 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  subscriptionUsageFiber: Fiber.Fiber<void, never> | undefined;
+  subscriptionUsageInFlight: boolean;
+  subscriptionUsageRefreshPending: boolean;
+  readonly scheduleSubscriptionUsage: () => void;
   readonly pendingWorkState: {
     hasPendingWork: boolean | undefined;
   };
@@ -234,6 +239,20 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  /**
+   * Structured `/usage` data — the only source of subscription quota
+   * *percentages* for Claude. The passive `rate_limit_event` stream carries a
+   * window type and reset time but omits `utilization` at normal usage levels
+   * (verified against CLI 2.1.220), so the usage meter has nothing to render
+   * without this call.
+   *
+   * The SDK marks this API experimental and says the method will be renamed
+   * when it stabilizes, hence the optional declaration: every call site
+   * feature-detects and degrades to the passive event instead of breaking.
+   */
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?:
+    | (() => Promise<SDKControlGetUsageResponse>)
+    | undefined;
   readonly close: () => void;
 }
 
@@ -1881,6 +1900,62 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return normalizeClaudeContextUsageApiSnapshot(usage, totalProcessedTokens);
   });
 
+  /**
+   * Pulls subscription quota from the structured `/usage` API and emits it as
+   * a rate-limit update. Mirrors the cadence of providers that push quota
+   * (session start + turn end) rather than polling on a timer.
+   *
+   * Every failure mode is silent by design: an SDK rename, an API-key session
+   * (`rate_limits_available: false`), or a transport error must not disturb
+   * the turn — the meter simply shows nothing, exactly as before this call
+   * existed.
+   */
+  const emitSubscriptionUsage = Effect.fn("emitSubscriptionUsage")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (!readUsage) {
+      return;
+    }
+
+    const usage = yield* Effect.promise(async () => {
+      try {
+        return await readUsage.call(context.query);
+      } catch {
+        return undefined;
+      }
+    });
+    if (context.stopped) {
+      return;
+    }
+    if (!usage?.rate_limits_available || !usage.rate_limits) {
+      return;
+    }
+
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      providerInstanceId: boundInstanceId,
+      payload: {
+        rateLimits: {
+          source: "claude.usage-api",
+          subscriptionType: usage.subscription_type,
+          rateLimits: usage.rate_limits,
+        },
+      },
+      providerRefs: nativeProviderRefs(context),
+      raw: {
+        source: "claude.sdk.message",
+        method: "usage",
+        payload: usage.rate_limits,
+      },
+    });
+  });
+
   const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (
     context: ClaudeSessionContext,
     input: {
@@ -2164,6 +2239,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
+    // After the turn, so the quota reflects the work just done.
+    context.scheduleSubscriptionUsage();
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -3133,6 +3210,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     context.stopped = true;
 
+    const subscriptionUsageFiber = context.subscriptionUsageFiber;
+    context.subscriptionUsageFiber = undefined;
+    if (subscriptionUsageFiber && subscriptionUsageFiber.pollUnsafe() === undefined) {
+      yield* Fiber.interrupt(subscriptionUsageFiber);
+    }
+
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
       const stamp = yield* makeEventStamp();
@@ -3766,6 +3849,45 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        subscriptionUsageFiber: undefined,
+        subscriptionUsageInFlight: false,
+        subscriptionUsageRefreshPending: false,
+        scheduleSubscriptionUsage: () => {
+          if (context.stopped) {
+            return;
+          }
+          if (context.subscriptionUsageInFlight) {
+            context.subscriptionUsageRefreshPending = true;
+            return;
+          }
+
+          context.subscriptionUsageInFlight = true;
+          const usageFiber = runFork(
+            emitSubscriptionUsage(context).pipe(
+              // SDK control requests have no response timeout. Keep this
+              // best-effort pull off the provider lifecycle and bound a lost
+              // response without allowing concurrent requests to accumulate.
+              Effect.timeoutOption("10 seconds"),
+              Effect.catchCause(() => Effect.void),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  context.subscriptionUsageInFlight = false;
+                  if (context.subscriptionUsageRefreshPending && !context.stopped) {
+                    context.subscriptionUsageRefreshPending = false;
+                    context.scheduleSubscriptionUsage();
+                  }
+                }),
+              ),
+              Effect.asVoid,
+            ),
+          );
+          context.subscriptionUsageFiber = usageFiber;
+          usageFiber.addObserver(() => {
+            if (context.subscriptionUsageFiber === usageFiber) {
+              context.subscriptionUsageFiber = undefined;
+            }
+          });
+        },
         pendingWorkState,
         stopped: false,
       };
@@ -3839,6 +3961,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+
+      // Seed the usage meter without delaying session startup or SDK stream
+      // consumption. A later turn completion coalesces behind this single
+      // in-flight request when necessary.
+      context.scheduleSubscriptionUsage();
 
       return {
         ...session,

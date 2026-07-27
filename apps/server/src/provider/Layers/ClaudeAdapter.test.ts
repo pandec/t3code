@@ -8,6 +8,7 @@ import type {
   Options as ClaudeQueryOptions,
   PermissionMode,
   PermissionResult,
+  SDKControlGetUsageResponse,
   SDKControlInitializeResponse,
   SDKControlReloadSkillsResponse,
   SDKMessage,
@@ -70,6 +71,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public reloadSkillsResult: SDKControlReloadSkillsResponse = { skills: [] };
   public reloadSkillsFailure: unknown | undefined;
   public closeCalls = 0;
+  /** Undefined models an SDK that lacks the experimental usage API entirely. */
+  public usageResult: (() => Promise<unknown>) | undefined;
+  public usageCalls = 0;
 
   emit(message: SDKMessage): void {
     if (this.done) {
@@ -139,6 +143,19 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.closeCalls += 1;
     this.finish();
   };
+
+  get usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET():
+    | (() => Promise<SDKControlGetUsageResponse>)
+    | undefined {
+    const usageResult = this.usageResult;
+    if (!usageResult) {
+      return undefined;
+    }
+    return async function (this: FakeClaudeQuery) {
+      this.usageCalls += 1;
+      return (await usageResult()) as SDKControlGetUsageResponse;
+    };
+  }
 
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return {
@@ -661,6 +678,132 @@ describe("ClaudeAdapterLive", () => {
     assert.equal(hasPendingClaudeWork({ session_crons: [] }), false);
     assert.equal(hasPendingClaudeWork({ background_tasks: [{}] }), true);
     assert.equal(hasPendingClaudeWork({ session_crons: [{}] }), true);
+  });
+
+  it.effect("emits subscription usage from the structured usage API on session start", () => {
+    const harness = makeHarness();
+    // Shape captured live from the SDK usage API.
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: "max",
+        rate_limits_available: true,
+        rate_limits: {
+          limits: [
+            {
+              kind: "weekly_scoped",
+              percent: 44,
+              severity: "normal",
+              resets_at: "2026-07-31T02:59:59.990712+00:00",
+              scope: { model: { display_name: "Fable" } },
+              is_active: true,
+            },
+          ],
+        },
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const usageEventFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "account.rate-limits.updated",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const usageEvent = yield* Fiber.join(usageEventFiber);
+      assert.equal(usageEvent._tag, "Some");
+      if (usageEvent._tag !== "Some") {
+        return;
+      }
+      const payload = usageEvent.value.payload as {
+        readonly rateLimits: Record<string, unknown>;
+      };
+      assert.equal(payload.rateLimits.source, "claude.usage-api");
+      assert.equal(payload.rateLimits.subscriptionType, "max");
+      assert.isTrue(harness.query.usageCalls >= 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("stays silent when the experimental usage API is absent or failing", () => {
+    const harness = makeHarness();
+    // Models both degradation paths: an SDK that renamed/removed the method
+    // (undefined) must not break sessions, and neither must a throwing call.
+    harness.query.usageResult = undefined;
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      assert.equal(session.status, "ready");
+      assert.equal(harness.query.usageCalls, 0);
+
+      harness.query.usageResult = () => Promise.reject(new Error("usage endpoint unavailable"));
+      const secondSession = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      assert.equal(secondSession.status, "ready");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("does not let a stalled usage request block session startup", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () => new Promise<never>(() => undefined);
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.timeout("1 second"));
+
+      assert.equal(session.status, "ready");
+      yield* Effect.yieldNow;
+      assert.equal(harness.query.usageCalls, 1);
+      yield* adapter.stopSession(THREAD_ID);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("skips usage emission for sessions without plan rate limits", () => {
+    const harness = makeHarness();
+    // API-key / Bedrock / Vertex sessions report availability false.
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: null,
+        rate_limits_available: false,
+        rate_limits: null,
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: Array<string> = [];
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          events.push(event.type);
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+
+      assert.isTrue(harness.query.usageCalls >= 1);
+      assert.isFalse(events.includes("account.rate-limits.updated"));
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
   it.effect("reports the latest Stop hook pending-work state on turn completion", () => {
