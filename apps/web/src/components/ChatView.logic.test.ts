@@ -26,6 +26,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolvePendingComposerRequest,
   shouldQueueMessageWhileBusy,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -626,6 +627,32 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("resolvePendingComposerRequest", () => {
+  it("leaves the composer to the user when nothing is pending", () => {
+    expect(
+      resolvePendingComposerRequest({ hasPendingApproval: false, hasPendingUserInput: false }),
+    ).toBe(null);
+  });
+
+  it("names an approval, which renders an empty composer over the draft", () => {
+    expect(
+      resolvePendingComposerRequest({ hasPendingApproval: true, hasPendingUserInput: false }),
+    ).toBe("approval");
+  });
+
+  it("names a question, which renders its own answer over the draft", () => {
+    expect(
+      resolvePendingComposerRequest({ hasPendingApproval: false, hasPendingUserInput: true }),
+    ).toBe("user-input");
+  });
+
+  it("reports the approval first when both are pending", () => {
+    expect(
+      resolvePendingComposerRequest({ hasPendingApproval: true, hasPendingUserInput: true }),
+    ).toBe("approval");
   });
 });
 

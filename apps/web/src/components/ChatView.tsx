@@ -188,8 +188,10 @@ import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  flushComposerDraftPersistence,
   hasComposerDraftContent,
   hydrateImagesFromPersisted,
+  persistComposerDraftContentNow,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -198,6 +200,7 @@ import {
   enqueueThreadOutboxMessage,
   hasPendingThreadOutboxWork,
   holdEditingQueuedMessage,
+  isThreadOutboxMessageQueued,
   releaseEditingQueuedMessage,
   removeThreadOutboxMessage,
   updateThreadOutboxMessage,
@@ -293,6 +296,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolvePendingComposerRequest,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -1242,6 +1246,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
+  const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
   );
@@ -1337,6 +1342,16 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const queuedMessageEditsInProgressRef = useRef(new Set<MessageId>());
+  // Lets the damaged-image recovery toast re-enter the edit handler without the
+  // handler having to depend on itself.
+  const onEditQueuedMessageRef = useRef<
+    | ((
+        message: QueuedThreadMessage,
+        options?: { readonly discardDamagedImages?: boolean },
+      ) => Promise<void>)
+    | null
+  >(null);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
@@ -4467,6 +4482,14 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    if (queuedMessageEditsInProgressRef.current.size > 0) {
+      toastManager.add({
+        type: "warning",
+        title: "Queued message is still opening",
+        description: "Wait for it to finish moving into the composer, then send.",
+      });
+      return;
+    }
     if (
       !activeThread ||
       isSendBusy ||
@@ -5105,15 +5128,28 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
-    void removeThreadOutboxMessage(message).catch((error) => {
-      console.warn("[thread-outbox] failed to delete queued message", error);
-    });
+    if (!holdEditingQueuedMessage(message.messageId)) return;
+    void removeThreadOutboxMessage(message)
+      .catch((error) => {
+        console.warn("[thread-outbox] failed to delete queued message", error);
+      })
+      .finally(() => {
+        releaseEditingQueuedMessage(message.messageId);
+      });
   }, []);
 
   const onEditQueuedMessage = useCallback(
-    async (message: QueuedThreadMessage) => {
+    async (message: QueuedThreadMessage, options?: { readonly discardDamagedImages?: boolean }) => {
+      // Damaged attachments block the edit by default so no image is dropped
+      // silently; the user opts in to losing the unreadable bytes to get the
+      // text and the healthy images back.
+      const discardDamagedImages = options?.discardDamagedImages === true;
       if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId)
         return;
+      // The recovery toast and a stale render both outlive the row they point
+      // at, and appending a message the composer already holds would duplicate
+      // it — the removal below only reports the loss afterwards.
+      if (!isThreadOutboxMessageQueued(message)) return;
       const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
       if (currentImageCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         toastManager.add({
@@ -5123,27 +5159,190 @@ function ChatViewContent(props: ChatViewProps) {
         });
         return;
       }
+      // Leave the message queued while another request holds the composer.
+      const pendingComposerRequest = resolvePendingComposerRequest({
+        hasPendingApproval: activePendingApproval !== null,
+        hasPendingUserInput: activePendingProgress !== null,
+      });
+      if (pendingComposerRequest !== null) {
+        toastManager.add({
+          type: "warning",
+          title: "Finish the pending request first",
+          description:
+            pendingComposerRequest === "approval"
+              ? "Resolve the approval above, then edit this queued message."
+              : "Answer the question above, then edit this queued message.",
+        });
+        return;
+      }
       // Hold the message so the drain cannot deliver it while its content is
-      // being moved back into the composer.
-      holdEditingQueuedMessage(message.messageId);
+      // being moved back into the composer. The acquisition also rejects a
+      // second pencil click before it can append the same message twice.
+      if (queuedMessageEditsInProgressRef.current.size > 0) {
+        return;
+      }
+      if (!holdEditingQueuedMessage(message.messageId)) {
+        return;
+      }
+      queuedMessageEditsInProgressRef.current.add(message.messageId);
+      // Set before the first await: once the queued row is gone the composer
+      // holds the only copy, so a later failure must never revert it away.
+      let removed = false;
+      let revertComposerLoad: (() => boolean) | null = null;
+      const reportLoadFailure = (
+        error?: unknown,
+        fullyReverted = true,
+        fullyRevertedDescription?: string,
+      ) => {
+        if (error !== undefined) {
+          console.warn("[thread-outbox] failed to load queued message into the composer", error);
+        }
+        toastManager.add({
+          type: "error",
+          title: "Could not open this message for editing",
+          description: fullyReverted
+            ? (fullyRevertedDescription ??
+              "It is still queued — try again, or delete it if you no longer need it.")
+            : "It is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
+        });
+      };
       try {
-        // Remove first: if this fails the message simply stays queued, whereas
-        // appending first could leave the content both queued and in the draft.
-        const removed = await removeThreadOutboxMessage(message);
-        if (!removed) return;
-        const currentPrompt = promptRef.current;
+        const previousPrompt = promptRef.current;
+        const readDraft = () =>
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) ?? null;
+        const previousInputOrigin = readDraft()?.inputOrigin;
+        const imageIdsBeforeLoad = new Set((readDraft()?.images ?? []).map((image) => image.id));
+        const hydratedImages = hydrateImagesFromPersisted(message.attachments);
+        // Undo a partial load so the queued row stays the single copy of the
+        // user's content. Only images this call introduced are removed.
+        revertComposerLoad = () => {
+          for (const image of hydratedImages) {
+            if (imageIdsBeforeLoad.has(image.id)) continue;
+            removeComposerDraftImage(composerDraftTarget, image.id);
+          }
+          const latestPrompt = readDraft()?.prompt ?? "";
+          if (latestPrompt !== nextPrompt) {
+            flushComposerDraftPersistence();
+            return false;
+          }
+          promptRef.current = previousPrompt;
+          // An empty prompt clears the stored origin, so a draft that had none
+          // does not inherit the queued message's.
+          if (previousInputOrigin === undefined) {
+            setComposerDraftPrompt(composerDraftTarget, "");
+          }
+          setComposerDraftPrompt(composerDraftTarget, previousPrompt, previousInputOrigin);
+          composerRef.current?.resetCursorState({
+            cursor: collapseExpandedComposerCursor(previousPrompt, previousPrompt.length),
+            prompt: previousPrompt,
+            detectTrigger: false,
+          });
+          return flushComposerDraftPersistence();
+        };
+        // Load the composer FIRST, then drop the queued row. Removal is
+        // durable (the row leaves local storage too), so removing first would
+        // destroy the message outright whenever the load does not land.
         const nextPrompt =
-          currentPrompt.trim().length > 0
-            ? `${currentPrompt.trimEnd()}\n\n${message.text}`
+          previousPrompt.trim().length > 0
+            ? `${previousPrompt.trimEnd()}\n\n${message.text}`
             : message.text;
         promptRef.current = nextPrompt;
         setComposerDraftPrompt(composerDraftTarget, nextPrompt, message.inputOrigin);
-        if (message.attachments.length > 0) {
-          addComposerDraftImages(
-            composerDraftTarget,
-            hydrateImagesFromPersisted(message.attachments),
-          );
+        if (hydratedImages.length > 0) {
+          addComposerDraftImages(composerDraftTarget, hydratedImages);
         }
+
+        // Confirm the live content first, then make a separate durable
+        // acknowledgement before destroying the queued copy. An empty draft is
+        // pruned outright, so read the prompt defensively. A source image may be
+        // represented by another id only when the persisted bytes match exactly;
+        // the store's name/MIME/size dedup key alone is not a content identity.
+        const loadedDraft = readDraft();
+        const hydratedImageIds = new Set(hydratedImages.map((image) => image.id));
+        const healthyAttachments = message.attachments.filter(({ id }) => hydratedImageIds.has(id));
+        const damagedAttachmentCount = message.attachments.length - healthyAttachments.length;
+        const contentLoadedInMemory =
+          (damagedAttachmentCount === 0 || discardDamagedImages) &&
+          (loadedDraft?.prompt ?? "") === nextPrompt;
+        let contentPersisted = false;
+        if (contentLoadedInMemory) {
+          contentPersisted = persistComposerDraftContentNow(composerDraftTarget, {
+            prompt: nextPrompt,
+            attachments: healthyAttachments,
+          });
+        }
+        if (!contentPersisted) {
+          const fullyReverted = revertComposerLoad();
+          if (damagedAttachmentCount > 0 && !discardDamagedImages) {
+            const damagedTitle =
+              damagedAttachmentCount === 1
+                ? "1 queued image is damaged"
+                : `${damagedAttachmentCount} queued images are damaged`;
+            if (!fullyReverted) {
+              // The composer kept the merged prompt, so recovering from here
+              // would append the message to it a second time. Report only.
+              toastManager.add(
+                stackedThreadToast({
+                  type: "warning",
+                  title: damagedTitle,
+                  description:
+                    "The message is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
+                }),
+              );
+              return;
+            }
+            let damagedToastId: ReturnType<typeof toastManager.add>;
+            let recoveryStarted = false;
+            // The recovery is one shot: it removes the queued row, so a second
+            // click would append the same message to the composer again.
+            const startRecovery = () => {
+              if (recoveryStarted) return;
+              recoveryStarted = true;
+              toastManager.close(damagedToastId);
+              void onEditQueuedMessageRef.current?.(message, { discardDamagedImages: true });
+            };
+            damagedToastId = toastManager.add(
+              stackedThreadToast({
+                type: "warning",
+                title: damagedTitle,
+                description:
+                  "The message is still queued. Recover it without the damaged images to keep its text and the rest.",
+                actionProps: {
+                  children: "Recover without damaged images",
+                  onClick: startRecovery,
+                },
+              }),
+            );
+            return;
+          }
+          reportLoadFailure(
+            undefined,
+            fullyReverted,
+            "It is still queued. If the same image is already in the composer, remove that image and try again.",
+          );
+          return;
+        }
+
+        removed = await removeThreadOutboxMessage(message);
+        if (!removed) {
+          // The atomic edit hold rules out a second local edit. Another action
+          // already removed the queued row, so the durable composer copy is the
+          // only copy this handler still owns and must not be reverted.
+          console.debug("[thread-outbox] queued message vanished before the edit claimed it");
+          return;
+        }
+
+        if (damagedAttachmentCount > 0) {
+          toastManager.add({
+            type: "warning",
+            title:
+              damagedAttachmentCount === 1
+                ? "1 damaged image was left behind"
+                : `${damagedAttachmentCount} damaged images were left behind`,
+            description: "Re-attach them before sending if you still need them.",
+          });
+        }
+
         const draftStore = useComposerDraftStore.getState();
         if (message.modelSelection !== undefined) {
           draftStore.setModelSelection(composerDraftTarget, message.modelSelection, {
@@ -5161,22 +5360,47 @@ function ChatViewContent(props: ChatViewProps) {
           prompt: nextPrompt,
           detectTrigger: false,
         });
+        // Safe only because the removal above awaited: focusing the editor
+        // reports its own snapshot back through `onPromptChange`, so the draft
+        // write has to have been committed first or a pre-load snapshot would
+        // be written back over the message. Keep an await between the two.
         focusComposer();
       } catch (error) {
-        console.warn("[thread-outbox] failed to load queued message into the composer", error);
+        if (removed) {
+          // The queued row is already gone, so the composer holds the only
+          // copy of the message — reverting here would destroy it.
+          console.warn("[thread-outbox] queued message loaded but its setup failed", error);
+        } else {
+          const fullyReverted = revertComposerLoad?.() ?? true;
+          reportLoadFailure(error, fullyReverted);
+        }
       } finally {
+        queuedMessageEditsInProgressRef.current.delete(message.messageId);
         releaseEditingQueuedMessage(message.messageId);
       }
     },
     [
+      activePendingApproval,
+      activePendingProgress,
       addComposerDraftImages,
       composerDraftTarget,
       composerRef,
       focusComposer,
       promptRef,
+      removeComposerDraftImage,
       setComposerDraftPrompt,
     ],
   );
+
+  useEffect(() => {
+    onEditQueuedMessageRef.current = onEditQueuedMessage;
+    // A toast outlives this view, so drop the handler on unmount: recovering
+    // into a composer the user has navigated away from would quietly take the
+    // message out of the queue behind their back.
+    return () => {
+      onEditQueuedMessageRef.current = null;
+    };
+  }, [onEditQueuedMessage]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {

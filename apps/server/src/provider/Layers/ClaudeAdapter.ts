@@ -85,6 +85,10 @@ import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import {
+  applyClaudeSkillReferencePointers,
+  collectClaudeSkillReferenceNames,
+} from "../Drivers/ClaudeSkillReferences.ts";
+import {
   CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
   getClaudeModelCapabilities,
   gateClaudeSkillsByUserInvocation,
@@ -941,6 +945,11 @@ const CLAUDE_SETTING_SOURCES = [
 function buildPromptText(
   input: ProviderSendTurnInput,
   boundInstanceId: ProviderInstanceId,
+  /**
+   * Resolves `$skill` references to SKILL.md paths. Applied before the effort
+   * prefix so the prefix stays anchored at the start of the message.
+   */
+  skillReferencePaths?: ReadonlyMap<string, string>,
 ): string {
   const rawEffort =
     input.modelSelection?.instanceId === boundInstanceId
@@ -951,7 +960,14 @@ function buildPromptText(
   const caps = getClaudeModelCapabilities(claudeModel);
 
   const promptEffort = resolvePromptInjectedEffort(caps, rawEffort);
-  return applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
+  const trimmedInput = input.input?.trim() ?? "";
+  const withSkillPointers =
+    skillReferencePaths === undefined || skillReferencePaths.size === 0
+      ? trimmedInput
+      : applyClaudeSkillReferencePointers(trimmedInput, (name) =>
+          skillReferencePaths.get(name.toLowerCase()),
+        );
+  return applyClaudePromptEffortPrefix(withSkillPointers, promptEffort);
 }
 
 function buildUserMessage(input: {
@@ -988,9 +1004,14 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly boundInstanceId: ProviderInstanceId;
+    readonly skillReferencePaths?: ReadonlyMap<string, string>;
   },
 ) {
-  const text = buildPromptText(input, dependencies.boundInstanceId);
+  const text = buildPromptText(
+    input,
+    dependencies.boundInstanceId,
+    dependencies.skillReferencePaths,
+  );
   const sdkContent: Array<Record<string, unknown>> = [];
 
   if (text.length > 0) {
@@ -1421,6 +1442,39 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+
+  /**
+   * Map the `$skill` references in one outgoing message to SKILL.md paths, but
+   * only for skills the model cannot invoke itself — the rest already work
+   * through Claude's skill tool.
+   *
+   * The scan is gated on the message actually containing a reference, so an
+   * ordinary turn never touches the filesystem and there is nothing to cache
+   * or invalidate: an edited skill is picked up on the very next message.
+   */
+  const resolveSkillReferencePaths = Effect.fn("resolveClaudeSkillReferencePaths")(
+    function* (input: { readonly text: string | undefined; readonly cwd: string | undefined }) {
+      const referencedNames = collectClaudeSkillReferenceNames(input.text ?? "");
+      if (referencedNames.size === 0) {
+        return undefined;
+      }
+
+      const skills = yield* discoverClaudeSkills(claudeSettings, input.cwd, claudeEnvironment).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+
+      const skillPathsByName = new Map<string, string>();
+      for (const skill of skills) {
+        const key = skill.name.toLowerCase();
+        if (skill.modelInvocable !== false || !skill.path || !referencedNames.has(key)) {
+          continue;
+        }
+        skillPathsByName.set(key, skill.path);
+      }
+      return skillPathsByName.size > 0 ? skillPathsByName : undefined;
+    },
+  );
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -4052,10 +4106,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
+    const skillReferencePaths = yield* resolveSkillReferencePaths({
+      text: input.input,
+      cwd: context.session.cwd,
+    });
     const message = yield* buildUserMessageEffect(input, {
       fileSystem,
       attachmentsDir: serverConfig.attachmentsDir,
       boundInstanceId,
+      ...(skillReferencePaths ? { skillReferencePaths } : {}),
     });
 
     yield* Queue.offer(context.promptQueue, {

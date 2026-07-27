@@ -6,7 +6,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useConnectionController } from "../connection/useConnectionController";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
-import { holdEditingQueuedMessage } from "../../state/use-thread-outbox";
+import { ensureEditingQueuedMessageHeld } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import {
   getNativeShowcasePairingUrls,
@@ -108,7 +108,7 @@ export function ShowcaseCaptureCoordinator(props: { readonly pathname: string })
     if (pendingTasks.length !== SHOWCASE_PENDING_TASK_DEFINITIONS.length) return;
 
     let cancelled = false;
-    for (const task of pendingTasks) holdEditingQueuedMessage(task.messageId);
+    for (const task of pendingTasks) ensureEditingQueuedMessageHeld(task.messageId);
     void (async () => {
       const results = await Promise.all(
         pendingTasks.map(async (task) => {
