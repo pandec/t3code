@@ -21,6 +21,17 @@
  */
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 
+const UNREPRESENTABLE_POINTER_PATH_PATTERN = /[\]\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Keep the pointer on one unambiguous line and inside its closing bracket.
+ * Escaping would no longer name the literal filesystem path, so an unsafe path
+ * declines the rewrite instead.
+ */
+function isRepresentablePointerPath(path: string): boolean {
+  return path.length > 0 && !UNREPRESENTABLE_POINTER_PATH_PATTERN.test(path);
+}
+
 /**
  * The composer's token pattern requires trailing whitespace, so a reference
  * that ends the message only matches once a newline follows it. Offsets stay
@@ -58,7 +69,7 @@ export function applyClaudeSkillReferencePointers(
       continue;
     }
     const skillPath = resolveSkillPath(token.value);
-    if (skillPath === undefined) {
+    if (skillPath === undefined || !isRepresentablePointerPath(skillPath)) {
       continue;
     }
     rewritten += text.slice(cursor, token.start);
