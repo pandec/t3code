@@ -14,8 +14,9 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread, including immediately after importing an external session; forked threads are titled with a 🔱 prefix.
 - **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads, including strict resume/continuation and CLI-assigned session names in the import picker.
 - **Archived-thread search, grouping & project filtering** — archived chats are searchable, grouped, and filterable by project, with direct scoped access from project menus and persisted repository identity so grouping survives project changes.
+- **Environment filter** — filter the thread list by connected environment from the header: a radio menu left of the sort control on desktop (persisted, with a "No projects in this environment" empty state) and in the native header on iOS. Filtering applies before project grouping, so cross-environment groups collapse correctly; manual project reorder is disabled while a filter is active.
 - **Archive undo** — press Command+Z outside the composer after archiving to restore the latest thread; an empty new-thread screen reopens it, while another active conversation stays in place.
-- **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes.
+- **Message queueing** — sending while an agent turn runs queues the message by default instead of steering; a visible queue above the composer (web and mobile) lets each message be steered into the running turn, edited back into the composer, or deleted, and drains in order when the turn completes. A queued message whose images no longer resolve offers a recovery action instead of failing silently.
 - **Per-project default model** — the last model picked in a project's composer becomes that project's default; new threads there pre-select it (a selection carried from a thread you're viewing still wins within the same project). No extra UI — the model picker itself is the interface.
 - **Composer thread commands** — `/t3-rename` (prefilled with the current title, on web and mobile) and `/t3-status` to set a thread's status emoji.
 - **Thread naming & sidebar polish** — split thread naming with refined fork titles, plus a setting to show each thread's provider icon on hover or at all times.
@@ -49,6 +50,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - Bounded catch-up for stale clients reconnecting to the server.
 - The session reaper spares provider sessions that still have pending deliverables.
+- A turn interrupted by a shutdown or provider exit is reported to the resumed agent as stranded, not as a user rejection, so it continues instead of halting and apologising.
 - Escalating desktop process termination and an interactive sidebar resize rail.
 
 ### Fork infrastructure
