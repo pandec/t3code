@@ -21,6 +21,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    sidebarEnvironmentFilterId: null,
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -173,6 +174,7 @@ describe("parsePersistedState", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      sidebarEnvironmentFilterId: null,
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -184,6 +186,16 @@ describe("parsePersistedState", () => {
         },
       },
     });
+  });
+
+  it("keeps a saved sidebar environment filter and drops unusable values", () => {
+    expect(
+      parsePersistedState({ sidebarEnvironmentFilterId: "env-a" }).sidebarEnvironmentFilterId,
+    ).toBe("env-a");
+    expect(parsePersistedState({ sidebarEnvironmentFilterId: "" }).sidebarEnvironmentFilterId).toBe(
+      null,
+    );
+    expect(parsePersistedState({}).sidebarEnvironmentFilterId).toBe(null);
   });
 
   it("ignores changed-file expansion values saved with legacy folder semantics", () => {
@@ -292,6 +304,7 @@ describe("uiStateStore persistence", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      sidebarEnvironmentFilterId: null,
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },

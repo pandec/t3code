@@ -14,6 +14,7 @@ import { T3Wordmark } from "../../components/T3Wordmark";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+import { createNativeFilterMenuHeaderItem } from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
@@ -316,6 +317,15 @@ function IosHomeHeader(props: HomeHeaderProps) {
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
+                  // Filter sits left of the "..." button so the environment
+                  // filter is reachable from the title bar, not just the
+                  // Mail-style bottom toolbar.
+                  createNativeFilterMenuHeaderItem({
+                    filterIcon: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle",
+                    filterMenu,
+                  }),
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -332,11 +342,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
                     composeSystemImageName: "square.and.pencil",
-                    filterMenu,
-                    filterButtonId: "home-filter",
-                    filterSystemImageName: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease",
                     onComposePress: props.onStartNewTask,
                     onSearchTextChange: props.onSearchQueryChange,
                     placeholder: "Search",
