@@ -22,10 +22,10 @@ When the incoming upstream range touches a path below, spawn one targeted sub-ag
 
 | Path                                                              | Question                                                                                                  | Untouched streak |
 | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------- |
-| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`  | Are fork steering and `titlePinned` still compatible with upstream's interrupt and title-generation flow? | 1                |
-| `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` | Is the repository-identity write-back seam intact (see standing decision)?                                | 0                |
-| `apps/server/src/cli/thread.ts`                                   | Does fork CLI automation expose upstream thread lifecycle fields and commands with stable JSON semantics? | 0                |
-| `apps/server/src/persistence/Migrations/`                         | Migration numbering per standing decision.                                                                | 0                |
+| `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` | Is the repository-identity write-back seam intact (see standing decision)?                                | 1                |
+| `apps/server/src/cli/thread.ts`                                   | Does fork CLI automation expose upstream thread lifecycle fields and commands with stable JSON semantics? | 1                |
+| `apps/server/src/persistence/Migrations/`                         | Migration numbering per standing decision.                                                                | 1                |
+| `apps/web/vite.config.ts`                                         | Does the fork's `sharedTestDefaults` spread survive upstream's single-origin dev/proxy rework?            | 0                |
 
 ## Full audit
 
