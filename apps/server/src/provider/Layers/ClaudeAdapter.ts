@@ -931,9 +931,11 @@ const CLAUDE_SETTING_SOURCES = [
  */
 const STRANDED_PRIOR_TURN_NOTICE = [
   "<system-reminder>",
-  "The previous turn on this thread ended because its session went away — T3 restarted, or the provider process exited — not because the user stopped it.",
+  "The previous turn on this thread was cut off when T3 shut down and took its session with it — not because the user stopped it.",
   'If that turn ends with a tool result saying the user rejected the tool call or "doesn\'t want to proceed", the shutdown cancelled it; the user did not refuse and is not waiting for you to justify yourself.',
-  "Pick the work back up, and re-run anything that was cut off if you still need its result.",
+  // Deliberately does not tell the agent to resume: the user may have quit
+  // mid-turn on purpose, and the message below is what they want done now.
+  "Take the message below as the instruction, and re-run anything that was cut off if you still need its result.",
   "</system-reminder>",
 ].join("\n");
 

@@ -375,6 +375,86 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   }),
 );
 
+it.effect("ProviderServiceLive records the turns its shutdown stranded", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const dependencies = Layer.mergeAll(
+      ProviderSessionDirectoryLive.pipe(Layer.provideMerge(runtimeRepositoryLayer)),
+      Layer.succeed(
+        ProviderAdapterRegistry.ProviderAdapterRegistry,
+        makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+      ),
+      defaultServerSettingsLayer,
+      AnalyticsService.layerTest,
+      Layer.succeed(
+        ProviderEventLoggers.ProviderEventLoggers,
+        ProviderEventLoggers.NoOpProviderEventLoggers,
+      ),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+
+    // The persistence outlives the provider service, so what the service
+    // writes on the way down can be read back after its scope closes.
+    const dependencyScope = yield* Scope.make();
+    const dependencyServices = yield* Layer.build(dependencies).pipe(
+      Scope.provide(dependencyScope),
+    );
+    const serviceScope = yield* Scope.make();
+    const serviceServices = yield* Layer.build(makeProviderServiceLive()).pipe(
+      Effect.provide(dependencyServices),
+      Scope.provide(serviceScope),
+    );
+    const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(serviceServices));
+    const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory.pipe(
+      Effect.provide(dependencyServices),
+    );
+
+    const strandedThreadId = asThreadId("thread-stranded-by-shutdown");
+    const settledThreadId = asThreadId("thread-settled-before-shutdown");
+    const goneThreadId = asThreadId("thread-session-already-gone");
+    for (const threadId of [strandedThreadId, settledThreadId, goneThreadId]) {
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      // Every binding now names the turn it last started; only the session
+      // knows whether that turn is still running.
+      yield* provider.sendTurn({ threadId, input: "work", attachments: [] });
+    }
+    codex.updateSession(strandedThreadId, (session) => ({
+      ...session,
+      activeTurnId: asTurnId(`turn-${String(strandedThreadId)}`),
+    }));
+    // This session died earlier without an observed exit, so its binding is
+    // left naming a turn that is not running.
+    yield* codex.adapter.stopSession(goneThreadId);
+
+    yield* Scope.close(serviceScope, Exit.void);
+
+    const stranded = Option.getOrThrow(yield* directory.getBinding(strandedThreadId));
+    const settled = Option.getOrThrow(yield* directory.getBinding(settledThreadId));
+    const gone = Option.getOrThrow(yield* directory.getBinding(goneThreadId));
+    assert.equal(
+      (stranded.runtimePayload as { readonly strandedTurnId?: unknown } | null)?.strandedTurnId,
+      `turn-${String(strandedThreadId)}`,
+    );
+    assert.equal(
+      (settled.runtimePayload as { readonly strandedTurnId?: unknown } | null)?.strandedTurnId,
+      undefined,
+    );
+    assert.equal(
+      (gone.runtimePayload as { readonly strandedTurnId?: unknown } | null)?.strandedTurnId,
+      undefined,
+    );
+
+    yield* Scope.close(dependencyScope, Exit.void);
+  }),
+);
+
 it.effect("ProviderServiceLive rejects new sessions for disabled providers", () =>
   Effect.gen(function* () {
     const codex = makeFakeCodexAdapter();
@@ -1705,6 +1785,43 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("tells the next turn a prior turn was stranded, and only that turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stranded-marker");
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      // A shutdown left this behind. The session is live again — callers
+      // restart it before they route a turn — so the marker, not the routing
+      // path, is what has to carry the news.
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimePayload: { strandedTurnId: "turn-stranded" },
+      });
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({ threadId, input: "back", attachments: [] });
+      assert.equal(routing.codex.sendTurn.mock.calls[0]?.[0]?.priorTurnEndedUnrequested, true);
+
+      yield* provider.sendTurn({ threadId, input: "and again", attachments: [] });
+      assert.equal(routing.codex.sendTurn.mock.calls[1]?.[0]?.priorTurnEndedUnrequested, undefined);
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(
+        (binding.runtimePayload as { readonly strandedTurnId?: unknown } | null)?.strandedTurnId,
+        null,
+      );
+      yield* provider.stopSession({ threadId });
+    }),
   );
 });
 
