@@ -1342,6 +1342,15 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const queuedMessageEditsInProgressRef = useRef(new Set<MessageId>());
+  // Lets the damaged-image recovery toast re-enter the edit handler without the
+  // handler having to depend on itself.
+  const onEditQueuedMessageRef = useRef<
+    | ((
+        message: QueuedThreadMessage,
+        options?: { readonly discardDamagedImages?: boolean },
+      ) => Promise<void>)
+    | null
+  >(null);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
@@ -5127,7 +5136,11 @@ function ChatViewContent(props: ChatViewProps) {
   }, []);
 
   const onEditQueuedMessage = useCallback(
-    async (message: QueuedThreadMessage) => {
+    async (message: QueuedThreadMessage, options?: { readonly discardDamagedImages?: boolean }) => {
+      // Damaged attachments block the edit by default so no image is dropped
+      // silently; the user opts in to losing the unreadable bytes to get the
+      // text and the healthy images back.
+      const discardDamagedImages = options?.discardDamagedImages === true;
       if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId)
         return;
       const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
@@ -5238,23 +5251,45 @@ function ChatViewContent(props: ChatViewProps) {
         // represented by another id only when the persisted bytes match exactly;
         // the store's name/MIME/size dedup key alone is not a content identity.
         const loadedDraft = readDraft();
+        const hydratedImageIds = new Set(hydratedImages.map((image) => image.id));
+        const healthyAttachments = message.attachments.filter(({ id }) => hydratedImageIds.has(id));
+        const damagedAttachmentCount = message.attachments.length - healthyAttachments.length;
         const contentLoadedInMemory =
-          hydratedImages.length === message.attachments.length &&
+          (damagedAttachmentCount === 0 || discardDamagedImages) &&
           (loadedDraft?.prompt ?? "") === nextPrompt;
         let contentPersisted = false;
         if (contentLoadedInMemory) {
           contentPersisted = persistComposerDraftContentNow(composerDraftTarget, {
             prompt: nextPrompt,
-            attachments: message.attachments,
+            attachments: healthyAttachments,
           });
         }
         if (!contentPersisted) {
           const fullyReverted = revertComposerLoad();
-          const failureDescription =
-            hydratedImages.length !== message.attachments.length
-              ? "One or more queued images are damaged. The message is still queued, but it cannot be opened safely."
-              : "It is still queued. If the same image is already in the composer, remove that image and try again.";
-          reportLoadFailure(undefined, fullyReverted, failureDescription);
+          if (damagedAttachmentCount > 0 && !discardDamagedImages) {
+            toastManager.add({
+              type: "warning",
+              title:
+                damagedAttachmentCount === 1
+                  ? "1 queued image is damaged"
+                  : `${damagedAttachmentCount} queued images are damaged`,
+              description: fullyReverted
+                ? "The message is still queued. Recover it without the damaged images to keep its text and the rest."
+                : "The message is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
+              actionProps: {
+                children: "Recover without damaged images",
+                onClick: () => {
+                  void onEditQueuedMessageRef.current?.(message, { discardDamagedImages: true });
+                },
+              },
+            });
+            return;
+          }
+          reportLoadFailure(
+            undefined,
+            fullyReverted,
+            "It is still queued. If the same image is already in the composer, remove that image and try again.",
+          );
           return;
         }
 
@@ -5265,6 +5300,17 @@ function ChatViewContent(props: ChatViewProps) {
           // only copy this handler still owns and must not be reverted.
           console.debug("[thread-outbox] queued message vanished before the edit claimed it");
           return;
+        }
+
+        if (damagedAttachmentCount > 0) {
+          toastManager.add({
+            type: "warning",
+            title:
+              damagedAttachmentCount === 1
+                ? "1 damaged image was left behind"
+                : `${damagedAttachmentCount} damaged images were left behind`,
+            description: "Re-attach them before sending if you still need them.",
+          });
         }
 
         const draftStore = useComposerDraftStore.getState();
@@ -5315,6 +5361,10 @@ function ChatViewContent(props: ChatViewProps) {
       setComposerDraftPrompt,
     ],
   );
+
+  useEffect(() => {
+    onEditQueuedMessageRef.current = onEditQueuedMessage;
+  }, [onEditQueuedMessage]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
