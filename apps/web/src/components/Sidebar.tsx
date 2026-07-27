@@ -6,6 +6,7 @@ import {
   ContainerIcon,
   FolderPlusIcon,
   Globe2Icon,
+  ListFilterIcon,
   LoaderIcon,
   SearchIcon,
   SquarePenIcon,
@@ -45,6 +46,7 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
+  type EnvironmentId,
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
@@ -2724,6 +2726,84 @@ type SortableProjectHandleProps = Pick<
   "attributes" | "listeners" | "setActivatorNodeRef"
 >;
 
+const ALL_ENVIRONMENTS_FILTER_VALUE = "all";
+
+interface SidebarEnvironmentFilterOption {
+  environmentId: EnvironmentId;
+  label: string;
+}
+
+/**
+ * Scopes the sidebar to a single execution environment. Sits left of the
+ * sort menu so the two list controls read as one group.
+ */
+function EnvironmentFilterMenu({
+  environments,
+  selectedEnvironmentId,
+  onSelectedEnvironmentIdChange,
+}: {
+  environments: readonly SidebarEnvironmentFilterOption[];
+  selectedEnvironmentId: EnvironmentId | null;
+  onSelectedEnvironmentIdChange: (environmentId: EnvironmentId | null) => void;
+}) {
+  const isFiltered = selectedEnvironmentId !== null;
+  const selectedLabel =
+    environments.find((environment) => environment.environmentId === selectedEnvironmentId)
+      ?.label ?? null;
+
+  return (
+    <Menu>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              aria-label="Filter projects by environment"
+              data-testid="sidebar-environment-filter-trigger"
+              className={`inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] transition-colors hover:bg-accent hover:text-foreground ${
+                isFiltered ? "bg-accent text-foreground" : "text-muted-foreground/60"
+              }`}
+            />
+          }
+        >
+          <ListFilterIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="right">
+          {isFiltered && selectedLabel ? `Environment: ${selectedLabel}` : "Filter by environment"}
+        </TooltipPopup>
+      </Tooltip>
+      <MenuPopup align="end" side="bottom" className="min-w-52">
+        <MenuGroup>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Environment</div>
+          <MenuRadioGroup
+            value={selectedEnvironmentId ?? ALL_ENVIRONMENTS_FILTER_VALUE}
+            onValueChange={(value) => {
+              onSelectedEnvironmentIdChange(
+                value === ALL_ENVIRONMENTS_FILTER_VALUE ? null : (value as EnvironmentId),
+              );
+            }}
+          >
+            <MenuRadioItem
+              value={ALL_ENVIRONMENTS_FILTER_VALUE}
+              className="min-h-7 py-1 sm:text-xs"
+            >
+              All environments
+            </MenuRadioItem>
+            {environments.map((environment) => (
+              <MenuRadioItem
+                key={environment.environmentId}
+                value={environment.environmentId}
+                className="min-h-7 py-1 sm:text-xs"
+              >
+                {environment.label}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
+  );
+}
+
 function ProjectSortMenu({
   projectSortOrder,
   threadSortOrder,
@@ -2918,6 +2998,9 @@ interface SidebarProjectsContentProps {
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
   attachProjectListAutoAnimateRef: (node: HTMLElement | null) => void;
   projectsLength: number;
+  environmentFilterOptions: readonly SidebarEnvironmentFilterOption[];
+  selectedEnvironmentId: EnvironmentId | null;
+  onSelectedEnvironmentIdChange: (environmentId: EnvironmentId | null) => void;
 }
 
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
@@ -2959,6 +3042,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     suppressProjectClickForContextMenuRef,
     attachProjectListAutoAnimateRef,
     projectsLength,
+    environmentFilterOptions,
+    selectedEnvironmentId,
+    onSelectedEnvironmentIdChange,
   } = props;
 
   const handleProjectSortOrderChange = useCallback(
@@ -3033,6 +3119,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
           <div className="flex items-center gap-1">
+            <EnvironmentFilterMenu
+              environments={environmentFilterOptions}
+              selectedEnvironmentId={selectedEnvironmentId}
+              onSelectedEnvironmentIdChange={onSelectedEnvironmentIdChange}
+            />
             <ProjectSortMenu
               projectSortOrder={projectSortOrder}
               threadSortOrder={threadSortOrder}
@@ -3140,17 +3231,27 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             No projects yet
           </div>
         )}
+
+        {projectsLength > 0 && sortedProjects.length === 0 && selectedEnvironmentId !== null && (
+          <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
+            No projects in this environment
+          </div>
+        )}
       </SidebarGroup>
     </SidebarContent>
   );
 });
 
 export default function Sidebar() {
-  const projects = useProjects();
+  const allProjects = useProjects();
   const sidebarThreads = useThreadShells();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
+  const persistedEnvironmentFilterId = useUiStateStore((store) => store.sidebarEnvironmentFilterId);
+  const setSidebarEnvironmentFilterId = useUiStateStore(
+    (store) => store.setSidebarEnvironmentFilterId,
+  );
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = pathname.startsWith("/settings");
@@ -3213,6 +3314,43 @@ export default function Sidebar() {
           .map((environment) => environment.environmentId),
       ),
     [environments],
+  );
+  const environmentFilterOptions = useMemo<SidebarEnvironmentFilterOption[]>(
+    () =>
+      environments
+        .map((environment) => ({
+          environmentId: environment.environmentId,
+          label: environment.label,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [environments],
+  );
+  // A persisted id can outlive its environment (connection removed), so fall
+  // back to "all" instead of rendering a permanently empty sidebar.
+  const selectedEnvironmentId = useMemo<EnvironmentId | null>(
+    () =>
+      environmentFilterOptions.find(
+        (environment) => environment.environmentId === persistedEnvironmentFilterId,
+      )?.environmentId ?? null,
+    [environmentFilterOptions, persistedEnvironmentFilterId],
+  );
+  const handleEnvironmentFilterChange = useCallback(
+    (environmentId: EnvironmentId | null) => {
+      // Selected threads can be hidden by the new filter. The global mousedown
+      // handler only covers pointer activation, so clear here as well —
+      // otherwise a keyboard-driven filter change leaves invisible threads
+      // selected and a later Cmd-click sweeps them into a bulk archive/delete.
+      clearSelection();
+      setSidebarEnvironmentFilterId(environmentId);
+    },
+    [clearSelection, setSidebarEnvironmentFilterId],
+  );
+  const projects = useMemo(
+    () =>
+      selectedEnvironmentId === null
+        ? allProjects
+        : allProjects.filter((project) => project.environmentId === selectedEnvironmentId),
+    [allProjects, selectedEnvironmentId],
   );
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
@@ -3453,7 +3591,10 @@ export default function Sidebar() {
     sidebarProjects,
     visibleThreads,
   ]);
-  const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  // Dragging a filtered subset would rewrite the global project order from an
+  // incomplete list, so manual reordering stays off while a filter is active.
+  const isManualProjectSorting =
+    sidebarProjectSortOrder === "manual" && selectedEnvironmentId === null;
   const visibleSidebarThreadKeys = useMemo(
     () =>
       sortedProjects.flatMap((project) => {
@@ -3792,7 +3933,10 @@ export default function Sidebar() {
             suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
             suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
             attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
-            projectsLength={projects.length}
+            projectsLength={allProjects.length}
+            environmentFilterOptions={environmentFilterOptions}
+            selectedEnvironmentId={selectedEnvironmentId}
+            onSelectedEnvironmentIdChange={handleEnvironmentFilterChange}
           />
 
           <SidebarSeparator />
