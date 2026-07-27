@@ -21,6 +21,7 @@ import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
+  type HomeListFilterMenuModel,
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
 import {
@@ -34,14 +35,17 @@ export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+  readonly models: ReadonlyArray<HomeListFilterMenuModel>;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onModelChange: (model: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
@@ -76,7 +80,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const mutedColor = useThemeColor("--color-foreground-muted");
   const threadListV2Enabled = useThreadListV2FilterGate();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
+    ? props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      props.selectedModel !== null
     : hasCustomHomeListOptions(props);
   const menuActions = useMemo<MenuAction[]>(
     () => [
@@ -116,6 +122,26 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
+      ...(props.models.length === 0
+        ? []
+        : ([
+            {
+              id: "model",
+              title: "Model",
+              subactions: [
+                {
+                  id: "model:all",
+                  title: "All models",
+                  state: checkedMenuState(props.selectedModel === null),
+                },
+                ...props.models.map((model) => ({
+                  id: `model:${model.key}`,
+                  title: model.label,
+                  state: checkedMenuState(props.selectedModel === model.key),
+                })),
+              ],
+            },
+          ] satisfies MenuAction[])),
       ...(threadListV2Enabled
         ? []
         : ([
@@ -141,9 +167,11 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     ],
     [
       props.environments,
+      props.models,
       props.projectSortOrder,
       props.projects,
       props.selectedEnvironmentId,
+      props.selectedModel,
       props.selectedProjectKey,
       props.threadSortOrder,
       threadListV2Enabled,
@@ -177,6 +205,19 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         const projectKey = id.slice("project:".length);
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
+        }
+        return;
+      }
+
+      if (id === "model:all") {
+        props.onModelChange(null);
+        return;
+      }
+
+      if (id.startsWith("model:")) {
+        const modelKey = id.slice("model:".length);
+        if (props.models.some((model) => model.key === modelKey)) {
+          props.onModelChange(modelKey);
         }
         return;
       }
@@ -294,7 +335,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const iconColor = useThemeColor("--color-icon");
   const threadListV2Enabled = useThreadListV2FilterGate();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
+    ? props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      props.selectedModel !== null
     : hasCustomHomeListOptions(props);
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
@@ -427,6 +470,28 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     onPress={() => props.onProjectChange(project.key)}
                   >
                     <NativeHeaderToolbar.Label>{project.label}</NativeHeaderToolbar.Label>
+                  </NativeHeaderToolbar.MenuAction>
+                ))}
+              </NativeHeaderToolbar.Menu>
+            ) : null}
+
+            {props.models.length > 0 ? (
+              <NativeHeaderToolbar.Menu title="Model">
+                <NativeHeaderToolbar.Label>Model</NativeHeaderToolbar.Label>
+                <NativeHeaderToolbar.MenuAction
+                  isOn={props.selectedModel === null}
+                  onPress={() => props.onModelChange(null)}
+                  subtitle="Show threads on every model"
+                >
+                  <NativeHeaderToolbar.Label>All models</NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+                {props.models.map((model) => (
+                  <NativeHeaderToolbar.MenuAction
+                    key={model.key}
+                    isOn={props.selectedModel === model.key}
+                    onPress={() => props.onModelChange(model.key)}
+                  >
+                    <NativeHeaderToolbar.Label>{model.label}</NativeHeaderToolbar.Label>
                   </NativeHeaderToolbar.MenuAction>
                 ))}
               </NativeHeaderToolbar.Menu>

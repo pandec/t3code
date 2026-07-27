@@ -8,6 +8,7 @@ import { hasCustomHomeListOptions, type HomeListOptions } from "./home-list-opti
 
 const defaults: HomeListOptions = {
   selectedEnvironmentId: null,
+  selectedModel: null,
   projectSortOrder:
     DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
       ? "updated_at"
@@ -27,5 +28,9 @@ describe("home list options", () => {
     expect(
       hasCustomHomeListOptions({ ...defaults, selectedProjectKey: "environment-1:project-1" }),
     ).toBe(true);
+  });
+
+  it("marks model filters as customized", () => {
+    expect(hasCustomHomeListOptions({ ...defaults, selectedModel: "claude-opus-4-5" })).toBe(true);
   });
 });

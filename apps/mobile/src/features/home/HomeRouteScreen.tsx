@@ -4,7 +4,10 @@ import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { useAtomValue } from "@effect/atom-react";
+
 import { useProjects, useThreadShells } from "../../state/entities";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -15,6 +18,7 @@ import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
+import { buildHomeModelFilterOptions } from "./home-model-filter";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
@@ -51,12 +55,22 @@ export function HomeRouteScreen() {
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const modelFilterOptions = useMemo(
+    () => buildHomeModelFilterOptions({ threads, serverConfigs }),
+    [serverConfigs, threads],
+  );
+  const availableModels = useMemo(
+    () => new Set(modelFilterOptions.map((model) => model.key)),
+    [modelFilterOptions],
+  );
   const {
     options: listOptions,
     setSelectedEnvironmentId,
+    setSelectedModel,
     setProjectSortOrder,
     setThreadSortOrder,
-  } = useHomeListOptions(availableEnvironmentIds);
+  } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
@@ -112,13 +126,16 @@ export function HomeRouteScreen() {
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
+          models={modelFilterOptions}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
+          selectedModel={listOptions.selectedModel}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onModelChange={setSelectedModel}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -173,6 +190,7 @@ export function HomeRouteScreen() {
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
+          selectedModel={listOptions.selectedModel}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
           threadSortOrder={listOptions.threadSortOrder}

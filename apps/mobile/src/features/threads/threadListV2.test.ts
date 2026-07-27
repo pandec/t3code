@@ -156,6 +156,28 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(0);
   });
 
+  it("keeps only threads on the pinned model", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("opus"),
+          title: "Opus",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-opus-4-5",
+          },
+        }),
+        makeThread({ id: ThreadId.make("codex"), title: "Codex" }),
+      ],
+      environmentId: null,
+      model: "claude-opus-4-5",
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["opus"]);
+  });
+
   it("partitions settled threads into a slim tail with one divider", () => {
     const { items } = buildThreadListV2Items({
       threads: [

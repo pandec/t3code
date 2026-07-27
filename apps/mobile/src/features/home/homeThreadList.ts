@@ -253,6 +253,8 @@ export function buildHomeThreadGroups(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks?: ReadonlyArray<PendingNewTask>;
   readonly environmentId: EnvironmentId | null;
+  /** Model slug filter; null shows every model. */
+  readonly model?: string | null;
   readonly searchQuery: string;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
@@ -261,6 +263,7 @@ export function buildHomeThreadGroups(input: {
   readonly now?: number;
 }): ReadonlyArray<HomeThreadGroup> {
   const now = input.now ?? Date.now();
+  const model = input.model ?? null;
   const groups = new Map<string, MutableHomeThreadGroup>();
   const groupKeyByProjectKey = new Map<string, string>();
 
@@ -281,6 +284,11 @@ export function buildHomeThreadGroups(input: {
 
   for (const pendingTask of input.pendingTasks ?? []) {
     if (input.environmentId !== null && pendingTask.message.environmentId !== input.environmentId) {
+      continue;
+    }
+    // A queued task carries the model it will start on; one that predates the
+    // model snapshot cannot claim to match the pinned model.
+    if (model !== null && pendingTask.message.modelSelection?.model !== model) {
       continue;
     }
 
@@ -323,6 +331,9 @@ export function buildHomeThreadGroups(input: {
       continue;
     }
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) {
+      continue;
+    }
+    if (model !== null && thread.modelSelection.model !== model) {
       continue;
     }
 

@@ -38,6 +38,7 @@ import {
   useHomeListOptions,
 } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
+import { buildHomeModelFilterOptions } from "../home/home-model-filter";
 import {
   buildHomeListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
@@ -64,6 +65,7 @@ import {
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import { ThreadListV2Row } from "./thread-list-v2-items";
+import { resolveThreadProviderDriver } from "./thread-provider";
 import {
   buildThreadListV2Items,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
@@ -216,8 +218,25 @@ function ThreadNavigationSidebarPane(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const { options, setSelectedEnvironmentId, setProjectSortOrder, setThreadSortOrder } =
-    useHomeListOptions(availableEnvironmentIds);
+  // Threads on servers without the settlement capability never classify as
+  // settled (the user could neither un-settle nor pin them); the same configs
+  // name the models behind the filter menu and each row's provider mark.
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const modelFilterOptions = useMemo(
+    () => buildHomeModelFilterOptions({ threads, serverConfigs }),
+    [serverConfigs, threads],
+  );
+  const availableModels = useMemo(
+    () => new Set(modelFilterOptions.map((model) => model.key)),
+    [modelFilterOptions],
+  );
+  const {
+    options,
+    setSelectedEnvironmentId,
+    setSelectedModel,
+    setProjectSortOrder,
+    setThreadSortOrder,
+  } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectScopes = useMemo(
     () =>
@@ -313,6 +332,7 @@ function ThreadNavigationSidebarPane(
         threads: scopedThreads,
         pendingTasks: scopedPendingTasks,
         environmentId: options.selectedEnvironmentId,
+        model: options.selectedModel,
         searchQuery: props.searchQuery,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
@@ -385,7 +405,7 @@ function ThreadNavigationSidebarPane(
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${options.selectedModel ?? "all"}:${props.searchQuery.trim()}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -412,9 +432,6 @@ function ThreadNavigationSidebarPane(
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
   }, [threadListV2Enabled]);
-  // Threads on servers without the settlement capability never classify as
-  // settled (the user could neither un-settle nor pin them).
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const settlementEnvironmentIds = useMemo(() => {
     const supported = new Set<EnvironmentId>();
     for (const [environmentId, config] of serverConfigs) {
@@ -439,6 +456,7 @@ function ThreadNavigationSidebarPane(
     return buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
       environmentId: options.selectedEnvironmentId,
+      model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
       searchQuery: props.searchQuery,
       changeRequestStateByKey,
@@ -453,6 +471,7 @@ function ThreadNavigationSidebarPane(
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentId,
+    options.selectedModel,
     props.searchQuery,
     settledVisibleCount,
     settlementEnvironmentIds,
@@ -568,6 +587,27 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
+      ...(modelFilterOptions.length === 0
+        ? []
+        : ([
+            {
+              id: "model",
+              title: "Model",
+              subactions: [
+                {
+                  id: "model:all",
+                  title: "All models",
+                  subtitle: "Show threads on every model",
+                  state: options.selectedModel === null ? "on" : "off",
+                },
+                ...modelFilterOptions.map((model) => ({
+                  id: `model:${model.key}`,
+                  title: model.label,
+                  state: options.selectedModel === model.key ? ("on" as const) : ("off" as const),
+                })),
+              ],
+            },
+          ] satisfies MenuAction[])),
       // v2 lays the list out in fixed creation order — offering sort/group
       // controls it silently ignores would be a lie. Environment still
       // scopes the v2 partition, so it stays.
@@ -594,7 +634,14 @@ function ThreadNavigationSidebarPane(
             },
           ] satisfies MenuAction[])),
     ],
-    [environments, options, projectFilterOptions, selectedProjectKey, threadListV2Enabled],
+    [
+      environments,
+      modelFilterOptions,
+      options,
+      projectFilterOptions,
+      selectedProjectKey,
+      threadListV2Enabled,
+    ],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -621,6 +668,17 @@ function ThreadNavigationSidebarPane(
         }
         return;
       }
+      if (event === "model:all") {
+        setSelectedModel(null);
+        return;
+      }
+      if (event.startsWith("model:")) {
+        const modelKey = event.slice("model:".length);
+        if (modelFilterOptions.some((model) => model.key === modelKey)) {
+          setSelectedModel(modelKey);
+        }
+        return;
+      }
       const projectSort = PROJECT_SORT_OPTIONS.find(
         (option) => `project-sort:${option.value}` === event,
       );
@@ -638,9 +696,11 @@ function ThreadNavigationSidebarPane(
     },
     [
       environments,
+      modelFilterOptions,
       projectFilterOptions,
       setProjectSortOrder,
       setSelectedEnvironmentId,
+      setSelectedModel,
       setThreadSortOrder,
     ],
   );
@@ -776,15 +836,10 @@ function ThreadNavigationSidebarPane(
               showSettledDivider={item.item.showSettledDivider}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
-              providerDriver={
-                serverConfigs
-                  .get(thread.environmentId)
-                  ?.providers.find(
-                    (provider) =>
-                      provider.instanceId ===
-                      (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId),
-                  )?.driver ?? null
-              }
+              providerDriver={resolveThreadProviderDriver(
+                serverConfigs.get(thread.environmentId)?.providers,
+                thread,
+              )}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
@@ -864,6 +919,10 @@ function ThreadNavigationSidebarPane(
               environmentLabel={
                 savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
               }
+              providerDriver={resolveThreadProviderDriver(
+                serverConfigs.get(thread.environmentId)?.providers,
+                thread,
+              )}
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
                 null
@@ -922,7 +981,9 @@ function ThreadNavigationSidebarPane(
   // v2 ignores the sort/group options, so only the environment filter can
   // light the "customized" state while the beta is on.
   const filterCustomized = threadListV2Enabled
-    ? options.selectedEnvironmentId !== null || selectedProjectKey !== null
+    ? options.selectedEnvironmentId !== null ||
+      selectedProjectKey !== null ||
+      options.selectedModel !== null
     : hasCustomHomeListOptions({ ...options, selectedProjectKey });
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -932,23 +993,28 @@ function ThreadNavigationSidebarPane(
       buildHomeListFilterMenu({
         environments,
         projects: projectFilterOptions,
+        models: modelFilterOptions,
         selectedEnvironmentId: options.selectedEnvironmentId,
         selectedProjectKey,
+        selectedModel: options.selectedModel,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
         onEnvironmentChange: setSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
+        onModelChange: setSelectedModel,
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization: !threadListV2Enabled,
       }),
     [
       environments,
+      modelFilterOptions,
       options,
       projectFilterOptions,
       selectedProjectKey,
       setProjectSortOrder,
       setSelectedEnvironmentId,
+      setSelectedModel,
       setThreadSortOrder,
       threadListV2Enabled,
     ],

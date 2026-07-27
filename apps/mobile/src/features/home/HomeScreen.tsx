@@ -36,6 +36,7 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import { ThreadListV2Row } from "../threads/thread-list-v2-items";
+import { resolveThreadProviderDriver } from "../threads/thread-provider";
 import {
   buildThreadListV2Items,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
@@ -74,6 +75,8 @@ interface HomeScreenProps {
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  /** Model slug the list is pinned to; null shows every model. */
+  readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -317,6 +320,7 @@ export function HomeScreen(props: HomeScreenProps) {
         threads: scopedThreads,
         pendingTasks: scopedPendingTasks,
         environmentId: props.selectedEnvironmentId,
+        model: props.selectedModel,
         searchQuery: props.searchQuery,
         projectSortOrder: props.projectSortOrder,
         threadSortOrder: props.threadSortOrder,
@@ -327,6 +331,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.projectSortOrder,
       props.searchQuery,
       props.selectedEnvironmentId,
+      props.selectedModel,
       props.threadSortOrder,
       scopedPendingTasks,
       scopedProjects,
@@ -458,7 +463,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.selectedModel ?? "all"}:${props.searchQuery.trim()}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -514,6 +519,7 @@ export function HomeScreen(props: HomeScreenProps) {
     return buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       environmentId: props.selectedEnvironmentId,
+      model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
       searchQuery: props.searchQuery,
       changeRequestStateByKey,
@@ -532,6 +538,7 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozeEnvironmentIds,
     props.searchQuery,
     props.selectedEnvironmentId,
+    props.selectedModel,
     props.threads,
     threadListV2Enabled,
     v2ScopedProjectGroup,
@@ -565,15 +572,10 @@ export function HomeScreen(props: HomeScreenProps) {
         projectTitle={v2ProjectTitleByProjectKey.get(
           scopedProjectKey(item.thread.environmentId, item.thread.projectId),
         )}
-        providerDriver={
-          serverConfigs
-            .get(item.thread.environmentId)
-            ?.providers.find(
-              (provider) =>
-                provider.instanceId ===
-                (item.thread.session?.providerInstanceId ?? item.thread.modelSelection.instanceId),
-            )?.driver ?? null
-        }
+        providerDriver={resolveThreadProviderDriver(
+          serverConfigs.get(item.thread.environmentId)?.providers,
+          item.thread,
+        )}
         environmentLabel={
           Object.keys(props.savedConnectionsById).length > 1
             ? (props.savedConnectionsById[item.thread.environmentId]?.environmentLabel ?? null)
@@ -617,8 +619,8 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const extraData = useMemo(
-    () => ({ savedConnectionsById: props.savedConnectionsById, projectCwdByKey }),
-    [props.savedConnectionsById, projectCwdByKey],
+    () => ({ savedConnectionsById: props.savedConnectionsById, projectCwdByKey, serverConfigs }),
+    [props.savedConnectionsById, projectCwdByKey, serverConfigs],
   );
 
   const renderItem = useCallback(
@@ -666,6 +668,10 @@ export function HomeScreen(props: HomeScreenProps) {
               environmentLabel={
                 props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
               }
+              providerDriver={resolveThreadProviderDriver(
+                serverConfigs.get(thread.environmentId)?.providers,
+                thread,
+              )}
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
                 null
@@ -702,6 +708,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
+      serverConfigs,
       updateGroupDisplay,
     ],
   );
@@ -798,6 +805,8 @@ export function HomeScreen(props: HomeScreenProps) {
     (pendingTask) =>
       (props.selectedEnvironmentId === null ||
         pendingTask.message.environmentId === props.selectedEnvironmentId) &&
+      (props.selectedModel === null ||
+        pendingTask.message.modelSelection?.model === props.selectedModel) &&
       (v2ScopedProjectKeys === null ||
         v2ScopedProjectKeys.has(
           scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
@@ -832,6 +841,11 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title={`No threads in ${selectedProjectScope.title}`}
         detail="Choose another project or create a new task."
+      />
+    ) : props.selectedModel !== null ? (
+      <EmptyState
+        title={`No threads on ${props.selectedModel}`}
+        detail="Choose another model or create a new task."
       />
     ) : selectedEnvironmentLabel ? (
       <EmptyState

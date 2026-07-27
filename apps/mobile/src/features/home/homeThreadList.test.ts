@@ -709,4 +709,46 @@ describe("buildHomeThreadGroups", () => {
     expect(groups[0]?.newThreadTarget?.environmentId).toBe(desktopEnv);
     expect(groups[0]?.newThreadTarget?.id).toBe(desktopProject.id);
   });
+
+  it("keeps only threads on the pinned model, and drops projects left empty", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const project = makeProject({
+      environmentId,
+      id: ProjectId.make("project-1"),
+      title: "t3code",
+    });
+    const otherProject = makeProject({
+      environmentId,
+      id: ProjectId.make("project-2"),
+      title: "website",
+    });
+    const threads = [
+      makeThread({
+        environmentId,
+        id: ThreadId.make("thread-opus"),
+        projectId: project.id,
+        title: "Opus thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude"),
+          model: "claude-opus-4-5",
+        },
+      }),
+      makeThread({
+        environmentId,
+        id: ThreadId.make("thread-codex"),
+        projectId: project.id,
+        title: "Codex thread",
+      }),
+      makeThread({
+        environmentId,
+        id: ThreadId.make("thread-other-project"),
+        projectId: otherProject.id,
+        title: "Codex thread elsewhere",
+      }),
+    ];
+
+    const groups = buildGroups([project, otherProject], threads, { model: "claude-opus-4-5" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.threads.map((thread) => thread.title)).toEqual(["Opus thread"]);
+  });
 });
