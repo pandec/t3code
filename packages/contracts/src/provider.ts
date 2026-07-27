@@ -90,6 +90,13 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /**
+   * The turn this one follows was left running by a session that went away —
+   * an app restart or crash rather than a stop the user asked for. Adapters
+   * tell the agent, so it reads a tool call the shutdown cancelled as the
+   * harness interrupting it rather than the user refusing.
+   */
+  priorTurnEndedUnrequested: Schema.optional(Schema.Boolean),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

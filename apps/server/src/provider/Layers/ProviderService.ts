@@ -581,6 +581,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  /** The turn a binding still claims as active, if its payload names one. */
+  const bindingActiveTurnId = (runtimePayload: unknown | null | undefined): string | null => {
+    if (
+      runtimePayload === null ||
+      runtimePayload === undefined ||
+      typeof runtimePayload !== "object" ||
+      Array.isArray(runtimePayload) ||
+      !("activeTurnId" in runtimePayload)
+    ) {
+      return null;
+    }
+    const activeTurnId = runtimePayload.activeTurnId;
+    return typeof activeTurnId === "string" && activeTurnId.length > 0 ? activeTurnId : null;
+  };
+
   const resolveRoutableSession = Effect.fn("resolveRoutableSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly operation: string;
@@ -616,6 +631,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       } as const;
     }
 
+    // The binding still names a turn, yet nothing is running it: the session
+    // that owned that turn went away without the user asking it to stop.
+    const strandedTurnId = bindingActiveTurnId(binding.runtimePayload);
     const recovered = yield* recoverSessionForThread({
       binding,
       operation: input.operation,
@@ -625,6 +643,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       instanceId,
       threadId: input.threadId,
       isActive: true,
+      strandedPriorTurn: strandedTurnId !== null,
     } as const;
   });
 
@@ -897,7 +916,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
-      const turn = yield* routed.adapter.sendTurn(input);
+      const turn = yield* routed.adapter.sendTurn(
+        routed.strandedPriorTurn === true ? { ...input, priorTurnEndedUnrequested: true } : input,
+      );
       yield* directory.upsert({
         threadId: input.threadId,
         provider: routed.adapter.provider,
