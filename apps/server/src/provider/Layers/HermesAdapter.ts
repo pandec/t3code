@@ -65,6 +65,8 @@ import {
   settleHermesOpenToolCalls,
   updateHermesOpenToolCalls,
 } from "../acp/HermesAcpExtension.ts";
+import { collectComposerSkillTokens } from "@t3tools/shared/composerInlineTokens";
+
 import { rewriteHermesPrompt } from "../acp/HermesPromptRewrite.ts";
 import { readHermesSkillsSnapshot } from "../hermesSkillsSnapshot.ts";
 import { type HermesAdapterShape } from "../Services/HermesAdapter.ts";
@@ -1067,6 +1069,29 @@ export function makeHermesAdapter(
         }).pipe(Effect.scoped),
       );
 
+    /**
+     * Lowercased command names of the enabled skills Hermes reports, used to
+     * decide which mid-message `$name` references are safe to rewrite.
+     *
+     * Read only when the message actually carries a reference, so an ordinary
+     * turn never touches the filesystem and there is nothing to cache: a skill
+     * added a moment ago is picked up on the next message. An unreadable
+     * snapshot yields `undefined`, which keeps the leading-token rewrite the
+     * only behaviour — never a failed turn.
+     */
+    const resolveKnownSkillNames = Effect.fn("resolveHermesKnownSkillNames")(function* (
+      text: string | undefined,
+    ) {
+      if (!text || collectComposerSkillTokens(text).length === 0) {
+        return undefined;
+      }
+      const skills = yield* listSkills({ cwd: "" }).pipe(Effect.orElseSucceed(() => []));
+      const names = new Set(
+        skills.filter((skill) => skill.enabled).map((skill) => skill.name.toLowerCase()),
+      );
+      return names.size > 0 ? names : undefined;
+    });
+
     const sendTurn: HermesAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const semaphore = yield* getThreadSemaphore(input.threadId);
@@ -1087,7 +1112,10 @@ export function makeHermesAdapter(
                       ? input.modelSelection
                       : undefined;
                   const requestedTurnModelId = turnModelSelection?.model?.trim() || undefined;
-                  const text = input.input ? rewriteHermesPrompt(input.input) : undefined;
+                  const knownSkillNames = yield* resolveKnownSkillNames(input.input);
+                  const text = input.input
+                    ? rewriteHermesPrompt(input.input, knownSkillNames)
+                    : undefined;
                   const imagePromptParts = yield* restore(
                     Effect.forEach(input.attachments ?? [], (attachment) =>
                       Effect.gen(function* () {

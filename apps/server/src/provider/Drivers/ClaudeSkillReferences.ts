@@ -19,10 +19,7 @@
  *
  * @module provider/Drivers/ClaudeSkillReferences
  */
-import {
-  type ComposerInlineToken,
-  collectComposerInlineTokens,
-} from "@t3tools/shared/composerInlineTokens";
+import { collectComposerSkillTokens } from "@t3tools/shared/composerInlineTokens";
 
 const UNREPRESENTABLE_POINTER_PATH_PATTERN = /[\]\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
@@ -35,40 +32,9 @@ function isRepresentablePointerPath(path: string): boolean {
   return path.length > 0 && !UNREPRESENTABLE_POINTER_PATH_PATTERN.test(path);
 }
 
-/**
- * The composer's token pattern requires trailing whitespace, so a reference
- * that ends the message only matches once a newline follows it. Offsets stay
- * valid for the original text because a token never extends into the suffix.
- *
- * A `$name` can also sit inside an `@mention`'s label — a file link for
- * `my $review notes.md` serialises to `[my $review notes.md](...)`, whose
- * label matches the skill pattern. The composer renders that whole span as
- * one file chip, so the earliest token claims its span and any reference
- * nested inside it is ignored, mirroring how the editor splits the same text
- * into segments. Rewriting there would corrupt the user's path.
- */
-function collectSkillTokens(text: string): ReadonlyArray<ComposerInlineToken> {
-  const tokens = [...collectComposerInlineTokens(`${text}\n`)].sort(
-    (left, right) => left.start - right.start,
-  );
-
-  const skillTokens: ComposerInlineToken[] = [];
-  let claimedUntil = 0;
-  for (const token of tokens) {
-    if (token.start < claimedUntil) {
-      continue;
-    }
-    claimedUntil = token.end;
-    if (token.type === "skill") {
-      skillTokens.push(token);
-    }
-  }
-  return skillTokens;
-}
-
 /** Lowercased names of every `$skill` reference in the text. */
 export function collectClaudeSkillReferenceNames(text: string): ReadonlySet<string> {
-  return new Set(collectSkillTokens(text).map((token) => token.value.toLowerCase()));
+  return new Set(collectComposerSkillTokens(text).map((token) => token.value.toLowerCase()));
 }
 
 /**
@@ -80,7 +46,7 @@ export function applyClaudeSkillReferencePointers(
   text: string,
   resolveSkillPath: (name: string) => string | undefined,
 ): string {
-  const tokens = collectSkillTokens(text);
+  const tokens = collectComposerSkillTokens(text);
   if (tokens.length === 0) {
     return text;
   }

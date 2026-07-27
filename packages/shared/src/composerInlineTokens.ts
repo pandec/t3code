@@ -119,3 +119,32 @@ export function collectComposerInlineTokens(
 
   return [...matches].sort((left, right) => left.start - right.start);
 }
+
+/**
+ * Skill tokens in `text`, in order, with overlaps resolved the way the editor
+ * splits the same text into segments: the earliest token claims its span.
+ *
+ * That rule matters because a `$name` can sit inside a file mention's label —
+ * a link for `my $review notes.md` serialises to `[my $review notes.md](...)`,
+ * whose label matches the skill pattern. The composer renders that whole span
+ * as one file chip, so the nested reference is not a skill reference, and any
+ * provider that rewrites `$name` in an outgoing prompt must not touch it.
+ *
+ * The token pattern requires trailing whitespace, so a reference that ends the
+ * text only matches once a newline follows it. Offsets stay valid for the
+ * original text because a token never extends into that suffix.
+ */
+export function collectComposerSkillTokens(text: string): ReadonlyArray<ComposerInlineToken> {
+  const skillTokens: ComposerInlineToken[] = [];
+  let claimedUntil = 0;
+  for (const token of collectComposerInlineTokens(`${text}\n`)) {
+    if (token.start < claimedUntil) {
+      continue;
+    }
+    claimedUntil = token.end;
+    if (token.type === "skill") {
+      skillTokens.push(token);
+    }
+  }
+  return skillTokens;
+}
