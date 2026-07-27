@@ -21,7 +21,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Thread naming & sidebar polish** — split thread naming with refined fork titles, plus a setting to show each thread's provider icon on hover or at all times.
 - **Conversation navigation rails** — desktop threads keep the existing left-side user-message navigator and add a mirrored right-side navigator for completed agent responses, with hover previews and click-to-jump navigation.
 - **Turn-completion notifications** — optional in-app toast and OS-level notification when an agent turn finishes (both off by default, toggled independently in Settings). System notifications fire only while the app is in the background, and clicking one focuses the window and opens the thread; works in both the desktop app and the browser.
-- **Provider usage meter** — live Claude Code and Codex subscription-quota windows in the web and mobile composers, including local reset times and optional warning/critical alerts on web.
+- **Provider usage meter** — live Claude Code and Codex subscription-quota windows with local reset times. On web the quota shares the composer's context-window control as a second, inner ring, and one popover covers both; on mobile it is a composer toolbar pill. Claude reports its per-window percentages through the same data as `/usage` (session, weekly, and any model-scoped weekly window); Codex renders whichever windows it reports. Optional warning/critical alerts on web, off by default.
 
 ### Voice
 
