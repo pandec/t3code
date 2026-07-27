@@ -64,6 +64,20 @@ export function hasPendingThreadOutboxWork(threadRef: ScopedThreadRef): boolean 
 }
 
 /**
+ * Whether the row is still queued. Actions reached from a stale render or from
+ * a toast that outlived its message must not re-open one that is already gone:
+ * the composer would gain a second copy of content it already holds.
+ */
+export function isThreadOutboxMessageQueued(message: QueuedThreadMessage): boolean {
+  const threadKey = outboxScopedThreadKey(message.environmentId, message.threadId);
+  const queuedMessages = appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom);
+  return (
+    queuedMessages[threadKey]?.some((candidate) => candidate.messageId === message.messageId) ??
+    false
+  );
+}
+
+/**
  * Queued messages the outbox drain must not deliver right now because an
  * editing session is moving them back into the composer; delivering mid-edit
  * would send content the user is about to change.
@@ -73,12 +87,14 @@ export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, 
   Atom.withLabel("web:thread-outbox:editing-message-ids"),
 );
 
-export function holdEditingQueuedMessage(messageId: MessageId): void {
+/** Acquires the edit hold and reports whether this caller owns it. */
+export function holdEditingQueuedMessage(messageId: MessageId): boolean {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (current[messageId]) {
-    return;
+    return false;
   }
   appAtomRegistry.set(editingQueuedMessageIdsAtom, { ...current, [messageId]: true });
+  return true;
 }
 
 export function releaseEditingQueuedMessage(messageId: MessageId): void {

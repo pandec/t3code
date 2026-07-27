@@ -133,6 +133,21 @@ export function shouldQueueMessageWhileBusy(input: {
   );
 }
 
+// An approval or a question takes over the composer and renders its own answer
+// in place of the draft, so a queued message loaded there would be invisible —
+// and focusing an approval composer writes its empty value back over the draft,
+// destroying the message. Name the request that holds the composer so editing
+// can wait for the user to answer it.
+export function resolvePendingComposerRequest(input: {
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+}): "approval" | "user-input" | null {
+  if (input.hasPendingApproval) {
+    return "approval";
+  }
+  return input.hasPendingUserInput ? "user-input" : null;
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

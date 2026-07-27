@@ -1595,6 +1595,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       cursorAdjacentToMention: boolean,
       terminalContextIds: string[],
     ) => {
+      // An approval renders an empty editor of its own in place of the draft,
+      // and focus alone reports that value back here, so leave the draft to the
+      // user and keep only the cursor state. Mirrors the render precedence in
+      // the editor's `value`, where the approval state wins over a question.
+      if (isComposerApprovalState) {
+        setComposerCursor(nextCursor);
+        setComposerTrigger(
+          cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
+        );
+        return;
+      }
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
@@ -1623,6 +1634,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     },
     [
+      isComposerApprovalState,
       activePendingProgress?.activeQuestion,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,

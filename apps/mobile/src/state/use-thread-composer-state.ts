@@ -36,6 +36,7 @@ import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
+  appendedComposerDraftText,
   clearComposerDraftContentIfUnchanged,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
@@ -52,6 +53,7 @@ import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
+import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
 
 /** Appends text and attachments to a thread's composer draft (review comments, queued-message edits). */
 export function appendContentToThreadDraft(input: {
@@ -63,8 +65,7 @@ export function appendContentToThreadDraft(input: {
   const threadKey = scopedThreadKey(input.environmentId, input.threadId);
   if (input.text.length > 0) {
     const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
-    const separator = existing.trim().length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
-    setComposerDraftText(threadKey, `${existing}${separator}${input.text}`);
+    setComposerDraftText(threadKey, appendedComposerDraftText(existing, input.text));
   }
   if (input.attachments && input.attachments.length > 0) {
     appendComposerDraftAttachments(threadKey, input.attachments);
@@ -153,6 +154,13 @@ export function useThreadComposerState() {
       }
 
       const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      if (isQueuedMessageEditTransferring(threadKey)) {
+        Alert.alert(
+          "Queued message is still opening",
+          "Wait for it to finish moving into the composer, then send.",
+        );
+        return null;
+      }
       const draft = getComposerDraftSnapshot(threadKey);
       const thread = selectedThreadDetail ?? selectedThreadShell;
       const text = draft.text.trim();
