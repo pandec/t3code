@@ -38,7 +38,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
   skill marked `disable-model-invocation: true` is rewritten in the outgoing prompt to
   `/name [Read: <path to SKILL.md>]`. The chip you see and the message that is stored are
   unchanged; the agent gets the intent plus a pointer it loads only if it acts on it.
-- **Hermes ACP provider** — use a machine-local Hermes Agent as a first-class provider with native streaming, tool calls, resumable sessions, model and mode selection, slash commands, skills, and steering.
+- **Hermes ACP provider** — use a machine-local Hermes Agent as a first-class provider with native streaming, tool calls, resumable sessions, model and mode selection, slash commands, skills, and steering. `$skill` references work anywhere in a message, not just at the start; a reference is rewritten to `/skill` only when it names a skill Hermes actually reports, so `$PATH` and other prose survive untouched.
 
 ### CLI & automation
 
