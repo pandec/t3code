@@ -104,7 +104,9 @@ export function buildHomeListFilterMenu(props: {
     });
   }
 
-  if (props.models.length > 0) {
+  // A single model across every thread makes the section a no-op — every
+  // choice shows the same list — so it only appears once it can discriminate.
+  if (props.models.length > 1) {
     items.push({
       type: "submenu",
       title: "Model",

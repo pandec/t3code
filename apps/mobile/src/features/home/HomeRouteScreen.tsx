@@ -4,10 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useAtomValue } from "@effect/atom-react";
-
 import { useProjects, useThreadShells } from "../../state/entities";
-import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -18,7 +15,7 @@ import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
-import { buildHomeModelFilterOptions } from "./home-model-filter";
+import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
@@ -55,15 +52,7 @@ export function HomeRouteScreen() {
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const modelFilterOptions = useMemo(
-    () => buildHomeModelFilterOptions({ threads, serverConfigs }),
-    [serverConfigs, threads],
-  );
-  const availableModels = useMemo(
-    () => new Set(modelFilterOptions.map((model) => model.key)),
-    [modelFilterOptions],
-  );
+  const { modelFilterOptions, availableModels } = useHomeModelFilterOptions(threads);
   const {
     options: listOptions,
     setSelectedEnvironmentId,
@@ -72,6 +61,8 @@ export function HomeRouteScreen() {
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const selectedModelLabel =
+    modelFilterOptions.find((model) => model.key === listOptions.selectedModel)?.label ?? null;
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
@@ -191,6 +182,7 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedModel={listOptions.selectedModel}
+          selectedModelLabel={selectedModelLabel}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
           threadSortOrder={listOptions.threadSortOrder}

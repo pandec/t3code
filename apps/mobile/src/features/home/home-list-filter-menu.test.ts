@@ -82,11 +82,11 @@ describe("buildHomeListFilterMenu", () => {
     expect(onModelChange).toHaveBeenNthCalledWith(2, "gpt-5.6-sol");
   });
 
-  it("omits the model submenu when no thread reports a model", () => {
+  it("omits the model submenu until a second model can discriminate", () => {
     const menu = buildHomeListFilterMenu({
       environments: [],
       projects: [],
-      models: [],
+      models: [{ key: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
       selectedEnvironmentId: null,
       selectedProjectKey: null,
       selectedModel: null,

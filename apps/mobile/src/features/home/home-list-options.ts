@@ -106,10 +106,18 @@ export function hasCustomHomeListOptions(
   );
 }
 
+/**
+ * A pin whose environment or model is not currently available is MASKED, not
+ * cleared: the stored value survives so the filter comes back when the
+ * environment reconnects or a thread on that model reappears, instead of
+ * being silently dropped while a machine is offline. Masking is per consumer,
+ * but both shells derive availability from the same thread list, and only one
+ * is mounted at a time.
+ */
 export function useHomeListOptions(
   availableEnvironmentIds: ReadonlySet<EnvironmentId>,
   /** Model slugs still present in the list; a stale pin falls back to "all". */
-  availableModels?: ReadonlySet<string>,
+  availableModels: ReadonlySet<string>,
 ) {
   const shared = useContext(HomeListOptionsContext);
   const [localOptions, setLocalOptions] = useState<HomeListOptions>(defaultHomeListOptions);
@@ -121,11 +129,9 @@ export function useHomeListOptions(
       ? options.selectedEnvironmentId
       : null;
   const selectedModel =
-    options.selectedModel !== null &&
-    availableModels !== undefined &&
-    !availableModels.has(options.selectedModel)
-      ? null
-      : options.selectedModel;
+    options.selectedModel !== null && availableModels.has(options.selectedModel)
+      ? options.selectedModel
+      : null;
   const availableOptions =
     selectedEnvironmentId === options.selectedEnvironmentId &&
     selectedModel === options.selectedModel

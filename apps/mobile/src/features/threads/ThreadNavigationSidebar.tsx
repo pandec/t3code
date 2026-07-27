@@ -26,7 +26,6 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
-import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -38,7 +37,7 @@ import {
   useHomeListOptions,
 } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { buildHomeModelFilterOptions } from "../home/home-model-filter";
+import { useHomeModelFilterOptions } from "../home/use-home-model-filter-options";
 import {
   buildHomeListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
@@ -218,18 +217,9 @@ function ThreadNavigationSidebarPane(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  // Threads on servers without the settlement capability never classify as
-  // settled (the user could neither un-settle nor pin them); the same configs
-  // name the models behind the filter menu and each row's provider mark.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const modelFilterOptions = useMemo(
-    () => buildHomeModelFilterOptions({ threads, serverConfigs }),
-    [serverConfigs, threads],
-  );
-  const availableModels = useMemo(
-    () => new Set(modelFilterOptions.map((model) => model.key)),
-    [modelFilterOptions],
-  );
+  // The same configs name the models behind the filter menu, each row's
+  // provider mark, and (below) the settlement/snooze capabilities.
+  const { modelFilterOptions, availableModels, serverConfigs } = useHomeModelFilterOptions(threads);
   const {
     options,
     setSelectedEnvironmentId,
@@ -238,6 +228,8 @@ function ThreadNavigationSidebarPane(
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const selectedModelLabel =
+    modelFilterOptions.find((model) => model.key === options.selectedModel)?.label ?? null;
   const projectScopes = useMemo(
     () =>
       buildHomeProjectScopes({
@@ -405,7 +397,15 @@ function ThreadNavigationSidebarPane(
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${options.selectedModel ?? "all"}:${props.searchQuery.trim()}`;
+  // JSON, not a colon join: model slugs, project keys, and searches all admit
+  // colons, so a delimited string can collide across different filter states
+  // and silently skip the reset.
+  const settledResetKey = JSON.stringify([
+    options.selectedEnvironmentId,
+    selectedProjectKey,
+    options.selectedModel,
+    props.searchQuery.trim(),
+  ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -499,13 +499,15 @@ function ThreadNavigationSidebarPane(
     // Queued offline tasks render above the thread rows (mirrors the
     // compact Home v2 list): they are not thread shells, so the v2 item
     // builder never sees them, but they must stay visible and deletable
-    // while their environment is offline. Same environment scope and
-    // search filter as the list.
+    // while their environment is offline. Same environment, model, and
+    // search filters as the list.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
         (options.selectedEnvironmentId === null ||
           pendingTask.message.environmentId === options.selectedEnvironmentId) &&
+        (options.selectedModel === null ||
+          pendingTask.message.modelSelection?.model === options.selectedModel) &&
         (selectedProjectRefs === null ||
           selectedProjectRefs.has(
             scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
@@ -537,6 +539,7 @@ function ThreadNavigationSidebarPane(
   }, [
     listLayout.items,
     options.selectedEnvironmentId,
+    options.selectedModel,
     pendingTasks,
     props.searchQuery,
     selectedProjectRefs,
@@ -587,7 +590,8 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
-      ...(modelFilterOptions.length === 0
+      // Only once it can discriminate (same rule as the shared iOS builder).
+      ...(modelFilterOptions.length < 2
         ? []
         : ([
             {
@@ -595,7 +599,9 @@ function ThreadNavigationSidebarPane(
               title: "Model",
               subactions: [
                 {
-                  id: "model:all",
+                  // "clear", not "all": a model slug could legitimately be
+                  // "all" and would then be unselectable.
+                  id: "model:clear",
                   title: "All models",
                   subtitle: "Show threads on every model",
                   state: options.selectedModel === null ? "on" : "off",
@@ -668,7 +674,7 @@ function ThreadNavigationSidebarPane(
         }
         return;
       }
-      if (event === "model:all") {
+      if (event === "model:clear") {
         setSelectedModel(null);
         return;
       }
@@ -836,10 +842,7 @@ function ThreadNavigationSidebarPane(
               showSettledDivider={item.item.showSettledDivider}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
-              providerDriver={resolveThreadProviderDriver(
-                serverConfigs.get(thread.environmentId)?.providers,
-                thread,
-              )}
+              providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
@@ -919,10 +922,7 @@ function ThreadNavigationSidebarPane(
               environmentLabel={
                 savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
               }
-              providerDriver={resolveThreadProviderDriver(
-                serverConfigs.get(thread.environmentId)?.providers,
-                thread,
-              )}
+              providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
                 null
@@ -1049,7 +1049,12 @@ function ThreadNavigationSidebarPane(
               : `${snoozedCount} threads snoozed`
             : selectedProjectScope !== null
               ? `No threads in ${selectedProjectScope.title}`
-              : "No threads yet"}
+              : // A model pin can empty the list in one tap; "No threads yet"
+                // over a filtered inbox reads as data loss, same as the
+                // snoozed case above.
+                options.selectedModel !== null
+                ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
+                : "No threads yet"}
     </Text>
   );
 

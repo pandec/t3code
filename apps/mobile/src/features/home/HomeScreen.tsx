@@ -77,6 +77,9 @@ interface HomeScreenProps {
   readonly selectedProjectKey: string | null;
   /** Model slug the list is pinned to; null shows every model. */
   readonly selectedModel: string | null;
+  /** Catalog label for {@link selectedModel}, so prose never shows a raw slug
+      the user did not pick. Falls back to the slug when nothing knows it. */
+  readonly selectedModelLabel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -463,7 +466,15 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.selectedModel ?? "all"}:${props.searchQuery.trim()}`;
+  // JSON, not a colon join: model slugs, project keys, and searches all admit
+  // colons, so a delimited string can collide across different filter states
+  // and silently skip the reset.
+  const settledResetKey = JSON.stringify([
+    props.selectedEnvironmentId,
+    v2ProjectScopeKey,
+    props.selectedModel,
+    props.searchQuery.trim(),
+  ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -572,10 +583,7 @@ export function HomeScreen(props: HomeScreenProps) {
         projectTitle={v2ProjectTitleByProjectKey.get(
           scopedProjectKey(item.thread.environmentId, item.thread.projectId),
         )}
-        providerDriver={resolveThreadProviderDriver(
-          serverConfigs.get(item.thread.environmentId)?.providers,
-          item.thread,
-        )}
+        providerDriver={resolveThreadProviderDriver(serverConfigs, item.thread)}
         environmentLabel={
           Object.keys(props.savedConnectionsById).length > 1
             ? (props.savedConnectionsById[item.thread.environmentId]?.environmentLabel ?? null)
@@ -668,10 +676,7 @@ export function HomeScreen(props: HomeScreenProps) {
               environmentLabel={
                 props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
               }
-              providerDriver={resolveThreadProviderDriver(
-                serverConfigs.get(thread.environmentId)?.providers,
-                thread,
-              )}
+              providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
                 null
@@ -844,7 +849,7 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     ) : props.selectedModel !== null ? (
       <EmptyState
-        title={`No threads on ${props.selectedModel}`}
+        title={`No threads on ${props.selectedModelLabel ?? props.selectedModel}`}
         detail="Choose another model or create a new task."
       />
     ) : selectedEnvironmentLabel ? (

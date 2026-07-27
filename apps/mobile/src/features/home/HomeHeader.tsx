@@ -122,7 +122,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
-      ...(props.models.length === 0
+      // One model across every thread makes the section a no-op; it appears
+      // only once it can discriminate (same rule as the shared iOS builder).
+      ...(props.models.length < 2
         ? []
         : ([
             {
@@ -130,7 +132,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               title: "Model",
               subactions: [
                 {
-                  id: "model:all",
+                  // "clear", not "all": a model slug could legitimately be
+                  // "all" and would then be unselectable.
+                  id: "model:clear",
                   title: "All models",
                   state: checkedMenuState(props.selectedModel === null),
                 },
@@ -209,7 +213,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         return;
       }
 
-      if (id === "model:all") {
+      if (id === "model:clear") {
         props.onModelChange(null);
         return;
       }
@@ -421,6 +425,10 @@ function IosHomeHeader(props: HomeHeaderProps) {
         </NativeHeaderToolbar>
       )}
 
+      {/* Currently unreachable: HomeHeader routes Android to AndroidHomeHeader
+          and the app ships ios + android only (app.config.ts), so this branch
+          never renders. Kept as-is rather than extended — the live iOS menu is
+          buildHomeListFilterMenu above. */}
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
@@ -475,28 +483,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             ) : null}
 
-            {props.models.length > 0 ? (
-              <NativeHeaderToolbar.Menu title="Model">
-                <NativeHeaderToolbar.Label>Model</NativeHeaderToolbar.Label>
-                <NativeHeaderToolbar.MenuAction
-                  isOn={props.selectedModel === null}
-                  onPress={() => props.onModelChange(null)}
-                  subtitle="Show threads on every model"
-                >
-                  <NativeHeaderToolbar.Label>All models</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-                {props.models.map((model) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={model.key}
-                    isOn={props.selectedModel === model.key}
-                    onPress={() => props.onModelChange(model.key)}
-                  >
-                    <NativeHeaderToolbar.Label>{model.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            ) : null}
-
+            {/* No Model section here: this whole toolbar is unreachable on
+                the shipping platforms (see the comment above), and a fourth
+                hand-synced copy of the filter menu would only rot. */}
             <NativeHeaderToolbar.Menu title="Sort projects">
               <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
               {PROJECT_SORT_OPTIONS.map((option) => (

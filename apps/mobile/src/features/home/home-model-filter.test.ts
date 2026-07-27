@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ServerConfig } from "@t3tools/contracts";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -30,6 +31,25 @@ function makeThread(
     hasActionableProposedPlan: false,
     ...input,
   };
+}
+
+/**
+ * Only `providers[].models[].{slug,name}` is read, so the fixture states just
+ * that rather than assembling a whole ServerConfig.
+ */
+function makeServerConfigs(
+  entries: ReadonlyArray<readonly [EnvironmentId, ReadonlyArray<readonly [string, string]>]>,
+): ReadonlyMap<EnvironmentId, ServerConfig> {
+  return new Map(
+    entries.map(([id, models]) => [
+      id,
+      {
+        providers: [
+          { instanceId: "provider-1", models: models.map(([slug, name]) => ({ slug, name })) },
+        ],
+      } as unknown as ServerConfig,
+    ]),
+  );
 }
 
 describe("buildHomeModelFilterOptions", () => {
@@ -64,5 +84,34 @@ describe("buildHomeModelFilterOptions", () => {
       { key: "claude-opus-4-5", label: "claude-opus-4-5" },
       { key: "gpt-5.4", label: "gpt-5.4" },
     ]);
+  });
+
+  it("upgrades a slug placeholder once any environment names the model", () => {
+    const connectingEnvironmentId = EnvironmentId.make("environment-connecting");
+    const options = buildHomeModelFilterOptions({
+      threads: [
+        // Comes first, and its environment has no catalog yet.
+        makeThread({
+          id: ThreadId.make("connecting"),
+          title: "Connecting",
+          environmentId: connectingEnvironmentId,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-opus-4-5",
+          },
+        }),
+        makeThread({
+          id: ThreadId.make("online"),
+          title: "Online",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-opus-4-5",
+          },
+        }),
+      ],
+      serverConfigs: makeServerConfigs([[environmentId, [["claude-opus-4-5", "Opus 4.5"]]]]),
+    });
+
+    expect(options).toEqual([{ key: "claude-opus-4-5", label: "Opus 4.5" }]);
   });
 });

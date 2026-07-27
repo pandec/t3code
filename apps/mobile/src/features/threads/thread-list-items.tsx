@@ -21,6 +21,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { providerDisplayName } from "./thread-provider";
 import { resolveThreadStatus } from "./threadPresentation";
 
 /**
@@ -454,7 +455,14 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
-  const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
+  const providerDriver = props.providerDriver ?? null;
+  // The subtitle text is inside the row's Pressable, so it is not announced
+  // separately; the provider mark is the only NEW information the row shows,
+  // and it has no non-visual equivalent unless it is named here.
+  const providerName = providerDisplayName(providerDriver);
+  const threadAccessibilityLabel = [thread.title, providerName, pr ? pr.accessibilityLabel : null]
+    .filter((part): part is string => Boolean(part))
+    .join(", ");
   const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
     Boolean(part),
   );
@@ -493,12 +501,17 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     </View>
   ) : null;
 
-  const providerDriver = props.providerDriver ?? null;
   const subtitleRow =
-    subtitleParts.length > 0 || pr !== null || providerDriver !== null ? (
+    subtitleParts.length > 0 || pr !== null ? (
       <View className="mt-px flex-row items-center gap-1.5">
+        {/* Leads the line like PendingTaskListRow's glyph, and never stands
+            alone: a lone mark on an otherwise empty line carries nothing.
+            Muted to the same weight as the v2 row's trailing mark so a
+            brand color does not outrank the row title. */}
         {providerDriver !== null ? (
-          <ProviderIcon provider={providerDriver} size={compact ? 13 : 11} />
+          <View className="opacity-60">
+            <ProviderIcon provider={providerDriver} size={compact ? 13 : 11} />
+          </View>
         ) : null}
         {subtitleParts.length > 0 ? (
           <Text
