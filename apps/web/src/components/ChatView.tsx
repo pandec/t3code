@@ -199,6 +199,7 @@ import {
   enqueueThreadOutboxMessage,
   hasPendingThreadOutboxWork,
   holdEditingQueuedMessage,
+  isThreadOutboxMessageQueued,
   releaseEditingQueuedMessage,
   removeThreadOutboxMessage,
   updateThreadOutboxMessage,
@@ -5143,6 +5144,10 @@ function ChatViewContent(props: ChatViewProps) {
       const discardDamagedImages = options?.discardDamagedImages === true;
       if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId)
         return;
+      // The recovery toast and a stale render both outlive the row they point
+      // at, and appending a message the composer already holds would duplicate
+      // it — the removal below only reports the loss afterwards.
+      if (!isThreadOutboxMessageQueued(message)) return;
       const currentImageCount = composerRef.current?.getSendContext().images.length ?? 0;
       if (currentImageCount + message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         toastManager.add({
@@ -5267,22 +5272,45 @@ function ChatViewContent(props: ChatViewProps) {
         if (!contentPersisted) {
           const fullyReverted = revertComposerLoad();
           if (damagedAttachmentCount > 0 && !discardDamagedImages) {
-            toastManager.add({
-              type: "warning",
-              title:
-                damagedAttachmentCount === 1
-                  ? "1 queued image is damaged"
-                  : `${damagedAttachmentCount} queued images are damaged`,
-              description: fullyReverted
-                ? "The message is still queued. Recover it without the damaged images to keep its text and the rest."
-                : "The message is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
-              actionProps: {
-                children: "Recover without damaged images",
-                onClick: () => {
-                  void onEditQueuedMessageRef.current?.(message, { discardDamagedImages: true });
+            const damagedTitle =
+              damagedAttachmentCount === 1
+                ? "1 queued image is damaged"
+                : `${damagedAttachmentCount} queued images are damaged`;
+            if (!fullyReverted) {
+              // The composer kept the merged prompt, so recovering from here
+              // would append the message to it a second time. Report only.
+              toastManager.add(
+                stackedThreadToast({
+                  type: "warning",
+                  title: damagedTitle,
+                  description:
+                    "The message is still queued, and newer composer changes were kept. Review the composer before sending to avoid a duplicate.",
+                }),
+              );
+              return;
+            }
+            let damagedToastId: ReturnType<typeof toastManager.add>;
+            let recoveryStarted = false;
+            // The recovery is one shot: it removes the queued row, so a second
+            // click would append the same message to the composer again.
+            const startRecovery = () => {
+              if (recoveryStarted) return;
+              recoveryStarted = true;
+              toastManager.close(damagedToastId);
+              void onEditQueuedMessageRef.current?.(message, { discardDamagedImages: true });
+            };
+            damagedToastId = toastManager.add(
+              stackedThreadToast({
+                type: "warning",
+                title: damagedTitle,
+                description:
+                  "The message is still queued. Recover it without the damaged images to keep its text and the rest.",
+                actionProps: {
+                  children: "Recover without damaged images",
+                  onClick: startRecovery,
                 },
-              },
-            });
+              }),
+            );
             return;
           }
           reportLoadFailure(
@@ -5364,6 +5392,12 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     onEditQueuedMessageRef.current = onEditQueuedMessage;
+    // A toast outlives this view, so drop the handler on unmount: recovering
+    // into a composer the user has navigated away from would quietly take the
+    // message out of the queue behind their back.
+    return () => {
+      onEditQueuedMessageRef.current = null;
+    };
   }, [onEditQueuedMessage]);
 
   const onRespondToApproval = useCallback(

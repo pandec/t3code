@@ -457,10 +457,23 @@ describe("persistComposerDraftContentNow", () => {
       existingAttachment,
     ]);
   });
+});
 
-  it("exposes failed source hydration instead of treating it as an empty attachment list", () => {
+describe("hydrateImagesFromPersisted", () => {
+  // The queued-message edit detects damaged attachments by comparing this
+  // result against the source list, so an unreadable attachment has to be
+  // dropped rather than returned as a placeholder entry.
+  it("drops an attachment whose data URL carries no bytes", () => {
+    const healthy = {
+      id: "healthy-image",
+      name: "healthy.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      dataUrl: "data:image/png;base64,YWJj",
+    };
     expect(
       hydrateImagesFromPersisted([
+        healthy,
         {
           id: "broken-image",
           name: "broken.png",
@@ -468,8 +481,8 @@ describe("persistComposerDraftContentNow", () => {
           sizeBytes: 3,
           dataUrl: "data:image/png;base64,",
         },
-      ]),
-    ).toEqual([]);
+      ]).map(({ id }) => id),
+    ).toEqual([healthy.id]);
   });
 });
 
