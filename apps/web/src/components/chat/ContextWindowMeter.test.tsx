@@ -39,6 +39,58 @@ describe("ContextWindowMeter", () => {
 
     expect(markup).toContain('aria-label="Claude Session (5h) limit warning"');
     expect(markup.match(/<circle/g)).toHaveLength(2);
+    // A numberless window still has to paint: a zero-length arc would leave
+    // the ring visually identical to "no quota data at all".
+    expect(markup).toContain('stroke-dashoffset="0"');
+    expect(markup).toContain("var(--color-warning)");
+  });
+
+  it("colours the ring by the worst window, not just the featured one", () => {
+    const criticalWindow = {
+      id: "session",
+      group: "session" as const,
+      label: "Session (5h)",
+      shortLabel: "5h",
+      usedPercent: 97,
+      resetsAt: null,
+      status: "critical" as const,
+    };
+    const markup = renderToStaticMarkup(
+      <ContextWindowMeter
+        usage={null}
+        providerUsage={{
+          providerLabel: "Claude",
+          providerInstanceId: "claudeAgent",
+          windows: [
+            criticalWindow,
+            {
+              id: "weekly_scoped:Fable",
+              group: "weekly",
+              label: "Weekly (Fable)",
+              shortLabel: "Fable",
+              usedPercent: 85,
+              resetsAt: null,
+              status: "warning",
+            },
+          ],
+          status: "critical",
+          // A snapshot whose featured window is milder than its worst window
+          // must still read as critical on the ring.
+          constrainedWindow: {
+            id: "weekly_scoped:Fable",
+            group: "weekly",
+            label: "Weekly (Fable)",
+            shortLabel: "Fable",
+            usedPercent: 85,
+            resetsAt: null,
+            status: "warning",
+          },
+          updatedAt: "2026-07-27T05:00:00.000Z",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("var(--color-destructive)");
   });
 
   it("still renders with only context-window usage", () => {

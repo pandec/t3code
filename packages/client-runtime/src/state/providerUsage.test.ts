@@ -781,6 +781,30 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     });
 
     it("prefers the provider's active window over the highest percentage", () => {
+      // Equal severity: the provider knows which window actually binds, so its
+      // flag wins over the raw percentage.
+      const limits = {
+        limits: [
+          { kind: "session", percent: 88, severity: "normal", resets_at: null, is_active: false },
+          {
+            kind: "weekly_scoped",
+            percent: 85,
+            severity: "normal",
+            resets_at: null,
+            scope: { model: { display_name: "Fable" } },
+            is_active: true,
+          },
+        ],
+      };
+      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
+
+      expect(snapshot?.status).toBe("warning");
+      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (Fable)");
+    });
+
+    it("never lets the active flag downgrade severity", () => {
+      // A compact surface renders only the constrained window, so an active
+      // warning must not hide a critical window elsewhere.
       const limits = {
         limits: [
           { kind: "session", percent: 97, severity: "normal", resets_at: null, is_active: false },
@@ -797,7 +821,20 @@ describe("deriveLatestProviderUsageSnapshot", () => {
       const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
 
       expect(snapshot?.status).toBe("critical");
-      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (Fable)");
+      expect(snapshot?.constrainedWindow?.label).toBe("Session (5h)");
+      expect(snapshot?.constrainedWindow?.status).toBe("critical");
+    });
+
+    it("keeps the flat map usable when an empty limits array is also present", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([
+        usageActivity("a1", {
+          limits: [],
+          five_hour: { utilization: 42, resets_at: "2026-07-26T07:00:00Z" },
+        }),
+      ]);
+
+      expect(snapshot?.windows.map((w) => w.id)).toEqual(["five_hour"]);
+      expect(snapshot?.windows[0]?.usedPercent).toBe(42);
     });
 
     it("falls back to the worst window when no window is flagged active", () => {

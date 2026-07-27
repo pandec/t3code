@@ -270,7 +270,11 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
   const windows: ProviderUsageWindow[] = [];
   let activeWindowId: string | null = null;
 
-  const limits = Array.isArray(rateLimits.limits) ? rateLimits.limits : null;
+  // An empty array must fall through to the flat map rather than claim the
+  // payload reported no windows — the flat map is the SDK's declared shape and
+  // may still be populated alongside an empty `limits`.
+  const limits =
+    Array.isArray(rateLimits.limits) && rateLimits.limits.length > 0 ? rateLimits.limits : null;
   if (limits) {
     const candidates: Array<{
       index: number;
@@ -754,13 +758,15 @@ export function deriveLatestProviderUsageSnapshot(
   );
   // The provider's own "active" flag beats inferring the binding window from
   // percentages — a 44% Fable weekly can bind while a 24% all-models weekly
-  // does not. Only trust it while that window is itself noteworthy.
+  // does not. It may NOT downgrade severity though: compact surfaces render
+  // this window alone, so preferring an active warning over a critical window
+  // elsewhere would hide the very state the meter exists to surface.
   const flaggedActiveWindow =
     activeWindowId !== null ? (windows.find((w) => w.id === activeWindowId) ?? null) : null;
   const constrainedWindow =
     status === "ok"
       ? null
-      : flaggedActiveWindow !== null && flaggedActiveWindow.status !== "ok"
+      : flaggedActiveWindow !== null && flaggedActiveWindow.status === status
         ? flaggedActiveWindow
         : windows.reduce((worst, window) => {
             const severityDelta = statusRank(window.status) - statusRank(worst.status);

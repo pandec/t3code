@@ -35,6 +35,15 @@ const QUOTA_TEXT_CLASS: Record<ProviderUsageStatus, string> = {
   critical: "text-destructive",
 };
 
+const QUOTA_STATUS_RANK: Record<ProviderUsageStatus, number> = { ok: 0, warning: 1, critical: 2 };
+
+function maxProviderUsageStatus(
+  a: ProviderUsageStatus,
+  b: ProviderUsageStatus,
+): ProviderUsageStatus {
+  return QUOTA_STATUS_RANK[b] > QUOTA_STATUS_RANK[a] ? b : a;
+}
+
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
     return null;
@@ -141,9 +150,22 @@ export function ContextWindowMeter(props: {
       : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   const quotaWindow = providerUsage ? primaryProviderUsageWindow(providerUsage) : null;
-  const quotaStatus = providerUsage?.status ?? "ok";
-  const quotaColor = QUOTA_RING_COLOR[quotaWindow?.status ?? quotaStatus];
-  const quotaPercentage = Math.max(0, Math.min(100, quotaWindow?.usedPercent ?? 0));
+  // Colour by the worst window, not just the featured one: the ring must never
+  // render a calmer state than the snapshot as a whole.
+  const quotaStatus = maxProviderUsageStatus(
+    providerUsage?.status ?? "ok",
+    quotaWindow?.status ?? "ok",
+  );
+  const quotaColor = QUOTA_RING_COLOR[quotaStatus];
+  // A window with a state but no number (Claude reports `rejected` without
+  // utilization) still has to be visible — fill the ring rather than drawing a
+  // zero-length arc that paints nothing.
+  const quotaPercentage =
+    quotaWindow?.usedPercent === null || quotaWindow?.usedPercent === undefined
+      ? quotaWindow !== null && quotaStatus !== "ok"
+        ? 100
+        : 0
+      : Math.max(0, Math.min(100, quotaWindow.usedPercent));
   const quotaPercentLabel = quotaWindow ? formatPercentage(quotaWindow.usedPercent) : null;
   const quotaAriaLabel = quotaWindow
     ? quotaPercentLabel
