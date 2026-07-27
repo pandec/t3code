@@ -942,6 +942,22 @@ const CLAUDE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/**
+ * Prepended to the first message after a turn was stranded by a session that
+ * went away. The SDK reports a tool call cancelled by that shutdown with its
+ * own "the user doesn't want to proceed … STOP what you are doing" text, which
+ * an agent otherwise reads as the user refusing and halting on purpose.
+ */
+const STRANDED_PRIOR_TURN_NOTICE = [
+  "<system-reminder>",
+  "The previous turn on this thread was cut off when T3 shut down and took its session with it — not because the user stopped it.",
+  'If that turn ends with a tool result saying the user rejected the tool call or "doesn\'t want to proceed", the shutdown cancelled it; the user did not refuse and is not waiting for you to justify yourself.',
+  // Deliberately does not tell the agent to resume: the user may have quit
+  // mid-turn on purpose, and the message below is what they want done now.
+  "Take the message below as the instruction, and re-run anything that was cut off if you still need its result.",
+  "</system-reminder>",
+].join("\n");
+
 function buildPromptText(
   input: ProviderSendTurnInput,
   boundInstanceId: ProviderInstanceId,
@@ -1013,6 +1029,10 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     dependencies.skillReferencePaths,
   );
   const sdkContent: Array<Record<string, unknown>> = [];
+
+  if (input.priorTurnEndedUnrequested === true) {
+    sdkContent.push({ type: "text", text: STRANDED_PRIOR_TURN_NOTICE });
+  }
 
   if (text.length > 0) {
     sdkContent.push({ type: "text", text });

@@ -1571,6 +1571,68 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("tells the agent when a turn was stranded rather than stopped by the user", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Status?",
+        attachments: [],
+        priorTurnEndedUnrequested: true,
+      });
+
+      // One read only: the prompt is a single-shot async iterable.
+      const message = yield* Effect.promise(() =>
+        readFirstPromptMessage(harness.getLastCreateQueryInput()),
+      );
+      const content = message?.message.content;
+      assert.isArray(content);
+      const blocks = Array.isArray(content) ? content : [];
+      assert.equal(blocks.length, 2);
+      // The notice leads, so it is read before the message it explains.
+      const [notice, prompt] = blocks;
+      assert.equal(notice?.type, "text");
+      assert.include(notice?.type === "text" ? notice.text : "", "not because the user stopped it");
+      assert.equal(prompt?.type === "text" ? prompt.text : "", "Status?");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves an ordinary turn's prompt untouched", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Status?",
+        attachments: [],
+      });
+
+      const promptText = yield* Effect.promise(() =>
+        readFirstPromptText(harness.getLastCreateQueryInput()),
+      );
+      assert.equal(promptText, "Status?");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("treats ultrathink as a prompt keyword instead of a session effort", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

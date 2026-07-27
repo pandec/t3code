@@ -581,6 +581,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  /**
+   * The turn `stopAll` recorded as still running when it tore this thread's
+   * session down, if the marker survives and no turn has been sent since.
+   *
+   * Only shutdown writes it, from the adapter's own live session state, so it
+   * cannot be confused with a turn that finished or one the user stopped.
+   */
+  const bindingStrandedTurnId = (runtimePayload: unknown | null | undefined): string | null => {
+    if (
+      runtimePayload === null ||
+      runtimePayload === undefined ||
+      typeof runtimePayload !== "object" ||
+      Array.isArray(runtimePayload) ||
+      !("strandedTurnId" in runtimePayload)
+    ) {
+      return null;
+    }
+    const value = runtimePayload.strandedTurnId;
+    return typeof value === "string" && value.length > 0 ? value : null;
+  };
+
   const resolveRoutableSession = Effect.fn("resolveRoutableSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly operation: string;
@@ -597,6 +618,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const instanceId = yield* requireBindingInstanceId(input.operation, binding);
     const adapter = yield* registry.getByInstance(instanceId);
 
+    // A turn was live when this thread's session was last torn down, and
+    // nothing has been sent since. Read before any recovery, which rewrites
+    // the binding from the fresh session, and reported on every branch: a
+    // caller usually restarts the session itself before routing here, so the
+    // marker must not depend on this call being the one that recovers.
+    const strandedPriorTurn = bindingStrandedTurnId(binding.runtimePayload) !== null;
+
     const hasRequestedSession = yield* adapter.hasSession(input.threadId);
     if (hasRequestedSession) {
       return {
@@ -604,6 +632,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         instanceId,
         threadId: input.threadId,
         isActive: true,
+        strandedPriorTurn,
       } as const;
     }
 
@@ -613,6 +642,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         instanceId,
         threadId: input.threadId,
         isActive: false,
+        strandedPriorTurn,
       } as const;
     }
 
@@ -625,6 +655,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       instanceId,
       threadId: input.threadId,
       isActive: true,
+      strandedPriorTurn,
     } as const;
   });
 
@@ -897,7 +928,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
-      const turn = yield* routed.adapter.sendTurn(input);
+      const turn = yield* routed.adapter.sendTurn(
+        routed.strandedPriorTurn ? { ...input, priorTurnEndedUnrequested: true } : input,
+      );
       yield* directory.upsert({
         threadId: input.threadId,
         provider: routed.adapter.provider,
@@ -907,6 +940,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimePayload: {
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
           activeTurnId: turn.turnId,
+          // The turn carrying the notice has been sent, so the marker is
+          // spent. `upsert` merges runtime payloads, so it has to be cleared
+          // by name — omitting it would leave it set forever.
+          strandedTurnId: null,
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: yield* nowIso,
         },
@@ -1317,6 +1354,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
+    // Shutting down cancels whatever a running turn was doing, and the agent
+    // is told its tool call was rejected. Remember the turns that were live
+    // here — before the adapters tear their sessions down — so the next
+    // message on those threads can explain it. The sessions are the only
+    // trustworthy source: a binding keeps naming the last turn it started
+    // long after that turn finished.
+    const strandedTurnIdByThread = new Map<ThreadId, string>();
+    for (const session of activeSessions) {
+      if (session.activeTurnId !== undefined) {
+        strandedTurnIdByThread.set(session.threadId, session.activeTurnId);
+      }
+    }
     yield* Effect.forEach(activeSessions, (session) =>
       Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
         upsertSessionBinding(session, session.threadId, {
@@ -1335,6 +1384,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "ProviderService.stopAll",
           binding,
         );
+        const strandedTurnId = strandedTurnIdByThread.get(binding.threadId);
         return yield* directory.upsert({
           threadId: binding.threadId,
           provider: binding.provider,
@@ -1343,6 +1393,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimePayload: {
             activeTurnId: null,
             hasPendingWork: false,
+            ...(strandedTurnId !== undefined ? { strandedTurnId } : {}),
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: yield* nowIso,
           },
