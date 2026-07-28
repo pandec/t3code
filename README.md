@@ -56,5 +56,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### Fork infrastructure
 
-- **Dev app flavor** — a separate Dev flavor of the desktop app with isolated state directories (shared provider homes), a Linux Dev AppImage build, and personal-team iOS builds.
+- **Dev app flavor** — a separate Dev flavor of the desktop app with isolated state directories
+  (shared provider homes), a Linux Dev AppImage build, personal-team iOS builds, and
+  [internal TestFlight uploads](apps/mobile/README.md#testflight) for the fork's production app.
 - **Upstream sync workflow** — a scripted `sync-upstream` flow that fast-forwards the `main` mirror from upstream, merges it into `dev`, and runs the required checks before pushing. `scripts/check-upstream-sync.sh` reports whether a sync is due; it is also offered as the **Check Upstream Sync** action in `t3.json`.

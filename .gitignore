@@ -45,6 +45,10 @@ node_modules/
 .env*
 !.env.example
 
+# Local secrets (App Store Connect API keys, signing material)
+/local/
+*.p8
+
 # Local review/planning artifacts (kept out of the repo)
 .nexus/
 .playwright-cli/

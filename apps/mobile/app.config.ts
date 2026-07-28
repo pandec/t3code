@@ -1,5 +1,11 @@
 import type { ExpoConfig } from "expo/config";
 
+import {
+  isAppleTeamId,
+  isAppVersion,
+  isIosBuildNumber,
+  isIosBundleIdentifier,
+} from "../../scripts/lib/apple-mobile-config.ts";
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
@@ -15,16 +21,32 @@ const customIosAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase();
 const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
-const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
-const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+// Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
+// Settings screen distinguishes them from an upstream build; upstream keeps 0.1.0.
+const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "0.1.0";
+// CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
+// rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
+// output stable for local dev builds.
+const iosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim() || undefined;
 const IOS_DEPLOYMENT_TARGET = "18.0";
+
+if (!isAppVersion(appVersion)) {
+  throw new Error(
+    `T3CODE_FORK_VERSION must be three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
+  );
+}
+
+if (iosBuildNumber !== undefined && !isIosBuildNumber(iosBuildNumber)) {
+  throw new Error(
+    `T3CODE_IOS_BUILD_NUMBER must be one to three dot-separated integers (received "${iosBuildNumber}").`,
+  );
+}
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
 if (
   isIosPersonalTeamBuild &&
-  (!personalTeamBundleIdentifier ||
-    !IOS_BUNDLE_IDENTIFIER_PATTERN.test(personalTeamBundleIdentifier))
+  (!personalTeamBundleIdentifier || !isIosBundleIdentifier(personalTeamBundleIdentifier))
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
@@ -34,9 +56,8 @@ if (
 if (
   !isIosPersonalTeamBuild &&
   ((customIosAppleTeamId === undefined) !== (customIosBundleIdentifier === undefined) ||
-    (customIosAppleTeamId !== undefined && !APPLE_TEAM_ID_PATTERN.test(customIosAppleTeamId)) ||
-    (customIosBundleIdentifier !== undefined &&
-      !IOS_BUNDLE_IDENTIFIER_PATTERN.test(customIosBundleIdentifier)))
+    (customIosAppleTeamId !== undefined && !isAppleTeamId(customIosAppleTeamId)) ||
+    (customIosBundleIdentifier !== undefined && !isIosBundleIdentifier(customIosBundleIdentifier)))
 ) {
   throw new Error(
     "T3CODE_APPLE_TEAM_ID and T3CODE_IOS_BUNDLE_ID must be provided together with a valid Apple Team ID and reverse-DNS bundle identifier.",
@@ -179,12 +200,12 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "0.1.0",
+  version: appVersion,
   runtimeVersion: {
     // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
     // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-    // could land on a binary missing the native changes it needs and crash.
+    // With appVersion, every build of one version shares a runtime version, so a JS
+    // update could land on a binary missing the native changes it needs and crash.
     policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
   },
   orientation: "portrait",
@@ -200,6 +221,7 @@ const config: ExpoConfig = {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
     bundleIdentifier: iosBundleIdentifier,
+    ...(iosBuildNumber ? { buildNumber: iosBuildNumber } : {}),
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
