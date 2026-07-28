@@ -131,14 +131,6 @@ export function steerGraceRemainingMs(
   return Math.max(0, createdAtMs + STEER_GRACE_WINDOW_MS - nowMs);
 }
 
-/** Whether the row's explicit steer-now action is available at this instant. */
-export function canSteerQueuedThreadMessageNow(
-  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">,
-  nowMs: number,
-): boolean {
-  return steerGraceRemainingMs(message, nowMs) === 0;
-}
-
 /**
  * Whether a steer still owes its grace window. Expediting is the user saying
  * they are sure, so it retires the window rather than shortening it.
@@ -154,18 +146,22 @@ export function isSteerWaitingOutGraceWindow(
 }
 
 /**
- * Messages released together once a turn ends. The first one starts the next
- * turn; holding the rest behind it would make each queued message wait out a
- * whole turn of its own, so they follow it into that turn instead. Only what
- * was already waiting joins the batch — anything queued afterwards waits for
- * the turn it was actually queued against.
+ * Drops expedite latches once their message is no longer queued or otherwise
+ * owned by an in-flight outbox action.
  */
-export function queueFlushBatchIds(
-  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation">>,
-): ReadonlySet<MessageId> {
-  return new Set(
-    messages.filter((message) => message.creation === undefined).map(({ messageId }) => messageId),
-  );
+export function pruneExpeditedQueuedMessageIds(
+  expedited: Readonly<Record<MessageId, true>>,
+  retainedMessageIds: ReadonlySet<MessageId>,
+): Readonly<Record<MessageId, true>> {
+  let next: Record<MessageId, true> | null = null;
+  for (const messageId of Object.keys(expedited) as MessageId[]) {
+    if (retainedMessageIds.has(messageId)) {
+      continue;
+    }
+    next ??= { ...expedited };
+    delete next[messageId];
+  }
+  return next ?? expedited;
 }
 
 /** The next steer grace deadline in a collection, if any steer is still waiting. */
@@ -277,6 +273,45 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 }
 
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
+
+/**
+ * Messages released together after a successful idle-thread dispatch. The
+ * dispatched leader has already started the new turn; only the non-creation
+ * rows that were behind it at selection time may follow that turn as steers.
+ *
+ * A steer selected while the thread is already running, a stale-row removal,
+ * or a pending-task creation must never open a flush batch.
+ */
+export function queueFlushBatchIds(
+  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation">>,
+  dispatchedMessage: Pick<QueuedThreadMessage, "messageId" | "creation">,
+  input: {
+    readonly delivered: boolean;
+    readonly action: Exclude<ThreadOutboxDeliveryAction, "wait">;
+    readonly threadStatus: OrchestrationSessionStatus | null;
+  },
+): ReadonlySet<MessageId> {
+  if (
+    !input.delivered ||
+    input.action !== "send" ||
+    input.threadStatus === "running" ||
+    dispatchedMessage.creation !== undefined
+  ) {
+    return new Set();
+  }
+  const leaderIndex = messages.findIndex(
+    (message) => message.messageId === dispatchedMessage.messageId,
+  );
+  if (leaderIndex < 0) {
+    return new Set();
+  }
+  return new Set(
+    messages
+      .slice(leaderIndex + 1)
+      .filter((message) => message.creation === undefined)
+      .map(({ messageId }) => messageId),
+  );
+}
 
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;

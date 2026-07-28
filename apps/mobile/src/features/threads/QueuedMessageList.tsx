@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 
@@ -11,7 +11,6 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import {
   queuedThreadMessagePreview,
-  soonestSteerGraceRemainingMs,
   type QueuedThreadMessage,
 } from "../../state/thread-outbox-model";
 import { useThreadOutboxMessages } from "../../state/use-thread-outbox";
@@ -41,14 +40,11 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly message: QueuedThreadMessage;
   readonly isDispatching: boolean;
   readonly isFirst: boolean;
-  readonly nowMs: number;
 }) {
   const iconColor = useThemeColor("--color-icon");
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const dangerFg = useThemeColor("--color-danger-foreground");
   const message = props.message;
-  // The steer slot stays in the row while a steer waits out its grace window
-  // so the three action columns never shift; it only disables.
   // A steer still inside its window can be sent now — the window is a chance
   // to change your mind, not a delay to sit through.
   const canSteer = !props.isDispatching;
@@ -132,19 +128,6 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
       ),
     [queuedMessagesByThreadKey, threadKey],
   );
-  const [graceClockTick, setGraceClockTick] = useState(0);
-  useEffect(() => {
-    const soonestGraceMs = soonestSteerGraceRemainingMs(messages, Date.now());
-    if (soonestGraceMs === null) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      setGraceClockTick((current) => current + 1);
-    }, soonestGraceMs);
-    return () => clearTimeout(timer);
-  }, [graceClockTick, messages]);
-  const nowMs = Date.now();
-
   if (messages.length === 0) {
     return null;
   }
@@ -167,7 +150,6 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
               message={message}
               isDispatching={dispatchingQueuedMessageId === message.messageId}
               isFirst={index === 0}
-              nowMs={nowMs}
             />
           ))}
         </ScrollView>

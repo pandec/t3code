@@ -22,11 +22,12 @@ import { ensureThreadOutboxLoaded, removeThreadOutboxMessage } from "./thread-ou
 import {
   flattenQueuedThreadMessages,
   isQueuedThreadCreationSendable,
-  resolveThreadOutboxDeliveryAction,
-  queuedThreadMessageIntent,
-  selectNextQueuedThreadDispatch,
   isSteerWaitingOutGraceWindow,
+  pruneExpeditedQueuedMessageIds,
   queueFlushBatchIds,
+  queuedThreadMessageIntent,
+  resolveThreadOutboxDeliveryAction,
+  selectNextQueuedThreadDispatch,
   soonestSteerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
@@ -112,7 +113,34 @@ export function useThreadOutboxDrain(): void {
         flushBatchRef.current.delete(threadKey);
       }
     }
-  }, [queuedMessagesByThreadKey]);
+  }, [dispatchingQueuedMessageId, queuedMessagesByThreadKey]);
+
+  // Keep expedite state only while its row is queued or owned by an in-flight
+  // edit/removal. The ownership checks avoid pruning during the manager's
+  // optimistic removal window if durable storage later restores the row.
+  useEffect(() => {
+    const retainedMessageIds = new Set(
+      flattenQueuedThreadMessages(queuedMessagesByThreadKey).map(({ messageId }) => messageId),
+    );
+    if (dispatchingQueuedMessageId !== null) {
+      retainedMessageIds.add(dispatchingQueuedMessageId);
+    }
+    for (const messageId of Object.keys(editingQueuedMessageIds) as MessageId[]) {
+      retainedMessageIds.add(messageId);
+    }
+    const nextExpeditedIds = pruneExpeditedQueuedMessageIds(
+      expeditedMessageIds,
+      retainedMessageIds,
+    );
+    if (nextExpeditedIds !== expeditedMessageIds) {
+      appAtomRegistry.set(expeditedQueuedMessageIdsAtom, nextExpeditedIds);
+    }
+  }, [
+    dispatchingQueuedMessageId,
+    editingQueuedMessageIds,
+    expeditedMessageIds,
+    queuedMessagesByThreadKey,
+  ]);
 
   // Nothing else re-renders when a steer's grace window runs out, so wake the
   // drain as the soonest one comes due.
@@ -266,11 +294,6 @@ export function useThreadOutboxDrain(): void {
             null)
           : null;
 
-      // Opening a batch here — the thread is idle enough to accept this
-      // message — releases everything already waiting with it.
-      if (!flushBatchRef.current.has(threadKey)) {
-        flushBatchRef.current.set(threadKey, queueFlushBatchIds(queuedMessages));
-      }
       beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
       const removeQueuedMessage = (warning: string) =>
         removeThreadOutboxMessage(nextQueuedMessage).then(
@@ -298,6 +321,16 @@ export function useThreadOutboxDrain(): void {
               : Promise.resolve(false);
       void dispatch
         .then((sent) => {
+          if (!flushBatchRef.current.has(threadKey)) {
+            const batchIds = queueFlushBatchIds(queuedMessages, nextQueuedMessage, {
+              delivered: sent,
+              action: candidate.action,
+              threadStatus: thread?.session?.status ?? null,
+            });
+            if (batchIds.size > 0) {
+              flushBatchRef.current.set(threadKey, batchIds);
+            }
+          }
           if (sent) {
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
             retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
@@ -333,6 +366,7 @@ export function useThreadOutboxDrain(): void {
     delivery,
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
+    expeditedMessageIds,
     projects,
     queuedMessagesByThreadKey,
     retryTick,
