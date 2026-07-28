@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  canSteerQueuedThreadMessageNow,
   soonestSteerGraceRemainingMs,
   STEER_GRACE_WINDOW_MS,
   steerGraceRemainingMs,
@@ -59,6 +60,29 @@ describe("steerGraceRemainingMs", () => {
     expect(
       steerGraceRemainingMs({ deliveryIntent: "steer", createdAt }, createdAtMs + 3_600_000),
     ).toBe(0);
+  });
+});
+
+describe("canSteerQueuedThreadMessageNow", () => {
+  it("gates only a steer whose grace window is still live", () => {
+    expect(
+      canSteerQueuedThreadMessageNow({ deliveryIntent: "queue", createdAt }, createdAtMs),
+    ).toBe(true);
+    expect(
+      canSteerQueuedThreadMessageNow({ deliveryIntent: "steer", createdAt }, createdAtMs),
+    ).toBe(false);
+    expect(
+      canSteerQueuedThreadMessageNow(
+        { deliveryIntent: "steer", createdAt },
+        createdAtMs + STEER_GRACE_WINDOW_MS,
+      ),
+    ).toBe(true);
+  });
+
+  it("fails open for an unreadable timestamp", () => {
+    expect(
+      canSteerQueuedThreadMessageNow({ deliveryIntent: "steer", createdAt: "nonsense" }, 0),
+    ).toBe(true);
   });
 });
 

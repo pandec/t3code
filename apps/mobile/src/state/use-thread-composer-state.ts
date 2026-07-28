@@ -214,7 +214,9 @@ export function useThreadComposerState() {
 
       const metadata = makeQueuedMessageMetadata();
       const messageId = MessageId.make(metadata.messageId);
-      const sessionStatus = thread.session?.status ?? null;
+      // Shell metadata is authoritative. Detail and shell subscriptions are
+      // independent, so a cached detail can briefly retain an older status.
+      const sessionStatus = selectedThreadShell.session?.status ?? null;
       const threadIsBusy = sessionStatus === "running" || sessionStatus === "starting";
       try {
         onWillEnqueueAgentMessage?.();
