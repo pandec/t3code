@@ -30,7 +30,7 @@
     "ios:local": "vp run @t3tools/mobile#ios:local",
     "ios:local:release": "vp run @t3tools/mobile#ios:local:release",
     "ios:testflight": "vp run @t3tools/mobile#ios:testflight",
-    "test": "vp run -r --concurrency-limit 4 test",
+    "test": "vp run -r --concurrency-limit 3 test",
     "test:desktop-smoke": "vp run --filter @t3tools/desktop smoke-test",
     "fmt": "vp fmt",
     "fmt:check": "vp fmt --check",
