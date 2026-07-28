@@ -39,6 +39,14 @@ type SidebarContextProps = {
   toggleSidebar: () => void;
 };
 
+/**
+ * `minWidth`/`maxWidth` are enforced while dragging, when a persisted width is
+ * restored, and whenever the limits themselves change. That last reconciliation
+ * only applies to a pixel-valued `--sidebar-width`, which is what the resize
+ * path writes; a sidebar left on the provider's `rem` default stays there until
+ * its first drag. Pass an initial pixel width via `onResize` if the limits must
+ * hold before then.
+ */
 type SidebarResizableOptions = {
   maxWidth?: number;
   minWidth?: number;
@@ -415,7 +423,10 @@ function SidebarRail({
   const hydratedStorageKeyRef = React.useRef<string | null>(null);
   // The width the user actually asked for, kept unclamped so a window that
   // grows again can restore it rather than staying at a narrower window's cap.
-  const preferredWidthRef = React.useRef<number | null>(null);
+  // Tagged with the key that owns it: a sidebar that switches storage keys must
+  // not inherit the previous key's preference, least of all when the new key has
+  // nothing stored and would otherwise silently keep the old width.
+  const preferredWidthRef = React.useRef<{ storageKey: string | null; width: number } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
@@ -440,7 +451,10 @@ function SidebarRail({
       if (resolvedResizable?.storageKey && typeof window !== "undefined") {
         setLocalStorageItem(resolvedResizable.storageKey, resizeState.width, Schema.Finite);
       }
-      preferredWidthRef.current = resizeState.width;
+      preferredWidthRef.current = {
+        storageKey: resolvedResizable?.storageKey ?? null,
+        width: resizeState.width,
+      };
       resolvedResizable?.onResize?.(resizeState.width);
       resizeStateRef.current = null;
       if (resizeState.rail.hasPointerCapture(pointerId)) {
@@ -608,7 +622,10 @@ function SidebarRail({
     }
     hydratedStorageKeyRef.current = resolvedResizable.storageKey;
     if (storedWidth === null) return;
-    preferredWidthRef.current = storedWidth;
+    preferredWidthRef.current = {
+      storageKey: resolvedResizable.storageKey,
+      width: storedWidth,
+    };
     const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
     // Hydrate the CSS variable before the browser paints so a restored sidebar
     // never flashes at the default width first.
@@ -629,16 +646,36 @@ function SidebarRail({
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
     if (!wrapper) return;
 
+    // Only widths this component owns are reconcilable: the resize path writes
+    // px, so anything else (the provider's "16rem" default, a caller managing
+    // the variable itself) is left alone rather than reinterpreted.
     const appliedWidth = parseSidebarPixelWidth(
       window.getComputedStyle(wrapper).getPropertyValue("--sidebar-width"),
     );
     if (appliedWidth === null) return;
 
-    const clampedWidth = clampSidebarWidth(
-      preferredWidthRef.current ?? appliedWidth,
-      resolvedResizable,
-    );
+    const preference = preferredWidthRef.current;
+    const preferredWidth =
+      preference && preference.storageKey === resolvedResizable.storageKey
+        ? preference.width
+        : null;
+    const clampedWidth = clampSidebarWidth(preferredWidth ?? appliedWidth, resolvedResizable);
     if (clampedWidth === appliedWidth) return;
+
+    const sidebarRoot = rail.closest<HTMLElement>("[data-slot='sidebar']");
+    if (!sidebarRoot) return;
+    // Numeric limits are not the caller's only constraint, so a reconciled width
+    // goes through the same gate as a dragged one.
+    const accepted =
+      resolvedResizable.shouldAcceptWidth?.({
+        currentWidth: appliedWidth,
+        nextWidth: clampedWidth,
+        rail,
+        side: sidebarInstance?.side ?? "left",
+        sidebarRoot,
+        wrapper,
+      }) ?? true;
+    if (!accepted) return;
 
     wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
     // Deliberately not persisted: storage holds the width the user asked for, so
