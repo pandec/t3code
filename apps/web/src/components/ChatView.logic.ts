@@ -305,6 +305,12 @@ export function deriveComposerSendState(options: {
   };
 }
 
+/**
+ * Whether up-arrow may reach past the composer for the newest queued message.
+ * A pending approval or question takes the editor over and shows its own answer
+ * in place of the draft, so an empty draft behind one is not an empty composer —
+ * recalling there would eat a cursor keystroke the user meant for their answer.
+ */
 export function isComposerEmptyForQueuedMessageRecall(options: {
   prompt: string;
   imageCount: number;
@@ -312,8 +318,10 @@ export function isComposerEmptyForQueuedMessageRecall(options: {
   elementContextCount: number;
   previewAnnotationCount: number;
   reviewCommentCount: number;
+  hasPendingComposerRequest: boolean;
 }): boolean {
   return (
+    !options.hasPendingComposerRequest &&
     options.prompt.length === 0 &&
     options.imageCount === 0 &&
     options.terminalContextCount === 0 &&

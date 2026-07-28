@@ -49,6 +49,7 @@ import {
   deriveComposerSendState,
   isComposerEmptyForQueuedMessageRecall,
   readFileAsDataUrl,
+  resolvePendingComposerRequest,
 } from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
@@ -2006,6 +2007,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       elementContextCount: composerElementContexts.length,
       previewAnnotationCount: composerPreviewAnnotations.length,
       reviewCommentCount: composerReviewComments.length,
+      hasPendingComposerRequest:
+        resolvePendingComposerRequest({
+          hasPendingApproval: activePendingApproval !== null,
+          hasPendingUserInput: activePendingProgress !== null,
+        }) !== null,
     });
     if (key === "ArrowUp" && composerIsEmptyForRecall && onRecallQueuedMessage?.()) {
       return true;

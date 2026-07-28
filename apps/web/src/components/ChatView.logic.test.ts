@@ -709,6 +709,7 @@ describe("isComposerEmptyForQueuedMessageRecall", () => {
     elementContextCount: 0,
     previewAnnotationCount: 0,
     reviewCommentCount: 0,
+    hasPendingComposerRequest: false,
   };
 
   it("allows recall only when the composer has no text or attached context", () => {
@@ -723,5 +724,16 @@ describe("isComposerEmptyForQueuedMessageRecall", () => {
     ]) {
       expect(isComposerEmptyForQueuedMessageRecall(occupiedComposer)).toBe(false);
     }
+  });
+
+  it("refuses recall while an approval or question owns the composer", () => {
+    // The editor shows the answer there, not the draft, so an empty draft must
+    // not turn a cursor keystroke into a queued-message recall.
+    expect(
+      isComposerEmptyForQueuedMessageRecall({
+        ...emptyComposer,
+        hasPendingComposerRequest: true,
+      }),
+    ).toBe(false);
   });
 });
