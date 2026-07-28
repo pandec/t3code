@@ -131,7 +131,7 @@ export function formatRelativeTimeLabel(isoDate: string) {
 export function formatCompactRelativeTimeLabel(isoDate: string): string {
   const relative = formatRelativeTime(isoDate);
   if (!relative) return "";
-  return relative.suffix === null && relative.value === "just now" ? "now" : relative.value;
+  return relative.value === "just now" ? "now" : relative.value;
 }
 
 export function getRelativeTimeState(isoDate: string | null): RelativeTimeState {
