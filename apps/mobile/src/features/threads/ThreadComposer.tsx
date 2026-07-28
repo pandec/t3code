@@ -331,12 +331,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
 
+  // A running turn is steered into rather than waited out, so the action says
+  // so; anything else the message can only queue behind.
   const sendLabel =
-    props.connectionState !== "connected" ||
-    props.selectedThread.session?.status === "starting" ||
-    props.queueCount > 0
-      ? "Queue"
-      : "Send";
+    props.selectedThread.session?.status === "running" && props.connectionState === "connected"
+      ? "Steer"
+      : props.connectionState !== "connected" ||
+          props.selectedThread.session?.status === "starting" ||
+          props.queueCount > 0
+        ? "Queue"
+        : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";

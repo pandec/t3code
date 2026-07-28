@@ -10,8 +10,8 @@ import { cn } from "../../lib/cn";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import {
-  queuedThreadMessageIntent,
   queuedThreadMessagePreview,
+  steerGraceRemainingMs,
   type QueuedThreadMessage,
 } from "../../state/thread-outbox-model";
 import { useThreadOutboxMessages } from "../../state/use-thread-outbox";
@@ -46,9 +46,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const dangerFg = useThemeColor("--color-danger-foreground");
   const message = props.message;
-  // The steer slot stays in the row once the intent is "steer" (just waiting
-  // to dispatch) so the three action columns never shift; it only disables.
-  const canSteer = queuedThreadMessageIntent(message) === "queue" && !props.isDispatching;
+  // The steer slot stays in the row while a steer waits out its grace window
+  // so the three action columns never shift; it only disables.
+  const canSteer = steerGraceRemainingMs(message, Date.now()) === 0 && !props.isDispatching;
 
   return (
     <View
