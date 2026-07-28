@@ -202,6 +202,7 @@ import {
   type DraftId,
 } from "../composerDraftStore";
 import {
+  describeThreadOutboxEnqueueFailure,
   dispatchingQueuedMessageAtom,
   enqueueThreadOutboxMessage,
   hasPendingThreadOutboxWork,
@@ -4853,10 +4854,7 @@ function ChatViewContent(props: ChatViewProps) {
           composerRef.current?.resetCursorState();
         }
       } catch (error) {
-        setThreadError(
-          threadIdForSend,
-          error instanceof Error ? error.message : "Failed to queue message.",
-        );
+        setThreadError(threadIdForSend, describeThreadOutboxEnqueueFailure(error));
       } finally {
         sendInFlightRef.current = false;
       }

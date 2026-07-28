@@ -27,6 +27,40 @@ export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promis
   return threadOutboxManager.enqueue(message);
 }
 
+/**
+ * Browsers signal a full localStorage as a DOMException, but not consistently:
+ * Firefox reports `NS_ERROR_DOM_QUOTA_REACHED`, and older engines set only the
+ * legacy numeric code. Match all three so the actionable message below is not
+ * decided by which engine the desktop shell happens to embed.
+ */
+function isQuotaExceededError(error: unknown): boolean {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return (
+      error.name === "QuotaExceededError" ||
+      error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      error.code === 22
+    );
+  }
+  return error instanceof Error && error.name === "QuotaExceededError";
+}
+
+/**
+ * The outbox writes a message to storage before queueing it, so a rejection
+ * means nothing was queued and the composer still holds the content. Callers
+ * surface this as the thread error, so a full-storage rejection has to say what
+ * to clear — `ThreadOutboxManagerError.message` only names opaque ids, which
+ * leaves a repeatable failure looking like an internal fault.
+ */
+export function describeThreadOutboxEnqueueFailure(error: unknown): string {
+  // The manager wraps the storage rejection, so the quota signal is one level
+  // down in `cause`; check the wrapper too in case a caller passes it raw.
+  const cause = error instanceof Error ? (error.cause as unknown) : undefined;
+  if (isQuotaExceededError(error) || isQuotaExceededError(cause)) {
+    return "Could not queue the message: this app's local storage is full. Clear stashed prompts (⌘S badge) or queued messages, then send again. Your message is still in the composer.";
+  }
+  return error instanceof Error ? error.message : "Failed to queue message.";
+}
+
 /** Rewrite a queued message; no-op (false) if it was removed in the meantime. */
 export function updateThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
   return threadOutboxManager.update(message);
