@@ -22,6 +22,14 @@ function renderSidebarButton(className?: string) {
   );
 }
 
+// The options a drag captured at pointer-down. applyPendingSidebarResize takes
+// the options to apply explicitly, so these only need to satisfy the type.
+const resizeOptions = {
+  maxWidth: 600,
+  minWidth: 208,
+  storageKey: null,
+} as const;
+
 describe("sidebar interactive cursors", () => {
   it("commits the latest pending width before a queued animation frame can run", () => {
     const appliedWidths: string[] = [];
@@ -36,6 +44,7 @@ describe("sidebar interactive cursors", () => {
     } as unknown as HTMLElement;
     const resizeState = {
       moved: true,
+      options: resizeOptions,
       pointerId: 1,
       pendingWidth: 320,
       rail: {} as HTMLButtonElement,
@@ -70,6 +79,7 @@ describe("sidebar interactive cursors", () => {
     } as unknown as HTMLElement;
     const resizeState = {
       moved: true,
+      options: resizeOptions,
       pointerId: 1,
       pendingWidth: 720,
       rail: {} as HTMLButtonElement,
