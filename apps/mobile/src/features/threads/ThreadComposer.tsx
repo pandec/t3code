@@ -75,6 +75,7 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { threadComposerSendLabel } from "./threadComposerSendLabel";
 import { VoiceRecorderControl } from "./VoiceRecorderControl";
 
 /**
@@ -331,12 +332,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
 
-  const sendLabel =
-    props.connectionState !== "connected" ||
-    props.selectedThread.session?.status === "starting" ||
-    props.queueCount > 0
-      ? "Queue"
-      : "Send";
+  const sendLabel = threadComposerSendLabel({
+    connectionState: props.connectionState,
+    queueCount: props.queueCount,
+    sessionStatus: props.selectedThread.session?.status ?? null,
+  });
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";

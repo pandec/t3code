@@ -214,6 +214,10 @@ export function useThreadComposerState() {
 
       const metadata = makeQueuedMessageMetadata();
       const messageId = MessageId.make(metadata.messageId);
+      // Shell metadata is authoritative. Detail and shell subscriptions are
+      // independent, so a cached detail can briefly retain an older status.
+      const sessionStatus = selectedThreadShell.session?.status ?? null;
+      const threadIsBusy = sessionStatus === "running" || sessionStatus === "starting";
       try {
         onWillEnqueueAgentMessage?.();
         await enqueueThreadOutboxMessage({
@@ -227,7 +231,9 @@ export function useThreadComposerState() {
           modelSelection: draft.modelSelection ?? thread.modelSelection,
           runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
           interactionMode: draft.interactionMode ?? thread.interactionMode,
-          deliveryIntent: "queue",
+          // A running turn is steered into, matching the CLIs and the web
+          // composer; with no turn to steer, the message simply queues.
+          deliveryIntent: threadIsBusy ? "steer" : "queue",
           createdAt: metadata.createdAt,
         });
         clearComposerDraftContentIfUnchanged(threadKey, draft);

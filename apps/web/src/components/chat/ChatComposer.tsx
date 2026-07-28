@@ -1253,13 +1253,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const composerHasRunningActions =
+    phase === "running" || activeThread?.session?.status === "starting";
+  const composerFooterHasWideActions =
+    showPlanFollowUpPrompt || activePendingProgress !== null || composerHasRunningActions;
   const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
-    if (phase === "running") {
+    if (composerHasRunningActions) {
       return "running";
     }
     if (showPlanFollowUpPrompt) {
@@ -1270,6 +1273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingIsResponding,
     activePendingProgress,
     composerSendState.hasSendableContent,
+    composerHasRunningActions,
     isConnecting,
     isPreparingWorktree,
     isSendBusy,
@@ -3361,7 +3365,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeProviderUsage={activeProviderUsage}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   pendingAction={pendingPrimaryAction}
-                  isRunning={phase === "running" || activeThread?.session?.status === "starting"}
+                  isRunning={composerHasRunningActions}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}

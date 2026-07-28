@@ -131,6 +131,14 @@ export function steerGraceRemainingMs(
   return Math.max(0, createdAtMs + STEER_GRACE_WINDOW_MS - nowMs);
 }
 
+/** Whether the row's explicit steer-now action is available at this instant. */
+export function canSteerQueuedThreadMessageNow(
+  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">,
+  nowMs: number,
+): boolean {
+  return steerGraceRemainingMs(message, nowMs) === 0;
+}
+
 /** The next steer grace deadline in a collection, if any steer is still waiting. */
 export function soonestSteerGraceRemainingMs(
   messages: ReadonlyArray<Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">>,

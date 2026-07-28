@@ -130,20 +130,33 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (isRunning) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {/* Submitting steers into the running turn; this holds the message
-            until the turn finishes instead. */}
+        {/* Steering is the default action, so it carries the submit button and
+            Enter takes the same path. Queueing holds the message until the turn
+            finishes instead. */}
         {hasSendableContent ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="rounded-full"
-            {...pointerFocusProps}
-            disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-            onClick={onQueue}
-          >
-            Queue for later
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className={cn("rounded-full", compact ? "px-2.5" : undefined)}
+              {...pointerFocusProps}
+              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+              onClick={onQueue}
+            >
+              {compact ? "Queue" : "Queue for later"}
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              className="rounded-full"
+              {...pointerFocusProps}
+              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+              aria-label="Steer the running turn"
+            >
+              {isConnecting || isSendBusy ? "Sending..." : "Steer"}
+            </Button>
+          </>
         ) : null}
         <button
           type="button"
