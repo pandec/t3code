@@ -365,7 +365,8 @@ export const causeChainHasSqliteBusy = (cause: unknown, seen = new Set<unknown>(
 
 const authSessionBusyRetryPolicy = {
   while: (error: unknown) => causeChainHasSqliteBusy(error),
-  schedule: Schedule.exponential(Duration.millis(50)).pipe(Schedule.both(Schedule.recurs(3))),
+  schedule: Schedule.exponential(Duration.millis(50)),
+  times: 3,
 };
 
 export const withCliOrchestrationSession = <A, E, R>(

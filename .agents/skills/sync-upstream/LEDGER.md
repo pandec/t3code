@@ -14,18 +14,18 @@ Self-cleaning rules (apply during every sync's ledger update):
 - **Provider command flow — keep steering and title-pin guards** (2026-07-24). Fork's failed-steer handling preserves the running session and active turn, while ordinary startup failures still use upstream's error transition. `titlePinned` protects explicit CLI titles before and after asynchronous title generation. Both remain compatible with upstream interrupt/title generation. Revisit if upstream distinguishes failed steers itself or persists an equivalent explicit-title pin.
 - **Repository identity — deliberate hybrid, do not deduplicate** (2026-07-24). Fork persists identity (migration 035 + write-time enrichment in `OrchestrationEngine.ts`); upstream resolves at query time, and the merged `ProjectionSnapshotQuery.ts` writes resolved values back into the fork's column as a cache with stored-value fallback. Both paths cover cases the other cannot.
 - **Event replay bounds — complementary, not duplication** (2026-07-24). Upstream's `SHELL_RESUME_MAX_GAP` bounds shell resume; fork's aggregate-filtered `readEvents` (`ws.ts` thread-detail catch-up) filters per-thread replay at the SQL level. Keep both.
+- **Effect beta bumps land on the fork CLI first** (2026-07-28). When upstream bumps the `effect` beta, typecheck the merge before anything else and read the errors bottom-up: one removed combinator in `apps/server/src/cli/` produces a repo-wide cascade of `unknown`-in-requirements errors (85 of them from a single `Schedule.both` removal at beta 78→102) that looks like broad breakage but is not. Fix the concrete API error, then re-typecheck before diagnosing anything else.
 - **Migration numbering** (2026-07-24). Fork migration history occupies 033–040; upstream's `ProjectionThreadsSettled` is 039 and `ProjectionThreadsSnoozed` is 041 on `dev`. Never renumber shipped fork migrations. Renumber new upstream migrations after the highest fork ID and verify ordering every sync that adds one. Databases previously migrated on pure upstream IDs 33/34 are not interchangeable with fork databases because the migrator tracks only the latest numeric ID.
 
 ## Watchpoints
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
-| Path                                                              | Question                                                                                                  | Untouched streak |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------- |
-| `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` | Is the repository-identity write-back seam intact (see standing decision)?                                | 1                |
-| `apps/server/src/cli/thread.ts`                                   | Does fork CLI automation expose upstream thread lifecycle fields and commands with stable JSON semantics? | 1                |
-| `apps/server/src/persistence/Migrations/`                         | Migration numbering per standing decision.                                                                | 1                |
-| `apps/web/vite.config.ts`                                         | Does the fork's `sharedTestDefaults` spread survive upstream's single-origin dev/proxy rework?            | 0                |
+| Path                                                  | Question                                                                                      | Untouched streak |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------- |
+| `apps/web/vite.config.ts`                             | Does the fork's `sharedTestDefaults` spread survive upstream's dev-server rework?             | 1                |
+| `apps/server/src/provider/Layers/ProviderService.ts`  | Does the fork's `strandedPriorTurn` input augmentation still wrap upstream's `sendTurn` call? | 0                |
+| `apps/web/src/components/settings/SettingsPanels.tsx` | Do the fork's dirty-badge entries still reference settings upstream has not renamed away?     | 0                |
 
 ## Full audit
 

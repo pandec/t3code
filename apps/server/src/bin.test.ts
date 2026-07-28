@@ -71,6 +71,20 @@ const noConnectCli = makeCli({ cloudEnabled: false });
 const runCli = (args: ReadonlyArray<string>, command = cli) =>
   Command.runWith(command, { version: "0.0.0" })(args);
 const runConnectCli = (args: ReadonlyArray<string>) => runCli(args, connectCli);
+
+// Node prints an ExperimentalWarning to stderr the first time `node:sqlite`
+// loads. That is the runtime talking, not the CLI, so it must not count against
+// assertions that the CLI itself keeps stderr clean for `--json` consumers.
+const cliStderr = (stderr: string) =>
+  stderr
+    .split("\n")
+    .filter(
+      (line) =>
+        !/^\(node:\d+\) ExperimentalWarning:/.test(line) &&
+        !line.startsWith("(Use `node --trace-warnings"),
+    )
+    .join("\n")
+    .trim();
 const runCliWithRuntime = (args: ReadonlyArray<string>) =>
   runCli(args).pipe(Effect.provide(CliRuntimeLayer));
 
@@ -1062,7 +1076,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     );
 
     assert.equal(result.status, 1, result.stderr);
-    assert.equal(result.stderr, "");
+    assert.equal(cliStderr(result.stderr), "");
     const output = JSON.parse(result.stdout) as {
       readonly error: {
         readonly code: string;
@@ -1099,7 +1113,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     );
 
     assert.equal(result.status, 1, result.stderr);
-    assert.equal(result.stderr, "");
+    assert.equal(cliStderr(result.stderr), "");
     const output = JSON.parse(result.stdout) as {
       readonly error: { readonly code: string };
     };
