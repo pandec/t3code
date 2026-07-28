@@ -305,6 +305,24 @@ export function deriveComposerSendState(options: {
   };
 }
 
+export function isComposerEmptyForQueuedMessageRecall(options: {
+  prompt: string;
+  imageCount: number;
+  terminalContextCount: number;
+  elementContextCount: number;
+  previewAnnotationCount: number;
+  reviewCommentCount: number;
+}): boolean {
+  return (
+    options.prompt.length === 0 &&
+    options.imageCount === 0 &&
+    options.terminalContextCount === 0 &&
+    options.elementContextCount === 0 &&
+    options.previewAnnotationCount === 0 &&
+    options.reviewCommentCount === 0
+  );
+}
+
 export function hasStandaloneComposerCommandContext(input: {
   imageCount: number;
   terminalContextCount: number;

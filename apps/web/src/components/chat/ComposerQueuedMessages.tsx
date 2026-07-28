@@ -1,10 +1,13 @@
 import {
+  queuedThreadMessageIntent,
   queuedThreadMessagePreview,
+  soonestSteerGraceRemainingMs,
   steerGraceRemainingMs,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
 import type { MessageId } from "@t3tools/contracts";
 import { ArrowUpIcon, LoaderIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -33,7 +36,17 @@ export function ComposerQueuedMessages({
   onDelete,
   className,
 }: ComposerQueuedMessagesProps) {
-  if (messages.length === 0) return null;
+  const [graceClockTick, setGraceClockTick] = useState(0);
+  useEffect(() => {
+    const soonestGraceMs = soonestSteerGraceRemainingMs(messages, Date.now());
+    if (soonestGraceMs === null) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setGraceClockTick((current) => current + 1);
+    }, soonestGraceMs);
+    return () => clearTimeout(timer);
+  }, [graceClockTick, messages]);
 
   // A steer is on its way out; it just rests here long enough to be edited or
   // dropped first.
@@ -41,6 +54,8 @@ export function ComposerQueuedMessages({
   const steeringCount = messages.filter(
     (message) => steerGraceRemainingMs(message, now) > 0,
   ).length;
+
+  if (messages.length === 0) return null;
 
   return (
     <div className={cn("mx-auto w-full max-w-3xl px-1 pb-1.5", className)}>
@@ -55,7 +70,7 @@ export function ComposerQueuedMessages({
         {messages.map((message) => {
           const isDispatching = dispatchingMessageId === message.messageId;
           const isSteering = steerGraceRemainingMs(message, now) > 0;
-          const canSteer = !isSteering && !isDispatching;
+          const canSteer = queuedThreadMessageIntent(message) === "queue" && !isDispatching;
           return (
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
               <span

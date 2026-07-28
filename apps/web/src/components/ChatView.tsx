@@ -5418,8 +5418,10 @@ function ChatViewContent(props: ChatViewProps) {
    * through to its own arrow handling when the queue is empty.
    */
   const onRecallQueuedMessage = useCallback((): boolean => {
-    const newest = queuedThreadMessages[queuedThreadMessages.length - 1];
-    if (!newest || dispatchingQueuedMessageId === newest.messageId) {
+    const newest = queuedThreadMessages.findLast(
+      (message) => dispatchingQueuedMessageId !== message.messageId,
+    );
+    if (!newest) {
       return false;
     }
     void onEditQueuedMessage(newest);

@@ -125,10 +125,25 @@ export function steerGraceRemainingMs(
     return 0;
   }
   const createdAtMs = Date.parse(message.createdAt);
-  if (Number.isNaN(createdAtMs)) {
+  if (Number.isNaN(createdAtMs) || createdAtMs > nowMs) {
     return 0;
   }
   return Math.max(0, createdAtMs + STEER_GRACE_WINDOW_MS - nowMs);
+}
+
+/** The next steer grace deadline in a collection, if any steer is still waiting. */
+export function soonestSteerGraceRemainingMs(
+  messages: ReadonlyArray<Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">>,
+  nowMs: number,
+): number | null {
+  let soonest: number | null = null;
+  for (const message of messages) {
+    const remainingMs = steerGraceRemainingMs(message, nowMs);
+    if (remainingMs > 0 && (soonest === null || remainingMs < soonest)) {
+      soonest = remainingMs;
+    }
+  }
+  return soonest;
 }
 
 /** One-line row label for the queued-messages list. */

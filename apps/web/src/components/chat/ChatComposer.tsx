@@ -45,7 +45,11 @@ import {
   replaceTextRange,
   shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  isComposerEmptyForQueuedMessageRecall,
+  readFileAsDataUrl,
+} from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
@@ -1995,7 +1999,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     // Up-arrow on an empty composer pulls the newest queued message back for
     // editing, the escape hatch for a steer already on its way out.
-    if (key === "ArrowUp" && promptRef.current.length === 0 && onRecallQueuedMessage?.()) {
+    const composerIsEmptyForRecall = isComposerEmptyForQueuedMessageRecall({
+      prompt: promptRef.current,
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      elementContextCount: composerElementContexts.length,
+      previewAnnotationCount: composerPreviewAnnotations.length,
+      reviewCommentCount: composerReviewComments.length,
+    });
+    if (key === "ArrowUp" && composerIsEmptyForRecall && onRecallQueuedMessage?.()) {
       return true;
     }
     return false;

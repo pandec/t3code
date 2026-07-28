@@ -21,6 +21,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasStandaloneComposerCommandContext,
   hasServerAcknowledgedLocalDispatch,
+  isComposerEmptyForQueuedMessageRecall,
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
@@ -697,5 +698,30 @@ describe("shouldQueueMessageWhileBusy", () => {
         hasPendingOutboxWork: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("isComposerEmptyForQueuedMessageRecall", () => {
+  const emptyComposer = {
+    prompt: "",
+    imageCount: 0,
+    terminalContextCount: 0,
+    elementContextCount: 0,
+    previewAnnotationCount: 0,
+    reviewCommentCount: 0,
+  };
+
+  it("allows recall only when the composer has no text or attached context", () => {
+    expect(isComposerEmptyForQueuedMessageRecall(emptyComposer)).toBe(true);
+    for (const occupiedComposer of [
+      { ...emptyComposer, prompt: "draft" },
+      { ...emptyComposer, imageCount: 1 },
+      { ...emptyComposer, terminalContextCount: 1 },
+      { ...emptyComposer, elementContextCount: 1 },
+      { ...emptyComposer, previewAnnotationCount: 1 },
+      { ...emptyComposer, reviewCommentCount: 1 },
+    ]) {
+      expect(isComposerEmptyForQueuedMessageRecall(occupiedComposer)).toBe(false);
+    }
   });
 });

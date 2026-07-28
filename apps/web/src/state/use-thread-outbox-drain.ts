@@ -11,6 +11,7 @@ import {
   resolveThreadOutboxDeliveryAction,
   scopedThreadKey,
   selectNextQueuedThreadDispatch,
+  soonestSteerGraceRemainingMs,
   steerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
@@ -130,13 +131,10 @@ export function useThreadOutboxDrain(): void {
   // drain as the soonest one comes due.
   useEffect(() => {
     const now = Date.now();
-    const soonestGraceMs = flattenQueuedThreadMessages(queuedMessagesByThreadKey)
-      .map((message) => steerGraceRemainingMs(message, now))
-      .filter((remainingMs) => remainingMs > 0)
-      .reduce<number | null>(
-        (soonest, remainingMs) => (soonest === null ? remainingMs : Math.min(soonest, remainingMs)),
-        null,
-      );
+    const soonestGraceMs = soonestSteerGraceRemainingMs(
+      flattenQueuedThreadMessages(queuedMessagesByThreadKey),
+      now,
+    );
     if (soonestGraceMs === null) {
       return;
     }
