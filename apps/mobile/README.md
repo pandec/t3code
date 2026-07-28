@@ -74,9 +74,11 @@ vp run ios:testflight
 This needs `T3CODE_APPLE_TEAM_ID`, `T3CODE_IOS_BUNDLE_ID`, `T3CODE_ASC_KEY_ID`,
 `T3CODE_ASC_ISSUER_ID`, and `T3CODE_ASC_KEY_PATH` in the repository root `.env.local`; see
 [`../../.env.example`](../../.env.example). The App Store Connect `.p8` downloads only once, so keep
-a backup outside the repository. Before touching build artifacts, the script authenticates the key
-with App Store Connect. The first distribution can also create an Apple Distribution certificate
-and App Store provisioning profiles through `-allowProvisioningUpdates`.
+a backup outside the repository. Before touching build artifacts, the script only checks the key
+locally — that it exists, is a readable regular file, and still carries App Store Connect's
+`AuthKey_<keyId>.p8` name. The credentials themselves are first exercised seconds into the archive,
+when `-allowProvisioningUpdates` contacts the developer portal; that same flag lets the first
+distribution create an Apple Distribution certificate and App Store provisioning profiles.
 
 The script always builds the `production` variant, because TestFlight requires the production APNs
 entitlement. `T3CODE_FORK_VERSION` supplies the marketing version shown in Settings, and the build

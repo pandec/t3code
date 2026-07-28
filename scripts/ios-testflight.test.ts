@@ -76,6 +76,20 @@ it("rejects malformed App Store Connect credentials before starting a build", ()
   });
 });
 
+it("rejects a malformed team id and bundle identifier", () => {
+  const settings = resolveSettings({
+    ...completeEnv,
+    T3CODE_APPLE_TEAM_ID: "TOOLONG12345",
+    T3CODE_IOS_BUNDLE_ID: "nodots",
+  });
+  assert.deepEqual(settings, {
+    missing: [
+      "T3CODE_APPLE_TEAM_ID must be a 10-character Apple Team ID",
+      "T3CODE_IOS_BUNDLE_ID must be a reverse-DNS bundle identifier",
+    ],
+  });
+});
+
 it.layer(NodeServices.layer)("artifact path safety", (it) => {
   it.effect("recognises destructive overlap without rejecting a safe sibling", () =>
     Effect.gen(function* () {
@@ -95,6 +109,23 @@ it.layer(NodeServices.layer)("artifact path safety", (it) => {
           path.join(artifactDir, "keys", "AuthKey_ABCDE12345.p8"),
         ),
       );
+      // The guard decides whether a recursive delete would swallow the key, so an
+      // ancestor or an unrelated absolute path must never read as "contained".
+      assert.isFalse(
+        isSameOrDescendantPath(path, path.join(artifactDir, "export"), path.join(path.sep, "repo")),
+      );
+      assert.isFalse(
+        isSameOrDescendantPath(
+          path,
+          path.join(artifactDir, "export"),
+          path.join(path.sep, "elsewhere", "AuthKey_ABCDE12345.p8"),
+        ),
+      );
+      // A prefix match on the path string is not containment.
+      assert.isFalse(
+        isSameOrDescendantPath(path, path.join(artifactDir, "export"), `${artifactDir}-export`),
+      );
+      assert.isTrue(isSameOrDescendantPath(path, artifactDir, artifactDir));
       assert.deepEqual(resolveArtifactCleanupTargets(path, artifactDir), [
         { path: path.join(artifactDir, "T3Code.xcarchive"), recursive: true },
         { path: path.join(artifactDir, "export"), recursive: true },
