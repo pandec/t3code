@@ -204,6 +204,7 @@ import {
 import {
   describeThreadOutboxEnqueueFailure,
   dispatchingQueuedMessageAtom,
+  editingQueuedMessageIdsAtom,
   enqueueThreadOutboxMessage,
   expediteQueuedMessage,
   hasPendingThreadOutboxWork,
@@ -5165,6 +5166,9 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSteerQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
+    // An edit owns the row: it is being moved into the composer, and a revert
+    // must put it back exactly as queued rather than as an expedited steer.
+    if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId]) return;
     // The drain is the only delivery path; flipping the intent lets it send
     // this message into the running turn on its next pass, and expediting
     // retires any grace window it was still waiting out.

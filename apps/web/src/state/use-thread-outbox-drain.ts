@@ -168,7 +168,9 @@ export function useThreadOutboxDrain(): void {
     [setThreadInteractionMode, setThreadRuntimeMode, startTurn, updateThreadMetadata],
   );
 
-  // A batch is done once nothing it covered is queued any more.
+  // A batch is done once nothing it covered is queued any more. This must stay
+  // declared ahead of the dispatch effect below: a spent batch that outlived
+  // its rows would suppress the next turn end's batch for a whole pass.
   useEffect(() => {
     for (const [threadKey, batchIds] of flushBatchRef.current) {
       const remaining = queuedMessagesByThreadKey[threadKey] ?? [];
@@ -227,7 +229,7 @@ export function useThreadOutboxDrain(): void {
           if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
             return "wait";
           }
-          const action = resolveThreadOutboxDeliveryAction({
+          return resolveThreadOutboxDeliveryAction({
             isCreation: false,
             threadExists: thread !== undefined,
             shellStatus: shellStatuses.get(message.environmentId) ?? "empty",
@@ -242,7 +244,6 @@ export function useThreadOutboxDrain(): void {
               ? "steer"
               : queuedThreadMessageIntent(message),
           });
-          return action;
         },
       });
       if (candidate === null) {

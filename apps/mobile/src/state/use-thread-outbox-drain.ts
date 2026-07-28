@@ -105,7 +105,9 @@ export function useThreadOutboxDrain(): void {
   // covers. Cleared once none of those ids remain queued.
   const flushBatchRef = useRef(new Map<string, ReadonlySet<MessageId>>());
 
-  // A batch is done once nothing it covered is queued any more.
+  // A batch is done once nothing it covered is queued any more. This must stay
+  // declared ahead of the dispatch effect below: a spent batch that outlived
+  // its rows would suppress the next turn end's batch for a whole pass.
   useEffect(() => {
     for (const [threadKey, batchIds] of flushBatchRef.current) {
       const remaining = queuedMessagesByThreadKey[threadKey] ?? [];

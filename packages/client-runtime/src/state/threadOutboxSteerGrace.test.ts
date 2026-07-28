@@ -139,6 +139,18 @@ describe("queueFlushBatchIds", () => {
     expect(ids.has(MessageId.make("b"))).toBe(true);
   });
 
+  it("leaves rows ahead of the leader out — they are not in the turn it started", () => {
+    const c = { messageId: MessageId.make("c"), creation: undefined };
+    const ids = queueFlushBatchIds([a, b, c], b, {
+      delivered: true,
+      action: "send",
+      threadStatus: "idle",
+    });
+
+    expect(ids.has(MessageId.make("a"))).toBe(false);
+    expect(ids.has(MessageId.make("c"))).toBe(true);
+  });
+
   it("does not open a batch for a steer dispatched into a running turn", () => {
     expect(
       queueFlushBatchIds([a, b], b, {
