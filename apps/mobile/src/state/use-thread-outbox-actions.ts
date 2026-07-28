@@ -15,6 +15,7 @@ import {
 } from "./use-composer-drafts";
 import {
   editingQueuedMessageIdsAtom,
+  expediteQueuedMessage,
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
 } from "./use-thread-outbox";
@@ -47,6 +48,8 @@ export async function steerQueuedMessageNow(message: QueuedThreadMessage): Promi
   ) {
     return;
   }
+  // Expediting retires any grace window this steer was still waiting out.
+  expediteQueuedMessage(message.messageId);
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" });
 }
 

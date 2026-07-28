@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { MessageId, ProjectId } from "@t3tools/contracts";
+
 import {
-  canSteerQueuedThreadMessageNow,
+  isSteerWaitingOutGraceWindow,
+  pruneExpeditedQueuedMessageIds,
+  queueFlushBatchIds,
   soonestSteerGraceRemainingMs,
   STEER_GRACE_WINDOW_MS,
   steerGraceRemainingMs,
@@ -63,29 +67,6 @@ describe("steerGraceRemainingMs", () => {
   });
 });
 
-describe("canSteerQueuedThreadMessageNow", () => {
-  it("gates only a steer whose grace window is still live", () => {
-    expect(
-      canSteerQueuedThreadMessageNow({ deliveryIntent: "queue", createdAt }, createdAtMs),
-    ).toBe(true);
-    expect(
-      canSteerQueuedThreadMessageNow({ deliveryIntent: "steer", createdAt }, createdAtMs),
-    ).toBe(false);
-    expect(
-      canSteerQueuedThreadMessageNow(
-        { deliveryIntent: "steer", createdAt },
-        createdAtMs + STEER_GRACE_WINDOW_MS,
-      ),
-    ).toBe(true);
-  });
-
-  it("fails open for an unreadable timestamp", () => {
-    expect(
-      canSteerQueuedThreadMessageNow({ deliveryIntent: "steer", createdAt: "nonsense" }, 0),
-    ).toBe(true);
-  });
-});
-
 describe("soonestSteerGraceRemainingMs", () => {
   it("returns the earliest live grace deadline and ignores queued or expired rows", () => {
     expect(
@@ -111,5 +92,135 @@ describe("soonestSteerGraceRemainingMs", () => {
         createdAtMs,
       ),
     ).toBeNull();
+  });
+});
+
+describe("isSteerWaitingOutGraceWindow", () => {
+  const messageId = MessageId.make("queued-1");
+  const message = { deliveryIntent: "steer" as const, createdAt, messageId };
+
+  it("holds a steer that is still inside its window", () => {
+    expect(isSteerWaitingOutGraceWindow(message, { nowMs: createdAtMs, expedited: {} })).toBe(true);
+  });
+
+  it("releases a steer the user asked to send now", () => {
+    // Expediting retires the window rather than shortening it: the point of
+    // the wait is second thoughts, and there are none.
+    expect(
+      isSteerWaitingOutGraceWindow(message, {
+        nowMs: createdAtMs,
+        expedited: { [messageId]: true },
+      }),
+    ).toBe(false);
+  });
+
+  it("holds nothing once the window has elapsed", () => {
+    expect(
+      isSteerWaitingOutGraceWindow(message, {
+        nowMs: createdAtMs + STEER_GRACE_WINDOW_MS,
+        expedited: {},
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("queueFlushBatchIds", () => {
+  const a = { messageId: MessageId.make("a"), creation: undefined };
+  const b = { messageId: MessageId.make("b"), creation: undefined };
+
+  it("covers only rows behind a successful idle-thread leader", () => {
+    const ids = queueFlushBatchIds([a, b], a, {
+      delivered: true,
+      action: "send",
+      threadStatus: "idle",
+    });
+
+    expect(ids.has(MessageId.make("a"))).toBe(false);
+    expect(ids.has(MessageId.make("b"))).toBe(true);
+  });
+
+  it("leaves rows ahead of the leader out — they are not in the turn it started", () => {
+    const c = { messageId: MessageId.make("c"), creation: undefined };
+    const ids = queueFlushBatchIds([a, b, c], b, {
+      delivered: true,
+      action: "send",
+      threadStatus: "idle",
+    });
+
+    expect(ids.has(MessageId.make("a"))).toBe(false);
+    expect(ids.has(MessageId.make("c"))).toBe(true);
+  });
+
+  it("does not open a batch for a steer dispatched into a running turn", () => {
+    expect(
+      queueFlushBatchIds([a, b], b, {
+        delivered: true,
+        action: "send",
+        threadStatus: "running",
+      }).size,
+    ).toBe(0);
+  });
+
+  it("does not open a batch for stale-row removal", () => {
+    expect(
+      queueFlushBatchIds([a, b], a, {
+        delivered: true,
+        action: "remove",
+        threadStatus: null,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("leaves pending-task creations out — they start their own threads", () => {
+    const creation = {
+      messageId: MessageId.make("creation"),
+      creation: {
+        projectId: ProjectId.make("project-1"),
+        workspaceMode: "local" as const,
+        branch: null,
+        worktreePath: null,
+      },
+    };
+    const ids = queueFlushBatchIds([a, creation, b], a, {
+      delivered: true,
+      action: "send",
+      threadStatus: "idle",
+    });
+
+    expect(ids.has(MessageId.make("creation"))).toBe(false);
+    expect(ids.has(MessageId.make("b"))).toBe(true);
+    expect(
+      queueFlushBatchIds([creation, a], creation, {
+        delivered: true,
+        action: "send",
+        threadStatus: null,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("does not activate until the leader dispatch succeeds", () => {
+    expect(
+      queueFlushBatchIds([a, b], a, {
+        delivered: false,
+        action: "send",
+        threadStatus: "idle",
+      }).size,
+    ).toBe(0);
+  });
+});
+
+describe("pruneExpeditedQueuedMessageIds", () => {
+  const retained = MessageId.make("retained");
+  const removed = MessageId.make("removed");
+
+  it("drops only ids whose row and in-flight ownership are both gone", () => {
+    expect(
+      pruneExpeditedQueuedMessageIds({ [retained]: true, [removed]: true }, new Set([retained])),
+    ).toEqual({ [retained]: true });
+  });
+
+  it("preserves identity when every expedite latch is still live", () => {
+    const expedited = { [retained]: true } as const;
+    expect(pruneExpeditedQueuedMessageIds(expedited, new Set([retained]))).toBe(expedited);
   });
 });

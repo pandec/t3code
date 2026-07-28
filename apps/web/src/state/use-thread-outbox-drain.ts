@@ -7,12 +7,14 @@ import type {
 import { createThreadOutboxDelivery } from "@t3tools/client-runtime/state/thread-outbox-delivery";
 import {
   flattenQueuedThreadMessages,
+  isSteerWaitingOutGraceWindow,
+  pruneExpeditedQueuedMessageIds,
+  queueFlushBatchIds,
   queuedThreadMessageIntent,
   resolveThreadOutboxDeliveryAction,
   scopedThreadKey,
   selectNextQueuedThreadDispatch,
   soonestSteerGraceRemainingMs,
-  steerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -28,6 +30,7 @@ import { environmentShell } from "./shell";
 import {
   dispatchingQueuedMessageAtom,
   editingQueuedMessageIdsAtom,
+  expeditedQueuedMessageIdsAtom,
   ensureThreadOutboxLoaded,
   removeThreadOutboxMessage,
   threadOutboxManager,
@@ -107,6 +110,7 @@ export function useThreadOutboxDrain(): void {
   });
   const dispatchingQueuedMessage = useAtomValue(dispatchingQueuedMessageAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
+  const expeditedMessageIds = useAtomValue(expeditedQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useAtomValue(threadOutboxShellStatusesAtom);
   const environmentConnectivity = useAtomValue(threadOutboxEnvironmentConnectivityAtom);
@@ -115,6 +119,9 @@ export function useThreadOutboxDrain(): void {
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
+  // Threads whose queue is being released as one batch, and the ids that batch
+  // covers. Cleared once none of those ids remain queued.
+  const flushBatchRef = useRef(new Map<string, ReadonlySet<MessageId>>());
 
   useEffect(() => {
     ensureThreadOutboxLoaded();
@@ -161,6 +168,45 @@ export function useThreadOutboxDrain(): void {
     [setThreadInteractionMode, setThreadRuntimeMode, startTurn, updateThreadMetadata],
   );
 
+  // A batch is done once nothing it covered is queued any more. This must stay
+  // declared ahead of the dispatch effect below: a spent batch that outlived
+  // its rows would suppress the next turn end's batch for a whole pass.
+  useEffect(() => {
+    for (const [threadKey, batchIds] of flushBatchRef.current) {
+      const remaining = queuedMessagesByThreadKey[threadKey] ?? [];
+      if (!remaining.some((message) => batchIds.has(message.messageId))) {
+        flushBatchRef.current.delete(threadKey);
+      }
+    }
+  }, [dispatchingQueuedMessage, queuedMessagesByThreadKey]);
+
+  // Keep expedite state only while its row is queued or owned by an in-flight
+  // edit/removal. The ownership checks avoid pruning during the manager's
+  // optimistic removal window if durable storage later restores the row.
+  useEffect(() => {
+    const retainedMessageIds = new Set(
+      flattenQueuedThreadMessages(queuedMessagesByThreadKey).map(({ messageId }) => messageId),
+    );
+    if (dispatchingQueuedMessage !== null) {
+      retainedMessageIds.add(dispatchingQueuedMessage.messageId);
+    }
+    for (const messageId of Object.keys(editingQueuedMessageIds) as MessageId[]) {
+      retainedMessageIds.add(messageId);
+    }
+    const nextExpeditedIds = pruneExpeditedQueuedMessageIds(
+      expeditedMessageIds,
+      retainedMessageIds,
+    );
+    if (nextExpeditedIds !== expeditedMessageIds) {
+      appAtomRegistry.set(expeditedQueuedMessageIdsAtom, nextExpeditedIds);
+    }
+  }, [
+    dispatchingQueuedMessage,
+    editingQueuedMessageIds,
+    expeditedMessageIds,
+    queuedMessagesByThreadKey,
+  ]);
+
   useEffect(() => {
     if (dispatchingQueuedMessage !== null) {
       return;
@@ -170,7 +216,10 @@ export function useThreadOutboxDrain(): void {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
           Boolean(editingQueuedMessageIds[message.messageId]) ||
-          steerGraceRemainingMs(message, Date.now()) > 0 ||
+          isSteerWaitingOutGraceWindow(message, {
+            nowMs: Date.now(),
+            expedited: expeditedMessageIds,
+          }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
           if (message.creation !== undefined) {
@@ -186,7 +235,14 @@ export function useThreadOutboxDrain(): void {
             shellStatus: shellStatuses.get(message.environmentId) ?? "empty",
             environmentConnected: environmentConnectivity.get(message.environmentId) === true,
             threadStatus: thread?.session?.status ?? null,
-            deliveryIntent: queuedThreadMessageIntent(message),
+            // The turn this batch waited for has ended and its first message
+            // started the next one, so the rest follow it in as steers rather
+            // than each waiting out a whole turn. Resolving as a steer bypasses
+            // only the running-turn hold — a disconnected environment or a
+            // shell that is not live still waits.
+            deliveryIntent: flushBatchRef.current.get(threadKey)?.has(message.messageId)
+              ? "steer"
+              : queuedThreadMessageIntent(message),
           });
         },
       });
@@ -216,6 +272,16 @@ export function useThreadOutboxDrain(): void {
             : Promise.resolve(false);
       void dispatch
         .then((sent) => {
+          if (!flushBatchRef.current.has(threadKey)) {
+            const batchIds = queueFlushBatchIds(queuedMessages, nextQueuedMessage, {
+              delivered: sent,
+              action: candidate.action,
+              threadStatus: thread?.session?.status ?? null,
+            });
+            if (batchIds.size > 0) {
+              flushBatchRef.current.set(threadKey, batchIds);
+            }
+          }
           if (sent) {
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
             retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
@@ -251,6 +317,7 @@ export function useThreadOutboxDrain(): void {
     dispatchingQueuedMessage,
     editingQueuedMessageIds,
     environmentConnectivity,
+    expeditedMessageIds,
     queuedMessagesByThreadKey,
     retryTick,
     shellStatuses,
