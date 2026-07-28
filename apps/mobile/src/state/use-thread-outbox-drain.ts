@@ -227,7 +227,14 @@ export function useThreadOutboxDrain(): void {
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadStatus: thread?.session?.status ?? null,
-            deliveryIntent: queuedThreadMessageIntent(message),
+            // The turn this batch waited for has ended and its first message
+            // started the next one, so the rest follow it in as steers rather
+            // than each waiting out a whole turn. Resolving as a steer bypasses
+            // only the running-turn hold — a disconnected environment or a
+            // shell that is not live still waits.
+            deliveryIntent: flushBatchRef.current.get(threadKey)?.has(message.messageId)
+              ? "steer"
+              : queuedThreadMessageIntent(message),
           });
           // An incomplete pending task (e.g. worktree mode without a branch)
           // stays queued until the user finishes it in the editor.
@@ -240,12 +247,6 @@ export function useThreadOutboxDrain(): void {
             if (creationProjectCwd === null && shellStatus !== "live") {
               return "wait";
             }
-          }
-          // The turn this batch was waiting for has ended and its first message
-          // has already started the next one; the rest follow it in rather than
-          // each waiting out a whole turn of its own.
-          if (action === "wait" && flushBatchRef.current.get(threadKey)?.has(message.messageId)) {
-            return "send";
           }
           return action;
         },
