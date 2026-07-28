@@ -33,7 +33,6 @@ export class IosTestFlightError extends Data.TaggedError("IosTestFlightError")<{
 interface CommandOptions {
   readonly cwd?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly stdout?: "inherit" | "ignore";
 }
 
 function formatCommand(command: string, args: ReadonlyArray<string>): string {
@@ -56,7 +55,7 @@ const runCommand = Effect.fn("iosTestFlight.runCommand")(
         cwd: options.cwd,
         env: options.env,
         stdin: "ignore",
-        stdout: options.stdout ?? "inherit",
+        stdout: "inherit",
         stderr: "inherit",
       }),
     );
@@ -297,17 +296,12 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
     ...buildEnv,
     API_PRIVATE_KEYS_DIR: path.dirname(keyPath),
   };
-  yield* Effect.log("[ios-testflight] Validating App Store Connect credentials...");
-  yield* runCommand(
-    spawner,
-    "xcrun",
-    ["altool", "--list-providers", "--apiKey", settings.keyId, "--apiIssuer", settings.issuerId],
-    {
-      cwd: mobileDir,
-      env: authenticationEnvironment,
-      stdout: "ignore",
-    },
-  );
+  // There is deliberately no credential preflight here. altool rejects API-key
+  // authentication for every command that would serve as one
+  // ("list-providers does not support APIKey authentication"), so such a check
+  // fails the run before it starts. Credentials are exercised seconds into the
+  // archive instead, when -allowProvisioningUpdates contacts the developer
+  // portal — long before the expensive compile.
 
   for (const target of cleanupTargets) {
     yield* fs.remove(target.path, { recursive: target.recursive, force: true });
