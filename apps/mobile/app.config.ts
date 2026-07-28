@@ -1,5 +1,11 @@
 import type { ExpoConfig } from "expo/config";
 
+import {
+  isAppleTeamId,
+  isAppVersion,
+  isIosBuildNumber,
+  isIosBundleIdentifier,
+} from "../../scripts/lib/apple-mobile-config.ts";
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
@@ -22,19 +28,15 @@ const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "0.1.0";
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.
 const iosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim() || undefined;
-const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
-const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
-const APP_VERSION_PATTERN = /^\d+(?:\.\d+){0,2}$/;
-const IOS_BUILD_NUMBER_PATTERN = /^\d+(?:\.\d+){0,2}$/;
 const IOS_DEPLOYMENT_TARGET = "18.0";
 
-if (!APP_VERSION_PATTERN.test(appVersion)) {
+if (!isAppVersion(appVersion)) {
   throw new Error(
-    `T3CODE_FORK_VERSION must be one to three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
+    `T3CODE_FORK_VERSION must be three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
   );
 }
 
-if (iosBuildNumber !== undefined && !IOS_BUILD_NUMBER_PATTERN.test(iosBuildNumber)) {
+if (iosBuildNumber !== undefined && !isIosBuildNumber(iosBuildNumber)) {
   throw new Error(
     `T3CODE_IOS_BUILD_NUMBER must be one to three dot-separated integers (received "${iosBuildNumber}").`,
   );
@@ -44,8 +46,7 @@ const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
 if (
   isIosPersonalTeamBuild &&
-  (!personalTeamBundleIdentifier ||
-    !IOS_BUNDLE_IDENTIFIER_PATTERN.test(personalTeamBundleIdentifier))
+  (!personalTeamBundleIdentifier || !isIosBundleIdentifier(personalTeamBundleIdentifier))
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
@@ -55,9 +56,8 @@ if (
 if (
   !isIosPersonalTeamBuild &&
   ((customIosAppleTeamId === undefined) !== (customIosBundleIdentifier === undefined) ||
-    (customIosAppleTeamId !== undefined && !APPLE_TEAM_ID_PATTERN.test(customIosAppleTeamId)) ||
-    (customIosBundleIdentifier !== undefined &&
-      !IOS_BUNDLE_IDENTIFIER_PATTERN.test(customIosBundleIdentifier)))
+    (customIosAppleTeamId !== undefined && !isAppleTeamId(customIosAppleTeamId)) ||
+    (customIosBundleIdentifier !== undefined && !isIosBundleIdentifier(customIosBundleIdentifier)))
 ) {
   throw new Error(
     "T3CODE_APPLE_TEAM_ID and T3CODE_IOS_BUNDLE_ID must be provided together with a valid Apple Team ID and reverse-DNS bundle identifier.",

@@ -71,16 +71,17 @@ few minutes later:
 vp run ios:testflight
 ```
 
-This needs `T3CODE_ASC_KEY_ID`, `T3CODE_ASC_ISSUER_ID`, and `T3CODE_ASC_KEY_PATH` in the repository
-root `.env.local`; see [`../../.env.example`](../../.env.example). The App Store Connect `.p8`
-downloads only once, so keep a backup outside the repository. The first archive also creates an
-Apple Distribution certificate and App Store provisioning profiles through
-`-allowProvisioningUpdates`.
+This needs `T3CODE_APPLE_TEAM_ID`, `T3CODE_IOS_BUNDLE_ID`, `T3CODE_ASC_KEY_ID`,
+`T3CODE_ASC_ISSUER_ID`, and `T3CODE_ASC_KEY_PATH` in the repository root `.env.local`; see
+[`../../.env.example`](../../.env.example). The App Store Connect `.p8` downloads only once, so keep
+a backup outside the repository. Before touching build artifacts, the script authenticates the key
+with App Store Connect. The first distribution can also create an Apple Distribution certificate
+and App Store provisioning profiles through `-allowProvisioningUpdates`.
 
 The script always builds the `production` variant, because TestFlight requires the production APNs
 entitlement. `T3CODE_FORK_VERSION` supplies the marketing version shown in Settings, and the build
-number is derived from the clock so every upload is unique — App Store Connect rejects a repeated
-build number.
+number is derived from the clock in one-minute steps — App Store Connect rejects a repeated build
+number, so wait for the next minute before retrying a successful upload.
 
 > [!NOTE]
 > `updates.enabled` is false whenever a custom Apple team signs the build, so this route has no OTA

@@ -2,12 +2,19 @@
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import {
+  isAppleTeamId,
+  isAppStoreConnectIssuerId,
+  isAppStoreConnectKeyId,
+  isIosBundleIdentifier,
+} from "./lib/apple-mobile-config.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 const SCHEME = "T3Code";
@@ -26,6 +33,7 @@ export class IosTestFlightError extends Data.TaggedError("IosTestFlightError")<{
 interface CommandOptions {
   readonly cwd?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly stdout?: "inherit" | "ignore";
 }
 
 function formatCommand(command: string, args: ReadonlyArray<string>): string {
@@ -48,7 +56,7 @@ const runCommand = Effect.fn("iosTestFlight.runCommand")(
         cwd: options.cwd,
         env: options.env,
         stdin: "ignore",
-        stdout: "inherit",
+        stdout: options.stdout ?? "inherit",
         stderr: "inherit",
       }),
     );
@@ -90,9 +98,37 @@ export function renderExportOptionsPlist(teamId: string): string {
 
 interface TestFlightSettings {
   readonly teamId: string;
+  readonly bundleId: string;
   readonly keyId: string;
   readonly issuerId: string;
   readonly keyPath: string;
+}
+
+interface PathContainment {
+  readonly isAbsolute: (path: string) => boolean;
+  readonly join: (...paths: ReadonlyArray<string>) => string;
+  readonly relative: (from: string, to: string) => string;
+  readonly sep: string;
+}
+
+export function isSameOrDescendantPath(
+  path: PathContainment,
+  parent: string,
+  candidate: string,
+): boolean {
+  const relative = path.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+export function resolveArtifactCleanupTargets(path: PathContainment, artifactDir: string) {
+  return [
+    { path: path.join(artifactDir, `${SCHEME}.xcarchive`), recursive: true },
+    { path: path.join(artifactDir, "export"), recursive: true },
+    { path: path.join(artifactDir, "ExportOptions.plist"), recursive: false },
+  ] as const;
 }
 
 export function resolveSettings(
@@ -107,18 +143,35 @@ export function resolveSettings(
   }
   const required = {
     teamId: "T3CODE_APPLE_TEAM_ID",
+    bundleId: "T3CODE_IOS_BUNDLE_ID",
     keyId: "T3CODE_ASC_KEY_ID",
     issuerId: "T3CODE_ASC_ISSUER_ID",
     keyPath: "T3CODE_ASC_KEY_PATH",
   } as const;
   const missing = Object.values(required).filter((name) => !env[name]?.trim());
   if (missing.length > 0) return { missing };
-  return {
+  const settings = {
     teamId: env[required.teamId]!.trim().toUpperCase(),
-    keyId: env[required.keyId]!.trim(),
+    bundleId: env[required.bundleId]!.trim(),
+    keyId: env[required.keyId]!.trim().toUpperCase(),
     issuerId: env[required.issuerId]!.trim(),
     keyPath: env[required.keyPath]!.trim(),
   };
+  const invalid = [
+    ...(!isAppleTeamId(settings.teamId)
+      ? ["T3CODE_APPLE_TEAM_ID must be a 10-character Apple Team ID"]
+      : []),
+    ...(!isIosBundleIdentifier(settings.bundleId)
+      ? ["T3CODE_IOS_BUNDLE_ID must be a reverse-DNS bundle identifier"]
+      : []),
+    ...(!isAppStoreConnectKeyId(settings.keyId)
+      ? ["T3CODE_ASC_KEY_ID must be a 10-character App Store Connect key ID"]
+      : []),
+    ...(!isAppStoreConnectIssuerId(settings.issuerId)
+      ? ["T3CODE_ASC_ISSUER_ID must be a UUID"]
+      : []),
+  ];
+  return invalid.length > 0 ? { missing: invalid } : settings;
 }
 
 const main = Effect.fn("iosTestFlight.main")(function* () {
@@ -155,16 +208,79 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       cause: undefined,
     });
   }
+  const keyInfo = yield* fs
+    .stat(keyPath)
+    .pipe(
+      Effect.mapError((cause) =>
+        asIosTestFlightError(`Could not inspect App Store Connect key at ${keyPath}`, cause),
+      ),
+    );
+  if (keyInfo.type !== "File") {
+    return yield* new IosTestFlightError({
+      message: `App Store Connect key must be a regular file, but ${keyPath} is ${keyInfo.type}.`,
+      cause: undefined,
+    });
+  }
+  yield* fs
+    .access(keyPath, { readable: true })
+    .pipe(
+      Effect.mapError((cause) =>
+        asIosTestFlightError(`App Store Connect key is not readable at ${keyPath}`, cause),
+      ),
+    );
 
-  const buildNumber = resolveBuildNumber(Date.now());
+  const buildNumber = resolveBuildNumber(yield* Clock.currentTimeMillis);
   const artifactDir = path.join(repoRoot, ARTIFACT_DIRECTORY);
-  const archivePath = path.join(artifactDir, `${SCHEME}.xcarchive`);
-  const exportDir = path.join(artifactDir, "export");
-  const exportOptionsPath = path.join(artifactDir, "ExportOptions.plist");
-
-  yield* fs.remove(artifactDir, { recursive: true }).pipe(Effect.ignore);
+  const cleanupTargets = resolveArtifactCleanupTargets(path, artifactDir);
+  const [archiveTarget, exportTarget, exportOptionsTarget] = cleanupTargets;
+  const archivePath = archiveTarget.path;
+  const exportDir = exportTarget.path;
+  const exportOptionsPath = exportOptionsTarget.path;
+  const lockPath = path.join(artifactDir, ".lock");
+  const repoRootRealPath = yield* fs.realPath(repoRoot);
+  const artifactParent = path.dirname(artifactDir);
+  yield* fs.makeDirectory(artifactParent, { recursive: true });
+  const artifactParentRealPath = yield* fs.realPath(artifactParent);
+  if (!isSameOrDescendantPath(path, repoRootRealPath, artifactParentRealPath)) {
+    return yield* new IosTestFlightError({
+      message: `Refusing to use artifact parent ${artifactParentRealPath} because it resolves outside ${repoRootRealPath}.`,
+      cause: undefined,
+    });
+  }
   yield* fs.makeDirectory(artifactDir, { recursive: true });
-  yield* fs.writeFileString(exportOptionsPath, renderExportOptionsPlist(settings.teamId));
+  const artifactDirRealPath = yield* fs.realPath(artifactDir);
+  if (!isSameOrDescendantPath(path, repoRootRealPath, artifactDirRealPath)) {
+    return yield* new IosTestFlightError({
+      message: `Refusing to use artifact directory ${artifactDirRealPath} because it resolves outside ${repoRootRealPath}.`,
+      cause: undefined,
+    });
+  }
+  yield* Effect.acquireRelease(
+    fs
+      .open(lockPath, { flag: "wx" })
+      .pipe(
+        Effect.mapError((cause) =>
+          asIosTestFlightError(
+            `Another TestFlight run is active, or a stale lock exists at ${lockPath}. Remove it only after confirming no run is active.`,
+            cause,
+          ),
+        ),
+      ),
+    () => fs.remove(lockPath, { force: true }).pipe(Effect.orDie),
+  );
+
+  const keyRealPath = yield* fs.realPath(keyPath);
+  for (const target of cleanupTargets) {
+    const targetRealPath = (yield* fs.exists(target.path))
+      ? yield* fs.realPath(target.path)
+      : path.join(artifactDirRealPath, path.relative(artifactDir, target.path));
+    if (isSameOrDescendantPath(path, targetRealPath, keyRealPath)) {
+      return yield* new IosTestFlightError({
+        message: `Refusing to clean ${target.path} because it contains the App Store Connect key at ${keyPath}. Move the key outside generated archive/export paths.`,
+        cause: undefined,
+      });
+    }
+  }
 
   const buildEnv = {
     ...process.env,
@@ -174,8 +290,29 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
   };
 
   yield* Effect.log(
-    `[ios-testflight] Building ${repoEnv.T3CODE_IOS_BUNDLE_ID ?? "the mobile app"} version ${repoEnv.T3CODE_FORK_VERSION ?? "0.1.0"} build ${buildNumber}.`,
+    `[ios-testflight] Building ${settings.bundleId} version ${repoEnv.T3CODE_FORK_VERSION?.trim() || "0.1.0"} build ${buildNumber}.`,
   );
+
+  const authenticationEnvironment = {
+    ...buildEnv,
+    API_PRIVATE_KEYS_DIR: path.dirname(keyPath),
+  };
+  yield* Effect.log("[ios-testflight] Validating App Store Connect credentials...");
+  yield* runCommand(
+    spawner,
+    "xcrun",
+    ["altool", "--list-providers", "--apiKey", settings.keyId, "--apiIssuer", settings.issuerId],
+    {
+      cwd: mobileDir,
+      env: authenticationEnvironment,
+      stdout: "ignore",
+    },
+  );
+
+  for (const target of cleanupTargets) {
+    yield* fs.remove(target.path, { recursive: target.recursive, force: true });
+  }
+  yield* fs.writeFileString(exportOptionsPath, renderExportOptionsPlist(settings.teamId));
 
   yield* Effect.log("[ios-testflight] Generating the native iOS project...");
   yield* runCommand(spawner, "vp", ["exec", "expo", "prebuild", "--clean", "--platform", "ios"], {
@@ -260,7 +397,7 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       "--apiIssuer",
       settings.issuerId,
     ],
-    { cwd: mobileDir, env: { ...buildEnv, API_PRIVATE_KEYS_DIR: path.dirname(keyPath) } },
+    { cwd: mobileDir, env: authenticationEnvironment },
   );
 
   yield* Effect.log(
