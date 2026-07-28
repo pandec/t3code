@@ -41,6 +41,15 @@ describe("thread sidebar width", () => {
     expect(resolveInitialThreadSidebarWidth(900, viewportWidth)).toBe(viewportWidth / 2);
   });
 
+  it("gives the odd pixel of a narrow window to the main content", () => {
+    expect(resolveThreadSidebarMaximumWidth(917)).toBe(458);
+  });
+
+  it("switches over to the flat main content reservation at 80rem", () => {
+    expect(resolveThreadSidebarMaximumWidth(1280)).toBe(1280 - THREAD_MAIN_CONTENT_MIN_WIDTH);
+    expect(resolveThreadSidebarMaximumWidth(1279)).toBe(639);
+  });
+
   it("keeps the sidebar minimum when the whole layout is narrower than its minimums", () => {
     expect(resolveInitialThreadSidebarWidth(900, 300)).toBe(THREAD_SIDEBAR_MIN_WIDTH);
   });

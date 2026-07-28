@@ -9,9 +9,11 @@ export function resolveThreadSidebarMaximumWidth(viewportWidth: number): number 
   // where it usually already sits), so the rail feels dead. Below ~80rem the
   // reservation scales down to half the window instead: the main content still
   // keeps at least half, and the sidebar always has room to grow.
+  // Rounding up hands the odd pixel to the main content, so the sidebar stays
+  // at or below half the window rather than one pixel past it.
   const reservedMainContentWidth = Math.min(
     THREAD_MAIN_CONTENT_MIN_WIDTH,
-    Math.floor(viewportWidth / 2),
+    Math.ceil(Math.floor(viewportWidth) / 2),
   );
   return Math.max(THREAD_SIDEBAR_MIN_WIDTH, Math.floor(viewportWidth) - reservedMainContentWidth);
 }
