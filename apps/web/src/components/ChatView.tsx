@@ -202,6 +202,7 @@ import {
   type DraftId,
 } from "../composerDraftStore";
 import {
+  describeThreadOutboxEnqueueFailure,
   dispatchingQueuedMessageAtom,
   enqueueThreadOutboxMessage,
   hasPendingThreadOutboxWork,
@@ -212,7 +213,10 @@ import {
   updateThreadOutboxMessage,
   useQueuedThreadMessages,
 } from "../state/threadOutbox";
-import type { QueuedThreadMessage } from "@t3tools/client-runtime/state/thread-outbox-model";
+import type {
+  QueuedThreadMessage,
+  ThreadOutboxDeliveryIntent,
+} from "@t3tools/client-runtime/state/thread-outbox-model";
 import { ComposerQueuedMessages } from "./chat/ComposerQueuedMessages";
 import {
   appendTerminalContextsToPrompt,
@@ -4511,8 +4515,15 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = async (
+    e?: { preventDefault: () => void },
+    options?: { readonly deliveryIntent?: ThreadOutboxDeliveryIntent },
+  ) => {
     e?.preventDefault();
+    // Submitting into a running turn steers by default, matching both CLIs:
+    // the message reaches the agent at its next step instead of waiting out
+    // the whole turn. "Queue" is the deliberate "do this afterwards" choice.
+    const deliveryIntent: ThreadOutboxDeliveryIntent = options?.deliveryIntent ?? "steer";
     if (queuedMessageEditsInProgressRef.current.size > 0) {
       toastManager.add({
         type: "warning",
@@ -4811,7 +4822,7 @@ function ChatViewContent(props: ChatViewProps) {
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,
-          deliveryIntent: "queue",
+          deliveryIntent,
           ...(localCheckoutBranchMismatch
             ? { localCheckoutBranch: localCheckoutBranchMismatch.currentBranch }
             : {}),
@@ -4853,10 +4864,7 @@ function ChatViewContent(props: ChatViewProps) {
           composerRef.current?.resetCursorState();
         }
       } catch (error) {
-        setThreadError(
-          threadIdForSend,
-          error instanceof Error ? error.message : "Failed to queue message.",
-        );
+        setThreadError(threadIdForSend, describeThreadOutboxEnqueueFailure(error));
       } finally {
         sendInFlightRef.current = false;
       }
@@ -5432,6 +5440,22 @@ function ChatViewContent(props: ChatViewProps) {
       onEditQueuedMessageRef.current = null;
     };
   }, [onEditQueuedMessage]);
+
+  /**
+   * Up-arrow on an empty composer reaches for the newest queued message, the
+   * way the CLI does. Reports whether it found one so the composer can fall
+   * through to its own arrow handling when the queue is empty.
+   */
+  const onRecallQueuedMessage = useCallback((): boolean => {
+    const newest = queuedThreadMessages.findLast(
+      (message) => dispatchingQueuedMessageId !== message.messageId,
+    );
+    if (!newest) {
+      return false;
+    }
+    void onEditQueuedMessage(newest);
+    return true;
+  }, [dispatchingQueuedMessageId, onEditQueuedMessage, queuedThreadMessages]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -6476,6 +6500,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
+                            onRecallQueuedMessage={onRecallQueuedMessage}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
