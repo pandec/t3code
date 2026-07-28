@@ -127,7 +127,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { formatRelativeTimeLabel } from "../timestampFormat";
+import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { Kbd } from "./ui/kbd";
 import {
@@ -528,10 +528,15 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       : showProviderAlways && !isThreadRunning
         ? `pointer-events-none ${threadTouchMetaPaddingClass}`
         : "pointer-events-none";
-  const threadLabelClassName =
+  // Constant-width time column: labels still swing between "now" and "59m",
+  // and a slot that only sized to its content slid the cloud/provider icons
+  // sitting to its left around from row to row. min-w (not w) so a longer
+  // outlier ("120d") or the jump badge can still push past it.
+  const threadLabelClassName = `inline-flex min-w-[4ch] justify-end${
     showProviderAlways && !isThreadRunning
-      ? "inline-flex min-w-6 justify-end transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
-      : undefined;
+      ? " transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+      : ""
+  }`;
   const clearConfirmingArchive = useCallback(() => {
     setConfirmingArchiveThreadKey((current) => (current === threadKey ? null : current));
   }, [setConfirmingArchiveThreadKey, threadKey]);
@@ -948,7 +953,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                           : "text-muted-foreground/40"
                       }`}
                     >
-                      {formatRelativeTimeLabel(
+                      {formatCompactRelativeTimeLabel(
                         thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
                       )}
                     </span>

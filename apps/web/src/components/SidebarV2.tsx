@@ -106,7 +106,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatCompactRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
@@ -174,14 +174,9 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   separate: "Keep separate",
 };
 
-function compactSidebarTimeLabel(label: string): string {
-  if (label === "just now") return "now";
-  return label.endsWith(" ago") ? label.slice(0, -4) : label;
-}
-
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
-  return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+  return formatCompactRelativeTimeLabel(timestamp);
 }
 
 // Settled rows read "how long ago did this wrap up", matching their sort
@@ -189,7 +184,7 @@ function threadTimeLabel(thread: SidebarThreadSummary): string {
 // disagree.
 function settledTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = resolveSettledTimestamp(thread);
-  return timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+  return timestamp === null ? "" : formatCompactRelativeTimeLabel(timestamp);
 }
 
 // Floats at the row's right edge, vertically centered, while the jump

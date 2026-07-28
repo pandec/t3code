@@ -123,6 +123,17 @@ export function formatRelativeTimeLabel(isoDate: string) {
   return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
 }
 
+/**
+ * Relative label stripped to its shortest readable form ("4m", "1d", "now").
+ * For dense lists — sidebar rows — where the column is narrow and every row
+ * carries the same implicit "ago", so spelling it out is pure noise.
+ */
+export function formatCompactRelativeTimeLabel(isoDate: string): string {
+  const relative = formatRelativeTime(isoDate);
+  if (!relative) return "";
+  return relative.suffix === null && relative.value === "just now" ? "now" : relative.value;
+}
+
 export function getRelativeTimeState(isoDate: string | null): RelativeTimeState {
   if (!isoDate) return { status: "missing" };
   const relative = formatRelativeTime(isoDate);
