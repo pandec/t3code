@@ -1,6 +1,6 @@
 import {
-  queuedThreadMessageIntent,
   queuedThreadMessagePreview,
+  steerGraceRemainingMs,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
 import type { MessageId } from "@t3tools/contracts";
@@ -35,18 +35,35 @@ export function ComposerQueuedMessages({
 }: ComposerQueuedMessagesProps) {
   if (messages.length === 0) return null;
 
+  // A steer is on its way out; it just rests here long enough to be edited or
+  // dropped first.
+  const now = Date.now();
+  const steeringCount = messages.filter(
+    (message) => steerGraceRemainingMs(message, now) > 0,
+  ).length;
+
   return (
     <div className={cn("mx-auto w-full max-w-3xl px-1 pb-1.5", className)}>
       <div className="text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
-        {messages.length === 1 ? "1 queued" : `${messages.length} queued`}
+        {steeringCount > 0
+          ? `${steeringCount === messages.length ? "" : `${steeringCount} of ${messages.length} `}steering`
+          : messages.length === 1
+            ? "1 queued"
+            : `${messages.length} queued`}
       </div>
       <ul className="mt-0.5 max-h-56 overflow-y-auto">
         {messages.map((message) => {
           const isDispatching = dispatchingMessageId === message.messageId;
-          const canSteer = queuedThreadMessageIntent(message) === "queue" && !isDispatching;
+          const isSteering = steerGraceRemainingMs(message, now) > 0;
+          const canSteer = !isSteering && !isDispatching;
           return (
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
-              <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-[13px]",
+                  isSteering ? "text-foreground/80" : "text-muted-foreground",
+                )}
+              >
                 {queuedThreadMessagePreview(message)}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">

@@ -28,6 +28,7 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onQueue: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -67,6 +68,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
+  onQueue,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -128,17 +130,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (isRunning) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {/* Submitting while a turn runs queues the message for the outbox drain. */}
+        {/* Submitting steers into the running turn; this holds the message
+            until the turn finishes instead. */}
         {hasSendableContent ? (
           <Button
-            type="submit"
+            type="button"
             size="sm"
             variant="outline"
             className="rounded-full"
             {...pointerFocusProps}
             disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+            onClick={onQueue}
           >
-            Queue
+            Queue for later
           </Button>
         ) : null}
         <button
