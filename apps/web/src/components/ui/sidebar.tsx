@@ -39,6 +39,14 @@ type SidebarContextProps = {
   toggleSidebar: () => void;
 };
 
+/**
+ * `minWidth`/`maxWidth` are enforced while dragging, when a persisted width is
+ * restored, and whenever the limits themselves change. That last reconciliation
+ * only applies to a pixel-valued `--sidebar-width`, which is what the resize
+ * path writes; a sidebar left on the provider's `rem` default stays there until
+ * its first drag. Pass an initial pixel width via `onResize` if the limits must
+ * hold before then.
+ */
 type SidebarResizableOptions = {
   maxWidth?: number;
   minWidth?: number;
@@ -71,6 +79,10 @@ type SidebarResolvedResizableOptions = {
 
 type SidebarResizeState = {
   moved: boolean;
+  // Captured at pointer-down: a drag settles against the configuration that
+  // started it, so options changing mid-drag cannot redirect where the result
+  // is persisted or which callback hears about it.
+  options: SidebarResolvedResizableOptions;
   pointerId: number;
   pendingWidth: number;
   rail: HTMLButtonElement;
@@ -362,6 +374,19 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
   return Math.max(options.minWidth, Math.min(width, options.maxWidth));
 }
 
+// The resize path only ever writes pixels. Anything else (the "16rem" default, a
+// calc(), a caller managing the variable itself) is not ours to reconcile, and
+// parsing it as a number would read "16rem" as 16 and collapse the sidebar.
+function parseSidebarPixelWidth(value: string): number | null {
+  const match = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(value);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  const width = Number.parseFloat(match[1]);
+  return Number.isFinite(width) ? width : null;
+}
+
 function applyPendingSidebarResize(
   resizeState: SidebarResizeState,
   options: SidebarResolvedResizableOptions,
@@ -399,40 +424,48 @@ function SidebarRail({
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
   const resizeStateRef = React.useRef<SidebarResizeState | null>(null);
+  const hydratedStorageKeyRef = React.useRef<string | null>(null);
+  const observedStorageKeyRef = React.useRef<string | null>(null);
+  // The width the user actually asked for, kept unclamped so a window that
+  // grows again can restore it rather than staying at a narrower window's cap.
+  // Tagged with the key that owns it: a sidebar that switches storage keys must
+  // not inherit the previous key's preference, least of all when the new key has
+  // nothing stored and would otherwise silently keep the old width.
+  const preferredWidthRef = React.useRef<{ storageKey: string | null; width: number } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
   const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
 
-  const stopResize = React.useCallback(
-    (pointerId: number) => {
-      const resizeState = resizeStateRef.current;
-      if (!resizeState) {
-        return;
-      }
-      if (resizeState.rafId !== null) {
-        window.cancelAnimationFrame(resizeState.rafId);
-        resizeState.rafId = null;
-      }
-      if (resolvedResizable) {
-        applyPendingSidebarResize(resizeState, resolvedResizable);
-      }
-      resizeState.transitionTargets.forEach((element) => {
-        element.style.removeProperty("transition-duration");
-      });
-      if (resolvedResizable?.storageKey && typeof window !== "undefined") {
-        setLocalStorageItem(resolvedResizable.storageKey, resizeState.width, Schema.Finite);
-      }
-      resolvedResizable?.onResize?.(resizeState.width);
-      resizeStateRef.current = null;
-      if (resizeState.rail.hasPointerCapture(pointerId)) {
-        resizeState.rail.releasePointerCapture(pointerId);
-      }
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-    },
-    [resolvedResizable],
-  );
+  const stopResize = React.useCallback((pointerId: number) => {
+    const resizeState = resizeStateRef.current;
+    if (!resizeState) {
+      return;
+    }
+    if (resizeState.rafId !== null) {
+      window.cancelAnimationFrame(resizeState.rafId);
+      resizeState.rafId = null;
+    }
+    const options = resizeState.options;
+    applyPendingSidebarResize(resizeState, options);
+    resizeState.transitionTargets.forEach((element) => {
+      element.style.removeProperty("transition-duration");
+    });
+    if (options.storageKey && typeof window !== "undefined") {
+      setLocalStorageItem(options.storageKey, resizeState.width, Schema.Finite);
+    }
+    preferredWidthRef.current = {
+      storageKey: options.storageKey,
+      width: resizeState.width,
+    };
+    options.onResize?.(resizeState.width);
+    resizeStateRef.current = null;
+    if (resizeState.rail.hasPointerCapture(pointerId)) {
+      resizeState.rail.releasePointerCapture(pointerId);
+    }
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }, []);
 
   const handlePointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -467,6 +500,7 @@ function SidebarRail({
       event.stopPropagation();
       resizeStateRef.current = {
         moved: false,
+        options: resolvedResizable,
         pointerId: event.pointerId,
         pendingWidth: initialWidth,
         rail: event.currentTarget,
@@ -515,7 +549,7 @@ function SidebarRail({
         if (!activeResizeState || !resolvedResizable) return;
 
         activeResizeState.rafId = null;
-        applyPendingSidebarResize(activeResizeState, resolvedResizable);
+        applyPendingSidebarResize(activeResizeState, activeResizeState.options);
       });
     },
     [onPointerMove, resolvedResizable],
@@ -570,7 +604,23 @@ function SidebarRail({
   );
 
   React.useLayoutEffect(() => {
-    if (!resolvedResizable?.storageKey || typeof window === "undefined") return;
+    const storageKey = resolvedResizable?.storageKey ?? null;
+    // Tracked separately from the hydrated key so that leaving a key and coming
+    // back to it counts as a fresh restore. Recording only successful hydrations
+    // would let a key that was never re-observed look permanently settled.
+    if (observedStorageKeyRef.current !== storageKey) {
+      observedStorageKeyRef.current = storageKey;
+      hydratedStorageKeyRef.current = null;
+    }
+    if (!resolvedResizable || !storageKey || typeof window === "undefined") return;
+    // Callers pass their resizable options as an object literal, so this effect
+    // re-runs on every parent render. Restoring is a mount concern: repeating it
+    // would overwrite a live drag (which only writes storage once it settles)
+    // with the pre-drag width every time an unrelated render lands.
+    if (hydratedStorageKeyRef.current === storageKey) return;
+    // A drag owns the width until it settles, and it settles against the options
+    // it began with — so restoring waits rather than racing it.
+    if (resizeStateRef.current) return;
     const rail = railRef.current;
     if (!rail) return;
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
@@ -578,18 +628,77 @@ function SidebarRail({
 
     let storedWidth: number | null;
     try {
-      storedWidth = getLocalStorageItem(resolvedResizable.storageKey, Schema.Finite);
+      storedWidth = getLocalStorageItem(storageKey, Schema.Finite);
     } catch (error) {
       console.error("Could not restore persisted sidebar width.", error);
       return;
     }
+    hydratedStorageKeyRef.current = storageKey;
     if (storedWidth === null) return;
+    preferredWidthRef.current = { storageKey, width: storedWidth };
     const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
     // Hydrate the CSS variable before the browser paints so a restored sidebar
     // never flashes at the default width first.
     wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
     resolvedResizable.onResize?.(clampedWidth);
   }, [resolvedResizable]);
+
+  // Hydration above runs once, so the applied width would otherwise ignore later
+  // changes to the limits: shrinking the window used to leave an oversized
+  // sidebar squeezing the main content until the next drag. Reconciling is
+  // separate from restoring, and idempotent, so an unrelated render is a no-op.
+  React.useLayoutEffect(() => {
+    if (!resolvedResizable || typeof window === "undefined") return;
+    // Never fight a drag in progress — the pointer owns the width until it settles.
+    if (resizeStateRef.current) return;
+    const rail = railRef.current;
+    if (!rail) return;
+    const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    if (!wrapper) return;
+
+    // Only widths this component owns are reconcilable: the resize path writes
+    // px, so anything else (the provider's "16rem" default, a caller managing
+    // the variable itself) is left alone rather than reinterpreted.
+    const appliedWidth = parseSidebarPixelWidth(
+      window.getComputedStyle(wrapper).getPropertyValue("--sidebar-width"),
+    );
+    if (appliedWidth === null) return;
+
+    const preference = preferredWidthRef.current;
+    const preferredWidth =
+      preference && preference.storageKey === resolvedResizable.storageKey
+        ? preference.width
+        : null;
+    const clampedWidth = clampSidebarWidth(preferredWidth ?? appliedWidth, resolvedResizable);
+    if (clampedWidth === appliedWidth) return;
+
+    // Bringing an out-of-bounds width back inside the limits is mandatory, so it
+    // skips the predicate: a caller that rejects shrinking would otherwise pin
+    // the sidebar above a maxWidth that just dropped. The predicate only governs
+    // optional movement between two valid widths, such as growing back toward
+    // the stored preference, where the caller may know a constraint we don't.
+    const appliedWithinLimits =
+      appliedWidth >= resolvedResizable.minWidth && appliedWidth <= resolvedResizable.maxWidth;
+    if (appliedWithinLimits) {
+      const sidebarRoot = rail.closest<HTMLElement>("[data-slot='sidebar']");
+      if (!sidebarRoot) return;
+      const accepted =
+        resolvedResizable.shouldAcceptWidth?.({
+          currentWidth: appliedWidth,
+          nextWidth: clampedWidth,
+          rail,
+          side: sidebarInstance?.side ?? "left",
+          sidebarRoot,
+          wrapper,
+        }) ?? true;
+      if (!accepted) return;
+    }
+
+    wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
+    // Deliberately not persisted: storage holds the width the user asked for, so
+    // a window that grows again restores it instead of keeping the smaller cap.
+    resolvedResizable.onResize?.(clampedWidth);
+  });
 
   React.useEffect(() => {
     return () => {
@@ -1016,6 +1125,7 @@ function SidebarMenuSubButton({
 export {
   Sidebar,
   applyPendingSidebarResize,
+  parseSidebarPixelWidth,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
