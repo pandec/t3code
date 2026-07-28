@@ -4,10 +4,16 @@ export const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 export const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 
 export function resolveThreadSidebarMaximumWidth(viewportWidth: number): number {
-  return Math.max(
-    THREAD_SIDEBAR_MIN_WIDTH,
-    Math.floor(viewportWidth) - THREAD_MAIN_CONTENT_MIN_WIDTH,
+  // Reserving a flat 40rem for the main content leaves almost no travel on a
+  // default-sized desktop window (~916px inner width caps the sidebar at 276px,
+  // where it usually already sits), so the rail feels dead. Below ~80rem the
+  // reservation scales down to half the window instead: the main content still
+  // keeps at least half, and the sidebar always has room to grow.
+  const reservedMainContentWidth = Math.min(
+    THREAD_MAIN_CONTENT_MIN_WIDTH,
+    Math.floor(viewportWidth / 2),
   );
+  return Math.max(THREAD_SIDEBAR_MIN_WIDTH, Math.floor(viewportWidth) - reservedMainContentWidth);
 }
 
 export function resolveInitialThreadSidebarWidth(

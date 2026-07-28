@@ -399,6 +399,7 @@ function SidebarRail({
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
   const resizeStateRef = React.useRef<SidebarResizeState | null>(null);
+  const hydratedStorageKeyRef = React.useRef<string | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
@@ -571,6 +572,11 @@ function SidebarRail({
 
   React.useLayoutEffect(() => {
     if (!resolvedResizable?.storageKey || typeof window === "undefined") return;
+    // Callers pass their resizable options as an object literal, so this effect
+    // re-runs on every parent render. Restoring is a mount concern: repeating it
+    // would overwrite a live drag (which only writes storage once it settles)
+    // with the pre-drag width every time an unrelated render lands.
+    if (hydratedStorageKeyRef.current === resolvedResizable.storageKey) return;
     const rail = railRef.current;
     if (!rail) return;
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
@@ -583,6 +589,7 @@ function SidebarRail({
       console.error("Could not restore persisted sidebar width.", error);
       return;
     }
+    hydratedStorageKeyRef.current = resolvedResizable.storageKey;
     if (storedWidth === null) return;
     const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
     // Hydrate the CSS variable before the browser paints so a restored sidebar

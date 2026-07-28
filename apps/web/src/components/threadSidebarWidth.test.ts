@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   resolveInitialThreadSidebarWidth,
+  resolveThreadSidebarMaximumWidth,
   THREAD_MAIN_CONTENT_MIN_WIDTH,
   THREAD_SIDEBAR_DEFAULT_WIDTH,
   THREAD_SIDEBAR_MIN_WIDTH,
@@ -20,15 +21,27 @@ describe("thread sidebar width", () => {
     expect(resolveInitialThreadSidebarWidth(120, 1200)).toBe(THREAD_SIDEBAR_MIN_WIDTH);
   });
 
-  it("leaves enough room for the main content on a smaller window", () => {
-    const viewportWidth = 1000;
+  it("leaves enough room for the main content on a wide window", () => {
+    const viewportWidth = 1600;
 
-    expect(resolveInitialThreadSidebarWidth(900, viewportWidth)).toBe(
+    expect(resolveInitialThreadSidebarWidth(1500, viewportWidth)).toBe(
       viewportWidth - THREAD_MAIN_CONTENT_MIN_WIDTH,
     );
   });
 
+  it("still gives the sidebar room to grow on a default-sized desktop window", () => {
+    // A flat 40rem reservation would cap this at 276px, which is where the
+    // sidebar already sits by default — the rail would have nowhere to go.
+    expect(resolveThreadSidebarMaximumWidth(916)).toBe(458);
+  });
+
+  it("never lets the sidebar take more than half of a narrow window", () => {
+    const viewportWidth = 1000;
+
+    expect(resolveInitialThreadSidebarWidth(900, viewportWidth)).toBe(viewportWidth / 2);
+  });
+
   it("keeps the sidebar minimum when the whole layout is narrower than its minimums", () => {
-    expect(resolveInitialThreadSidebarWidth(900, 700)).toBe(THREAD_SIDEBAR_MIN_WIDTH);
+    expect(resolveInitialThreadSidebarWidth(900, 300)).toBe(THREAD_SIDEBAR_MIN_WIDTH);
   });
 });

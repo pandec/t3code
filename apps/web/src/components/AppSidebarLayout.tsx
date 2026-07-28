@@ -21,7 +21,6 @@ import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import {
   resolveInitialThreadSidebarWidth,
   resolveThreadSidebarMaximumWidth,
-  THREAD_MAIN_CONTENT_MIN_WIDTH,
   THREAD_SIDEBAR_MIN_WIDTH,
   THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
 } from "./threadSidebarWidth";
@@ -190,9 +189,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         resizable={{
           maxWidth: sidebarMaximumWidth,
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+          // Same rule as the clamp above, measured against the live wrapper so
+          // the two never disagree and refuse a width the clamp just allowed.
           shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
             nextWidth <= currentWidth ||
-            wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+            nextWidth <= resolveThreadSidebarMaximumWidth(wrapper.clientWidth),
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
           onResize: setSidebarWidth,
         }}
