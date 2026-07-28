@@ -20,10 +20,13 @@ import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import { ensureThreadOutboxLoaded, removeThreadOutboxMessage } from "./thread-outbox";
 import {
+  flattenQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   resolveThreadOutboxDeliveryAction,
   queuedThreadMessageIntent,
   selectNextQueuedThreadDispatch,
+  soonestSteerGraceRemainingMs,
+  steerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
   type QueuedThreadMessage,
@@ -94,6 +97,22 @@ export function useThreadOutboxDrain(): void {
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
+
+  // Nothing else re-renders when a steer's grace window runs out, so wake the
+  // drain as the soonest one comes due.
+  useEffect(() => {
+    const soonestGraceMs = soonestSteerGraceRemainingMs(
+      flattenQueuedThreadMessages(queuedMessagesByThreadKey),
+      Date.now(),
+    );
+    if (soonestGraceMs === null) {
+      return;
+    }
+    const graceTimer = setTimeout(() => {
+      setRetryTick((current) => current + 1);
+    }, soonestGraceMs);
+    return () => clearTimeout(graceTimer);
+  }, [queuedMessagesByThreadKey, retryTick]);
 
   useEffect(() => {
     ensureThreadOutboxLoaded();
@@ -171,6 +190,7 @@ export function useThreadOutboxDrain(): void {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
           Boolean(editingQueuedMessageIds[message.messageId]) ||
+          steerGraceRemainingMs(message, Date.now()) > 0 ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
           const thread = findThread(threads, message);

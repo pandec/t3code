@@ -4520,10 +4520,7 @@ function ChatViewContent(props: ChatViewProps) {
     options?: { readonly deliveryIntent?: ThreadOutboxDeliveryIntent },
   ) => {
     e?.preventDefault();
-    // Submitting into a running turn steers by default, matching both CLIs:
-    // the message reaches the agent at its next step instead of waiting out
-    // the whole turn. "Queue" is the deliberate "do this afterwards" choice.
-    const deliveryIntent: ThreadOutboxDeliveryIntent = options?.deliveryIntent ?? "steer";
+    const requestedDeliveryIntent = options?.deliveryIntent;
     if (queuedMessageEditsInProgressRef.current.size > 0) {
       toastManager.add({
         type: "warning",
@@ -4796,6 +4793,15 @@ function ChatViewContent(props: ChatViewProps) {
       })
     ) {
       sendInFlightRef.current = true;
+      // Submitting into a running turn steers by default, matching both CLIs:
+      // the message reaches the agent at its next step instead of waiting out
+      // the whole turn. "Queue" is the deliberate "do this afterwards" choice.
+      // With no turn to steer into — the outbox is merely busy — steering means
+      // nothing, so those messages queue and go out in order.
+      const sessionStatus = activeThread.session?.status ?? null;
+      const threadIsBusy = sessionStatus === "running" || sessionStatus === "starting";
+      const deliveryIntent: ThreadOutboxDeliveryIntent =
+        requestedDeliveryIntent ?? (threadIsBusy ? "steer" : "queue");
       try {
         const queuedAttachments = await Promise.all(
           composerImagesSnapshot.map(async (image) => {

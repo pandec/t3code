@@ -6,6 +6,11 @@
       "command": "vp i && ln -sf $T3CODE_PROJECT_ROOT/.env .env && ln -sf $T3CODE_PROJECT_ROOT/infra/relay/.env infra/relay/.env",
       "icon": "configure",
       "runOnWorktreeCreate": true
+    },
+    {
+      "name": "Check Upstream Sync",
+      "command": "bash \"$T3CODE_PROJECT_ROOT/scripts/check-upstream-sync.sh\"",
+      "icon": "test"
     }
   ]
 }

@@ -20,10 +20,11 @@ const baseProps = {
 };
 
 describe("ComposerPrimaryActions", () => {
-  it("keeps the running-turn queue action off the form's submit path", () => {
-    // Submitting steers by default, so "Queue for later" has to be a plain
-    // button with its own handler — a `type="submit"` here would silently turn
-    // every Enter into a queue again.
+  it("puts steering on the form's submit path and queueing beside it", () => {
+    // Submitting steers, so the steer action carries the submit button and
+    // Enter takes the identical path. "Queue for later" has to be a plain
+    // button with its own handler — a `type="submit"` there would silently
+    // turn every Enter into a queue again.
     const markup = renderToStaticMarkup(
       <form>
         <ComposerPrimaryActions {...baseProps} isRunning />
@@ -31,7 +32,12 @@ describe("ComposerPrimaryActions", () => {
     );
 
     expect(markup).toContain("Queue for later");
-    expect(markup).not.toContain('type="submit"');
+    expect(markup).toContain("Steer");
+    // Exactly one submit button, and it is the steer action.
+    expect(markup.match(/type="submit"/g)).toHaveLength(1);
+    const queueIndex = markup.indexOf("Queue for later");
+    const submitIndex = markup.indexOf('type="submit"');
+    expect(submitIndex).toBeGreaterThan(queueIndex);
   });
 
   it("keeps the idle send button on the form's submit path", () => {

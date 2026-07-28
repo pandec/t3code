@@ -1,5 +1,5 @@
 import {
-  queuedThreadMessageIntent,
+  canSteerQueuedThreadMessageNow,
   queuedThreadMessagePreview,
   soonestSteerGraceRemainingMs,
   steerGraceRemainingMs,
@@ -70,7 +70,7 @@ export function ComposerQueuedMessages({
         {messages.map((message) => {
           const isDispatching = dispatchingMessageId === message.messageId;
           const isSteering = steerGraceRemainingMs(message, now) > 0;
-          const canSteer = queuedThreadMessageIntent(message) === "queue" && !isDispatching;
+          const canSteer = canSteerQueuedThreadMessageNow(message, now) && !isDispatching;
           return (
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
               <span
