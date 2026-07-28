@@ -205,6 +205,7 @@ import {
   describeThreadOutboxEnqueueFailure,
   dispatchingQueuedMessageAtom,
   enqueueThreadOutboxMessage,
+  expediteQueuedMessage,
   hasPendingThreadOutboxWork,
   holdEditingQueuedMessage,
   isThreadOutboxMessageQueued,
@@ -5165,7 +5166,9 @@ function ChatViewContent(props: ChatViewProps) {
   const onSteerQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     if (appAtomRegistry.get(dispatchingQueuedMessageAtom)?.messageId === message.messageId) return;
     // The drain is the only delivery path; flipping the intent lets it send
-    // this message into the running turn on its next pass.
+    // this message into the running turn on its next pass, and expediting
+    // retires any grace window it was still waiting out.
+    expediteQueuedMessage(message.messageId);
     void updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" }).catch((error) => {
       console.warn("[thread-outbox] failed to mark queued message for steering", error);
     });

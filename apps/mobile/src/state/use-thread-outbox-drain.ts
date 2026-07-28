@@ -25,8 +25,9 @@ import {
   resolveThreadOutboxDeliveryAction,
   queuedThreadMessageIntent,
   selectNextQueuedThreadDispatch,
+  isSteerWaitingOutGraceWindow,
+  queueFlushBatchIds,
   soonestSteerGraceRemainingMs,
-  steerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
   type QueuedThreadMessage,
@@ -35,6 +36,7 @@ import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
   editingQueuedMessageIdsAtom,
+  expeditedQueuedMessageIdsAtom,
   useThreadOutboxMessages,
   useThreadOutboxShellStatuses,
 } from "./use-thread-outbox";
@@ -88,6 +90,7 @@ export function useThreadOutboxDrain(): void {
   });
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
+  const expeditedMessageIds = useAtomValue(expeditedQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
@@ -97,6 +100,19 @@ export function useThreadOutboxDrain(): void {
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
+  // Threads whose queue is being released as one batch, and the ids that batch
+  // covers. Cleared once none of those ids remain queued.
+  const flushBatchRef = useRef(new Map<string, ReadonlySet<MessageId>>());
+
+  // A batch is done once nothing it covered is queued any more.
+  useEffect(() => {
+    for (const [threadKey, batchIds] of flushBatchRef.current) {
+      const remaining = queuedMessagesByThreadKey[threadKey] ?? [];
+      if (!remaining.some((message) => batchIds.has(message.messageId))) {
+        flushBatchRef.current.delete(threadKey);
+      }
+    }
+  }, [queuedMessagesByThreadKey]);
 
   // Nothing else re-renders when a steer's grace window runs out, so wake the
   // drain as the soonest one comes due.
@@ -190,7 +206,10 @@ export function useThreadOutboxDrain(): void {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
           Boolean(editingQueuedMessageIds[message.messageId]) ||
-          steerGraceRemainingMs(message, Date.now()) > 0 ||
+          isSteerWaitingOutGraceWindow(message, {
+            nowMs: Date.now(),
+            expedited: expeditedMessageIds,
+          }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
           const thread = findThread(threads, message);
@@ -222,6 +241,12 @@ export function useThreadOutboxDrain(): void {
               return "wait";
             }
           }
+          // The turn this batch was waiting for has ended and its first message
+          // has already started the next one; the rest follow it in rather than
+          // each waiting out a whole turn of its own.
+          if (action === "wait" && flushBatchRef.current.get(threadKey)?.has(message.messageId)) {
+            return "send";
+          }
           return action;
         },
       });
@@ -240,6 +265,11 @@ export function useThreadOutboxDrain(): void {
             null)
           : null;
 
+      // Opening a batch here — the thread is idle enough to accept this
+      // message — releases everything already waiting with it.
+      if (!flushBatchRef.current.has(threadKey)) {
+        flushBatchRef.current.set(threadKey, queueFlushBatchIds(queuedMessages));
+      }
       beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
       const removeQueuedMessage = (warning: string) =>
         removeThreadOutboxMessage(nextQueuedMessage).then(

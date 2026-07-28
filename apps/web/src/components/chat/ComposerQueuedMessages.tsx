@@ -1,5 +1,4 @@
 import {
-  canSteerQueuedThreadMessageNow,
   queuedThreadMessagePreview,
   soonestSteerGraceRemainingMs,
   steerGraceRemainingMs,
@@ -70,7 +69,9 @@ export function ComposerQueuedMessages({
         {messages.map((message) => {
           const isDispatching = dispatchingMessageId === message.messageId;
           const isSteering = steerGraceRemainingMs(message, now) > 0;
-          const canSteer = canSteerQueuedThreadMessageNow(message, now) && !isDispatching;
+          // A steer still inside its window can be sent now — the window is a
+          // chance to change your mind, not a delay to sit through.
+          const canSteer = !isDispatching;
           return (
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
               <span

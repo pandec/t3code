@@ -10,7 +10,6 @@ import { cn } from "../../lib/cn";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import {
-  canSteerQueuedThreadMessageNow,
   queuedThreadMessagePreview,
   soonestSteerGraceRemainingMs,
   type QueuedThreadMessage,
@@ -50,7 +49,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const message = props.message;
   // The steer slot stays in the row while a steer waits out its grace window
   // so the three action columns never shift; it only disables.
-  const canSteer = canSteerQueuedThreadMessageNow(message, props.nowMs) && !props.isDispatching;
+  // A steer still inside its window can be sent now — the window is a chance
+  // to change your mind, not a delay to sit through.
+  const canSteer = !props.isDispatching;
 
   return (
     <View

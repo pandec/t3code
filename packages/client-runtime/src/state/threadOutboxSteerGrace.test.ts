@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { MessageId, ProjectId } from "@t3tools/contracts";
+
 import {
   canSteerQueuedThreadMessageNow,
+  isSteerWaitingOutGraceWindow,
+  queueFlushBatchIds,
   soonestSteerGraceRemainingMs,
   STEER_GRACE_WINDOW_MS,
   steerGraceRemainingMs,
@@ -111,5 +115,64 @@ describe("soonestSteerGraceRemainingMs", () => {
         createdAtMs,
       ),
     ).toBeNull();
+  });
+});
+
+describe("isSteerWaitingOutGraceWindow", () => {
+  const messageId = MessageId.make("queued-1");
+  const message = { deliveryIntent: "steer" as const, createdAt, messageId };
+
+  it("holds a steer that is still inside its window", () => {
+    expect(isSteerWaitingOutGraceWindow(message, { nowMs: createdAtMs, expedited: {} })).toBe(true);
+  });
+
+  it("releases a steer the user asked to send now", () => {
+    // Expediting retires the window rather than shortening it: the point of
+    // the wait is second thoughts, and there are none.
+    expect(
+      isSteerWaitingOutGraceWindow(message, {
+        nowMs: createdAtMs,
+        expedited: { [messageId]: true },
+      }),
+    ).toBe(false);
+  });
+
+  it("holds nothing once the window has elapsed", () => {
+    expect(
+      isSteerWaitingOutGraceWindow(message, {
+        nowMs: createdAtMs + STEER_GRACE_WINDOW_MS,
+        expedited: {},
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("queueFlushBatchIds", () => {
+  it("covers every queued message so one turn end releases them all", () => {
+    const ids = queueFlushBatchIds([
+      { messageId: MessageId.make("a"), creation: undefined },
+      { messageId: MessageId.make("b"), creation: undefined },
+    ]);
+
+    expect(ids.has(MessageId.make("a"))).toBe(true);
+    expect(ids.has(MessageId.make("b"))).toBe(true);
+  });
+
+  it("leaves pending-task creations out — they start their own threads", () => {
+    const ids = queueFlushBatchIds([
+      { messageId: MessageId.make("a"), creation: undefined },
+      {
+        messageId: MessageId.make("creation"),
+        creation: {
+          projectId: ProjectId.make("project-1"),
+          workspaceMode: "local",
+          branch: null,
+          worktreePath: null,
+        },
+      },
+    ]);
+
+    expect(ids.has(MessageId.make("a"))).toBe(true);
+    expect(ids.has(MessageId.make("creation"))).toBe(false);
   });
 });

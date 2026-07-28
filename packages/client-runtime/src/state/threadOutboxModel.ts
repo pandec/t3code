@@ -139,6 +139,35 @@ export function canSteerQueuedThreadMessageNow(
   return steerGraceRemainingMs(message, nowMs) === 0;
 }
 
+/**
+ * Whether a steer still owes its grace window. Expediting is the user saying
+ * they are sure, so it retires the window rather than shortening it.
+ */
+export function isSteerWaitingOutGraceWindow(
+  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt" | "messageId">,
+  input: { readonly nowMs: number; readonly expedited: Readonly<Record<MessageId, true>> },
+): boolean {
+  if (input.expedited[message.messageId]) {
+    return false;
+  }
+  return steerGraceRemainingMs(message, input.nowMs) > 0;
+}
+
+/**
+ * Messages released together once a turn ends. The first one starts the next
+ * turn; holding the rest behind it would make each queued message wait out a
+ * whole turn of its own, so they follow it into that turn instead. Only what
+ * was already waiting joins the batch — anything queued afterwards waits for
+ * the turn it was actually queued against.
+ */
+export function queueFlushBatchIds(
+  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation">>,
+): ReadonlySet<MessageId> {
+  return new Set(
+    messages.filter((message) => message.creation === undefined).map(({ messageId }) => messageId),
+  );
+}
+
 /** The next steer grace deadline in a collection, if any steer is still waiting. */
 export function soonestSteerGraceRemainingMs(
   messages: ReadonlyArray<Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">>,

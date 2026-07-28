@@ -31,6 +31,23 @@ export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, 
   Atom.withLabel("mobile:thread-outbox:editing-message-ids"),
 );
 
+/**
+ * Steers the user asked to send now, skipping the rest of their grace window.
+ * In memory only: after a reload the window has elapsed anyway.
+ */
+export const expeditedQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, true>>>({}).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-outbox:expedited-message-ids"),
+);
+
+export function expediteQueuedMessage(messageId: MessageId): void {
+  const current = appAtomRegistry.get(expeditedQueuedMessageIdsAtom);
+  if (current[messageId]) {
+    return;
+  }
+  appAtomRegistry.set(expeditedQueuedMessageIdsAtom, { ...current, [messageId]: true });
+}
+
 /** Acquires the edit hold and reports whether this caller owns it. */
 export function holdEditingQueuedMessage(messageId: MessageId): boolean {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
