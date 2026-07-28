@@ -6,10 +6,13 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import { createThreadOutboxDelivery } from "@t3tools/client-runtime/state/thread-outbox-delivery";
 import {
+  flattenQueuedThreadMessages,
   queuedThreadMessageIntent,
   resolveThreadOutboxDeliveryAction,
   scopedThreadKey,
   selectNextQueuedThreadDispatch,
+  soonestSteerGraceRemainingMs,
+  steerGraceRemainingMs,
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -124,6 +127,23 @@ export function useThreadOutboxDrain(): void {
     };
   }, []);
 
+  // Nothing else re-renders when a steer's grace window runs out, so wake the
+  // drain as the soonest one comes due.
+  useEffect(() => {
+    const now = Date.now();
+    const soonestGraceMs = soonestSteerGraceRemainingMs(
+      flattenQueuedThreadMessages(queuedMessagesByThreadKey),
+      now,
+    );
+    if (soonestGraceMs === null) {
+      return;
+    }
+    const graceTimer = setTimeout(() => {
+      setRetryTick((current) => current + 1);
+    }, soonestGraceMs);
+    return () => clearTimeout(graceTimer);
+  }, [queuedMessagesByThreadKey, retryTick]);
+
   const delivery = useMemo(
     () =>
       createThreadOutboxDelivery({
@@ -150,6 +170,7 @@ export function useThreadOutboxDrain(): void {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
           Boolean(editingQueuedMessageIds[message.messageId]) ||
+          steerGraceRemainingMs(message, Date.now()) > 0 ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
           if (message.creation !== undefined) {
