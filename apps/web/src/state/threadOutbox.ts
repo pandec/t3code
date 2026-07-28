@@ -56,7 +56,10 @@ export function describeThreadOutboxEnqueueFailure(error: unknown): string {
   // down in `cause`; check the wrapper too in case a caller passes it raw.
   const cause = error instanceof Error ? (error.cause as unknown) : undefined;
   if (isQuotaExceededError(error) || isQuotaExceededError(cause)) {
-    return "Could not queue the message: this app's local storage is full. Clear stashed prompts (⌘S badge) or queued messages, then send again. Your message is still in the composer.";
+    // Deliberately "full or unavailable": the spec throws the same
+    // QuotaExceededError when storage is disabled or has zero quota, where
+    // clearing anything would not help. Naming both keeps the remedy honest.
+    return "Could not queue the message: this app's local storage is full or unavailable. If it is full, clear stashed prompts (⌘S badge) or queued messages, then send again. Your message is still in the composer.";
   }
   return error instanceof Error ? error.message : "Failed to queue message.";
 }

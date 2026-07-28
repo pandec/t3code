@@ -71,7 +71,7 @@ describe("describeThreadOutboxEnqueueFailure", () => {
 
   it("explains what to clear when storage is full", () => {
     const described = describeThreadOutboxEnqueueFailure(quotaError());
-    expect(described).toContain("local storage is full");
+    expect(described).toContain("local storage is full or unavailable");
     expect(described).toContain("still in the composer");
   });
 
@@ -85,12 +85,16 @@ describe("describeThreadOutboxEnqueueFailure", () => {
       messageId: null,
       cause: quotaError(),
     });
-    expect(describeThreadOutboxEnqueueFailure(wrapped)).toContain("local storage is full");
+    expect(describeThreadOutboxEnqueueFailure(wrapped)).toContain(
+      "local storage is full or unavailable",
+    );
   });
 
   it("recognises the Firefox spelling of the same condition", () => {
     const firefoxQuota = new DOMException("exceeded", "NS_ERROR_DOM_QUOTA_REACHED");
-    expect(describeThreadOutboxEnqueueFailure(firefoxQuota)).toContain("local storage is full");
+    expect(describeThreadOutboxEnqueueFailure(firefoxQuota)).toContain(
+      "local storage is full or unavailable",
+    );
   });
 
   it("passes an unrelated failure through unchanged", () => {
@@ -115,22 +119,43 @@ describe("thread outbox enqueue durability", () => {
     createdAt: new Date(0).toISOString(),
   };
 
-  it("queues nothing when the durable write is rejected", async () => {
-    // ChatView only clears the composer after enqueue resolves, so this
-    // rejection is what keeps the user's content on screen. A message that
-    // reached the in-memory queue anyway would look sent and never deliver.
-    const manager = createThreadOutboxManager({
+  const managerRejectingWriteWith = (cause: unknown) =>
+    createThreadOutboxManager({
       registry: appAtomRegistry,
       storage: {
         load: () => Promise.resolve([]),
-        write: () => Promise.reject(new DOMException("exceeded", "QuotaExceededError")),
+        write: () => Promise.reject(cause),
         remove: () => Promise.resolve(),
       },
       atomLabel: "test:thread-outbox:quota",
       warn: () => {},
     });
 
+  it("queues nothing when the durable write is rejected", async () => {
+    // ChatView only clears the composer after enqueue resolves, so this
+    // rejection is what keeps the user's content on screen. A message that
+    // reached the in-memory queue anyway would look sent and never deliver.
+    const manager = managerRejectingWriteWith(new DOMException("exceeded", "QuotaExceededError"));
+
     await expect(manager.enqueue(message)).rejects.toThrow();
     expect(appAtomRegistry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
+  });
+
+  it("describes the rejection the real manager produces", async () => {
+    // The seam this fix depends on: the manager must keep the storage
+    // rejection reachable as `cause`. Asserting against a hand-built wrapper
+    // would keep passing if the manager stopped carrying it, while production
+    // silently fell back to the opaque id-only message.
+    const manager = managerRejectingWriteWith(new DOMException("exceeded", "QuotaExceededError"));
+
+    const rejection = await manager.enqueue(message).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(rejection).not.toBe(null);
+    expect(describeThreadOutboxEnqueueFailure(rejection)).toContain(
+      "local storage is full or unavailable",
+    );
   });
 });
