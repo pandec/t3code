@@ -15,9 +15,30 @@ const customIosAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase();
 const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
+// Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
+// Settings screen distinguishes them from an upstream build; upstream keeps 0.1.0.
+const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "0.1.0";
+// CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
+// rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
+// output stable for local dev builds.
+const iosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim() || undefined;
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const APP_VERSION_PATTERN = /^\d+(?:\.\d+){0,2}$/;
+const IOS_BUILD_NUMBER_PATTERN = /^\d+(?:\.\d+){0,2}$/;
 const IOS_DEPLOYMENT_TARGET = "18.0";
+
+if (!APP_VERSION_PATTERN.test(appVersion)) {
+  throw new Error(
+    `T3CODE_FORK_VERSION must be one to three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
+  );
+}
+
+if (iosBuildNumber !== undefined && !IOS_BUILD_NUMBER_PATTERN.test(iosBuildNumber)) {
+  throw new Error(
+    `T3CODE_IOS_BUILD_NUMBER must be one to three dot-separated integers (received "${iosBuildNumber}").`,
+  );
+}
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
@@ -179,12 +200,12 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "0.1.0",
+  version: appVersion,
   runtimeVersion: {
     // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
     // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-    // could land on a binary missing the native changes it needs and crash.
+    // With appVersion, every build of one version shares a runtime version, so a JS
+    // update could land on a binary missing the native changes it needs and crash.
     policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
   },
   orientation: "portrait",
@@ -200,6 +221,7 @@ const config: ExpoConfig = {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
     bundleIdentifier: iosBundleIdentifier,
+    ...(iosBuildNumber ? { buildNumber: iosBuildNumber } : {}),
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).

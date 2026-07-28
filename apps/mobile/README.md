@@ -61,6 +61,36 @@ vp run ios:local
 vp run ios:local:release
 ```
 
+### TestFlight
+
+The fork ships to its own phone through internal TestFlight, which removes the cable from the
+loop — `vp run ios:testflight` archives, signs, and uploads, and the build appears in TestFlight a
+few minutes later:
+
+```bash
+vp run ios:testflight
+```
+
+This needs `T3CODE_ASC_KEY_ID`, `T3CODE_ASC_ISSUER_ID`, and `T3CODE_ASC_KEY_PATH` in the repository
+root `.env.local`; see [`../../.env.example`](../../.env.example). The App Store Connect `.p8`
+downloads only once, so keep a backup outside the repository. The first archive also creates an
+Apple Distribution certificate and App Store provisioning profiles through
+`-allowProvisioningUpdates`.
+
+The script always builds the `production` variant, because TestFlight requires the production APNs
+entitlement. `T3CODE_FORK_VERSION` supplies the marketing version shown in Settings, and the build
+number is derived from the clock so every upload is unique — App Store Connect rejects a repeated
+build number.
+
+> [!NOTE]
+> `updates.enabled` is false whenever a custom Apple team signs the build, so this route has no OTA
+> updates: every change, JavaScript or native, needs a new TestFlight build. The "check for update"
+> row in Settings stays inert.
+
+Because the TestFlight build shares `com.pandec.tools.t3code` with the cable-installed app, the two
+cannot coexist. Delete the side-loaded app before installing from TestFlight. The local SQLite cache
+is discarded with it, while paired connections live in the iOS keychain and normally survive.
+
 The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
