@@ -49,8 +49,16 @@ export type SidebarProjectScope = ReadonlySet<string> | null;
 export function resolveSidebarProjectAccentColor(
   members: readonly { physicalProjectKey: string }[],
   accentColors: Readonly<Record<string, string>>,
+  preferredPhysicalProjectKey?: string,
 ): string | null {
-  for (const member of members) {
+  if (preferredPhysicalProjectKey !== undefined) {
+    const preferredColor = accentColors[preferredPhysicalProjectKey];
+    if (preferredColor !== undefined) return preferredColor;
+  }
+
+  for (const member of members.toSorted((left, right) =>
+    left.physicalProjectKey.localeCompare(right.physicalProjectKey),
+  )) {
     const color = accentColors[member.physicalProjectKey];
     if (color !== undefined) return color;
   }

@@ -186,12 +186,22 @@ describe("Sidebar V2 project accents", () => {
   const localMember = { physicalProjectKey: "environment-local:/work/project" };
   const remoteMember = { physicalProjectKey: "environment-remote:/work/project" };
 
-  it("resolves a grouped project's first configured physical-member accent", () => {
+  it("resolves grouped project accents with deterministic representative precedence", () => {
     expect(
       resolveSidebarProjectAccentColor([localMember, remoteMember], {
         [remoteMember.physicalProjectKey]: "#123456",
       }),
     ).toBe("#123456");
+    expect(
+      resolveSidebarProjectAccentColor(
+        [remoteMember, localMember],
+        {
+          [localMember.physicalProjectKey]: "#112233",
+          [remoteMember.physicalProjectKey]: "#445566",
+        },
+        remoteMember.physicalProjectKey,
+      ),
+    ).toBe("#445566");
     expect(resolveSidebarProjectAccentColor([localMember, remoteMember], {})).toBeNull();
   });
 

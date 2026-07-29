@@ -78,6 +78,7 @@ import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import {
+  derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
   selectProjectGroupingSettings,
@@ -104,6 +105,7 @@ import { threadEnvironment } from "../state/threads";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { ProviderAccentColorPicker } from "./settings/ProviderAccentColorPicker";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -178,7 +180,6 @@ import { archivedProjectFilterKey } from "../archivedProjectFilter";
 // stays behind an explicit Show more.
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
-const DEFAULT_PROJECT_ACCENT_COLOR: SidebarProjectAccentColor = "#2563eb";
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
   repository_path: "Group by repository path",
@@ -1268,11 +1269,16 @@ export default function SidebarV2() {
     () =>
       new Map(
         projectGroups.flatMap((group) => {
-          const color = resolveSidebarProjectAccentColor(group.memberProjects, projectAccentColors);
+          const color = resolveSidebarProjectAccentColor(
+            group.memberProjects,
+            projectAccentColors,
+            derivePhysicalProjectKey(group),
+          );
           return color === null
             ? []
-            : group.memberProjects.map(
-                (project) => [`${project.environmentId}:${project.id}`, color] as const,
+            : group.memberProjectRefs.map(
+                (projectRef) =>
+                  [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
               );
         }),
       ),
@@ -1535,13 +1541,18 @@ export default function SidebarV2() {
         nextOverrides[overrideKey] = selection;
       }
       updateSettings({ sidebarProjectGroupingOverrides: nextOverrides });
+      setProjectActionsTarget(null);
     },
     [projectGroupingSettings.sidebarProjectGroupingOverrides, updateSettings],
   );
   const projectActionsAccentColor =
     projectActionsTarget === null
       ? null
-      : resolveSidebarProjectAccentColor(projectActionsTarget.memberProjects, projectAccentColors);
+      : resolveSidebarProjectAccentColor(
+          projectActionsTarget.memberProjects,
+          projectAccentColors,
+          derivePhysicalProjectKey(projectActionsTarget),
+        );
   const updateProjectAccentColor = useCallback(
     (color: SidebarProjectAccentColor | null) => {
       if (projectActionsTarget === null) return;
@@ -2572,6 +2583,7 @@ export default function SidebarV2() {
                         const accentColor = resolveSidebarProjectAccentColor(
                           project.memberProjects,
                           projectAccentColors,
+                          derivePhysicalProjectKey(project),
                         );
                         return (
                           <MenuCheckboxItem
@@ -2599,11 +2611,14 @@ export default function SidebarV2() {
                             />
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
                             {accentColor ? (
-                              <span
-                                aria-hidden
-                                className="ml-auto size-2.5 shrink-0 rounded-full ring-1 ring-white/10"
-                                style={{ backgroundColor: accentColor }}
-                              />
+                              <>
+                                <span
+                                  aria-hidden
+                                  className="ml-auto size-2.5 shrink-0 rounded-full ring-1 ring-white/10"
+                                  style={{ backgroundColor: accentColor }}
+                                />
+                                <span className="sr-only">Accent {accentColor}</span>
+                              </>
                             ) : null}
                             <button
                               type="button"
@@ -2918,39 +2933,16 @@ export default function SidebarV2() {
                     Adds a subtle transparent tint to this project's sidebar threads.
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <input
-                    type="color"
-                    aria-label={`Thread accent for ${projectActionsTarget.displayName}`}
-                    className="size-8 cursor-pointer rounded-md border border-input bg-transparent p-0.5"
-                    value={projectActionsAccentColor ?? DEFAULT_PROJECT_ACCENT_COLOR}
-                    onChange={(event) =>
-                      updateProjectAccentColor(
-                        event.currentTarget.value as SidebarProjectAccentColor,
-                      )
-                    }
-                  />
-                  <span className="min-w-16 font-mono text-xs text-muted-foreground">
-                    {projectActionsAccentColor ?? "No accent"}
-                  </span>
-                  {projectActionsAccentColor === null ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => updateProjectAccentColor(DEFAULT_PROJECT_ACCENT_COLOR)}
-                    >
-                      Use color
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => updateProjectAccentColor(null)}
-                    >
-                      Clear
-                    </Button>
-                  )}
-                </div>
+                <ProviderAccentColorPicker
+                  displayName={projectActionsTarget.displayName}
+                  value={projectActionsAccentColor ?? undefined}
+                  commitDelayMs={120}
+                  onCommit={(color) =>
+                    updateProjectAccentColor(
+                      color === "" ? null : (color as SidebarProjectAccentColor),
+                    )
+                  }
+                />
               </section>
             ) : null}
             <div className="divide-y divide-border/60">
