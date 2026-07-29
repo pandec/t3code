@@ -70,12 +70,21 @@ function completedTurnDurationMs(shell: EnvironmentThreadShell): number | null {
     return null;
   }
   const startedAtMs = Date.parse(latestTurn.startedAt ?? latestTurn.requestedAt);
+  const requestedAtMs = Date.parse(latestTurn.requestedAt);
   const completedAtMs = Date.parse(latestTurn.completedAt);
   if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)) {
     return null;
   }
   const durationMs = completedAtMs - startedAtMs;
-  return durationMs > 0 ? durationMs : null;
+  if (durationMs < 0) {
+    return null;
+  }
+  if (durationMs === 0 && (!Number.isFinite(requestedAtMs) || requestedAtMs >= startedAtMs)) {
+    // Checkpoint-only reconstruction stamps request, start, and completion from
+    // the same fallback timestamp. That is unknown duration, not a known zero.
+    return null;
+  }
+  return durationMs;
 }
 
 /**

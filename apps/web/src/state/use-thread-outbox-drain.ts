@@ -33,6 +33,7 @@ import {
   editingQueuedMessageIdsAtom,
   expeditedQueuedMessageIdsAtom,
   ensureThreadOutboxLoaded,
+  isThreadOutboxMessageWaitingForClientSettings,
   removeThreadOutboxMessage,
   threadOutboxManager,
   useThreadOutboxMessages,
@@ -227,15 +228,14 @@ export function useThreadOutboxDrain(): void {
   ]);
 
   useEffect(() => {
-    // A restored steer must not dispatch against the schema default before a
-    // longer persisted grace window finishes hydrating.
-    if (!clientSettingsHydrated || dispatchingQueuedMessage !== null) {
+    if (dispatchingQueuedMessage !== null) {
       return;
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
+          isThreadOutboxMessageWaitingForClientSettings(message, clientSettingsHydrated) ||
           Boolean(editingQueuedMessageIds[message.messageId]) ||
           isSteerWaitingOutGraceWindow(message, {
             nowMs: Date.now(),

@@ -303,17 +303,49 @@ describe("turn completion minimum duration", () => {
     expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
   });
 
-  it.each([
-    ["equal", "2026-07-24T10:00:01.000Z"],
-    ["reversed", "2026-07-24T09:59:59.000Z"],
-  ])("reports no duration when completion timestamps are %s", (_label, completedAt) => {
+  it("reports no duration when completion precedes the stamped start", () => {
     const before = running("a");
     const after = makeShell({
       id: "a",
-      latestTurn: makeTurn({ turnId: "a-turn", state: "completed", completedAt }),
+      latestTurn: makeTurn({
+        turnId: "a-turn",
+        state: "completed",
+        completedAt: "2026-07-24T09:59:59.000Z",
+      }),
     });
 
     expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
+  it("reports no duration for a checkpoint-only synthetic timestamp", () => {
+    const syntheticAt = "2026-07-24T10:00:01.000Z";
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: {
+        ...makeTurn({ turnId: "a-turn", state: "completed", completedAt: syntheticAt }),
+        requestedAt: syntheticAt,
+        startedAt: syntheticAt,
+      },
+    });
+
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
+  it("keeps a known zero duration when the request preceded the stamped start", () => {
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: makeTurn({
+        turnId: "a-turn",
+        state: "completed",
+        completedAt: "2026-07-24T10:00:01.000Z",
+      }),
+    });
+    const completedCandidate = collectTurnCompletionCandidates([before], [after])[0];
+
+    expect(completedCandidate?.durationMs).toBe(0);
+    expect(completedCandidate && shouldAnnounceTurnCompletion(completedCandidate, 1)).toBe(false);
   });
 
   it("announces everything when the threshold is zero or invalid", () => {
