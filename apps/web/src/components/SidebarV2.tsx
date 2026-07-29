@@ -52,7 +52,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  type CSSProperties,
 } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 
@@ -709,12 +708,14 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       !isSelected &&
       "opacity-70 transition-opacity hover:opacity-100",
   );
+  // A flat gradient rather than backgroundColor: the tint has to sit *over*
+  // the row's hover/active/selected background classes, not replace them.
   const rowAccentStyle =
     props.projectAccentColor === null
       ? undefined
-      : ({
+      : {
           backgroundImage: `linear-gradient(color-mix(in srgb, ${props.projectAccentColor} 12%, transparent), color-mix(in srgb, ${props.projectAccentColor} 12%, transparent))`,
-        } as CSSProperties);
+        };
 
   const title = isRenaming ? (
     <input
@@ -952,8 +953,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         >
           <div
             className={cn(
-              "relative z-10 px-2.5 py-2",
-              props.compactCards ? "h-[3.5rem]" : "h-[4.875rem]",
+              // Height is an exact fit for the rows inside: 20px header +
+              // 4px gap + 20px title (+ 2px gap + 16px branch line when the
+              // second line is shown), so the vertical padding must shrink
+              // with it or the compact card sits 4px off-centre.
+              "relative z-10 px-2.5",
+              props.compactCards ? "h-[3.5rem] py-1.5" : "h-[4.875rem] py-2",
             )}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
@@ -1049,7 +1054,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 ) : (
                   <span className="flex-1" />
                 )}
-                <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+                <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
                   {cardTrailingMetadata}
                 </span>
               </div>
@@ -2609,12 +2614,17 @@ export default function SidebarV2() {
                               cwd={project.workspaceRoot}
                               className="size-4 shrink-0"
                             />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                            {/* flex-1 rather than a second ml-auto: two auto
+                                margins split the free space between them and
+                                would leave the accent dot floating mid-row. */}
+                            <span className="min-w-0 flex-1 truncate text-sm">
+                              {project.displayName}
+                            </span>
                             {accentColor ? (
                               <>
                                 <span
                                   aria-hidden
-                                  className="ml-auto size-2.5 shrink-0 rounded-full ring-1 ring-white/10"
+                                  className="size-2.5 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/10"
                                   style={{ backgroundColor: accentColor }}
                                 />
                                 <span className="sr-only">Accent {accentColor}</span>
