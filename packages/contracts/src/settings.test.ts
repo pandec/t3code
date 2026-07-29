@@ -3,6 +3,10 @@ import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  clampAccentTintIntensityPercent,
+  clampProviderUsageAlertPercent,
+  clampSteerGraceWindowMs,
+  clampTurnCompletionMinDurationSeconds,
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
@@ -211,7 +215,7 @@ describe("ClientSettings sidebar provider icon visibility", () => {
     expect(decodeClientSettings({}).sidebarThreadProviderIconVisibility).toBe("hover");
   });
 
-  it.each(["hover", "always"] as const)("accepts %s visibility in patches", (value) => {
+  it.each(["hover", "always", "never"] as const)("accepts %s visibility in patches", (value) => {
     expect(
       decodeClientSettingsPatch({
         sidebarThreadProviderIconVisibility: value,
@@ -225,6 +229,79 @@ describe("ClientSettings sidebar provider icon visibility", () => {
         sidebarThreadProviderIconVisibility: "sometimes",
       }),
     ).toThrow();
+  });
+});
+
+describe("ClientSettings extras", () => {
+  it("keeps prior behaviour by default", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.steerGraceWindowMs).toBe(5_000);
+    expect(settings.providerUsageWarningPercent).toBe(80);
+    expect(settings.providerUsageCriticalPercent).toBe(95);
+    expect(settings.accentTintsEnabled).toBe(true);
+    expect(settings.accentTintIntensityPercent).toBe(12);
+    expect(settings.turnCompletionMinDurationSeconds).toBe(0);
+  });
+
+  it("accepts in-range values in patches", () => {
+    expect(
+      decodeClientSettingsPatch({
+        steerGraceWindowMs: 0,
+        providerUsageWarningPercent: 1,
+        providerUsageCriticalPercent: 100,
+        accentTintsEnabled: false,
+        accentTintIntensityPercent: 30,
+        turnCompletionMinDurationSeconds: 3_600,
+      }),
+    ).toEqual({
+      steerGraceWindowMs: 0,
+      providerUsageWarningPercent: 1,
+      providerUsageCriticalPercent: 100,
+      accentTintsEnabled: false,
+      accentTintIntensityPercent: 30,
+      turnCompletionMinDurationSeconds: 3_600,
+    });
+  });
+
+  it.each([
+    { steerGraceWindowMs: 15_001 },
+    { steerGraceWindowMs: -1 },
+    { providerUsageWarningPercent: 0 },
+    { providerUsageCriticalPercent: 101 },
+    { accentTintIntensityPercent: 3 },
+    { accentTintIntensityPercent: 31 },
+    { turnCompletionMinDurationSeconds: -1 },
+    { turnCompletionMinDurationSeconds: 3_601 },
+  ])("rejects out-of-range %o", (patch) => {
+    expect(() => decodeClientSettingsPatch(patch)).toThrow();
+  });
+
+  it("clamps hand-edited values on read", () => {
+    expect(clampSteerGraceWindowMs(99_999)).toBe(15_000);
+    expect(clampSteerGraceWindowMs(Number.NaN)).toBe(5_000);
+    expect(clampProviderUsageAlertPercent(0, 80)).toBe(1);
+    expect(clampProviderUsageAlertPercent(Number.NaN, 80)).toBe(80);
+    expect(clampAccentTintIntensityPercent(1)).toBe(4);
+    expect(clampAccentTintIntensityPercent(99)).toBe(30);
+    expect(clampTurnCompletionMinDurationSeconds(-5)).toBe(0);
+    expect(clampTurnCompletionMinDurationSeconds(10_000)).toBe(3_600);
+  });
+});
+
+describe("ServerSettings.voice", () => {
+  it("defaults to unset, so the server keeps its env/default resolution", () => {
+    expect(DEFAULT_SERVER_SETTINGS.voice).toEqual({ ttsModelId: "", ttsVoiceId: "" });
+    expect(decodeServerSettings({}).voice).toEqual({ ttsModelId: "", ttsVoiceId: "" });
+  });
+
+  it("trims values in both the settings and the patch", () => {
+    expect(decodeServerSettings({ voice: { ttsModelId: "  eleven_v3  " } }).voice).toEqual({
+      ttsModelId: "eleven_v3",
+      ttsVoiceId: "",
+    });
+    expect(decodeServerSettingsPatch({ voice: { ttsVoiceId: "  abc  " } })).toEqual({
+      voice: { ttsVoiceId: "abc" },
+    });
   });
 });
 

@@ -13,6 +13,8 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  accentTintsEnabled: true,
+  accentTintIntensityPercent: 12,
   autoOpenPlanSidebar: false,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
@@ -25,6 +27,8 @@ const clientSettings: ClientSettings = {
   favorites: [],
   glassOpacity: 80,
   providerModelPreferences: {},
+  providerUsageWarningPercent: 80,
+  providerUsageCriticalPercent: 95,
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectAccentColors: {
     "environment-1:/tmp/project-a": "#123456",
@@ -40,7 +44,9 @@ const clientSettings: ClientSettings = {
   sidebarV2CompactCards: true,
   sidebarV2Enabled: false,
   sidebarV2ConfiguredByUser: false,
+  steerGraceWindowMs: 5_000,
   timestampFormat: "24-hour",
+  turnCompletionMinDurationSeconds: 0,
   wordWrap: true,
 };
 

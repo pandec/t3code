@@ -24,6 +24,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
+import { useSteerGraceWindowMs } from "../hooks/useSettings";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
 import { environmentShell } from "./shell";
@@ -112,6 +113,9 @@ export function useThreadOutboxDrain(): void {
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const expeditedMessageIds = useAtomValue(expeditedQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  // Read live: a changed grace window applies to steers that are still waiting,
+  // and to every subsequent send, without a reload.
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const shellStatuses = useAtomValue(threadOutboxShellStatusesAtom);
   const environmentConnectivity = useAtomValue(threadOutboxEnvironmentConnectivityAtom);
   const threads = useThreadShells();
@@ -141,6 +145,7 @@ export function useThreadOutboxDrain(): void {
     const soonestGraceMs = soonestSteerGraceRemainingMs(
       flattenQueuedThreadMessages(queuedMessagesByThreadKey),
       now,
+      steerGraceWindowMs,
     );
     if (soonestGraceMs === null) {
       return;
@@ -149,7 +154,7 @@ export function useThreadOutboxDrain(): void {
       setRetryTick((current) => current + 1);
     }, soonestGraceMs);
     return () => clearTimeout(graceTimer);
-  }, [queuedMessagesByThreadKey, retryTick]);
+  }, [queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
 
   const delivery = useMemo(
     () =>
@@ -229,6 +234,7 @@ export function useThreadOutboxDrain(): void {
           isSteerWaitingOutGraceWindow(message, {
             nowMs: Date.now(),
             expedited: expeditedMessageIds,
+            graceWindowMs: steerGraceWindowMs,
           }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
@@ -331,6 +337,7 @@ export function useThreadOutboxDrain(): void {
     queuedMessagesByThreadKey,
     retryTick,
     shellStatuses,
+    steerGraceWindowMs,
     threads,
   ]);
 }

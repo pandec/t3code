@@ -61,6 +61,25 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("merges the voice group one field at a time", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      voice: { ttsModelId: "eleven_v3", ttsVoiceId: "voice-a" },
+    };
+
+    // A patch touching one field leaves the other alone...
+    expect(applyServerSettingsPatch(current, { voice: { ttsVoiceId: "voice-b" } }).voice).toEqual({
+      ttsModelId: "eleven_v3",
+      ttsVoiceId: "voice-b",
+    });
+    // ...and an empty string clears a field back to "unset".
+    expect(applyServerSettingsPatch(current, { voice: { ttsModelId: "" } }).voice).toEqual({
+      ttsModelId: "",
+      ttsVoiceId: "voice-a",
+    });
+    expect(applyServerSettingsPatch(current, {}).voice).toEqual(current.voice);
+  });
+
   it("replaces text generation selection when provider/model are provided", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,

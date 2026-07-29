@@ -9,6 +9,7 @@ import { ArrowUpIcon, LoaderIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { useSteerGraceWindowMs } from "~/hooks/useSettings";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -35,9 +36,10 @@ export function ComposerQueuedMessages({
   onDelete,
   className,
 }: ComposerQueuedMessagesProps) {
+  const graceWindowMs = useSteerGraceWindowMs();
   const [graceClockTick, setGraceClockTick] = useState(0);
   useEffect(() => {
-    const soonestGraceMs = soonestSteerGraceRemainingMs(messages, Date.now());
+    const soonestGraceMs = soonestSteerGraceRemainingMs(messages, Date.now(), graceWindowMs);
     if (soonestGraceMs === null) {
       return;
     }
@@ -45,13 +47,13 @@ export function ComposerQueuedMessages({
       setGraceClockTick((current) => current + 1);
     }, soonestGraceMs);
     return () => clearTimeout(timer);
-  }, [graceClockTick, messages]);
+  }, [graceClockTick, graceWindowMs, messages]);
 
   // A steer is on its way out; it just rests here long enough to be edited or
   // dropped first.
   const now = Date.now();
   const steeringCount = messages.filter(
-    (message) => steerGraceRemainingMs(message, now) > 0,
+    (message) => steerGraceRemainingMs(message, now, graceWindowMs) > 0,
   ).length;
 
   if (messages.length === 0) return null;
@@ -68,7 +70,7 @@ export function ComposerQueuedMessages({
       <ul className="mt-0.5 max-h-56 overflow-y-auto">
         {messages.map((message) => {
           const isDispatching = dispatchingMessageId === message.messageId;
-          const isSteering = steerGraceRemainingMs(message, now) > 0;
+          const isSteering = steerGraceRemainingMs(message, now, graceWindowMs) > 0;
           // A steer still inside its window can be sent now — the window is a
           // chance to change your mind, not a delay to sit through.
           const canSteer = !isDispatching;

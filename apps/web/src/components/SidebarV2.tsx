@@ -92,7 +92,11 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
+import {
+  useAccentTintSettings,
+  useClientSettings,
+  useUpdateClientSettings,
+} from "../hooks/useSettings";
 import {
   useProjectAccentColorMigration,
   useProjectAccentColors,
@@ -377,6 +381,11 @@ function SidebarV2ProviderIcon(props: {
   displayName: string;
   visibility: SidebarThreadProviderIconVisibility;
 }) {
+  // "never" removes the icon rather than hiding it with opacity: an invisible
+  // icon still reserves its slot and still reappears on hover.
+  if (props.visibility === "never") {
+    return null;
+  }
   return (
     <span
       aria-hidden
@@ -417,7 +426,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  // Null when the project has no accent, or when accent tints are switched off.
   projectAccentColor: SidebarProjectAccentColor | null;
+  accentTintIntensityPercent: number;
   compactCards: boolean;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
   providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
@@ -715,11 +726,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   );
   // A flat gradient rather than backgroundColor: the tint has to sit *over*
   // the row's hover/active/selected background classes, not replace them.
+  // Intensity is a client setting; `projectAccentColor` already arrives null
+  // when tints are switched off, so the picker keeps working either way.
   const rowAccentStyle =
     props.projectAccentColor === null
       ? undefined
       : {
-          backgroundImage: `linear-gradient(color-mix(in srgb, ${props.projectAccentColor} 12%, transparent), color-mix(in srgb, ${props.projectAccentColor} 12%, transparent))`,
+          backgroundImage: `linear-gradient(color-mix(in srgb, ${props.projectAccentColor} ${props.accentTintIntensityPercent}%, transparent), color-mix(in srgb, ${props.projectAccentColor} ${props.accentTintIntensityPercent}%, transparent))`,
         };
 
   const title = isRenaming ? (
@@ -1100,6 +1113,8 @@ export default function SidebarV2() {
   // Accents are server settings, merged across every connected environment —
   // that is what makes them reach the mobile app and other machines.
   const projectAccentColors = useProjectAccentColors();
+  // Whether those accents tint rows, and how strongly, is a per-client choice.
+  const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
@@ -1282,20 +1297,25 @@ export default function SidebarV2() {
       ),
     [projectGroups],
   );
+  // Empty while tints are switched off: every tinted surface reads this map,
+  // so the toggle lands in one place. Accents themselves are untouched — the
+  // project rows still show their dot and the picker still writes colors.
   const projectAccentColorByKey = useMemo(
     () =>
       new Map(
-        projectGroups.flatMap((group) => {
-          const color = projectAccentColors.resolve(group.memberProjects);
-          return color === null
-            ? []
-            : group.memberProjectRefs.map(
-                (projectRef) =>
-                  [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
-              );
-        }),
+        accentTint.enabled
+          ? projectGroups.flatMap((group) => {
+              const color = projectAccentColors.resolve(group.memberProjects);
+              return color === null
+                ? []
+                : group.memberProjectRefs.map(
+                    (projectRef) =>
+                      [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
+                  );
+            })
+          : [],
       ),
-    [projectAccentColors, projectGroups],
+    [accentTint.enabled, projectAccentColors, projectGroups],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -2762,6 +2782,7 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
+                      accentTintIntensityPercent={accentTint.intensityPercent}
                       compactCards={compactCards}
                       providerIconVisibility={providerIconVisibility}
                       providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}

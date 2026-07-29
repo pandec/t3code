@@ -30,8 +30,8 @@ export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator 
 
 const ELEVENLABS_TEXT_TO_SPEECH_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
-const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
-const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
+export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
+export const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
 const SPEECH_MIME_TYPE = "audio/mpeg" as const;
 const SPEECH_SCRIPT_RECIPE_VERSION = 2;
 
@@ -90,6 +90,23 @@ export function getElevenLabsTtsCharacterLimit(model: string): number {
   }
 }
 
+/**
+ * Resolution order for the TTS model and voice: the server setting wins, then
+ * the `ELEVENLABS_TTS_*` environment variable, then the built-in default.
+ *
+ * The setting is read per synthesis, so changing it takes effect on the next
+ * playback without restarting the server; an empty (or whitespace-only) value
+ * means "unset" and defers to the environment, which is how an untouched
+ * install keeps its previous behaviour.
+ */
+export function resolveMessageSpeechVoiceSetting(
+  settingValue: string | null | undefined,
+  environmentValue: string,
+): string {
+  const trimmed = settingValue?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : environmentValue;
+}
+
 export function isMessageSpeechCacheReusable(input: {
   readonly cache: Pick<
     MessageSpeechCacheRow,
@@ -139,10 +156,12 @@ export const layer = Layer.effect(
   MessageSpeech,
   Effect.gen(function* () {
     const apiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    const ttsModel = yield* Config.string("ELEVENLABS_TTS_MODEL").pipe(
+    // Environment fallbacks, read once; the per-synthesis server setting takes
+    // precedence over them (see resolveMessageSpeechVoiceSetting).
+    const envTtsModel = yield* Config.string("ELEVENLABS_TTS_MODEL").pipe(
       Config.withDefault(DEFAULT_ELEVENLABS_TTS_MODEL),
     );
-    const voiceId = yield* Config.string("ELEVENLABS_TTS_VOICE_ID").pipe(
+    const envVoiceId = yield* Config.string("ELEVENLABS_TTS_VOICE_ID").pipe(
       Config.withDefault(DEFAULT_ELEVENLABS_TTS_VOICE_ID),
     );
     const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
@@ -214,6 +233,14 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "message_unavailable" });
       }
 
+      // Fetched before the eligibility check because the source-length limit
+      // depends on the resolved model, which the settings may override.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })),
+      );
+      const ttsModel = resolveMessageSpeechVoiceSetting(settings.voice.ttsModelId, envTtsModel);
+      const voiceId = resolveMessageSpeechVoiceSetting(settings.voice.ttsVoiceId, envVoiceId);
+
       const sourceText = message.text.trim();
       const ttsCharacterLimit = getElevenLabsTtsCharacterLimit(ttsModel);
       if (
@@ -233,9 +260,6 @@ export const layer = Layer.effect(
       const sourceTextHash = NodeCrypto.createHash("sha256")
         .update(sourceText, "utf8")
         .digest("hex");
-      const settings = yield* serverSettings.getSettings.pipe(
-        Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })),
-      );
       const scriptRecipeHash = NodeCrypto.createHash("sha256")
         .update(
           // @effect-diagnostics-next-line preferSchemaOverJson:off
