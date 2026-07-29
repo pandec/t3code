@@ -27,8 +27,8 @@ Verify these facts from live Git state before changing anything. Stop if the rem
 
 ## 1. Preflight
 
-1. Inspect `git status --short --branch`, `git remote -v`, `git worktree list --porcelain`, branch tracking, and any in-progress Git operation.
-2. Record the old tips of local `main`, `origin/main`, local `dev`, and `upstream-sync/main`.
+1. Inspect `git status --short --branch`, `git remote -v`, `git worktree list --porcelain`, branch tracking, any in-progress Git operation, and `git stash list`.
+2. Record the old tips of local `main`, `origin/main`, local `dev`, and `upstream-sync/main`, plus the existing stash refs so hook-created leftovers can be detected later.
 3. Fetch `origin` and `upstream-sync` with pruning.
 4. Require clean worktrees for branches that will change. Leave unrelated worktrees untouched. If `dev` is not checked out, create a temporary sibling worktree rather than switching an active worktree; remove it only after successful completion while it is clean.
 5. Stop instead of stashing, committing, or discarding pre-existing changes.
@@ -72,13 +72,13 @@ Continue when upstream and fork changes are clearly complementary. Stop and expl
 
 Complete the applicable local verification before pushing `dev`.
 
-1. Determine the applicable checks from the complete merged diff, current `AGENTS.md`, affected package scripts, and changed repository tooling. Run every relevant check that is available locally before pushing; do not omit a relevant check merely because it is conditional or slower than the baseline.
+1. Re-read the merged `AGENTS.md` after conflict resolution; upstream may have changed the instructions that were read during preflight. Determine the applicable checks from the complete merged diff, the merged instructions, affected package scripts, and changed repository tooling. Run every relevant check that is available locally before pushing; do not omit a relevant check merely because it is conditional or slower than the baseline.
 2. Install the merged dependency graph with `vp install --frozen-lockfile`.
 3. Run the routine sync baseline in the merged worktree:
    - `vp check`
    - `vp run typecheck`
    - `vp run test`
-4. Run focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap. Use `vp test run <test-files>` for built-in Vite+ tests and `vp run test` only when the affected package specifically requires its test script.
+4. Run focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap. Run `vp test run <test-files>` from the affected package directory (or select an explicit project/config) so nested worktrees are not discovered by the root test runner. Use `vp run test` only when the affected package specifically requires its test script.
 5. Add conditional static, generated-output, or build checks when the merged changes make them relevant:
    - run `vp run lint:mobile` when native mobile code, native configuration, mobile dependencies, or patches changed
    - run the affected build, smoke, or generated-asset check when packaging, preload code, build configuration, release/update behavior, or generated assets changed
@@ -91,8 +91,14 @@ Complete the applicable local verification before pushing `dev`.
    - verify the global `t3-cli` skill at `~/.agents/skills/t3-cli` still describes the implemented command contract; when it has drifted, update it by default to match the merged contract (the user has standing authorization for these keep-in-sync edits), then report the exact change made. Note `~/.agents/skills/t3-cli` and `~/.claude/skills/t3-cli` are hardlinked copies, so editing one updates both. Still ask before any change beyond mechanical contract alignment (renames, removals, behavioral rewrites)
    - completion criterion: every CLI-affecting upstream or merge change is either reflected in the implementation, tests, and documentation or reported as a concrete unresolved decision
 9. Update `LEDGER.md` as part of the sync commit: record new standing decisions made during this sync, add watchpoints for newly observed fork/upstream friction files, resolve watchpoint checks that ran, and apply the ledger's self-cleaning rules. Keep it scoped to what changes future syncs — never a fork feature list.
-10. Only after the applicable local gates and CLI audit pass, create the merge commit, review the graph and final diff, and push `dev:dev` to `origin` normally.
-11. Verify `origin/main` equals `upstream-sync/main` and `origin/dev` contains that tip.
+10. Only after the applicable local gates and CLI audit pass, create the merge commit. Verify the commit has the expected parents, no merge operation remains, the worktree and index are clean, and the stash refs still match preflight. A hook can print an error after Git has already created the commit, so determine the actual result from Git state rather than hook output alone.
+11. Before pushing, enter an `origin/dev` convergence loop:
+    - fetch `origin` with pruning immediately before the push and compare `origin/dev` with the last reviewed tip
+    - if `origin/dev` advanced, inspect that exact new range and its behavioral overlap with the synchronized candidate, then merge `origin/dev` with `--no-ff --no-commit` under the same conflict rules
+    - rerun every gate invalidated by the new delta; behavioral or source changes require at least `vp check`, `vp run typecheck`, `vp run test`, and relevant focused or conditional checks
+    - commit the reconciliation, perform the post-commit checks above, fetch again, and repeat until the freshly fetched `origin/dev` is an ancestor of local `dev`
+    - push `dev:dev` normally only after that ancestry proof; if the push is rejected because `origin/dev` moved again, repeat the loop. Never force the push.
+12. Fetch `origin` after the push. Verify `dev` equals `origin/dev`, `main` equals both `origin/main` and `upstream-sync/main`, `dev` contains the synchronized `main` tip, and the worktree is clean.
 
 ## Report
 
