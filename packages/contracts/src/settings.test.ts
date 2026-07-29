@@ -75,6 +75,7 @@ describe("ClientSettings sidebar v2", () => {
   it("defaults the beta off with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
     expect(settings.sidebarV2Enabled).toBe(false);
+    expect(settings.sidebarV2CompactCards).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
   });
 
@@ -113,6 +114,35 @@ describe("ClientSettings sidebar v2", () => {
     expect(() => decodeClientSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeClientSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
   });
+});
+
+describe("ClientSettings sidebar project accents", () => {
+  it("defaults to no project accents", () => {
+    expect(decodeClientSettings({}).sidebarProjectAccentColors).toEqual({});
+  });
+
+  it("accepts arbitrary six-digit hex colors in settings and patches", () => {
+    const accents = {
+      "environment-local:/work/project-a": "#12AbEf",
+      "environment-remote:/work/project-b": "#00ff00",
+    };
+
+    expect(
+      decodeClientSettings({ sidebarProjectAccentColors: accents }).sidebarProjectAccentColors,
+    ).toEqual(accents);
+    expect(
+      decodeClientSettingsPatch({ sidebarProjectAccentColors: accents }).sidebarProjectAccentColors,
+    ).toEqual(accents);
+  });
+
+  it.each(["red", "#12345", "#12345g", "#12345678"])(
+    "rejects an invalid project accent: %s",
+    (color) => {
+      const accents = { "environment-local:/work/project": color };
+      expect(() => decodeClientSettings({ sidebarProjectAccentColors: accents })).toThrow();
+      expect(() => decodeClientSettingsPatch({ sidebarProjectAccentColors: accents })).toThrow();
+    },
+  );
 });
 
 describe("ClientSettings sidebar provider icon visibility", () => {

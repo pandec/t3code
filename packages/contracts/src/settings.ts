@@ -26,6 +26,9 @@ export type SidebarThreadProviderIconVisibility = typeof SidebarThreadProviderIc
 export const DEFAULT_SIDEBAR_THREAD_PROVIDER_ICON_VISIBILITY: SidebarThreadProviderIconVisibility =
   "hover";
 
+export const SidebarProjectAccentColor = Schema.String.check(Schema.isPattern(/^#[0-9a-f]{6}$/i));
+export type SidebarProjectAccentColor = typeof SidebarProjectAccentColor.Type;
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -117,6 +120,9 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     SidebarProjectGroupingMode,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  sidebarProjectAccentColors: Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER)),
   ),
@@ -129,6 +135,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
+  sidebarV2CompactCards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarV2Enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Whether `sidebarV2Enabled` reflects an explicit choice in Settings → Beta.
   // Client settings persist as a whole blob, so every user who has ever touched
@@ -712,10 +719,14 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
   ),
+  sidebarProjectAccentColors: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor),
+  ),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadProviderIconVisibility: Schema.optionalKey(SidebarThreadProviderIconVisibility),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
+  sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
   sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   timestampFormat: Schema.optionalKey(TimestampFormat),
