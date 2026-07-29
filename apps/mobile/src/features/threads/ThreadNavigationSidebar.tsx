@@ -29,6 +29,7 @@ import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import {
+  hasActiveHomeListFilters,
   hasCustomHomeListOptions,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
@@ -987,9 +988,7 @@ function ThreadNavigationSidebarPane(
   // v2 ignores the sort/group options, so only the environment filter can
   // light the "customized" state while the beta is on.
   const filterCustomized = threadListV2Enabled
-    ? options.selectedEnvironmentId !== null ||
-      selectedProjectKey !== null ||
-      options.selectedModel !== null
+    ? hasActiveHomeListFilters({ ...options, selectedProjectKey })
     : hasCustomHomeListOptions({ ...options, selectedProjectKey });
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"

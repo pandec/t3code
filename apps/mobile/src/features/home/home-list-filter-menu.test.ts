@@ -131,4 +131,25 @@ describe("buildHomeListFilterMenu", () => {
     menu.items[0].onPress();
     expect(onClearFilters).toHaveBeenCalledOnce();
   });
+
+  it("omits the clear action when only the sort order is non-default", () => {
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      models: [],
+      selectedEnvironmentId: null,
+      selectedProjectKey: null,
+      selectedModel: null,
+      projectSortOrder: "created_at",
+      threadSortOrder: "created_at",
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onClearFilters: vi.fn(),
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    expect(menu.items.some((item) => item.title === "Clear filters")).toBe(false);
+  });
 });

@@ -1,7 +1,11 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 
 import type { HomeProjectSortOrder } from "./homeThreadList";
-import { PROJECT_SORT_OPTIONS, THREAD_SORT_OPTIONS } from "./home-list-options";
+import {
+  hasActiveHomeListFilters,
+  PROJECT_SORT_OPTIONS,
+  THREAD_SORT_OPTIONS,
+} from "./home-list-options";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
@@ -60,11 +64,7 @@ export function buildHomeListFilterMenu(props: {
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
-  if (
-    props.selectedEnvironmentId !== null ||
-    props.selectedProjectKey !== null ||
-    props.selectedModel !== null
-  ) {
+  if (hasActiveHomeListFilters(props)) {
     items.push({
       type: "action",
       title: "Clear filters",

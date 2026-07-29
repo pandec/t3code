@@ -23,6 +23,7 @@ import {
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
 import {
+  hasActiveHomeListFilters,
   hasCustomHomeListOptions,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
@@ -70,14 +71,16 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
+  const hasActiveFilters = hasActiveHomeListFilters(props);
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null ||
-      props.selectedProjectKey !== null ||
-      props.selectedModel !== null
+    ? hasActiveFilters
     : hasCustomHomeListOptions(props);
   const menuActions = useMemo<MenuAction[]>(
     () => [
-      ...(hasCustomListOptions
+      // Gated on the scope filters alone, matching the shared iOS builder:
+      // "Clear filters" leaves sort order untouched, so offering it for a
+      // non-default sort would be a no-op menu item.
+      ...(hasActiveFilters
         ? ([
             {
               id: "clear-filters",
@@ -177,7 +180,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.selectedModel,
       props.selectedProjectKey,
       props.threadSortOrder,
-      hasCustomListOptions,
+      hasActiveFilters,
       threadListV2Enabled,
     ],
   );
@@ -349,9 +352,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null ||
-      props.selectedProjectKey !== null ||
-      props.selectedModel !== null
+    ? hasActiveHomeListFilters(props)
     : hasCustomHomeListOptions(props);
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();

@@ -153,6 +153,11 @@ export function HomeRouteScreen() {
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
+            // Compact drills into the thread and leaves the search field
+            // behind; the native one comes back empty, so a retained query
+            // would silently filter the list on the way back. Split view is
+            // unaffected — its sidebar and search bar stay on screen.
+            setSearchQuery("");
             // Settled threads are live shells: opening one is plain
             // navigation, and sending a message un-settles server-side.
             navigation.navigate("Thread", {
