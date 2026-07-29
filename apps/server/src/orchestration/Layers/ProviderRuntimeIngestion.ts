@@ -1433,7 +1433,12 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
-      if (event.type === "turn.completed" && shouldApplyThreadLifecycle) {
+      const turnCompletionMatchesActiveTurn =
+        event.type === "turn.completed" &&
+        activeTurnId !== null &&
+        eventTurnId !== undefined &&
+        sameId(activeTurnId, eventTurnId);
+      if (event.type === "turn.completed" && turnCompletionMatchesActiveTurn) {
         yield* reportTurnOutcomeHealth(event);
       }
 

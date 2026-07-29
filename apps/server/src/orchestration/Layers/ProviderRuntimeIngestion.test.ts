@@ -3018,37 +3018,14 @@ describe("ProviderRuntimeIngestion", () => {
     const limitedInstanceId = ProviderInstanceId.make("codex-work");
 
     harness.emit({
-      type: "account.rate-limits.updated",
-      eventId: asEventId("evt-rate-limit-rejected"),
-      provider: ProviderDriverKind.make("codex"),
-      providerInstanceId: limitedInstanceId,
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      payload: {
-        rateLimits: {
-          type: "rate_limit_event",
-          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
-        },
-      },
-    });
-    await harness.drain();
-    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
-
-    // A successful turn on the same instance proves it healthy again.
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-rate-limit-turn-success"),
+      type: "turn.started",
+      eventId: asEventId("evt-rate-limit-turn-started-1"),
       provider: ProviderDriverKind.make("codex"),
       providerInstanceId: limitedInstanceId,
       createdAt: now,
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-rate-limit-1"),
-      payload: { state: "completed" },
     });
-    await harness.drain();
-    expect(await harness.getRateLimitState(limitedInstanceId)).toBeUndefined();
-
-    // A rate-limit-classified turn failure marks it limited again.
     harness.emit({
       type: "turn.completed",
       eventId: asEventId("evt-rate-limit-turn-failed"),
@@ -3056,11 +3033,33 @@ describe("ProviderRuntimeIngestion", () => {
       providerInstanceId: limitedInstanceId,
       createdAt: now,
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-rate-limit-2"),
+      turnId: asTurnId("turn-rate-limit-1"),
       payload: { state: "failed", errorMessage: "API error 429: rate limit reached" },
     });
     await harness.drain();
     expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-rate-limit-turn-started-2"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-2"),
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-rate-limit-turn-success"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-2"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeUndefined();
   });
 
   it("keeps health unchanged for a stale conflicting turn completion", async () => {
@@ -3101,6 +3100,63 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: now,
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-stale"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    const healthyInstanceId = ProviderInstanceId.make("claude-work");
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-stale-failure"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: healthyInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-stale-failure"),
+      payload: { state: "failed", errorMessage: "Claude usage limit reached" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(healthyInstanceId)).toBeUndefined();
+  });
+
+  it("keeps health unchanged for an unmatched completion with no active turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedInstanceId = ProviderInstanceId.make("codex-work");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-no-active-limit-started"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-limit"),
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-limit-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-limit"),
+      payload: { state: "failed", errorMessage: "API error 429: rate limit reached" },
+    });
+    await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-stale-success"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-stale"),
       payload: { state: "completed" },
     });
     await harness.drain();

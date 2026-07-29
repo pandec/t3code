@@ -59,6 +59,12 @@ describe("isRateLimitErrorMessage", () => {
     expect(isRateLimitErrorMessage(undefined)).toBe(false);
     expect(isRateLimitErrorMessage("Tool execution failed: file not found")).toBe(false);
     expect(isRateLimitErrorMessage("Tool execution failed: output size limit reached")).toBe(false);
+    expect(isRateLimitErrorMessage("Tool execution failed: upstream API rate limit reached")).toBe(
+      false,
+    );
+    expect(isRateLimitErrorMessage("MCP server returned API error 429: rate_limit_error")).toBe(
+      false,
+    );
     expect(isRateLimitErrorMessage("Recursion limit reached while evaluating tool output")).toBe(
       false,
     );
@@ -148,6 +154,43 @@ describe("ProviderInstanceHealth", () => {
     }),
   );
 
+  it.effect("does not let generic success clear a structured provider rejection", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: RESETS_AT_SECONDS,
+        },
+      });
+      yield* health.reportTurnOutcome(instanceId, "success");
+
+      expect((yield* health.getRateLimitState(instanceId))?.until).toBe(RESETS_AT_SECONDS * 1_000);
+    }),
+  );
+
+  it.effect("lets structured window evidence supersede a fallback turn failure", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+
+      yield* health.reportTurnOutcome(instanceId, "failed", "rate limit reached");
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: RESETS_AT_SECONDS,
+        },
+      });
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
+      });
+
+      expect(yield* health.getRateLimitState(instanceId)).toBeUndefined();
+    }),
+  );
+
   it.effect("ignores turn failures that do not classify as rate limits", () =>
     Effect.gen(function* () {
       const health = yield* makeProviderInstanceHealth;
@@ -167,6 +210,32 @@ describe("ProviderInstanceHealth", () => {
       yield* health.reportTurnOutcome(instanceId, "failed", "rate limit reached");
 
       expect((yield* health.getRateLimitState(instanceId))?.until).toBe(RESETS_AT_SECONDS * 1_000);
+    }),
+  );
+
+  it.effect("reports the longest-lived active provider window", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: RESETS_AT_SECONDS,
+        },
+      });
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "seven_day",
+          resetsAt: RESETS_AT_SECONDS * 2,
+        },
+      });
+
+      expect(yield* health.getRateLimitState(instanceId)).toMatchObject({
+        until: RESETS_AT_SECONDS * 2 * 1_000,
+        reason: "usage limit reached (seven_day)",
+      });
     }),
   );
 });

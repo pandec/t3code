@@ -242,7 +242,13 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const threadModelSelections = new Map<string, ModelSelection>();
+  const threadModelSelections = new Map<
+    string,
+    {
+      readonly preferred: ModelSelection;
+      readonly effective: ModelSelection;
+    }
+  >();
   const pendingTurnStartThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
@@ -528,7 +534,8 @@ const make = Effect.gen(function* () {
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
         : thread.modelSelection.instanceId;
-    let desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const preferredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    let desiredModelSelection = preferredModelSelection;
     let desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
@@ -580,9 +587,11 @@ const make = Effect.gen(function* () {
           readonly createdAt: string;
         }
       | undefined;
-    const configuredFailoverInstanceId = desiredInfo.failoverInstanceId;
     const failoverTarget = yield* resolveRateLimitFailoverTarget(desiredInstanceId, desiredInfo);
+    const previousSelectionState = threadModelSelections.get(threadId);
+    let shouldRecordSelectionState = requestedModelSelection !== undefined;
     if (failoverTarget !== undefined) {
+      shouldRecordSelectionState = true;
       const rerouteFromInstanceId = desiredInstanceId;
       desiredModelSelection = {
         ...desiredModelSelection,
@@ -612,14 +621,24 @@ const make = Effect.gen(function* () {
       }
     } else if (
       effectiveRequestedModelSelection === undefined &&
-      configuredFailoverInstanceId !== undefined &&
-      activeSession?.providerInstanceId === configuredFailoverInstanceId
+      previousSelectionState !== undefined &&
+      !Equal.equals(previousSelectionState.preferred, previousSelectionState.effective) &&
+      Equal.equals(previousSelectionState.preferred, preferredModelSelection) &&
+      activeSession?.providerInstanceId === previousSelectionState.effective.instanceId
     ) {
-      // A prior turn was routed to the configured sibling. Once the preferred
-      // instance is routable again, an omitted unchanged selection must still
-      // restart the session back on the preferred instance.
+      // A prior turn was routed away from this preferred selection. Re-resolve
+      // from that preferred selection on every turn even if its failover
+      // setting was cleared or changed after the session moved.
       effectiveRequestedModelSelection = desiredModelSelection;
+      shouldRecordSelectionState = true;
     }
+    const recordSelectionState = () => {
+      if (!shouldRecordSelectionState) return;
+      threadModelSelections.set(threadId, {
+        preferred: preferredModelSelection,
+        effective: desiredModelSelection,
+      });
+    };
     const appendPendingFailoverActivity = (session: ProviderSession) => {
       const activity = pendingFailoverActivity;
       if (activity === undefined || session.providerInstanceId !== activity.toInstanceId) {
@@ -756,7 +775,7 @@ const make = Effect.gen(function* () {
         effectiveRequestedModelSelection !== undefined &&
         activeSession?.providerInstanceId !== effectiveRequestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId);
+      const previousModelSelection = previousSelectionState?.effective;
       const shouldRestartForModelSelectionChange =
         preferredProvider === "claudeAgent" &&
         effectiveRequestedModelSelection !== undefined &&
@@ -769,6 +788,7 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
+        recordSelectionState();
         return {
           sessionThreadId: existingSessionThreadId,
           effectiveModelSelection: desiredModelSelection,
@@ -810,6 +830,7 @@ const make = Effect.gen(function* () {
       });
       yield* bindSessionToThread(restartedSession);
       yield* appendPendingFailoverActivity(restartedSession);
+      recordSelectionState();
       return {
         sessionThreadId: restartedSession.threadId,
         effectiveModelSelection: desiredModelSelection,
@@ -819,6 +840,7 @@ const make = Effect.gen(function* () {
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
     yield* appendPendingFailoverActivity(startedSession);
+    recordSelectionState();
     return {
       sessionThreadId: startedSession.threadId,
       effectiveModelSelection: desiredModelSelection,
@@ -844,12 +866,6 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
     });
-    // Cache the selection the session actually uses: under rate-limit
-    // failover it may name a different instance than the client requested,
-    // and caching the original would flag a selection change on every turn.
-    if (input.modelSelection !== undefined || threadModelSelections.has(input.threadId)) {
-      threadModelSelections.set(input.threadId, ensuredSession.effectiveModelSelection);
-    }
     const effectiveInputModelSelection =
       input.modelSelection !== undefined ? ensuredSession.effectiveModelSelection : undefined;
     const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
@@ -872,7 +888,7 @@ const make = Effect.gen(function* () {
               .sessionModelSwitch;
     const requestedModelSelection =
       effectiveInputModelSelection ??
-      threadModelSelections.get(input.threadId) ??
+      threadModelSelections.get(input.threadId)?.effective ??
       thread.modelSelection;
     const modelForTurn =
       sessionModelSwitch === "unsupported" && effectiveInputModelSelection === undefined
@@ -1328,7 +1344,9 @@ const make = Effect.gen(function* () {
         yield* ensureSessionForThread(
           event.payload.threadId,
           event.occurredAt,
-          cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {},
+          cachedModelSelection !== undefined
+            ? { modelSelection: cachedModelSelection.preferred }
+            : {},
         );
         return;
       }

@@ -26,6 +26,8 @@ export const UNKNOWN_RESET_LIMIT_TTL_MS = 15 * 60 * 1_000;
  */
 const RATE_LIMIT_ERROR_PATTERN =
   /rate.?limit|usage limit|(?:quota|credits?) (?:limit )?reached|out of (?:usage|quota|credits)|\b429\b/i;
+const TOOL_RATE_LIMIT_ERROR_PATTERN =
+  /^(?:tool\b.*(?:failed|error)|error (?:executing|calling) (?:the )?tool\b|mcp\b|upstream api\b)/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -77,7 +79,11 @@ export function classifyRateLimitPayload(payload: unknown): RateLimitVerdict {
 
 /** Whether a turn-failure message classifies as an account rate limit. */
 export function isRateLimitErrorMessage(errorMessage: string | undefined): boolean {
-  return errorMessage !== undefined && RATE_LIMIT_ERROR_PATTERN.test(errorMessage);
+  return (
+    errorMessage !== undefined &&
+    !TOOL_RATE_LIMIT_ERROR_PATTERN.test(errorMessage) &&
+    RATE_LIMIT_ERROR_PATTERN.test(errorMessage)
+  );
 }
 
 const makeProviderInstanceHealth = Effect.gen(function* () {
@@ -87,17 +93,8 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
 
   const windowStateKey = (windowType: string | undefined) =>
     `provider-window:${windowType ?? "unknown"}`;
-
-  const setState = (
-    instanceId: ProviderInstanceId,
-    key: string,
-    state: ProviderInstanceRateLimitState,
-  ) =>
-    Ref.update(states, (map) => {
-      const instanceStates = new Map(map.get(instanceId) ?? []);
-      instanceStates.set(key, state);
-      return new Map(map).set(instanceId, instanceStates);
-    });
+  const expiresAt = (state: ProviderInstanceRateLimitState) =>
+    state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
 
   const clearAllStates = (instanceId: ProviderInstanceId) =>
     Ref.update(states, (map) => {
@@ -128,10 +125,15 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     const verdict = classifyRateLimitPayload(payload);
     if (verdict.kind === "limited") {
       const now = yield* Clock.currentTimeMillis;
-      yield* setState(instanceId, windowStateKey(verdict.windowType), {
-        until: verdict.until,
-        reason: verdict.reason,
-        reportedAt: now,
+      yield* Ref.update(states, (map) => {
+        const instanceStates = new Map(map.get(instanceId) ?? []);
+        instanceStates.delete("turn-failure");
+        instanceStates.set(windowStateKey(verdict.windowType), {
+          until: verdict.until,
+          reason: verdict.reason,
+          reportedAt: now,
+        });
+        return new Map(map).set(instanceId, instanceStates);
       });
       yield* Effect.logInfo("Provider instance marked rate-limited.", {
         instanceId,
@@ -144,7 +146,20 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
       if (verdict.windowType === undefined) {
         yield* clearAllStates(instanceId);
       } else {
-        yield* clearState(instanceId, windowStateKey(verdict.windowType));
+        yield* Ref.update(states, (map) => {
+          const current = map.get(instanceId);
+          if (current === undefined) return map;
+          const instanceStates = new Map(current);
+          instanceStates.delete("turn-failure");
+          instanceStates.delete(windowStateKey(verdict.windowType));
+          const next = new Map(map);
+          if (instanceStates.size === 0) {
+            next.delete(instanceId);
+          } else {
+            next.set(instanceId, instanceStates);
+          }
+          return next;
+        });
       }
     }
   });
@@ -153,7 +168,7 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     "ProviderInstanceHealth.reportTurnOutcome",
   )(function* (instanceId, outcome, errorMessage) {
     if (outcome === "success") {
-      yield* clearAllStates(instanceId);
+      yield* clearState(instanceId, "turn-failure");
       return;
     }
     if (!isRateLimitErrorMessage(errorMessage)) {
@@ -164,13 +179,13 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
       const current = map.get(instanceId);
       const activeStates = new Map(
         [...(current ?? [])].filter(([, state]) => {
-          const expiresAt = state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
-          return now < expiresAt;
+          return now < expiresAt(state);
         }),
       );
       // A provider-window rejection carries more precise reset information
       // than the unstructured turn failure, so keep it as the routing signal.
       if ([...activeStates.keys()].some((key) => key.startsWith("provider-window:"))) {
+        activeStates.delete("turn-failure");
         return activeStates.size === current?.size
           ? map
           : new Map(map).set(instanceId, activeStates);
@@ -197,8 +212,7 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
       if (current === undefined) return [undefined, map];
       const activeStates = new Map(
         [...current].filter(([, state]) => {
-          const expiresAt = state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
-          return now < expiresAt;
+          return now < expiresAt(state);
         }),
       );
       if (activeStates.size === 0) {
@@ -206,7 +220,9 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
         next.delete(instanceId);
         return [undefined, next];
       }
-      const state = activeStates.values().next().value;
+      const state = [...activeStates.values()].reduce((latest, candidate) =>
+        expiresAt(candidate) > expiresAt(latest) ? candidate : latest,
+      );
       return [
         state,
         activeStates.size === current.size ? map : new Map(map).set(instanceId, activeStates),
