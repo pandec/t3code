@@ -43,8 +43,13 @@ export interface ProviderInstanceRegistryShape {
    * The raw settings envelope the instance was built from. Exposes
    * envelope-level routing hints (e.g. `failoverInstanceId`) that are not
    * part of the driver-created `ProviderInstance`.
+   *
+   * Optional so test doubles of this shape need not implement it; the live
+   * registry always provides it, and the sole consumer
+   * (`ProviderAdapterRegistry.getInstanceInfo`) treats an absent method as
+   * "no envelope hints".
    */
-  readonly getInstanceConfig: (
+  readonly getInstanceConfig?: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceConfig | undefined>;
   /**

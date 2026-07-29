@@ -1593,14 +1593,151 @@ describe("ProviderCommandReactor", () => {
       thread?.activities.filter((activity) => activity.kind === "provider.instance.failover"),
     ).toHaveLength(1);
 
-    // Clearing the setting and the limit routes back to the preferred
-    // instance immediately, even though the first turn omitted its unchanged
-    // selection and the runtime-mode change is not itself a turn.
-    delete failoverInstanceIds.codex;
+    const failoverActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.instance.failover",
+    );
+    // The work log renders `detail`; the window and reset time must reach it.
+    expect(failoverActivity?.payload).toMatchObject({ direction: "failover" });
+    const failoverDetail = (failoverActivity?.payload as { detail?: string } | undefined)?.detail;
+    expect(failoverDetail).toContain("five_hour");
+    expect(failoverDetail).toContain("resets");
+  });
+
+  it("announces the reroute again when the user explicitly re-picks the limited instance", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+
+    for (const [index, createdAt] of [
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:01:00.000Z",
+    ].entries()) {
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`cmd-turn-start-failover-repick-${index}`),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId(`user-message-failover-repick-${index}`),
+          role: "user",
+          text: `turn ${index}`,
+          attachments: [],
+        },
+        // The user keeps picking the limited instance in the model picker.
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+    }
+    await harness.drain();
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    // Both explicit picks were overridden, so both are reported — silently
+    // ignoring the second would leave the user no feedback at all.
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "provider.instance.failover"),
+    ).toHaveLength(2);
+  });
+
+  it("announces the return to the preferred instance once the limit lifts", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-return-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-return-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
     await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
       type: "rate_limit_event",
       rate_limit_info: { status: "allowed" },
     });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-return-2"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-return-2"),
+        role: "user",
+        text: "second",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const activities = thread?.activities.filter(
+      (activity) => activity.kind === "provider.instance.failover",
+    );
+    expect(activities).toHaveLength(2);
+    expect(activities?.[1]?.payload).toMatchObject({
+      direction: "return",
+      returnCause: "limit-lifted",
+      toInstanceId: ProviderInstanceId.make("codex"),
+    });
+  });
+
+  it("returns to the preferred instance when the failover setting is cleared mid-limit", async () => {
+    const failoverInstanceIds: Record<string, string> = { codex: "codex_work" };
+    const harness = await createHarness({ failoverInstanceIds });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-cleared-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-cleared-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The limit persists; only the setting goes away. A runtime-mode change is
+    // not itself a turn, so this also covers the non-turn ensure path.
+    delete failoverInstanceIds.codex;
     await harness.dispatch({
       type: "thread.runtime-mode.set",
       commandId: CommandId.make("cmd-runtime-mode-set-during-failover"),
@@ -1609,38 +1746,22 @@ describe("ProviderCommandReactor", () => {
       createdAt: "2026-01-01T00:00:30.000Z",
     });
     await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await harness.drain();
+
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       providerInstanceId: ProviderInstanceId.make("codex"),
       runtimeMode: "full-access",
     });
-
-    await harness.dispatch({
-      type: "thread.turn.start",
-      commandId: CommandId.make("cmd-turn-start-failover-2"),
-      threadId: ThreadId.make("thread-1"),
-      message: {
-        messageId: asMessageId("user-message-failover-2"),
-        role: "user",
-        text: "second",
-        attachments: [],
-      },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "full-access",
-      createdAt: "2026-01-01T00:01:00.000Z",
-    });
-
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-
-    expect(harness.startSession).toHaveBeenCalledTimes(2);
-    const returnedReadModel = await harness.readModel();
-    const returnedThread = returnedReadModel.threads.find(
-      (entry) => entry.id === ThreadId.make("thread-1"),
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const activities = thread?.activities.filter(
+      (activity) => activity.kind === "provider.instance.failover",
     );
-    expect(
-      returnedThread?.activities.filter(
-        (activity) => activity.kind === "provider.instance.failover",
-      ),
-    ).toHaveLength(1);
+    expect(activities).toHaveLength(2);
+    expect(activities?.[1]?.payload).toMatchObject({
+      direction: "return",
+      returnCause: "failover-unavailable",
+    });
   });
 
   it("does not use an effective failover instance as a new routing origin", async () => {

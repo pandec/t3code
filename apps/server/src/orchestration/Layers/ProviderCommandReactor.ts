@@ -19,6 +19,7 @@ import { THREAD_FORK_FAILURE_PREFIX } from "@t3tools/shared/conversationFork";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -352,10 +353,12 @@ const make = Effect.gen(function* () {
 
   const appendFailoverActivity = (input: {
     readonly threadId: ThreadId;
+    readonly direction: "failover" | "return";
+    readonly returnCause?: "limit-lifted" | "failover-unavailable";
     readonly fromInstanceId: ProviderInstanceId;
     readonly toInstanceId: ProviderInstanceId;
     readonly toDisplayName: string | undefined;
-    readonly reason: string;
+    readonly reason: string | undefined;
     readonly until: number | null;
     readonly createdAt: string;
   }) =>
@@ -363,8 +366,21 @@ const make = Effect.gen(function* () {
       commandId: serverCommandId("provider-failover-activity"),
       eventId: serverEventId(),
     }).pipe(
-      Effect.flatMap(({ commandId, eventId }) =>
-        orchestrationEngine.dispatch({
+      Effect.flatMap(({ commandId, eventId }) => {
+        const target = input.toDisplayName ?? input.toInstanceId;
+        // The work log renders `summary` plus `payload.detail`; the structured
+        // fields below are for programmatic consumers, so the reset time has
+        // to be spelled out here to reach the reader.
+        const limitLifted = input.returnCause !== "failover-unavailable";
+        const detail =
+          input.direction === "failover"
+            ? input.until !== null
+              ? `${input.reason ?? "usage limit reached"}; resets ${DateTime.formatIso(DateTime.makeUnsafe(input.until))}`
+              : (input.reason ?? "usage limit reached")
+            : limitLifted
+              ? `Usage limit on ${input.fromInstanceId} lifted.`
+              : `Failover to ${input.fromInstanceId} is no longer available.`;
+        return orchestrationEngine.dispatch({
           type: "thread.activity.append",
           commandId,
           threadId: input.threadId,
@@ -372,19 +388,27 @@ const make = Effect.gen(function* () {
             id: eventId,
             tone: "info",
             kind: "provider.instance.failover",
-            summary: `Rate limited — failing over to ${input.toDisplayName ?? input.toInstanceId}`,
+            summary:
+              input.direction === "failover"
+                ? `Rate limited — failing over to ${target}`
+                : limitLifted
+                  ? `Usage limit lifted — back on ${target}`
+                  : `Back on ${target}`,
             payload: {
+              direction: input.direction,
+              ...(input.returnCause !== undefined ? { returnCause: input.returnCause } : {}),
               fromInstanceId: input.fromInstanceId,
               toInstanceId: input.toInstanceId,
-              reason: input.reason,
+              detail,
+              ...(input.reason !== undefined ? { reason: input.reason } : {}),
               ...(input.until !== null ? { limitedUntil: input.until } : {}),
             },
             turnId: null,
             createdAt: input.createdAt,
           },
           createdAt: input.createdAt,
-        }),
-      ),
+        });
+      }),
     );
 
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
@@ -579,10 +603,12 @@ const make = Effect.gen(function* () {
     let pendingFailoverActivity:
       | {
           readonly threadId: ThreadId;
+          readonly direction: "failover" | "return";
+          readonly returnCause?: "limit-lifted" | "failover-unavailable";
           readonly fromInstanceId: ProviderInstanceId;
           readonly toInstanceId: ProviderInstanceId;
           readonly toDisplayName: string | undefined;
-          readonly reason: string;
+          readonly reason: string | undefined;
           readonly until: number | null;
           readonly createdAt: string;
         }
@@ -607,10 +633,15 @@ const make = Effect.gen(function* () {
         reason: failoverTarget.limitState.reason,
       });
       // Record the notice only after the session successfully switches. While
-      // the thread already runs on the failover sibling, repeating it is noise.
-      if (activeSession?.providerInstanceId !== desiredInstanceId) {
+      // the thread already runs on the failover sibling, repeating it is noise
+      // — except when the user explicitly re-picked the limited instance, where
+      // silently overriding their choice would leave them no feedback at all.
+      const userRequestedLimitedInstance =
+        requestedModelSelection?.instanceId === rerouteFromInstanceId;
+      if (activeSession?.providerInstanceId !== desiredInstanceId || userRequestedLimitedInstance) {
         pendingFailoverActivity = {
           threadId,
+          direction: "failover",
           fromInstanceId: rerouteFromInstanceId,
           toInstanceId: desiredInstanceId,
           toDisplayName: failoverTarget.info.displayName,
@@ -631,6 +662,34 @@ const make = Effect.gen(function* () {
       // setting was cleared or changed after the session moved.
       effectiveRequestedModelSelection = desiredModelSelection;
       shouldRecordSelectionState = true;
+    }
+    // Close the loop the failover notice opened: without this the log ends on
+    // "failing over" forever and the reader cannot tell which account later
+    // turns actually ran on. Keyed on the outcome rather than on which branch
+    // above produced it, so an explicitly-supplied selection returns the
+    // thread just as visibly as an omitted one. The routing decision is
+    // already made; the health read only picks accurate wording (the limit
+    // lifting and the failover setting going away both land here).
+    if (
+      failoverTarget === undefined &&
+      previousSelectionState !== undefined &&
+      !Equal.equals(previousSelectionState.preferred, previousSelectionState.effective) &&
+      desiredInstanceId === previousSelectionState.preferred.instanceId &&
+      activeSession?.providerInstanceId === previousSelectionState.effective.instanceId
+    ) {
+      const preferredLimitState =
+        yield* providerInstanceHealth.getRateLimitState(desiredInstanceId);
+      pendingFailoverActivity = {
+        threadId,
+        direction: "return",
+        returnCause: preferredLimitState === undefined ? "limit-lifted" : "failover-unavailable",
+        fromInstanceId: previousSelectionState.effective.instanceId,
+        toInstanceId: desiredInstanceId,
+        toDisplayName: desiredInfo.displayName,
+        reason: undefined,
+        until: null,
+        createdAt,
+      };
     }
     const recordSelectionState = () => {
       if (!shouldRecordSelectionState) return;
@@ -789,6 +848,14 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelSelectionChange
       ) {
         recordSelectionState();
+        // The session already sits on the routed instance, so nothing
+        // restarts — but a notice queued here (an explicit re-pick of the
+        // limited instance) still has to reach the log. `activeSession` is
+        // non-undefined on this branch: `existingSessionThreadId` is derived
+        // from it.
+        if (activeSession !== undefined) {
+          yield* appendPendingFailoverActivity(activeSession);
+        }
         return {
           sessionThreadId: existingSessionThreadId,
           effectiveModelSelection: desiredModelSelection,

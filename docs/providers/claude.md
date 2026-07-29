@@ -123,10 +123,13 @@ Claude Work      Failover instance: Claude Personal
 Claude Personal  Failover instance: Claude Work
 ```
 
-When an instance reports its usage limit (or a turn fails with a rate-limit error), new turns —
-including the next turn of a live thread, when the two providers share session state as above —
-route to the failover instance until the limit lifts, then return to the preferred instance. Each
-switch appears in the thread's work log.
+When an instance reports its usage limit (or a turn fails with a rate-limit error), turns route to
+the failover instance until the limit lifts, then return to the preferred instance. Both switches
+appear in the thread's work log.
+
+Both providers must share session state — the same `CLAUDE_CONFIG_DIR path`, as in the setup above.
+Without that, failover never runs at all, for new and existing threads alike: T3 Code will not move
+a thread to an account that cannot resume its conversation.
 
 ## I Want To Use OpenRouter
 

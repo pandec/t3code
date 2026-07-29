@@ -112,6 +112,7 @@ import {
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
   readLastEnabledProjectGroupingMode,
+  isFailoverTargetCompatible,
   removeProviderInstanceAndInboundFailovers,
   rememberEnabledProjectGroupingMode,
 } from "./SettingsPanels.logic";
@@ -1784,17 +1785,34 @@ export function ProviderSettingsPanel() {
           const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
             favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
           );
+          // Mirror the server's routing preconditions (same driver, enabled,
+          // same continuation group) so an unusable target is flagged while
+          // configuring rather than silently never firing at runtime. The
+          // group key is only known once the instance has been probed; treat
+          // an unknown key as compatible rather than warning on a cold start.
+          const rowGroupKey = liveProvider?.continuation?.groupKey;
           const failoverOptions = rows
             .filter(
               (candidate) =>
                 candidate.driver === row.driver && candidate.instanceId !== row.instanceId,
             )
-            .map((candidate) => ({
-              id: candidate.instanceId,
-              label:
-                candidate.instance.displayName?.trim() ||
-                `${getDriverOption(candidate.driver)?.label ?? String(candidate.driver)} (${candidate.instanceId})`,
-            }));
+            .map((candidate) => {
+              const candidateProvider = serverProviders.find(
+                (snapshot) => snapshot.instanceId === candidate.instanceId,
+              );
+              const candidateGroupKey = candidateProvider?.continuation?.groupKey;
+              return {
+                id: candidate.instanceId,
+                label:
+                  candidate.instance.displayName?.trim() ||
+                  `${getDriverOption(candidate.driver)?.label ?? String(candidate.driver)} (${candidate.instanceId})`,
+                compatible: isFailoverTargetCompatible({
+                  sourceContinuationGroupKey: rowGroupKey,
+                  targetContinuationGroupKey: candidateGroupKey,
+                  targetEnabled: candidate.instance.enabled ?? true,
+                }),
+              };
+            });
           const resetLabel = driverOption?.label ?? String(row.driver);
           const headerAction =
             row.isDefault && row.isDirty ? (

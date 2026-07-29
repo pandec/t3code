@@ -1511,15 +1511,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
   const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
-  // Stamp the instance id at the chokepoint: several emission sites (e.g.
-  // SDK telemetry messages) build event bases without it, and instance-keyed
-  // consumers (usage meter filtering, rate-limit health) need it on every
-  // event.
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-    Queue.offer(runtimeEventQueue, {
-      ...event,
-      providerInstanceId: event.providerInstanceId ?? boundInstanceId,
-    }).pipe(Effect.asVoid);
+    Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
 
   const logNativeSdkMessage = Effect.fn("logNativeSdkMessage")(function* (
     context: ClaudeSessionContext,

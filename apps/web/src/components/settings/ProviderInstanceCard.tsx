@@ -350,6 +350,13 @@ interface ProviderInstanceCardProps {
   readonly failoverOptions?: ReadonlyArray<{
     readonly id: ProviderInstanceId;
     readonly label: string;
+    /**
+     * False when the server would refuse to route to this target — disabled,
+     * or in a different continuation group (no shared session state). Such a
+     * target is still selectable, but the card warns that failover will not
+     * run, since the server only logs the refusal.
+     */
+    readonly compatible: boolean;
   }>;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
@@ -508,8 +515,17 @@ export function ProviderInstanceCard({
       ? (failoverOptions?.find((option) => option.id === failoverInstanceId) ?? {
           id: failoverInstanceId,
           label: String(failoverInstanceId),
+          // Not in the options list at all: the referenced instance no longer
+          // exists (renamed or deleted elsewhere).
+          compatible: false,
         })
       : undefined;
+  const failoverWarning =
+    selectedFailoverOption === undefined || selectedFailoverOption.compatible
+      ? null
+      : failoverOptions?.some((option) => option.id === selectedFailoverOption.id)
+        ? "This instance does not share session state with the one above (or is disabled), so failover will not run. Give both instances the same config dir — differing only by shadow config dir — or pick another instance."
+        : "This instance no longer exists. Failover will not run until you pick another instance.";
   const updateFailoverInstanceId = (value: string) => {
     // Map the select's string back to the branded id; "None" and stale
     // values both clear the field.
@@ -809,17 +825,22 @@ export function ProviderInstanceCard({
                       </SelectItem>
                       {failoverOptions.map((option) => (
                         <SelectItem hideIndicator key={option.id} value={String(option.id)}>
-                          {option.label}
+                          {option.compatible ? option.label : `${option.label} — no shared session`}
                         </SelectItem>
                       ))}
                     </SelectPopup>
                   </Select>
                 </div>
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  When this instance hits its usage limit, new turns route to the selected instance.
-                  Threads switch mid-conversation only when both instances share their session state
-                  (e.g. a shadow config dir setup).
+                  When this instance hits its usage limit, turns route to the selected instance
+                  until the limit lifts. Both instances must share their session state — the same
+                  config dir, differing only by shadow config dir.
                 </span>
+                {failoverWarning ? (
+                  <span className="mt-1 block text-xs text-amber-600 dark:text-amber-500">
+                    {failoverWarning}
+                  </span>
+                ) : null}
               </div>
             ) : null}
 

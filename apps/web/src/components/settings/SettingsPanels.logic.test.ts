@@ -11,6 +11,7 @@ import {
   formatDiagnosticsDescription,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
+  isFailoverTargetCompatible,
   removeProviderInstanceAndInboundFailovers,
 } from "./SettingsPanels.logic";
 
@@ -147,6 +148,51 @@ describe("buildProviderInstanceUpdatePatch", () => {
 });
 
 describe("removeProviderInstanceAndInboundFailovers", () => {
+  it("treats a same-group enabled target as a usable failover destination", () => {
+    expect(
+      isFailoverTargetCompatible({
+        sourceContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects targets the server would refuse to route to", () => {
+    // Different continuation group: the sibling cannot resume the conversation.
+    expect(
+      isFailoverTargetCompatible({
+        sourceContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetContinuationGroupKey: "claude:home:/Users/x/.claude-other",
+        targetEnabled: true,
+      }),
+    ).toBe(false);
+    expect(
+      isFailoverTargetCompatible({
+        sourceContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetEnabled: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not warn before either instance has been probed", () => {
+    expect(
+      isFailoverTargetCompatible({
+        sourceContinuationGroupKey: undefined,
+        targetContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetEnabled: true,
+      }),
+    ).toBe(true);
+    expect(
+      isFailoverTargetCompatible({
+        sourceContinuationGroupKey: "claude:home:/Users/x/.claude",
+        targetContinuationGroupKey: undefined,
+        targetEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
   it("removes the target and clears inbound failovers without touching other fields", () => {
     const primaryId = ProviderInstanceId.make("claudeAgent");
     const targetId = ProviderInstanceId.make("claude_work");
