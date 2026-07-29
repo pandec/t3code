@@ -334,8 +334,8 @@ export function useUpdateSettingsForEnvironment() {
   );
   return useCallback(
     (environmentId: EnvironmentId, patch: ServerSettingsPatch) => {
-      if (Object.keys(patch).length === 0) return;
-      void persistServerSettings({ environmentId, input: { patch } });
+      if (Object.keys(patch).length === 0) return Promise.resolve(null);
+      return persistServerSettings({ environmentId, input: { patch } });
     },
     [persistServerSettings],
   );

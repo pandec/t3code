@@ -95,7 +95,7 @@ describe("resolveProjectAccentColor", () => {
     project({ environmentId: REMOTE, workspaceRoot: "/srv/a", canonicalKey: "repo/a" }),
   ]);
 
-  it("prefers the environment the caller renders for", () => {
+  it("orders conflicting member environments deterministically", () => {
     const maps = accentMaps([
       [LOCAL, { "repo/a": "#111111" }],
       [REMOTE, { "repo/a": "#222222" }],
@@ -105,26 +105,27 @@ describe("resolveProjectAccentColor", () => {
     expect(
       resolveProjectAccentColor({
         members,
-        accentColorsByEnvironment: maps,
-        preferredEnvironmentId: REMOTE,
+        accentColorsByEnvironment: accentMaps([
+          [REMOTE, { "repo/a": "#222222" }],
+          [LOCAL, { "repo/a": "#111111" }],
+        ]),
       }),
-    ).toBe("#222222");
+    ).toBe("#111111");
   });
 
   it("never lets another environment override an environment's own entry", () => {
     const maps = accentMaps([
-      [LOCAL, { "repo/a": "#111111" }],
       [REMOTE, { "repo/a": "#222222" }],
+      [THIRD, { "repo/a": "#333333" }],
+    ]);
+    const remoteMember = toProjectAccentMembers([
+      project({ environmentId: REMOTE, workspaceRoot: "/srv/a", canonicalKey: "repo/a" }),
     ]);
 
-    // The primary ranks first only among the group's own members; it cannot
-    // reach past a member environment that has its own explicit color.
     expect(
       resolveProjectAccentColor({
-        members,
+        members: remoteMember,
         accentColorsByEnvironment: maps,
-        primaryEnvironmentId: REMOTE,
-        preferredEnvironmentId: REMOTE,
       }),
     ).toBe("#222222");
   });
@@ -150,18 +151,21 @@ describe("resolveProjectAccentColor", () => {
       [THIRD, {}],
     ]);
 
-    // environment-local < environment-remote alphabetically.
+    // environment-local < environment-remote alphabetically, regardless of
+    // map insertion order or which client is rendering.
     expect(
       resolveProjectAccentColor({ members: soloMembers, accentColorsByEnvironment: maps }),
     ).toBe("#bbbbbb");
-    // ...unless one of them is the client's own environment.
     expect(
       resolveProjectAccentColor({
         members: soloMembers,
-        accentColorsByEnvironment: maps,
-        primaryEnvironmentId: REMOTE,
+        accentColorsByEnvironment: accentMaps([
+          [THIRD, {}],
+          [LOCAL, { "repo/a": "#bbbbbb" }],
+          [REMOTE, { "repo/a": "#aaaaaa" }],
+        ]),
       }),
-    ).toBe("#aaaaaa");
+    ).toBe("#bbbbbb");
   });
 
   it("returns null when nothing anywhere holds the key", () => {
@@ -190,6 +194,7 @@ describe("buildProjectAccentColorPatches", () => {
         [LOCAL, { "repo/other": "#cccccc" }],
         [REMOTE, {}],
       ]),
+      writableEnvironmentIds: new Set([LOCAL, REMOTE]),
       color: color("#0055aa"),
     });
 
@@ -210,6 +215,7 @@ describe("buildProjectAccentColorPatches", () => {
           [LOCAL, { "repo/a": "#0055aa", "repo/other": "#cccccc" }],
           [REMOTE, { "repo/a": "#0055aa" }],
         ]),
+        writableEnvironmentIds: new Set([LOCAL, REMOTE]),
         color: null,
       }),
     ).toEqual([
@@ -223,7 +229,11 @@ describe("buildProjectAccentColorPatches", () => {
     expect(
       buildProjectAccentColorPatches({
         members,
-        accentColorsByEnvironment: accentMaps([[LOCAL, { "repo/a": "#0055aa" }]]),
+        accentColorsByEnvironment: accentMaps([
+          [LOCAL, { "repo/a": "#0055aa" }],
+          [REMOTE, { "repo/a": "#ff0000" }],
+        ]),
+        writableEnvironmentIds: new Set([LOCAL]),
         color: color("#0055aa"),
       }),
     ).toEqual([]);
@@ -249,11 +259,14 @@ describe("planProjectAccentColorMigration", () => {
   const plan = (input: {
     readonly clientAccentColors: Record<string, string>;
     readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
+    readonly writableEnvironmentIds?: ReadonlySet<EnvironmentId>;
   }) =>
     planProjectAccentColorMigration({
       clientAccentColors: input.clientAccentColors as Record<string, SidebarProjectAccentColor>,
       projects: [localProject, remoteProject],
       accentColorsByEnvironment: input.accentColorsByEnvironment,
+      writableEnvironmentIds:
+        input.writableEnvironmentIds ?? new Set(input.accentColorsByEnvironment.keys()),
       deriveLegacyKey: derivePhysicalProjectKey,
     });
 
@@ -267,24 +280,28 @@ describe("planProjectAccentColorMigration", () => {
     });
 
     expect(result.patches).toEqual([
-      { environmentId: LOCAL, projectAccentColors: { "repo/a": "#0055aa" } },
-      { environmentId: REMOTE, projectAccentColors: { "/srv/b": "#00aa55" } },
+      {
+        environmentId: LOCAL,
+        projectAccentColors: { "repo/a": "#0055aa" },
+        migrations: [{ legacyKey: legacyLocalKey, accentKey: "repo/a", color: "#0055aa" }],
+      },
+      {
+        environmentId: REMOTE,
+        projectAccentColors: { "/srv/b": "#00aa55" },
+        migrations: [{ legacyKey: legacyRemoteKey, accentKey: "/srv/b", color: "#00aa55" }],
+      },
     ]);
-    expect(result.nextClientAccentColors).toEqual({});
+    expect(result.consumedWithoutWrite).toEqual([]);
   });
 
-  it("is idempotent: a second run over the migrated state does nothing", () => {
-    const first = plan({
-      clientAccentColors: { [legacyLocalKey]: "#0055aa" },
-      accentColorsByEnvironment: accentMaps([[LOCAL, {}]]),
-    });
+  it("is idempotent once the server holds the migrated state", () => {
     const second = plan({
-      clientAccentColors: first.nextClientAccentColors ?? {},
+      clientAccentColors: { [legacyLocalKey]: "#0055aa" },
       accentColorsByEnvironment: accentMaps([[LOCAL, { "repo/a": "#0055aa" }]]),
     });
 
     expect(second.patches).toEqual([]);
-    expect(second.nextClientAccentColors).toBeNull();
+    expect(second.consumedWithoutWrite).toEqual([legacyLocalKey]);
   });
 
   it("consumes but never overwrites an existing server-side accent", () => {
@@ -294,7 +311,7 @@ describe("planProjectAccentColorMigration", () => {
     });
 
     expect(result.patches).toEqual([]);
-    expect(result.nextClientAccentColors).toEqual({});
+    expect(result.consumedWithoutWrite).toEqual([legacyLocalKey]);
   });
 
   it("keeps entries whose environment or project is not available yet", () => {
@@ -308,18 +325,29 @@ describe("planProjectAccentColorMigration", () => {
     });
 
     expect(result.patches).toEqual([
-      { environmentId: LOCAL, projectAccentColors: { "repo/a": "#0055aa" } },
+      {
+        environmentId: LOCAL,
+        projectAccentColors: { "repo/a": "#0055aa" },
+        migrations: [{ legacyKey: legacyLocalKey, accentKey: "repo/a", color: "#0055aa" }],
+      },
     ]);
-    expect(result.nextClientAccentColors).toEqual({
-      [legacyRemoteKey]: "#00aa55",
-      "environment-unknown:/gone": "#123456",
-    });
+    expect(result.consumedWithoutWrite).toEqual([]);
   });
 
   it("does nothing when there is nothing to migrate", () => {
     expect(plan({ clientAccentColors: {}, accentColorsByEnvironment: accentMaps([]) })).toEqual({
       patches: [],
-      nextClientAccentColors: null,
+      consumedWithoutWrite: [],
     });
+  });
+
+  it("does not migrate from a cached map when the environment is not writable", () => {
+    expect(
+      plan({
+        clientAccentColors: { [legacyLocalKey]: "#0055aa" },
+        accentColorsByEnvironment: accentMaps([[LOCAL, {}]]),
+        writableEnvironmentIds: new Set(),
+      }),
+    ).toEqual({ patches: [], consumedWithoutWrite: [] });
   });
 });

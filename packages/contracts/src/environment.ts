@@ -56,6 +56,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),
+  /** Server persists ServerSettings.projectAccentColors and accepts its
+      whole-map patch. Absent on older servers, whose patch decoder silently
+      drops the unknown key, so clients must not send accent writes. */
+  projectAccentColors: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

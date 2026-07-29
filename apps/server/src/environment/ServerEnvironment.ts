@@ -146,6 +146,7 @@ export const make = Effect.gen(function* () {
       sessionImport: true,
       providerCatalog: true,
       threadSnooze: true,
+      projectAccentColors: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
     },
   };

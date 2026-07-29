@@ -12,9 +12,9 @@
  *   repository canonical key — every worktree and checkout of a repo shares
  *   one color, which is the intended behavior — and non-git projects fall
  *   back to the normalized workspace path.
- * - **Reads merge across environments** (`resolveProjectAccentColor`). A
- *   project's own environment wins; other connected environments only fill
- *   gaps, in a deterministic order so two clients never disagree.
+ * - **Reads merge across environments** (`resolveProjectAccentColor`).
+ *   Project-owning environments win; other connected environments only fill
+ *   gaps. Both tiers use the same stable ordering on every client.
  * - **Writes fan out** (`buildProjectAccentColorPatches`). Picking a color
  *   patches every connected environment that owns a member of the group, so
  *   the color becomes durable on each machine rather than on whichever one
@@ -73,36 +73,13 @@ export function toProjectAccentMembers(
   });
 }
 
-/**
- * Deterministic environment order: the client's own/primary environment
- * first, then by id. Every client must walk fallbacks in the same order or
- * two clients looking at the same data would show different colors.
- */
-function orderEnvironmentIds(
-  environmentIds: Iterable<EnvironmentId>,
-  primaryEnvironmentId: EnvironmentId | null,
-): EnvironmentId[] {
-  return [...new Set(environmentIds)].toSorted((left, right) => {
-    if (left === primaryEnvironmentId) return right === primaryEnvironmentId ? 0 : -1;
-    if (right === primaryEnvironmentId) return 1;
-    return left.localeCompare(right);
-  });
+function orderEnvironmentIds(environmentIds: Iterable<EnvironmentId>): EnvironmentId[] {
+  return [...new Set(environmentIds)].toSorted((left, right) => left.localeCompare(right));
 }
 
-function orderMembers(
-  members: ReadonlyArray<ProjectAccentMember>,
-  primaryEnvironmentId: EnvironmentId | null,
-  preferredEnvironmentId: EnvironmentId | null,
-): ProjectAccentMember[] {
-  const rank = (member: ProjectAccentMember): number =>
-    member.environmentId === preferredEnvironmentId
-      ? 0
-      : member.environmentId === primaryEnvironmentId
-        ? 1
-        : 2;
+function orderMembers(members: ReadonlyArray<ProjectAccentMember>): ProjectAccentMember[] {
   return [...members].toSorted(
     (left, right) =>
-      rank(left) - rank(right) ||
       left.environmentId.localeCompare(right.environmentId) ||
       left.accentKey.localeCompare(right.accentKey),
   );
@@ -113,10 +90,6 @@ export interface ResolveProjectAccentColorInput {
   readonly members: ReadonlyArray<ProjectAccentMember>;
   /** Accent maps of the currently connected environments. */
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
-  /** The client's own environment, ranked first in every tie-break. */
-  readonly primaryEnvironmentId?: EnvironmentId | null;
-  /** The environment the caller is rendering for (a specific group member). */
-  readonly preferredEnvironmentId?: EnvironmentId | null;
 }
 
 /**
@@ -128,10 +101,7 @@ export interface ResolveProjectAccentColorInput {
 export function resolveProjectAccentColor(
   input: ResolveProjectAccentColorInput,
 ): SidebarProjectAccentColor | null {
-  const primaryEnvironmentId = input.primaryEnvironmentId ?? null;
-  const preferredEnvironmentId = input.preferredEnvironmentId ?? null;
-
-  for (const member of orderMembers(input.members, primaryEnvironmentId, preferredEnvironmentId)) {
+  for (const member of orderMembers(input.members)) {
     const color = input.accentColorsByEnvironment.get(member.environmentId)?.[member.accentKey];
     if (color !== undefined) return color;
   }
@@ -141,10 +111,7 @@ export function resolveProjectAccentColor(
   );
   if (accentKeys.length === 0) return null;
 
-  for (const environmentId of orderEnvironmentIds(
-    input.accentColorsByEnvironment.keys(),
-    primaryEnvironmentId,
-  )) {
+  for (const environmentId of orderEnvironmentIds(input.accentColorsByEnvironment.keys())) {
     const accentColors = input.accentColorsByEnvironment.get(environmentId);
     if (accentColors === undefined) continue;
     for (const accentKey of accentKeys) {
@@ -161,7 +128,27 @@ export interface ProjectAccentColorPatch {
   readonly projectAccentColors: Record<string, SidebarProjectAccentColor>;
 }
 
-function withAccentKeys(
+export function collectWritableProjectAccentKeys(input: {
+  readonly members: ReadonlyArray<ProjectAccentMember>;
+  readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
+  readonly writableEnvironmentIds: ReadonlySet<EnvironmentId>;
+}): ReadonlyMap<EnvironmentId, ReadonlySet<string>> {
+  const accentKeysByEnvironment = new Map<EnvironmentId, Set<string>>();
+  for (const member of input.members) {
+    if (
+      !input.writableEnvironmentIds.has(member.environmentId) ||
+      !input.accentColorsByEnvironment.has(member.environmentId)
+    ) {
+      continue;
+    }
+    const accentKeys = accentKeysByEnvironment.get(member.environmentId);
+    if (accentKeys) accentKeys.add(member.accentKey);
+    else accentKeysByEnvironment.set(member.environmentId, new Set([member.accentKey]));
+  }
+  return accentKeysByEnvironment;
+}
+
+export function withProjectAccentKeys(
   accentColors: ProjectAccentColorMap,
   accentKeys: ReadonlySet<string>,
   color: SidebarProjectAccentColor | null,
@@ -191,21 +178,14 @@ function withAccentKeys(
 export function buildProjectAccentColorPatches(input: {
   readonly members: ReadonlyArray<ProjectAccentMember>;
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
+  /** Connected environments that advertise accent-setting persistence. */
+  readonly writableEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly color: SidebarProjectAccentColor | null;
 }): ProjectAccentColorPatch[] {
-  const accentKeysByEnvironment = new Map<EnvironmentId, Set<string>>();
-  for (const member of input.members) {
-    // Environments that are not currently connected are skipped: we have no
-    // map to patch, and writing a blind whole-map replacement would wipe
-    // whatever that server actually holds.
-    if (!input.accentColorsByEnvironment.has(member.environmentId)) continue;
-    const accentKeys = accentKeysByEnvironment.get(member.environmentId);
-    if (accentKeys) accentKeys.add(member.accentKey);
-    else accentKeysByEnvironment.set(member.environmentId, new Set([member.accentKey]));
-  }
+  const accentKeysByEnvironment = collectWritableProjectAccentKeys(input);
 
   return [...accentKeysByEnvironment].flatMap(([environmentId, accentKeys]) => {
-    const { next, changed } = withAccentKeys(
+    const { next, changed } = withProjectAccentKeys(
       input.accentColorsByEnvironment.get(environmentId) ?? {},
       accentKeys,
       input.color,
@@ -217,14 +197,21 @@ export function buildProjectAccentColorPatches(input: {
 // ── Legacy client-settings migration ─────────────────────────────────
 
 export interface ProjectAccentColorMigrationPlan {
-  readonly patches: ReadonlyArray<ProjectAccentColorPatch>;
   /**
-   * The client map with every migrated entry removed, or null when nothing
-   * changed. Entries whose environment is not currently connected (or whose
-   * project is unknown) are kept so they can migrate the next time that
-   * environment is seen.
+   * One write per environment. Legacy keys are attached to their write so the
+   * caller consumes them only after that server acknowledges persistence.
    */
-  readonly nextClientAccentColors: Record<string, SidebarProjectAccentColor> | null;
+  readonly patches: ReadonlyArray<
+    ProjectAccentColorPatch & {
+      readonly migrations: ReadonlyArray<{
+        readonly legacyKey: string;
+        readonly accentKey: string;
+        readonly color: SidebarProjectAccentColor;
+      }>;
+    }
+  >;
+  /** Legacy keys whose live server map already has an authoritative color. */
+  readonly consumedWithoutWrite: ReadonlyArray<string>;
 }
 
 /**
@@ -233,20 +220,22 @@ export interface ProjectAccentColorMigrationPlan {
  * Legacy entries live in `ClientSettings.sidebarProjectAccentColors`, keyed
  * `${environmentId}:${normalizedWorkspacePath}`. Each one is translated into
  * its project's environment server settings under the machine-independent
- * key. Idempotent: migrated entries are dropped from the client map, and an
- * entry whose target already has a new-style color is dropped WITHOUT
- * overwriting it — the server map is authoritative once populated.
+ * key. The caller consumes entries only after their write succeeds. An entry
+ * whose target already has a new-style color needs no write and is safe to
+ * consume immediately — the server map is authoritative once populated.
  */
 export function planProjectAccentColorMigration(input: {
   readonly clientAccentColors: ProjectAccentColorMap;
   readonly projects: ReadonlyArray<ProjectAccentSource>;
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
+  /** Connected environments that advertise accent-setting persistence. */
+  readonly writableEnvironmentIds: ReadonlySet<EnvironmentId>;
   /** Builds the legacy `${environmentId}:${normalizedPath}` key. */
   readonly deriveLegacyKey: (project: ProjectAccentSource) => string;
 }): ProjectAccentColorMigrationPlan {
   const legacyEntries = Object.entries(input.clientAccentColors);
   if (legacyEntries.length === 0) {
-    return { patches: [], nextClientAccentColors: null };
+    return { patches: [], consumedWithoutWrite: [] };
   }
 
   const projectsByLegacyKey = new Map<string, ProjectAccentSource>();
@@ -256,45 +245,55 @@ export function planProjectAccentColorMigration(input: {
   }
 
   const nextByEnvironment = new Map<EnvironmentId, Record<string, SidebarProjectAccentColor>>();
-  const changedEnvironmentIds = new Set<EnvironmentId>();
-  const migratedLegacyKeys = new Set<string>();
+  const migrationsByEnvironment = new Map<
+    EnvironmentId,
+    Array<{
+      readonly legacyKey: string;
+      readonly accentKey: string;
+      readonly color: SidebarProjectAccentColor;
+    }>
+  >();
+  const consumedWithoutWrite: string[] = [];
 
   for (const [legacyKey, color] of legacyEntries) {
     const project = projectsByLegacyKey.get(legacyKey);
     if (project === undefined) continue;
 
     const environmentAccentColors = input.accentColorsByEnvironment.get(project.environmentId);
-    if (environmentAccentColors === undefined) continue;
+    if (
+      environmentAccentColors === undefined ||
+      !input.writableEnvironmentIds.has(project.environmentId)
+    ) {
+      continue;
+    }
 
     const accentKey = deriveProjectAccentKey(project);
     if (accentKey === null) continue;
 
-    // The entry is consumed either way: an existing server-side color is the
-    // user's newer, cross-machine choice and must not be clobbered.
-    migratedLegacyKeys.add(legacyKey);
+    if (environmentAccentColors[accentKey] !== undefined) {
+      consumedWithoutWrite.push(legacyKey);
+      continue;
+    }
+
     const next =
       nextByEnvironment.get(project.environmentId) ??
       ({ ...environmentAccentColors } as Record<string, SidebarProjectAccentColor>);
     nextByEnvironment.set(project.environmentId, next);
-    if (next[accentKey] !== undefined) continue;
-
-    next[accentKey] = color;
-    changedEnvironmentIds.add(project.environmentId);
+    if (next[accentKey] === undefined) {
+      next[accentKey] = color;
+    }
+    const migrations = migrationsByEnvironment.get(project.environmentId);
+    const migration = { legacyKey, accentKey, color };
+    if (migrations) migrations.push(migration);
+    else migrationsByEnvironment.set(project.environmentId, [migration]);
   }
-
-  if (migratedLegacyKeys.size === 0) {
-    return { patches: [], nextClientAccentColors: null };
-  }
-
-  const nextClientAccentColors = Object.fromEntries(
-    legacyEntries.filter(([legacyKey]) => !migratedLegacyKeys.has(legacyKey)),
-  );
 
   return {
-    patches: [...changedEnvironmentIds].map((environmentId) => ({
+    patches: [...migrationsByEnvironment].map(([environmentId, migrations]) => ({
       environmentId,
       projectAccentColors: nextByEnvironment.get(environmentId) ?? {},
+      migrations,
     })),
-    nextClientAccentColors,
+    consumedWithoutWrite,
   };
 }

@@ -1286,7 +1286,7 @@ export default function SidebarV2() {
     () =>
       new Map(
         projectGroups.flatMap((group) => {
-          const color = projectAccentColors.resolve(group.memberProjects, group.environmentId);
+          const color = projectAccentColors.resolve(group.memberProjects);
           return color === null
             ? []
             : group.memberProjectRefs.map(
@@ -1561,10 +1561,7 @@ export default function SidebarV2() {
   const projectActionsAccentColor =
     projectActionsTarget === null
       ? null
-      : projectAccentColors.resolve(
-          projectActionsTarget.memberProjects,
-          projectActionsTarget.environmentId,
-        );
+      : projectAccentColors.resolve(projectActionsTarget.memberProjects);
   const updateProjectAccentColor = useCallback(
     (color: SidebarProjectAccentColor | null) => {
       if (projectActionsTarget === null) return;
@@ -2586,10 +2583,7 @@ export default function SidebarV2() {
                       </MenuCheckboxItem>
                       {menuProjectGroups.map((project) => {
                         const scopeKey = project.projectKey;
-                        const accentColor = projectAccentColors.resolve(
-                          project.memberProjects,
-                          project.environmentId,
-                        );
+                        const accentColor = projectAccentColors.resolve(project.memberProjects);
                         return (
                           <MenuCheckboxItem
                             key={scopeKey}

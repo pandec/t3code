@@ -779,6 +779,8 @@ function ThreadNavigationSidebarPane(
   const listExtraData = useMemo(
     () => ({
       selectedThreadKey: props.selectedThreadKey ?? "",
+      projectAccentByGroupKey,
+      projectAccentByProjectKey,
       projectByKey,
       projectCwdByKey,
       projectTitleByProjectKey,
@@ -787,6 +789,8 @@ function ThreadNavigationSidebarPane(
     }),
     [
       props.selectedThreadKey,
+      projectAccentByGroupKey,
+      projectAccentByProjectKey,
       projectByKey,
       projectCwdByKey,
       projectTitleByProjectKey,
@@ -1003,6 +1007,8 @@ function ThreadNavigationSidebarPane(
       handleSwipeableClose,
       handleSwipeableWillOpen,
       openPendingTask,
+      projectAccentByGroupKey,
+      projectAccentByProjectKey,
       projectByKey,
       projectCwdByKey,
       projectTitleByProjectKey,

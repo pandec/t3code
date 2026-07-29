@@ -9,7 +9,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
 import { useCallback, useMemo } from "react";
 
-import { environmentServerConfigsAtom } from "./server";
+import { environmentPresentations } from "./presentation";
 
 /**
  * Project accent colors as seen by mobile: read-only.
@@ -25,16 +25,17 @@ import { environmentServerConfigsAtom } from "./server";
 export function useProjectAccentColors(): (
   members: ReadonlyArray<ProjectAccentSource>,
 ) => SidebarProjectAccentColor | null {
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const accentColorsByEnvironment = useMemo<ReadonlyMap<EnvironmentId, ProjectAccentColorMap>>(
     () =>
       new Map(
-        [...serverConfigs].map(
-          ([environmentId, config]) =>
-            [environmentId, config.settings.projectAccentColors] as const,
+        [...presentations].flatMap(([environmentId, presentation]) =>
+          presentation.connection.phase === "connected" && presentation.serverConfig !== null
+            ? [[environmentId, presentation.serverConfig.settings.projectAccentColors] as const]
+            : [],
         ),
       ),
-    [serverConfigs],
+    [presentations],
   );
 
   return useCallback(
