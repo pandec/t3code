@@ -35,7 +35,9 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../../config.ts";
@@ -406,6 +408,56 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(openCodeSnapshot.enabled).toBe(false);
       expect(openCodeSnapshot.continuation?.groupKey).toBe(
         `${openCodeDriverKind}:instance:${openCodeId}`,
+      );
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("isolates a Claude shadow materialization failure to the invalid instance", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "provider-instance-registry-claude-shadow-",
+      });
+      const invalidId = ProviderInstanceId.make("claude_invalid_shadow");
+      const validId = ProviderInstanceId.make("claude_valid_shadow");
+      const invalidShared = path.join(root, "invalid-shared");
+      const validShared = path.join(root, "valid-shared");
+      const validShadow = path.join(root, "valid-shadow");
+
+      const configMap: ProviderInstanceConfigMap = {
+        [invalidId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: false,
+          config: makeClaudeConfig({
+            homePath: invalidShared,
+            shadowHomePath: invalidShared,
+          }),
+        },
+        [validId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: false,
+          config: makeClaudeConfig({
+            homePath: validShared,
+            shadowHomePath: validShadow,
+          }),
+        },
+      };
+
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [ClaudeDriver],
+        configMap,
+      });
+
+      const instances = yield* registry.listInstances;
+      expect(instances.map(({ instanceId }) => instanceId)).toEqual([validId]);
+      const unavailable = yield* registry.listUnavailable;
+      expect(unavailable.map(({ instanceId }) => instanceId)).toEqual([invalidId]);
+      expect(unavailable[0]?.unavailableReason).toContain(
+        "must be separate from and not nested within",
+      );
+      expect(yield* fileSystem.readLink(path.join(validShadow, "projects"))).toBe(
+        path.join(validShared, "projects"),
       );
     }).pipe(Effect.provide(testLayer)),
   );

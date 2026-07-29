@@ -90,6 +90,22 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
         expect(layout.shadowConfigDirPath).toBe(shadow);
       }),
     );
+
+    it.effect("resolves a relative inherited config dir from the server cwd", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir("t3code-claude-layout-cwd-");
+        const shadow = path.join(root, "shadow");
+
+        const layout = yield* resolveClaudeHomeLayout(
+          { homePath: "", shadowHomePath: shadow },
+          { CLAUDE_CONFIG_DIR: ".claude-work" },
+          root,
+        );
+
+        expect(layout.sharedConfigDirPath).toBe(path.join(root, ".claude-work"));
+      }),
+    );
   });
 
   describe("materializeClaudeShadowHome", () => {
@@ -141,6 +157,27 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
       }),
     );
 
+    it.effect("converges when the same layout is materialized concurrently", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir("t3code-claude-overlay-");
+        const shared = path.join(root, "shared");
+        const shadow = path.join(root, "shadow");
+
+        yield* Effect.all(
+          [
+            materializeClaudeShadowHome(overlayLayout(shared, shadow)),
+            materializeClaudeShadowHome(overlayLayout(shared, shadow)),
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        expect(yield* readLinkTarget(path.join(shadow, "projects"))).toBe(
+          path.join(shared, "projects"),
+        );
+      }),
+    );
+
     it.effect("retargets a shared symlink that points somewhere else", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -168,13 +205,38 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
         const root = yield* makeTempDir("t3code-claude-overlay-");
         const shared = path.join(root, "shared");
         const shadow = path.join(root, "shadow");
+        const privateTarget = path.join(root, "account", ".claude.json");
+        yield* writeTextFile(privateTarget, '{"account":"two"}\n');
         yield* fileSystem.makeDirectory(path.join(shadow, "projects"), { recursive: true });
+        yield* fileSystem.symlink(privateTarget, path.join(shadow, ".claude.json"));
 
         const result = yield* materializeClaudeShadowHome(overlayLayout(shared, shadow)).pipe(
           Effect.flip,
         );
 
         expect(result).toBeInstanceOf(ClaudeShadowHomeEntryConflictError);
+        expect(yield* readLinkTarget(path.join(shadow, ".claude.json"))).toBe(privateTarget);
+      }),
+    );
+
+    it.effect("removes a managed optional link after its shared target disappears", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const root = yield* makeTempDir("t3code-claude-overlay-");
+        const shared = path.join(root, "shared");
+        const shadow = path.join(root, "shadow");
+        const sharedSettings = path.join(shared, "settings.json");
+        const shadowSettings = path.join(shadow, "settings.json");
+        yield* writeTextFile(sharedSettings, "{}\n");
+
+        yield* materializeClaudeShadowHome(overlayLayout(shared, shadow));
+        yield* fileSystem.remove(sharedSettings);
+        yield* materializeClaudeShadowHome(overlayLayout(shared, shadow));
+
+        expect((yield* fileSystem.readLink(shadowSettings).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
       }),
     );
 
@@ -256,6 +318,44 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
         );
 
         expect(result).toBeInstanceOf(ClaudeShadowHomePathConflictError);
+      }),
+    );
+
+    it.effect("rejects nested shared and shadow config dirs before creating the shadow", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const shared = yield* makeTempDir("t3code-claude-overlay-");
+        const shadow = path.join(shared, "projects", "shadow");
+
+        const result = yield* materializeClaudeShadowHome(overlayLayout(shared, shadow)).pipe(
+          Effect.flip,
+        );
+
+        expect(result).toBeInstanceOf(ClaudeShadowHomePathConflictError);
+        expect(yield* fileSystem.exists(shadow)).toBe(false);
+      }),
+    );
+
+    it.effect("rejects a shadow symlink alias without removing shared private links", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const root = yield* makeTempDir("t3code-claude-overlay-");
+        const shared = path.join(root, "shared");
+        const shadowAlias = path.join(root, "shadow-alias");
+        const privateTarget = path.join(root, "account", ".claude.json");
+        yield* writeTextFile(privateTarget, '{"account":"one"}\n');
+        yield* fileSystem.makeDirectory(shared, { recursive: true });
+        yield* fileSystem.symlink(privateTarget, path.join(shared, ".claude.json"));
+        yield* fileSystem.symlink(shared, shadowAlias);
+
+        const result = yield* materializeClaudeShadowHome(overlayLayout(shared, shadowAlias)).pipe(
+          Effect.flip,
+        );
+
+        expect(result).toBeInstanceOf(ClaudeShadowHomePathConflictError);
+        expect(yield* readLinkTarget(path.join(shared, ".claude.json"))).toBe(privateTarget);
       }),
     );
 

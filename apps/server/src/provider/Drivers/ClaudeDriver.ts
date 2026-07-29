@@ -131,7 +131,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         instanceId,
       });
       const effectiveConfig = { ...config, enabled } satisfies ClaudeSettings;
-      const homeLayout = yield* resolveClaudeHomeLayout(effectiveConfig, processEnv);
+      const homeLayout = yield* resolveClaudeHomeLayout(effectiveConfig, processEnv, cwd);
       yield* materializeClaudeShadowHome(homeLayout).pipe(
         Effect.mapError(
           (cause) =>

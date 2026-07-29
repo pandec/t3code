@@ -60,7 +60,14 @@ export class ClaudeShadowHomeFileSystemError extends Schema.TaggedErrorClass<Cla
   "ClaudeShadowHomeFileSystemError",
   {
     ...ClaudeShadowHomeContext,
-    operation: Schema.Literals(["readLink", "makeDirectory", "exists", "remove", "symlink"]),
+    operation: Schema.Literals([
+      "readLink",
+      "makeDirectory",
+      "realPath",
+      "exists",
+      "remove",
+      "symlink",
+    ]),
     path: Schema.String,
     targetPath: Schema.optional(Schema.String),
     entryName: Schema.optional(Schema.String),
@@ -78,7 +85,7 @@ export class ClaudeShadowHomePathConflictError extends Schema.TaggedErrorClass<C
   ClaudeShadowHomeContext,
 ) {
   override get message(): string {
-    return `Claude shadow config dir '${this.shadowConfigDirPath}' must be different from the shared config dir '${this.sharedConfigDirPath}'.`;
+    return `Claude shadow config dir '${this.shadowConfigDirPath}' must be separate from and not nested within the shared config dir '${this.sharedConfigDirPath}'.`;
   }
 }
 
@@ -106,8 +113,9 @@ export type ClaudeShadowHomeError = typeof ClaudeShadowHomeError.Type;
 export const resolveClaudeHomeLayout = Effect.fn("resolveClaudeHomeLayout")(function* (
   config: Pick<ClaudeSettings, "homePath" | "shadowHomePath">,
   environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
 ): Effect.fn.Return<ClaudeHomeLayout, never, Path.Path> {
-  const sharedConfigDirPath = yield* resolveClaudeConfigDirPath(config, environment);
+  const sharedConfigDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
   const shadowConfigDirPath = yield* resolveClaudeShadowConfigDirPath(config);
   if (shadowConfigDirPath === undefined) {
     return { mode: "direct", sharedConfigDirPath, shadowConfigDirPath: undefined };
@@ -128,6 +136,14 @@ function isNotSymlinkError(error: PlatformError.PlatformError): boolean {
     cause !== null &&
     "code" in cause &&
     cause.code === "EINVAL"
+  );
+}
+
+function pathsOverlap(path: Path.Path, first: string, second: string): boolean {
+  const relative = path.relative(first, second);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   );
 }
 
@@ -173,19 +189,77 @@ const removePrivateSymlink = Effect.fn("ClaudeHomeLayout.removePrivateSymlink")(
   if (state._tag === "Symlink") {
     yield* input.fileSystem.remove(privatePath).pipe(
       Effect.catchTags({
-        PlatformError: (cause) =>
-          new ClaudeShadowHomeFileSystemError({
+        PlatformError: (cause) => {
+          if (cause.reason._tag === "NotFound") return Effect.void;
+          return new ClaudeShadowHomeFileSystemError({
             sharedConfigDirPath: input.sharedConfigDirPath,
             shadowConfigDirPath: input.shadowConfigDirPath,
             operation: "remove",
             path: privatePath,
             entryName: input.entryName,
             cause,
-          }),
+          });
+        },
       }),
     );
   }
 });
+
+const validateSharedEntry = Effect.fn("ClaudeHomeLayout.validateSharedEntry")(function* (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly sharedConfigDirPath: string;
+  readonly shadowConfigDirPath: string;
+  readonly entryName: string;
+}): Effect.fn.Return<void, ClaudeShadowHomeError, Path.Path> {
+  const path = yield* Path.Path;
+  const targetPath = path.join(input.sharedConfigDirPath, input.entryName);
+  const linkPath = path.join(input.shadowConfigDirPath, input.entryName);
+  const state = yield* readLinkState({ ...input, linkPath });
+  if (state._tag === "NotSymlink") {
+    return yield* new ClaudeShadowHomeEntryConflictError({
+      sharedConfigDirPath: input.sharedConfigDirPath,
+      shadowConfigDirPath: input.shadowConfigDirPath,
+      entryName: input.entryName,
+      linkPath,
+      targetPath,
+    });
+  }
+});
+
+const removeStaleOptionalSymlink = Effect.fn("ClaudeHomeLayout.removeStaleOptionalSymlink")(
+  function* (input: {
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly sharedConfigDirPath: string;
+    readonly shadowConfigDirPath: string;
+    readonly entryName: string;
+  }): Effect.fn.Return<void, ClaudeShadowHomeError, Path.Path> {
+    const path = yield* Path.Path;
+    const targetPath = path.join(input.sharedConfigDirPath, input.entryName);
+    const linkPath = path.join(input.shadowConfigDirPath, input.entryName);
+    const state = yield* readLinkState({ ...input, linkPath });
+    if (
+      state._tag !== "Symlink" ||
+      path.resolve(path.dirname(linkPath), state.target) !== targetPath
+    ) {
+      return;
+    }
+    yield* input.fileSystem.remove(linkPath).pipe(
+      Effect.catchTags({
+        PlatformError: (cause) => {
+          if (cause.reason._tag === "NotFound") return Effect.void;
+          return new ClaudeShadowHomeFileSystemError({
+            sharedConfigDirPath: input.sharedConfigDirPath,
+            shadowConfigDirPath: input.shadowConfigDirPath,
+            operation: "remove",
+            path: linkPath,
+            entryName: input.entryName,
+            cause,
+          });
+        },
+      }),
+    );
+  },
+);
 
 const ensureSymlink = Effect.fn("ClaudeHomeLayout.ensureSymlink")(function* (input: {
   readonly fileSystem: FileSystem.FileSystem;
@@ -200,8 +274,38 @@ const ensureSymlink = Effect.fn("ClaudeHomeLayout.ensureSymlink")(function* (inp
 
   const createLink = input.fileSystem.symlink(target, link).pipe(
     Effect.catchTags({
-      PlatformError: (cause) =>
-        new ClaudeShadowHomeFileSystemError({
+      PlatformError: (cause) => {
+        if (cause.reason._tag === "AlreadyExists") {
+          return readLinkState({ ...input, linkPath: link }).pipe(
+            Effect.flatMap((currentState): Effect.Effect<void, ClaudeShadowHomeError> => {
+              if (
+                currentState._tag === "Symlink" &&
+                path.resolve(path.dirname(link), currentState.target) === target
+              ) {
+                return Effect.void;
+              }
+              if (currentState._tag === "NotSymlink") {
+                return new ClaudeShadowHomeEntryConflictError({
+                  sharedConfigDirPath: input.sharedConfigDirPath,
+                  shadowConfigDirPath: input.shadowConfigDirPath,
+                  entryName: input.entryName,
+                  linkPath: link,
+                  targetPath: target,
+                });
+              }
+              return new ClaudeShadowHomeFileSystemError({
+                sharedConfigDirPath: input.sharedConfigDirPath,
+                shadowConfigDirPath: input.shadowConfigDirPath,
+                operation: "symlink",
+                path: link,
+                targetPath: target,
+                entryName: input.entryName,
+                cause,
+              });
+            }),
+          );
+        }
+        return new ClaudeShadowHomeFileSystemError({
           sharedConfigDirPath: input.sharedConfigDirPath,
           shadowConfigDirPath: input.shadowConfigDirPath,
           operation: "symlink",
@@ -209,7 +313,8 @@ const ensureSymlink = Effect.fn("ClaudeHomeLayout.ensureSymlink")(function* (inp
           targetPath: target,
           entryName: input.entryName,
           cause,
-        }),
+        });
+      },
     }),
   );
 
@@ -231,15 +336,17 @@ const ensureSymlink = Effect.fn("ClaudeHomeLayout.ensureSymlink")(function* (inp
   if (resolvedExisting !== target) {
     yield* input.fileSystem.remove(link).pipe(
       Effect.catchTags({
-        PlatformError: (cause) =>
-          new ClaudeShadowHomeFileSystemError({
+        PlatformError: (cause) => {
+          if (cause.reason._tag === "NotFound") return Effect.void;
+          return new ClaudeShadowHomeFileSystemError({
             sharedConfigDirPath: input.sharedConfigDirPath,
             shadowConfigDirPath: input.shadowConfigDirPath,
             operation: "remove",
             path: link,
             entryName: input.entryName,
             cause,
-          }),
+          });
+        },
       }),
     );
     yield* createLink;
@@ -268,6 +375,15 @@ export const materializeClaudeShadowHome = Effect.fn("materializeClaudeShadowHom
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  if (
+    pathsOverlap(path, layout.sharedConfigDirPath, shadowConfigDirPath) ||
+    pathsOverlap(path, shadowConfigDirPath, layout.sharedConfigDirPath)
+  ) {
+    return yield* new ClaudeShadowHomePathConflictError({
+      sharedConfigDirPath: layout.sharedConfigDirPath,
+      shadowConfigDirPath,
+    });
+  }
 
   const makeDirectory = (directoryPath: string) =>
     fileSystem.makeDirectory(directoryPath, { recursive: true }).pipe(
@@ -294,11 +410,38 @@ export const materializeClaudeShadowHome = Effect.fn("materializeClaudeShadowHom
     { concurrency: "unbounded" },
   );
 
-  const optionalEntries = yield* Effect.forEach(
+  const realPath = (directoryPath: string) =>
+    fileSystem.realPath(directoryPath).pipe(
+      Effect.catchTags({
+        PlatformError: (cause) =>
+          new ClaudeShadowHomeFileSystemError({
+            sharedConfigDirPath: layout.sharedConfigDirPath,
+            shadowConfigDirPath,
+            operation: "realPath",
+            path: directoryPath,
+            cause,
+          }),
+      }),
+    );
+  const [canonicalSharedConfigDirPath, canonicalShadowConfigDirPath] = yield* Effect.all([
+    realPath(layout.sharedConfigDirPath),
+    realPath(shadowConfigDirPath),
+  ]);
+  if (
+    pathsOverlap(path, canonicalSharedConfigDirPath, canonicalShadowConfigDirPath) ||
+    pathsOverlap(path, canonicalShadowConfigDirPath, canonicalSharedConfigDirPath)
+  ) {
+    return yield* new ClaudeShadowHomePathConflictError({
+      sharedConfigDirPath: layout.sharedConfigDirPath,
+      shadowConfigDirPath,
+    });
+  }
+
+  const optionalEntryStates = yield* Effect.forEach(
     OPTIONAL_SHARED_ENTRIES,
     (entryName) =>
       fileSystem.exists(path.join(layout.sharedConfigDirPath, entryName)).pipe(
-        Effect.map((exists) => (exists ? entryName : undefined)),
+        Effect.map((exists) => ({ entryName, exists })),
         Effect.catchTags({
           PlatformError: (cause) =>
             new ClaudeShadowHomeFileSystemError({
@@ -314,6 +457,36 @@ export const materializeClaudeShadowHome = Effect.fn("materializeClaudeShadowHom
     { concurrency: "unbounded" },
   );
 
+  const sharedEntryNames = [
+    ...REQUIRED_SHARED_DIRECTORIES,
+    ...optionalEntryStates.filter(({ exists }) => exists).map(({ entryName }) => entryName),
+  ];
+
+  // Validate every known conflict before changing existing shadow entries.
+  yield* Effect.forEach(
+    sharedEntryNames,
+    (entryName) =>
+      validateSharedEntry({
+        fileSystem,
+        sharedConfigDirPath: layout.sharedConfigDirPath,
+        shadowConfigDirPath,
+        entryName,
+      }),
+    { discard: true },
+  );
+
+  yield* Effect.forEach(
+    optionalEntryStates.filter(({ exists }) => !exists),
+    ({ entryName }) =>
+      removeStaleOptionalSymlink({
+        fileSystem,
+        sharedConfigDirPath: layout.sharedConfigDirPath,
+        shadowConfigDirPath,
+        entryName,
+      }),
+    { discard: true },
+  );
+
   yield* Effect.forEach(
     PRIVATE_ENTRY_NAMES,
     (entryName) =>
@@ -327,10 +500,7 @@ export const materializeClaudeShadowHome = Effect.fn("materializeClaudeShadowHom
   );
 
   yield* Effect.forEach(
-    [
-      ...REQUIRED_SHARED_DIRECTORIES,
-      ...optionalEntries.filter((entryName) => entryName !== undefined),
-    ],
+    sharedEntryNames,
     (entryName) =>
       ensureSymlink({
         fileSystem,
