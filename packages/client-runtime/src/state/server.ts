@@ -326,6 +326,16 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverListProviderSkills,
       staleTimeMs: 60_000,
     }),
+    resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:resource-telemetry",
+      tag: WS_METHODS.subscribeResourceTelemetry,
+      idleTtlMs: 0,
+    }),
+    resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:resource-telemetry-history",
+      tag: WS_METHODS.serverGetResourceTelemetryHistory,
+      staleTimeMs: 5_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -376,6 +386,14 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
+    }),
+    retryResourceTelemetry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:retry-resource-telemetry",
+      tag: WS_METHODS.serverRetryResourceTelemetry,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
     }),
   };
 }

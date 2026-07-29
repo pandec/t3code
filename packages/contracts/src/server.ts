@@ -324,6 +324,7 @@ export type ServerProcessSignal = typeof ServerProcessSignal.Type;
 
 export const ServerProcessDiagnosticsEntry = Schema.Struct({
   pid: PositiveInt,
+  startTimeMs: NonNegativeInt,
   ppid: NonNegativeInt,
   pgid: Schema.Option(Schema.Int),
   status: TrimmedNonEmptyString,
@@ -416,6 +417,7 @@ export type ServerProcessResourceHistoryResult = typeof ServerProcessResourceHis
 
 export const ServerSignalProcessInput = Schema.Struct({
   pid: PositiveInt,
+  startTimeMs: NonNegativeInt,
   signal: ServerProcessSignal,
 });
 export type ServerSignalProcessInput = typeof ServerSignalProcessInput.Type;

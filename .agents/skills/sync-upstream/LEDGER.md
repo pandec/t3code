@@ -22,6 +22,8 @@ Self-cleaning rules (apply during every sync's ledger update):
 - **Fork requirements override upstream AGENTS defaults** (2026-07-29). Keep upstream's broad project guidance in `AGENTS.md`, but retain the leading private-fork requirements for full local gates, `dev`/mirror-only `main` topology, focused fork testing, private build helpers, and controlled-browser verification of shared URLs. These explicitly override conflicting upstream defaults such as CI-only repo-wide checks or rebasing feature work onto mirror `main`.
 - **test-t3-mobile skill carries fork hardening** (2026-07-29). `.agents/skills/test-t3-mobile/SKILL.md` deliberately diverges from upstream #4165: resolved (not hardcoded) bundle identifier and workspace names, native-compatibility precheck, per-worktree derived-data pinning, physical-device section, opt-in trigger clause in the description, and expanded troubleshooting; `references/local-setup.md` is fork-only and must never go upstream. On sync conflicts, take upstream's structural changes but preserve these additions; never revert to upstream's hardcoded `com.t3tools.t3code.dev` / `T3CodeDev.xcworkspace` constants. Revisit if upstream ships its own identity-resolution step.
 - **Migration numbering** (2026-07-24). Fork migration history occupies 033–040; upstream's `ProjectionThreadsSettled` is 039 and `ProjectionThreadsSnoozed` is 041 on `dev`. Never renumber shipped fork migrations. Renumber new upstream migrations after the highest fork ID and verify ordering every sync that adds one. Databases previously migrated on pure upstream IDs 33/34 are not interchangeable with fork databases because the migrator tracks only the latest numeric ID.
+- **RPC authorization stays centralized and exhaustive** (2026-07-29). Use upstream's typed `apps/server/src/auth/RpcAuthorization.ts` map and never restore the old local map in `ws.ts`. Fork RPC scopes remain `serverListProviderSkills` → orchestration read, `sessionImportListCandidates` → orchestration read, and `sessionImportImport` → orchestration operate. Revisit if those methods are removed or replaced.
+- **Hermes follows shared provider background policy** (2026-07-29). `HermesDriverEnv` includes `BackgroundPolicy`, and Hermes leaves `makeManagedServerProvider.refreshInterval` unset so the same server setting, demand gate, and battery policy used by built-in providers controls its health refresh. Revisit if upstream changes the managed-provider scheduling contract again.
 
 ## Watchpoints
 
@@ -29,12 +31,13 @@ When the incoming upstream range touches a path below, spawn one targeted sub-ag
 
 | Path                                                           | Question                                                                                                                 | Untouched streak |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `apps/web/src/components/SidebarV2.tsx`                        | Do the fork's multi-project scope, archived-threads entry, provider icons, and compact time labels survive upstream?     | 1                |
-| `apps/mobile/src/features/home/HomeScreen.tsx`                 | Do upstream v2 pending-row changes retain the fork's model predicate and shared provider-driver resolution?              | 0                |
-| `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` | Does the fork's model-filter wiring still supply every upstream `serverConfigs` consumer and pending-task filter?        | 0                |
-| `apps/web/src/components/SidebarStageBackdrop.tsx`             | Do the upstream appearance gate and fork packaged-build gate remain separate options with Nightly still eligible?        | 0                |
+| `apps/mobile/src/features/home/HomeScreen.tsx`                 | Do upstream v2 pending-row changes retain the fork's model predicate and shared provider-driver resolution?              | 1                |
+| `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` | Does the fork's model-filter wiring still supply every upstream `serverConfigs` consumer and pending-task filter?        | 1                |
+| `apps/web/src/components/SidebarStageBackdrop.tsx`             | Do the upstream appearance gate and fork packaged-build gate remain separate options with Nightly still eligible?        | 1                |
 | `apps/server/src/ws.ts`                                        | Does thread-detail catch-up still pass aggregate filters to `readEvents` without restoring the dead replay RPC?          | 0                |
-| `.agents/skills/test-t3-mobile/SKILL.md`                       | Does an upstream skill revision duplicate or conflict with the fork's identity-resolution and troubleshooting additions? | 0                |
+| `apps/server/src/auth/RpcAuthorization.ts`                     | Does the exhaustive typed map still include the fork's provider-skill and session-import RPC scopes?                     | 0                |
+| `apps/server/src/provider/makeManagedServerProvider.ts`        | Does the fork's Hermes driver still supply new runtime dependencies and inherit shared refresh scheduling?               | 0                |
+| `.agents/skills/test-t3-mobile/SKILL.md`                       | Does an upstream skill revision duplicate or conflict with the fork's identity-resolution and troubleshooting additions? | 1                |
 
 ## Full audit
 

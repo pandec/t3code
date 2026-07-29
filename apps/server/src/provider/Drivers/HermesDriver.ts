@@ -1,5 +1,4 @@
 import { HermesSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +7,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGeneration.ts";
@@ -40,7 +40,6 @@ import {
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("hermes");
-const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const UPDATE = makeStaticProviderMaintenanceResolver(
   makeManualOnlyProviderMaintenanceCapabilities({
     provider: DRIVER_KIND,
@@ -49,6 +48,7 @@ const UPDATE = makeStaticProviderMaintenanceResolver(
 );
 
 export type HermesDriverEnv =
+  | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
@@ -138,7 +138,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
             publishSnapshot,
             httpClient,
           }),
-        refreshInterval: SNAPSHOT_REFRESH_INTERVAL,
       }).pipe(
         Effect.mapError(
           (cause) =>
