@@ -114,6 +114,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
+    const stored = yield* cache.loadThread(environmentId, threadId).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not inspect the thread cache before persisting.").pipe(
+          Effect.annotateLogs({
+            environmentId,
+            threadId,
+            error: error.message,
+          }),
+          Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
+        ),
+      ),
+    );
+    if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
+      return;
+    }
     yield* cache.saveThread(environmentId, snapshot).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(

@@ -54,7 +54,7 @@ export const EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS: EnvironmentThreadPrewarmSt
     failed: 0,
   });
 
-function isStreamingSession(thread: OrchestrationThreadShell): boolean {
+function isStreamingSession(thread: Pick<OrchestrationThreadShell, "session">): boolean {
   const status = thread.session?.status;
   return status === "starting" || status === "running";
 }
@@ -77,9 +77,10 @@ export function selectPrewarmCandidates(
 }
 
 /**
- * Commits a prewarmed detail snapshot unless the cache already holds a newer
- * one. The stored sequence is re-read immediately before writing so a warm
- * fetch that raced a live thread's own persistence cannot regress the cache.
+ * Commits a prewarmed detail snapshot unless the cache already holds the same
+ * sequence or a newer one. The stored sequence is re-read immediately before
+ * writing so a warm fetch that raced a live thread's own persistence cannot
+ * regress the cache or replace equal-sequence message artifacts.
  * Returns whether the snapshot was written.
  */
 export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(function* (
@@ -90,7 +91,7 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
   const stored = yield* cache
     .loadThread(environmentId, snapshot.thread.id)
     .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
-  if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
+  if (Option.isSome(stored) && stored.value.snapshotSequence >= snapshot.snapshotSequence) {
     return false;
   }
   yield* cache.saveThread(environmentId, snapshot);
@@ -144,6 +145,10 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           failed += 1;
           return;
         }
+        if (isStreamingSession(fetched.value.thread)) {
+          skipped += 1;
+          return;
+        }
         const committed = yield* commitPrewarmedThreadSnapshot(
           input.cache,
           input.environmentId,
@@ -178,7 +183,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
     const loader = yield* ThreadSnapshotLoader;
     const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
     const environmentId = supervisor.target.environmentId;
-    const lastTriggeredAt = yield* Ref.make<number | null>(null);
+    const lastRunAt = yield* Ref.make<number | null>(null);
 
     const connectedGenerations = SubscriptionRef.changes(supervisor.state).pipe(
       Stream.filterMap((state) =>
@@ -197,12 +202,16 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
       Stream.mapEffect(() =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const last = yield* Ref.get(lastTriggeredAt);
+          const last = yield* Ref.get(lastRunAt);
           if (last !== null && now - last < PREWARM_COOLDOWN_MS) {
             return Option.none<EnvironmentThreadPrewarmStatus>();
           }
-          yield* Ref.set(lastTriggeredAt, now);
-          return yield* warmEnvironmentOnce({ supervisor, cache, loader, environmentId }).pipe(
+          const result = yield* warmEnvironmentOnce({
+            supervisor,
+            cache,
+            loader,
+            environmentId,
+          }).pipe(
             Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
             Effect.map((result) =>
               Option.flatMap(result, (status) => Option.fromNullishOr(status)),
@@ -214,6 +223,10 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
               ),
             ),
           );
+          if (Option.isSome(result)) {
+            yield* Ref.set(lastRunAt, result.value.lastRunAt);
+          }
+          return result;
         }),
       ),
       Stream.filterMap((status) =>

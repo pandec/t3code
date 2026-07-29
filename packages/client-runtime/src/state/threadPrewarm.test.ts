@@ -165,7 +165,7 @@ describe("selectPrewarmCandidates", () => {
 });
 
 describe("commitPrewarmedThreadSnapshot", () => {
-  it.effect("writes newer and equal-sequence snapshots and rejects older ones", () =>
+  it.effect("writes newer snapshots and rejects equal or older ones", () =>
     Effect.gen(function* () {
       const { cache, stored } = yield* makeCacheStore({
         shell: Option.none(),
@@ -179,7 +179,7 @@ describe("commitPrewarmedThreadSnapshot", () => {
 
       expect(
         yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, detailSnapshot("thread-1", 5)),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, detailSnapshot("thread-1", 8)),
       ).toBe(true);
@@ -189,7 +189,10 @@ describe("commitPrewarmedThreadSnapshot", () => {
 });
 
 describe("makeEnvironmentThreadPrewarm", () => {
-  const makeHarness = Effect.fn("TestThreadPrewarm.makeHarness")(function* () {
+  const makeHarness = Effect.fn("TestThreadPrewarm.makeHarness")(function* (options?: {
+    readonly initialPrepared?: Option.Option<PreparedConnection>;
+    readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
+  }) {
     const shell: OrchestrationShellSnapshot = {
       snapshotSequence: 10,
       projects: [],
@@ -213,14 +216,16 @@ describe("makeEnvironmentThreadPrewarm", () => {
     const loader = ThreadSnapshotLoader.of({
       load: (_prepared, threadId) =>
         Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
-          Effect.as(Option.some(detailSnapshot(threadId, 10))),
+          Effect.as(
+            Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+          ),
         ),
     });
     const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
       AVAILABLE_CONNECTION_STATE,
     );
     const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
-      Option.some(PREPARED),
+      options?.initialPrepared ?? Option.some(PREPARED),
     );
     const session = yield* SubscriptionRef.make(Option.none());
     const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
@@ -246,7 +251,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     );
     yield* Effect.forkScoped(Stream.runForEach(stream, (status) => Queue.offer(statuses, status)));
 
-    return { supervisorState, wakeups, statuses, stored, loaderCalls };
+    return { supervisorState, prepared, wakeups, statuses, stored, loaderCalls };
   });
 
   it.effect("warms stale recent threads once the environment connects", () =>
@@ -267,7 +272,54 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
-  it.effect("applies a cooldown between runs and rewarns after it elapses", () =>
+  it.effect("does not cool down a no-op foreground attempt before connection", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ initialPrepared: Option.none() });
+
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* TestClock.adjust("3 seconds");
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+
+        yield* SubscriptionRef.set(harness.prepared, Option.some(PREPARED));
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.skipped).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("does not persist a fetched snapshot that became actively streaming", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          fetchedSnapshot: (threadId) => {
+            const snapshot = detailSnapshot(threadId, 10);
+            return {
+              ...snapshot,
+              thread: {
+                ...snapshot.thread,
+                session: runningSession(threadId),
+              },
+            };
+          },
+        });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(0);
+        expect(status.skipped).toBe(2);
+        expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(3);
+      }),
+    ),
+  );
+
+  it.effect("applies a cooldown between runs and rewarms after it elapses", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
