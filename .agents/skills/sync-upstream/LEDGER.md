@@ -23,12 +23,12 @@ Self-cleaning rules (apply during every sync's ledger update):
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
-| Path                                                            | Question                                                                                              | Untouched streak |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------- |
-| `apps/server/src/provider/Layers/ProviderService.ts`            | Does the fork's `strandedPriorTurn` input augmentation still wrap upstream's `sendTurn` call?         | 1                |
-| `apps/web/src/components/settings/SettingsPanels.tsx`           | Do the fork's dirty-badge entries still reference settings upstream has not renamed away?             | 1                |
-| `apps/web/src/components/SidebarV2.tsx`                         | Do the fork's archived-threads entry, provider icons, and compact time labels survive upstream's rework? | 0                |
-| `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx`  | Does the fork's model-filter wiring (`useHomeModelFilterOptions`) still supply upstream's `serverConfigs` consumers? | 0                |
+| Path                                                           | Question                                                                                                             | Untouched streak |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `apps/server/src/provider/Layers/ProviderService.ts`           | Does the fork's `strandedPriorTurn` input augmentation still wrap upstream's `sendTurn` call?                        | 1                |
+| `apps/web/src/components/settings/SettingsPanels.tsx`          | Do the fork's dirty-badge entries still reference settings upstream has not renamed away?                            | 1                |
+| `apps/web/src/components/SidebarV2.tsx`                        | Do the fork's archived-threads entry, provider icons, and compact time labels survive upstream's rework?             | 0                |
+| `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` | Does the fork's model-filter wiring (`useHomeModelFilterOptions`) still supply upstream's `serverConfigs` consumers? | 0                |
 
 ## Full audit
 

@@ -1036,12 +1036,20 @@ export default function SidebarV2() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread, forkThread } =
-    useThreadActions();
+  const {
+    archiveThread,
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+    deleteThread,
+    forkThread,
+  } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -2090,6 +2098,12 @@ export default function SidebarV2() {
               { id: "rename", label: "Rename thread" },
               { id: "mark-unread", label: "Mark unread" },
               ...(canForkConversation(thread) ? [{ id: "fork", label: "Fork conversation" }] : []),
+              {
+                id: "archive",
+                label: "Archive thread",
+                disabled:
+                  thread.session?.status === "running" && thread.session.activeTurnId != null,
+              },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -2156,6 +2170,33 @@ export default function SidebarV2() {
             }
             return;
           }
+          case "archive": {
+            if (confirmThreadArchive) {
+              const confirmed = await settlePromise(() =>
+                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+              );
+              if (confirmed._tag === "Failure" || !confirmed.value) return;
+            }
+            let didArchive = false;
+            const result = await archiveThread(threadRef, {
+              onArchived: () => {
+                didArchive = true;
+              },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: didArchive
+                    ? "Thread archived, but navigation failed"
+                    : "Failed to archive thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -2192,6 +2233,8 @@ export default function SidebarV2() {
       attemptSnooze,
       attemptUnsettle,
       attemptUnsnooze,
+      archiveThread,
+      confirmThreadArchive,
       confirmThreadDelete,
       deleteThread,
       forkThread,
