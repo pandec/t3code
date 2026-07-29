@@ -459,7 +459,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
-      ...(Object.keys(settings.sidebarProjectAccentColors).length > 0
+      ...(Object.keys(settings.projectAccentColors).length > 0 ||
+      Object.keys(settings.sidebarProjectAccentColors).length > 0
         ? ["Project accent colors"]
         : []),
       ...(settings.sidebarThreadProviderIconVisibility !==
@@ -530,6 +531,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
+      settings.projectAccentColors,
       settings.sidebarProjectAccentColors,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
@@ -559,6 +561,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      // Both maps: accents now live in server settings, but the deprecated
+      // client map can still hold entries whose environment has not been
+      // reconnected since the migration landed.
+      projectAccentColors: DEFAULT_UNIFIED_SETTINGS.projectAccentColors,
       sidebarProjectAccentColors: DEFAULT_UNIFIED_SETTINGS.sidebarProjectAccentColors,
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,

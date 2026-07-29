@@ -320,6 +320,27 @@ export function useUpdateEnvironmentSettings(environmentId: EnvironmentId) {
   return useUpdateSettingsTarget(environmentId);
 }
 
+/**
+ * Fan-out updater: the target environment is chosen per call rather than per
+ * hook, so one interaction can patch several servers at once (project accent
+ * colors write to every environment owning a member of the group). Hooks
+ * cannot be called in a loop, which rules out `useUpdateEnvironmentSettings`
+ * for that shape.
+ */
+export function useUpdateSettingsForEnvironment() {
+  const persistServerSettings = useAtomCommand(
+    serverEnvironment.updateSettings,
+    "server settings update",
+  );
+  return useCallback(
+    (environmentId: EnvironmentId, patch: ServerSettingsPatch) => {
+      if (Object.keys(patch).length === 0) return;
+      void persistServerSettings({ environmentId, input: { patch } });
+    },
+    [persistServerSettings],
+  );
+}
+
 export function useUpdatePrimarySettings() {
   return useUpdateSettingsTarget(usePrimaryEnvironment()?.environmentId ?? null);
 }
