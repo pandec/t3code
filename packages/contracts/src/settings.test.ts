@@ -163,6 +163,49 @@ describe("ClientSettings sidebar project accents", () => {
   );
 });
 
+describe("ServerSettings project accents", () => {
+  it("decodes an absent map to empty, so older servers stay readable", () => {
+    expect(decodeServerSettings({}).projectAccentColors).toEqual({});
+    expect(DEFAULT_SERVER_SETTINGS.projectAccentColors).toEqual({});
+  });
+
+  it("accepts machine-independent keys in settings and replacement or fill patches", () => {
+    const accents = {
+      "github.com/t3tools/t3code": "#12AbEf",
+      "/work/not-a-repo": "#00ff00",
+    };
+
+    expect(decodeServerSettings({ projectAccentColors: accents }).projectAccentColors).toEqual(
+      accents,
+    );
+    expect(decodeServerSettingsPatch({ projectAccentColors: accents }).projectAccentColors).toEqual(
+      accents,
+    );
+    expect(
+      decodeServerSettingsPatch({ projectAccentColorsFill: accents }).projectAccentColorsFill,
+    ).toEqual(accents);
+    expect(
+      decodeServerSettingsPatch({
+        projectAccentColors: {},
+        projectAccentColorsFill: accents,
+      }),
+    ).toEqual({
+      projectAccentColors: {},
+      projectAccentColorsFill: accents,
+    });
+  });
+
+  it.each(["red", "#12345", "#12345g", "#12345678"])(
+    "rejects an invalid project accent: %s",
+    (color) => {
+      const accents = { "github.com/t3tools/t3code": color };
+      expect(() => decodeServerSettings({ projectAccentColors: accents })).toThrow();
+      expect(() => decodeServerSettingsPatch({ projectAccentColors: accents })).toThrow();
+      expect(() => decodeServerSettingsPatch({ projectAccentColorsFill: accents })).toThrow();
+    },
+  );
+});
+
 describe("ClientSettings sidebar provider icon visibility", () => {
   it("preserves the existing hover-only behavior by default", () => {
     expect(decodeClientSettings({}).sidebarThreadProviderIconVisibility).toBe("hover");

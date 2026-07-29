@@ -14,8 +14,8 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
-  ServerSettings,
-  type ServerSettingsPatch,
+  type ServerSettings,
+  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   type ClientSettingsPatch,
@@ -43,6 +43,7 @@ let clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
 let clientSettingsHydrated = false;
 let clientSettingsHydrationPromise: Promise<void> | null = null;
 let clientSettingsHydrationGeneration = 0;
+let clientSettingsPersistenceChain = Promise.resolve();
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -133,23 +134,29 @@ async function hydrateClientSettings(): Promise<void> {
   return clientSettingsHydrationPromise;
 }
 
+export function enqueueClientSettingsPersistence(persist: () => Promise<void>): Promise<void> {
+  const current = clientSettingsPersistenceChain.then(persist, persist);
+  clientSettingsPersistenceChain = current;
+  return current;
+}
+
 function persistClientSettings(settings: ClientSettings): void {
   replaceClientSettingsSnapshot(settings);
-  void ensureLocalApi()
-    .persistence.setClientSettings(settings)
-    .catch((error) => {
-      console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, {
-        operation: "persist",
-        ...safeErrorLogAttributes(error),
-      });
+  void enqueueClientSettingsPersistence(() =>
+    ensureLocalApi().persistence.setClientSettings(settings),
+  ).catch((error) => {
+    console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, {
+      operation: "persist",
+      ...safeErrorLogAttributes(error),
     });
+  });
 }
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettingsPatch.fields));
 
-function splitPatch(patch: UnifiedSettingsPatch): {
+export function splitSettingsPatch(patch: UnifiedSettingsPatch): {
   serverPatch: ServerSettingsPatch;
   clientPatch: ClientSettingsPatch;
 } {
@@ -292,7 +299,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   );
   const updateSettings = useCallback(
     (patch: UnifiedSettingsPatch) => {
-      const { serverPatch, clientPatch } = splitPatch(patch);
+      const { serverPatch, clientPatch } = splitSettingsPatch(patch);
 
       if (Object.keys(serverPatch).length > 0) {
         if (environmentId) {
@@ -320,6 +327,27 @@ export function useUpdateEnvironmentSettings(environmentId: EnvironmentId) {
   return useUpdateSettingsTarget(environmentId);
 }
 
+/**
+ * Fan-out updater: the target environment is chosen per call rather than per
+ * hook, so one interaction can patch several servers at once (project accent
+ * colors write to every environment owning a member of the group). Hooks
+ * cannot be called in a loop, which rules out `useUpdateEnvironmentSettings`
+ * for that shape.
+ */
+export function useUpdateSettingsForEnvironment() {
+  const persistServerSettings = useAtomCommand(
+    serverEnvironment.updateSettings,
+    "server settings update",
+  );
+  return useCallback(
+    (environmentId: EnvironmentId, patch: ServerSettingsPatch) => {
+      if (Object.keys(patch).length === 0) return Promise.resolve(null);
+      return persistServerSettings({ environmentId, input: { patch } });
+    },
+    [persistServerSettings],
+  );
+}
+
 export function useUpdatePrimarySettings() {
   return useUpdateSettingsTarget(usePrimaryEnvironment()?.environmentId ?? null);
 }
@@ -338,6 +366,7 @@ export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
   clientSettingsHydrated = false;
   clientSettingsHydrationPromise = null;
+  clientSettingsPersistenceChain = Promise.resolve();
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
 }

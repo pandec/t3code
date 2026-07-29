@@ -77,7 +77,6 @@ import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import {
-  derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
   selectProjectGroupingSettings,
@@ -94,6 +93,10 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
+import {
+  useProjectAccentColorMigration,
+  useProjectAccentColors,
+} from "../hooks/useProjectAccentColors";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -121,7 +124,6 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
-  resolveSidebarProjectAccentColor,
   resolveSidebarProjectScope,
   resolveSidebarProjectScopePhysicalKeys,
   resolveSettledTimestamp,
@@ -133,7 +135,6 @@ import {
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
   toggleSidebarProjectScope,
-  updateSidebarProjectAccentColors,
 } from "./Sidebar.logic";
 import type { SidebarProjectScope } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -1096,7 +1097,10 @@ export default function SidebarV2() {
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
-  const projectAccentColors = useClientSettings((s) => s.sidebarProjectAccentColors);
+  // Accents are server settings, merged across every connected environment —
+  // that is what makes them reach the mobile app and other machines.
+  const projectAccentColors = useProjectAccentColors();
+  useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -1282,11 +1286,7 @@ export default function SidebarV2() {
     () =>
       new Map(
         projectGroups.flatMap((group) => {
-          const color = resolveSidebarProjectAccentColor(
-            group.memberProjects,
-            projectAccentColors,
-            derivePhysicalProjectKey(group),
-          );
+          const color = projectAccentColors.resolve(group.memberProjects);
           return color === null
             ? []
             : group.memberProjectRefs.map(
@@ -1561,23 +1561,13 @@ export default function SidebarV2() {
   const projectActionsAccentColor =
     projectActionsTarget === null
       ? null
-      : resolveSidebarProjectAccentColor(
-          projectActionsTarget.memberProjects,
-          projectAccentColors,
-          derivePhysicalProjectKey(projectActionsTarget),
-        );
+      : projectAccentColors.resolve(projectActionsTarget.memberProjects);
   const updateProjectAccentColor = useCallback(
     (color: SidebarProjectAccentColor | null) => {
       if (projectActionsTarget === null) return;
-      updateSettings({
-        sidebarProjectAccentColors: updateSidebarProjectAccentColors(
-          projectAccentColors,
-          projectActionsTarget.memberProjects,
-          color,
-        ),
-      });
+      projectAccentColors.update(projectActionsTarget.memberProjects, color);
     },
-    [projectAccentColors, projectActionsTarget, updateSettings],
+    [projectAccentColors, projectActionsTarget],
   );
 
   const handleProjectActions = useCallback(
@@ -2593,11 +2583,7 @@ export default function SidebarV2() {
                       </MenuCheckboxItem>
                       {menuProjectGroups.map((project) => {
                         const scopeKey = project.projectKey;
-                        const accentColor = resolveSidebarProjectAccentColor(
-                          project.memberProjects,
-                          projectAccentColors,
-                          derivePhysicalProjectKey(project),
-                        );
+                        const accentColor = projectAccentColors.resolve(project.memberProjects);
                         return (
                           <MenuCheckboxItem
                             key={scopeKey}

@@ -29,6 +29,7 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   PendingTaskListRow,
@@ -417,6 +418,37 @@ export function HomeScreen(props: HomeScreenProps) {
       ),
     [v2ScopeProjects],
   );
+  // Accents are shared server settings, so a project reads the same color
+  // here as it does in the desktop sidebar. Mobile is read-only for them.
+  const resolveProjectAccentColor = useProjectAccentColors();
+  const v2ProjectAccentByProjectKey = useMemo(
+    () =>
+      new Map(
+        v2ScopeProjects.flatMap((scope) => {
+          const accentColor = resolveProjectAccentColor(scope.projects);
+          return accentColor === null
+            ? []
+            : scope.projectRefs.map(
+                (projectRef) =>
+                  [
+                    scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+                    accentColor,
+                  ] as const,
+              );
+        }),
+      ),
+    [resolveProjectAccentColor, v2ScopeProjects],
+  );
+  const projectAccentByGroupKey = useMemo(
+    () =>
+      new Map(
+        projectGroups.flatMap((group) => {
+          const accentColor = resolveProjectAccentColor(group.projects);
+          return accentColor === null ? [] : [[group.key, accentColor] as const];
+        }),
+      ),
+    [projectGroups, resolveProjectAccentColor],
+  );
   const v2ScopedProjectKeys = useMemo(
     () =>
       v2ScopedProjectGroup === null
@@ -617,6 +649,7 @@ export function HomeScreen(props: HomeScreenProps) {
             pendingTask={item.pendingTask}
             project={projectByKey.get(pendingScopeKey) ?? null}
             projectTitle={v2ProjectTitleByProjectKey.get(pendingScopeKey)}
+            projectAccentColor={v2ProjectAccentByProjectKey.get(pendingScopeKey) ?? null}
             environmentLabel={
               Object.keys(props.savedConnectionsById).length > 1
                 ? (props.savedConnectionsById[item.pendingTask.message.environmentId]
@@ -641,6 +674,11 @@ export function HomeScreen(props: HomeScreenProps) {
           projectTitle={v2ProjectTitleByProjectKey.get(
             scopedProjectKey(thread.environmentId, thread.projectId),
           )}
+          projectAccentColor={
+            v2ProjectAccentByProjectKey.get(
+              scopedProjectKey(thread.environmentId, thread.projectId),
+            ) ?? null
+          }
           providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
           environmentLabel={
             Object.keys(props.savedConnectionsById).length > 1
@@ -678,14 +716,20 @@ export function HomeScreen(props: HomeScreenProps) {
       props.savedConnectionsById,
       serverConfigs,
       settlementEnvironmentIds,
+      v2ProjectAccentByProjectKey,
       v2ProjectTitleByProjectKey,
     ],
   );
   const v2KeyExtractor = useCallback((item: ThreadListV2ListItem) => item.key, []);
 
   const extraData = useMemo(
-    () => ({ savedConnectionsById: props.savedConnectionsById, projectCwdByKey, serverConfigs }),
-    [props.savedConnectionsById, projectCwdByKey, serverConfigs],
+    () => ({
+      savedConnectionsById: props.savedConnectionsById,
+      projectAccentByGroupKey,
+      projectCwdByKey,
+      serverConfigs,
+    }),
+    [projectAccentByGroupKey, projectCwdByKey, props.savedConnectionsById, serverConfigs],
   );
 
   const renderItem = useCallback(
@@ -695,6 +739,7 @@ export function HomeScreen(props: HomeScreenProps) {
           return (
             <ThreadListGroupHeader
               variant="compact"
+              accentColor={projectAccentByGroupKey.get(item.group.key) ?? null}
               collapsed={item.collapsed}
               isFirst={item.isFirst}
               groupKey={item.group.key}
@@ -769,6 +814,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onNewThreadInProject,
       props.onSelectPendingTask,
       props.onSelectThread,
+      projectAccentByGroupKey,
       props.savedConnectionsById,
       serverConfigs,
       updateGroupDisplay,

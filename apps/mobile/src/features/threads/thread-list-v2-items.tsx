@@ -4,13 +4,18 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, type ComponentProps } from "react";
-import { Platform, Pressable, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import {
+  ACCENT_TINT_ALPHA,
+  ACCENT_TINT_ALPHA_RECEDED,
+  withAccentAlpha,
+} from "../../lib/accentTint";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -69,6 +74,32 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
 
+/**
+ * The project accent as a flat tint layered over the row's own background,
+ * mirroring web's `color-mix` overlay. Null accent renders nothing, and a
+ * selected row keeps its solid selection fill — the accent identifies the
+ * project, selection identifies the open thread, and the second must win.
+ */
+function AccentTintOverlay(props: {
+  readonly accentColor: string | null;
+  readonly alpha?: number;
+  readonly borderRadius?: number;
+}) {
+  if (props.accentColor === null) return null;
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFill,
+        {
+          backgroundColor: withAccentAlpha(props.accentColor, props.alpha ?? ACCENT_TINT_ALPHA),
+          borderRadius: props.borderRadius,
+        },
+      ]}
+    />
+  );
+}
+
 /** Section label + rule: the only structure in an otherwise flat list. */
 export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
   readonly label: string;
@@ -103,6 +134,9 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly pendingTask: PendingNewTask;
   readonly project: EnvironmentProject | null;
   readonly projectTitle?: string;
+  /** Same shared project accent the thread rows carry — a queued task sits
+      in the same list and must not be the one row without it. */
+  readonly projectAccentColor?: string | null;
   readonly environmentLabel: string | null;
   readonly pane?: "screen" | "sidebar";
   /** Draws the "Pending" divider above the first queued row. */
@@ -190,10 +224,19 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           }
         >
           {sidebarPane ? (
-            rowContent
+            <>
+              <AccentTintOverlay
+                accentColor={props.projectAccentColor ?? null}
+                borderRadius={SIDEBAR_V2_ROW_RADIUS}
+              />
+              {rowContent}
+            </>
           ) : (
             <View className="bg-screen">
-              <View className="px-5 py-2.5">{rowContent}</View>
+              <View className="px-5 py-2.5">
+                <AccentTintOverlay accentColor={props.projectAccentColor ?? null} />
+                {rowContent}
+              </View>
               <View className="ml-5 h-px bg-border-subtle" />
             </View>
           )}
@@ -209,6 +252,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly showSettledDivider: boolean;
   readonly project: EnvironmentProject | null;
   readonly projectTitle?: string;
+  /** Shared project accent (server settings, merged across environments).
+      Rendered as a flat tint so a row is recognizable by project at a
+      glance, exactly as in the web sidebar. */
+  readonly projectAccentColor?: string | null;
   readonly providerDriver: string | null;
   /** Which machine hosts the thread. Null when only one environment is
       connected — repeating the same label on every row is noise. Mirrors
@@ -273,6 +320,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
 
+  const accentColor = props.projectAccentColor ?? null;
   const status = resolveThreadListV2Status(thread);
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
@@ -464,14 +512,22 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         }
       >
         {sidebarPane ? (
-          cardContent
+          <>
+            {selected ? null : (
+              <AccentTintOverlay accentColor={accentColor} borderRadius={SIDEBAR_V2_ROW_RADIUS} />
+            )}
+            {cardContent}
+          </>
         ) : (
           /* Flat native list rows: no tonal containers — colored status
              labels and text hierarchy carry state, an inset hairline
              separates rows. The opaque screen background stays so swipe
              actions reveal behind the row. */
           <View className="bg-screen">
-            <View className="px-5 py-2.5">{cardContent}</View>
+            <View className="px-5 py-2.5">
+              <AccentTintOverlay accentColor={accentColor} />
+              {cardContent}
+            </View>
             <View className="ml-5 h-px bg-border-subtle" />
           </View>
         )}
@@ -500,13 +556,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
         }
       >
-        {/* Settled history recedes: dimmed favicon + muted title. */}
+        {/* Settled history recedes: dimmed favicon + muted title, and the
+            project tint halves with it so the tail stays quiet. */}
         <View
           className={cn(
             "min-h-[44px] flex-row items-center gap-2.5 py-2",
             sidebarPane ? "px-3" : "px-5",
           )}
         >
+          {selected ? null : (
+            <AccentTintOverlay
+              accentColor={accentColor}
+              alpha={ACCENT_TINT_ALPHA_RECEDED}
+              borderRadius={sidebarPane ? SIDEBAR_V2_ROW_RADIUS : undefined}
+            />
+          )}
           {props.project ? (
             <View className="opacity-40">
               <ProjectFavicon
