@@ -314,6 +314,17 @@ describe("planProjectAccentColorMigration", () => {
     expect(result.consumedWithoutWrite).toEqual([legacyLocalKey]);
   });
 
+  it("consumes an authoritative old-server accent without the fill capability", () => {
+    const result = plan({
+      clientAccentColors: { [legacyLocalKey]: "#0055aa" },
+      accentColorsByEnvironment: accentMaps([[LOCAL, { "repo/a": "#ff0000" }]]),
+      fillCapableEnvironmentIds: new Set(),
+    });
+
+    expect(result.patches).toEqual([]);
+    expect(result.consumedWithoutWrite).toEqual([legacyLocalKey]);
+  });
+
   it("keeps entries whose environment or project is not available yet", () => {
     const result = plan({
       clientAccentColors: {

@@ -125,6 +125,38 @@ describe("enqueueProjectAccentColorWrite", () => {
     });
   });
 
+  it("persists a clear after an ambiguous preceding write failure", async () => {
+    const persisted: Array<Record<string, SidebarProjectAccentColor>> = [];
+    const persist = async (payload: Record<string, SidebarProjectAccentColor>) => {
+      persisted.push(payload);
+      return persisted.length === 1 ? null : payload;
+    };
+
+    const add = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: () => ({
+        payload: { "repo/a": color("#111111") },
+        changed: true,
+      }),
+      persist,
+    });
+    const clear = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: () => ({
+        payload: {},
+        changed: true,
+      }),
+      persist,
+    });
+
+    await Promise.all([add, clear]);
+    expect(persisted).toEqual([{ "repo/a": "#111111" }, {}]);
+  });
+
   it("queues a clear behind an in-flight first accent write", async () => {
     const persisted: Array<Record<string, SidebarProjectAccentColor>> = [];
     let releaseFirst: (() => void) | undefined;

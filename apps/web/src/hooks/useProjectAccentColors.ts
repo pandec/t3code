@@ -147,9 +147,9 @@ export function useProjectAccentColors(): ProjectAccentColors {
         environmentId,
         fallbackMap: current,
         readCurrentMap: () => accentColorsRef.current.get(environmentId),
-        update: (latest) => ({
+        update: () => ({
           payload: {},
-          changed: Object.keys(latest).length > 0,
+          changed: true,
         }),
         persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
       });

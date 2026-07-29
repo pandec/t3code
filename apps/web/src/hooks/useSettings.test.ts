@@ -6,7 +6,13 @@ import {
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeEnvironmentSettings, resolveEnvironmentIdentificationMode } from "./useSettings";
+import {
+  __resetClientSettingsPersistenceForTests,
+  enqueueClientSettingsPersistence,
+  mergeEnvironmentSettings,
+  resolveEnvironmentIdentificationMode,
+  splitSettingsPatch,
+} from "./useSettings";
 
 describe("resolveEnvironmentIdentificationMode", () => {
   it("keeps identification hidden until client settings hydrate", () => {
@@ -44,5 +50,50 @@ describe("mergeEnvironmentSettings", () => {
 
     expect(settings.providerInstances).toBe(serverSettings.providerInstances);
     expect(settings.favorites).toBe(clientSettings.favorites);
+  });
+});
+
+describe("client settings persistence", () => {
+  it("serializes full-snapshot writes in invocation order", async () => {
+    __resetClientSettingsPersistenceForTests();
+    const order: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = enqueueClientSettingsPersistence(async () => {
+      order.push("first:start");
+      await firstBlocked;
+      order.push("first:end");
+    });
+    const second = enqueueClientSettingsPersistence(async () => {
+      order.push("second");
+    });
+
+    await Promise.resolve();
+    expect(order).toEqual(["first:start"]);
+
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first:start", "first:end", "second"]);
+  });
+});
+
+describe("splitSettingsPatch", () => {
+  it("routes patch-only server operations away from client persistence", () => {
+    expect(
+      splitSettingsPatch({
+        projectAccentColorsFill: { "repo/a": "#0055aa" },
+        timestampFormat: "12-hour",
+      }),
+    ).toEqual({
+      serverPatch: {
+        projectAccentColorsFill: { "repo/a": "#0055aa" },
+      },
+      clientPatch: {
+        timestampFormat: "12-hour",
+      },
+    });
   });
 });

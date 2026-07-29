@@ -260,12 +260,7 @@ export function planProjectAccentColorMigration(input: {
     if (project === undefined) continue;
 
     const environmentAccentColors = input.accentColorsByEnvironment.get(project.environmentId);
-    if (
-      environmentAccentColors === undefined ||
-      !input.fillCapableEnvironmentIds.has(project.environmentId)
-    ) {
-      continue;
-    }
+    if (environmentAccentColors === undefined) continue;
 
     const accentKey = deriveProjectAccentKey(project);
     if (accentKey === null) continue;
@@ -274,6 +269,7 @@ export function planProjectAccentColorMigration(input: {
       consumedWithoutWrite.push(legacyKey);
       continue;
     }
+    if (!input.fillCapableEnvironmentIds.has(project.environmentId)) continue;
 
     const fill = fillByEnvironment.get(project.environmentId) ?? {};
     fillByEnvironment.set(project.environmentId, fill);
