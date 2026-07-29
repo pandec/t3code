@@ -120,8 +120,19 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
-  const { automaticGitFetchInterval, ...patchForMerge } = patch;
+  const { automaticGitFetchInterval, projectAccentColorsFill, ...patchForMerge } = patch;
   const next = deepMerge(current, patchForMerge);
+  const nextProjectAccentColors =
+    patch.projectAccentColors === undefined
+      ? { ...next.projectAccentColors }
+      : { ...patch.projectAccentColors };
+  if (projectAccentColorsFill !== undefined) {
+    for (const [accentKey, color] of Object.entries(projectAccentColorsFill)) {
+      if (nextProjectAccentColors[accentKey] === undefined) {
+        nextProjectAccentColors[accentKey] = color;
+      }
+    }
+  }
   const nextWithReplacements = {
     ...next,
     ...(patch.providerInstances !== undefined
@@ -129,8 +140,8 @@ export function applyServerSettingsPatch(
       : {}),
     // Replaced wholesale, never deep-merged: a merge cannot express clearing
     // a project's accent, which is the removal of its key.
-    ...(patch.projectAccentColors !== undefined
-      ? { projectAccentColors: patch.projectAccentColors }
+    ...(patch.projectAccentColors !== undefined || projectAccentColorsFill !== undefined
+      ? { projectAccentColors: nextProjectAccentColors }
       : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }

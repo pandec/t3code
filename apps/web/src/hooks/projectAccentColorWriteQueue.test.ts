@@ -37,7 +37,7 @@ describe("enqueueProjectAccentColorWrite", () => {
         fallbackMap: {},
         readCurrentMap: () => ({}),
         update: (current) => ({
-          next: { ...current, [key]: value },
+          payload: { ...current, [key]: value },
           changed: current[key] !== value,
         }),
         persist,
@@ -70,7 +70,7 @@ describe("enqueueProjectAccentColorWrite", () => {
         fallbackMap: {},
         readCurrentMap: () => ({ "repo/external": color("#333333") }),
         update: (current) => ({
-          next: { ...current, [key]: value },
+          payload: { ...current, [key]: value },
           changed: current[key] !== value,
         }),
         persist,
@@ -82,5 +82,94 @@ describe("enqueueProjectAccentColorWrite", () => {
       "repo/external": "#333333",
       "repo/b": "#222222",
     });
+  });
+
+  it("seeds a following replacement from an acknowledged fill response", async () => {
+    const persisted: Array<Record<string, SidebarProjectAccentColor>> = [];
+    const fill = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: () => ({
+        payload: { "repo/a": color("#111111") },
+        changed: true,
+      }),
+      persist: async (payload) => {
+        persisted.push(payload);
+        return {
+          "repo/external": color("#333333"),
+          ...payload,
+        };
+      },
+    });
+    const replace = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: (current) => ({
+        payload: { ...current, "repo/b": color("#222222") },
+        changed: true,
+      }),
+      persist: async (payload) => {
+        persisted.push(payload);
+        return payload;
+      },
+    });
+
+    await Promise.all([fill, replace]);
+
+    expect(persisted[1]).toEqual({
+      "repo/external": "#333333",
+      "repo/a": "#111111",
+      "repo/b": "#222222",
+    });
+  });
+
+  it("queues a clear behind an in-flight first accent write", async () => {
+    const persisted: Array<Record<string, SidebarProjectAccentColor>> = [];
+    let releaseFirst: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const firstPersisted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const persist = async (payload: Record<string, SidebarProjectAccentColor>) => {
+      persisted.push(payload);
+      if (persisted.length === 1) {
+        markFirstStarted?.();
+        await firstPersisted;
+      }
+      return payload;
+    };
+
+    const add = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: (current) => ({
+        payload: { ...current, "repo/a": color("#111111") },
+        changed: current["repo/a"] !== "#111111",
+      }),
+      persist,
+    });
+    const clear = enqueueProjectAccentColorWrite({
+      environmentId: ENVIRONMENT,
+      fallbackMap: {},
+      readCurrentMap: () => ({}),
+      update: (current) => ({
+        payload: {},
+        changed: Object.keys(current).length > 0,
+      }),
+      persist,
+    });
+
+    await firstStarted;
+    expect(persisted).toEqual([{ "repo/a": "#111111" }]);
+
+    releaseFirst?.();
+    await Promise.all([add, clear]);
+    expect(persisted).toEqual([{ "repo/a": "#111111" }, {}]);
   });
 });

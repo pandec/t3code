@@ -312,4 +312,43 @@ describe("serverSettings helpers", () => {
       current.projectAccentColors,
     );
   });
+
+  it("atomically fills only absent project accent keys", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectAccentColors: { "repo/a": "#0055aa" },
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        projectAccentColorsFill: {
+          "repo/a": "#ff0000",
+          "repo/b": "#00aa55",
+        },
+      }).projectAccentColors,
+    ).toEqual({
+      "repo/a": "#0055aa",
+      "repo/b": "#00aa55",
+    });
+  });
+
+  it("applies project accent replacement before fill when both are present", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectAccentColors: { "repo/old": "#0055aa" },
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        projectAccentColors: { "repo/a": "#ff0000" },
+        projectAccentColorsFill: {
+          "repo/a": "#00aa55",
+          "repo/b": "#123456",
+        },
+      }).projectAccentColors,
+    ).toEqual({
+      "repo/a": "#ff0000",
+      "repo/b": "#123456",
+    });
+  });
 });

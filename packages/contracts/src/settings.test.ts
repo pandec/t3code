@@ -169,7 +169,7 @@ describe("ServerSettings project accents", () => {
     expect(DEFAULT_SERVER_SETTINGS.projectAccentColors).toEqual({});
   });
 
-  it("accepts machine-independent keys in settings and patches", () => {
+  it("accepts machine-independent keys in settings and replacement or fill patches", () => {
     const accents = {
       "github.com/t3tools/t3code": "#12AbEf",
       "/work/not-a-repo": "#00ff00",
@@ -181,6 +181,18 @@ describe("ServerSettings project accents", () => {
     expect(decodeServerSettingsPatch({ projectAccentColors: accents }).projectAccentColors).toEqual(
       accents,
     );
+    expect(
+      decodeServerSettingsPatch({ projectAccentColorsFill: accents }).projectAccentColorsFill,
+    ).toEqual(accents);
+    expect(
+      decodeServerSettingsPatch({
+        projectAccentColors: {},
+        projectAccentColorsFill: accents,
+      }),
+    ).toEqual({
+      projectAccentColors: {},
+      projectAccentColorsFill: accents,
+    });
   });
 
   it.each(["red", "#12345", "#12345g", "#12345678"])(
@@ -189,6 +201,7 @@ describe("ServerSettings project accents", () => {
       const accents = { "github.com/t3tools/t3code": color };
       expect(() => decodeServerSettings({ projectAccentColors: accents })).toThrow();
       expect(() => decodeServerSettingsPatch({ projectAccentColors: accents })).toThrow();
+      expect(() => decodeServerSettingsPatch({ projectAccentColorsFill: accents })).toThrow();
     },
   );
 });

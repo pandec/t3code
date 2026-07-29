@@ -508,6 +508,29 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("does not let a concurrent migration fill overwrite an explicit accent", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      yield* Effect.all(
+        [
+          serverSettings.updateSettings({
+            projectAccentColors: { "repo/a": "#ff0000" },
+          }),
+          serverSettings.updateSettings({
+            projectAccentColorsFill: { "repo/a": "#0055aa" },
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const finalSettings = yield* serverSettings.getSettings;
+      assert.deepEqual(finalSettings.projectAccentColors, {
+        "repo/a": "#ff0000",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("trims observability settings when updates are applied", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

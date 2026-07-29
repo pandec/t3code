@@ -201,15 +201,15 @@ export interface ProjectAccentColorMigrationPlan {
    * One write per environment. Legacy keys are attached to their write so the
    * caller consumes them only after that server acknowledges persistence.
    */
-  readonly patches: ReadonlyArray<
-    ProjectAccentColorPatch & {
-      readonly migrations: ReadonlyArray<{
-        readonly legacyKey: string;
-        readonly accentKey: string;
-        readonly color: SidebarProjectAccentColor;
-      }>;
-    }
-  >;
+  readonly patches: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly projectAccentColorsFill: Record<string, SidebarProjectAccentColor>;
+    readonly migrations: ReadonlyArray<{
+      readonly legacyKey: string;
+      readonly accentKey: string;
+      readonly color: SidebarProjectAccentColor;
+    }>;
+  }>;
   /** Legacy keys whose live server map already has an authoritative color. */
   readonly consumedWithoutWrite: ReadonlyArray<string>;
 }
@@ -228,8 +228,8 @@ export function planProjectAccentColorMigration(input: {
   readonly clientAccentColors: ProjectAccentColorMap;
   readonly projects: ReadonlyArray<ProjectAccentSource>;
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
-  /** Connected environments that advertise accent-setting persistence. */
-  readonly writableEnvironmentIds: ReadonlySet<EnvironmentId>;
+  /** Connected environments that advertise atomic fill-if-absent persistence. */
+  readonly fillCapableEnvironmentIds: ReadonlySet<EnvironmentId>;
   /** Builds the legacy `${environmentId}:${normalizedPath}` key. */
   readonly deriveLegacyKey: (project: ProjectAccentSource) => string;
 }): ProjectAccentColorMigrationPlan {
@@ -244,7 +244,7 @@ export function planProjectAccentColorMigration(input: {
     if (!projectsByLegacyKey.has(legacyKey)) projectsByLegacyKey.set(legacyKey, project);
   }
 
-  const nextByEnvironment = new Map<EnvironmentId, Record<string, SidebarProjectAccentColor>>();
+  const fillByEnvironment = new Map<EnvironmentId, Record<string, SidebarProjectAccentColor>>();
   const migrationsByEnvironment = new Map<
     EnvironmentId,
     Array<{
@@ -262,7 +262,7 @@ export function planProjectAccentColorMigration(input: {
     const environmentAccentColors = input.accentColorsByEnvironment.get(project.environmentId);
     if (
       environmentAccentColors === undefined ||
-      !input.writableEnvironmentIds.has(project.environmentId)
+      !input.fillCapableEnvironmentIds.has(project.environmentId)
     ) {
       continue;
     }
@@ -275,12 +275,10 @@ export function planProjectAccentColorMigration(input: {
       continue;
     }
 
-    const next =
-      nextByEnvironment.get(project.environmentId) ??
-      ({ ...environmentAccentColors } as Record<string, SidebarProjectAccentColor>);
-    nextByEnvironment.set(project.environmentId, next);
-    if (next[accentKey] === undefined) {
-      next[accentKey] = color;
+    const fill = fillByEnvironment.get(project.environmentId) ?? {};
+    fillByEnvironment.set(project.environmentId, fill);
+    if (fill[accentKey] === undefined) {
+      fill[accentKey] = color;
     }
     const migrations = migrationsByEnvironment.get(project.environmentId);
     const migration = { legacyKey, accentKey, color };
@@ -291,7 +289,7 @@ export function planProjectAccentColorMigration(input: {
   return {
     patches: [...migrationsByEnvironment].map(([environmentId, migrations]) => ({
       environmentId,
-      projectAccentColors: nextByEnvironment.get(environmentId) ?? {},
+      projectAccentColorsFill: fillByEnvironment.get(environmentId) ?? {},
       migrations,
     })),
     consumedWithoutWrite,

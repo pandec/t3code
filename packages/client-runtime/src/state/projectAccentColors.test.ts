@@ -259,14 +259,14 @@ describe("planProjectAccentColorMigration", () => {
   const plan = (input: {
     readonly clientAccentColors: Record<string, string>;
     readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
-    readonly writableEnvironmentIds?: ReadonlySet<EnvironmentId>;
+    readonly fillCapableEnvironmentIds?: ReadonlySet<EnvironmentId>;
   }) =>
     planProjectAccentColorMigration({
       clientAccentColors: input.clientAccentColors as Record<string, SidebarProjectAccentColor>,
       projects: [localProject, remoteProject],
       accentColorsByEnvironment: input.accentColorsByEnvironment,
-      writableEnvironmentIds:
-        input.writableEnvironmentIds ?? new Set(input.accentColorsByEnvironment.keys()),
+      fillCapableEnvironmentIds:
+        input.fillCapableEnvironmentIds ?? new Set(input.accentColorsByEnvironment.keys()),
       deriveLegacyKey: derivePhysicalProjectKey,
     });
 
@@ -282,12 +282,12 @@ describe("planProjectAccentColorMigration", () => {
     expect(result.patches).toEqual([
       {
         environmentId: LOCAL,
-        projectAccentColors: { "repo/a": "#0055aa" },
+        projectAccentColorsFill: { "repo/a": "#0055aa" },
         migrations: [{ legacyKey: legacyLocalKey, accentKey: "repo/a", color: "#0055aa" }],
       },
       {
         environmentId: REMOTE,
-        projectAccentColors: { "/srv/b": "#00aa55" },
+        projectAccentColorsFill: { "/srv/b": "#00aa55" },
         migrations: [{ legacyKey: legacyRemoteKey, accentKey: "/srv/b", color: "#00aa55" }],
       },
     ]);
@@ -327,7 +327,7 @@ describe("planProjectAccentColorMigration", () => {
     expect(result.patches).toEqual([
       {
         environmentId: LOCAL,
-        projectAccentColors: { "repo/a": "#0055aa" },
+        projectAccentColorsFill: { "repo/a": "#0055aa" },
         migrations: [{ legacyKey: legacyLocalKey, accentKey: "repo/a", color: "#0055aa" }],
       },
     ]);
@@ -341,12 +341,12 @@ describe("planProjectAccentColorMigration", () => {
     });
   });
 
-  it("does not migrate from a cached map when the environment is not writable", () => {
+  it("does not migrate without the atomic fill capability", () => {
     expect(
       plan({
         clientAccentColors: { [legacyLocalKey]: "#0055aa" },
         accentColorsByEnvironment: accentMaps([[LOCAL, {}]]),
-        writableEnvironmentIds: new Set(),
+        fillCapableEnvironmentIds: new Set(),
       }),
     ).toEqual({ patches: [], consumedWithoutWrite: [] });
   });

@@ -8,11 +8,11 @@ export interface ProjectAccentColorWrite {
   readonly fallbackMap: ProjectAccentColorMap;
   readonly readCurrentMap: () => ProjectAccentColorMap | undefined;
   readonly update: (current: ProjectAccentColorMap) => {
-    readonly next: MutableProjectAccentColorMap;
+    readonly payload: MutableProjectAccentColorMap;
     readonly changed: boolean;
   };
   readonly persist: (
-    projectAccentColors: MutableProjectAccentColorMap,
+    payload: MutableProjectAccentColorMap,
   ) => Promise<ProjectAccentColorMap | null>;
 }
 
@@ -22,9 +22,10 @@ const writeChains = new Map<EnvironmentId, Promise<ProjectAccentColorMap | null>
  * Serializes both accent payload construction and persistence per environment.
  *
  * The underlying settings command already serializes RPCs, but building two
- * whole-map payloads before they enter that queue can still make the second
- * overwrite the first. Each queued update therefore starts from the previous
- * server response, or the freshest rendered map after a failure.
+ * accent operations before they enter that queue can still make a later
+ * whole-map replacement overwrite the first. Each queued operation therefore
+ * starts from the previous server response, or the freshest rendered map after
+ * a failure.
  */
 export function enqueueProjectAccentColorWrite(
   input: ProjectAccentColorWrite,
@@ -34,8 +35,8 @@ export function enqueueProjectAccentColorWrite(
     .catch(() => null)
     .then(async (lastPersistedMap) => {
       const base = lastPersistedMap ?? input.readCurrentMap() ?? input.fallbackMap;
-      const { next, changed } = input.update(base);
-      return changed ? input.persist(next) : base;
+      const { payload, changed } = input.update(base);
+      return changed ? input.persist(payload) : base;
     });
 
   writeChains.set(input.environmentId, current);

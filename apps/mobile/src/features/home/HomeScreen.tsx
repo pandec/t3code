@@ -723,8 +723,13 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2KeyExtractor = useCallback((item: ThreadListV2ListItem) => item.key, []);
 
   const extraData = useMemo(
-    () => ({ savedConnectionsById: props.savedConnectionsById, projectCwdByKey, serverConfigs }),
-    [props.savedConnectionsById, projectCwdByKey, serverConfigs],
+    () => ({
+      savedConnectionsById: props.savedConnectionsById,
+      projectAccentByGroupKey,
+      projectCwdByKey,
+      serverConfigs,
+    }),
+    [projectAccentByGroupKey, projectCwdByKey, props.savedConnectionsById, serverConfigs],
   );
 
   const renderItem = useCallback(

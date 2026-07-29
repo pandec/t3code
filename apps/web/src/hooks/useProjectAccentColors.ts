@@ -6,7 +6,7 @@
  * and fans a pick out to each environment owning a member of the group. See
  * `@t3tools/client-runtime/state/project-accent-colors` for the rules.
  */
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
@@ -40,14 +40,15 @@ export interface ProjectAccentColors {
     members: ReadonlyArray<ProjectAccentSource>,
     color: SidebarProjectAccentColor | null,
   ) => void;
-  /** Clears every connected server map plus any not-yet-migrated client map. */
-  readonly clearAll: () => void;
+  /** Clears every connected server map. */
+  readonly clearAllServerColors: () => void;
   readonly hasAnyServerAccentColors: boolean;
 }
 
 interface AccentEnvironmentState {
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
   readonly writableEnvironmentIds: ReadonlySet<EnvironmentId>;
+  readonly fillCapableEnvironmentIds: ReadonlySet<EnvironmentId>;
 }
 
 function useAccentEnvironmentState(): AccentEnvironmentState {
@@ -55,6 +56,7 @@ function useAccentEnvironmentState(): AccentEnvironmentState {
   return useMemo(() => {
     const accentColorsByEnvironment = new Map<EnvironmentId, ProjectAccentColorMap>();
     const writableEnvironmentIds = new Set<EnvironmentId>();
+    const fillCapableEnvironmentIds = new Set<EnvironmentId>();
     for (const [environmentId, presentation] of presentations) {
       const config = presentation.serverConfig;
       if (presentation.connection.phase !== "connected" || config === null) continue;
@@ -62,8 +64,11 @@ function useAccentEnvironmentState(): AccentEnvironmentState {
       if (config.environment.capabilities.projectAccentColors === true) {
         writableEnvironmentIds.add(environmentId);
       }
+      if (config.environment.capabilities.projectAccentColorsFill === true) {
+        fillCapableEnvironmentIds.add(environmentId);
+      }
     }
-    return { accentColorsByEnvironment, writableEnvironmentIds };
+    return { accentColorsByEnvironment, writableEnvironmentIds, fillCapableEnvironmentIds };
   }, [presentations]);
 }
 
@@ -81,10 +86,25 @@ function usePersistProjectAccentColors() {
   );
 }
 
+function useFillProjectAccentColors() {
+  const updateEnvironmentSettings = useUpdateSettingsForEnvironment();
+  return useCallback(
+    async (
+      environmentId: EnvironmentId,
+      projectAccentColorsFill: Record<string, SidebarProjectAccentColor>,
+    ): Promise<ProjectAccentColorMap | null> => {
+      const result = await updateEnvironmentSettings(environmentId, {
+        projectAccentColorsFill,
+      });
+      return result?._tag === "Success" ? result.value.projectAccentColors : null;
+    },
+    [updateEnvironmentSettings],
+  );
+}
+
 export function useProjectAccentColors(): ProjectAccentColors {
   const { accentColorsByEnvironment, writableEnvironmentIds } = useAccentEnvironmentState();
   const persistAccentColors = usePersistProjectAccentColors();
-  const updateClientSettings = useUpdateClientSettings();
   const accentColorsRef = useRef(accentColorsByEnvironment);
   accentColorsRef.current = accentColorsByEnvironment;
 
@@ -109,7 +129,10 @@ export function useProjectAccentColors(): ProjectAccentColors {
           environmentId,
           fallbackMap: accentColorsByEnvironment.get(environmentId) ?? {},
           readCurrentMap: () => accentColorsRef.current.get(environmentId),
-          update: (current) => withProjectAccentKeys(current, accentKeys, color),
+          update: (current) => {
+            const { next, changed } = withProjectAccentKeys(current, accentKeys, color);
+            return { payload: next, changed };
+          },
           persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
         });
       }
@@ -117,28 +140,21 @@ export function useProjectAccentColors(): ProjectAccentColors {
     [accentColorsByEnvironment, persistAccentColors, writableEnvironmentIds],
   );
 
-  const clearAll = useCallback(() => {
+  const clearAllServerColors = useCallback(() => {
     for (const environmentId of writableEnvironmentIds) {
-      const current = accentColorsByEnvironment.get(environmentId);
-      if (current === undefined || Object.keys(current).length === 0) continue;
+      const current = accentColorsByEnvironment.get(environmentId) ?? {};
       void enqueueProjectAccentColorWrite({
         environmentId,
         fallbackMap: current,
         readCurrentMap: () => accentColorsRef.current.get(environmentId),
         update: (latest) => ({
-          next: {},
+          payload: {},
           changed: Object.keys(latest).length > 0,
         }),
         persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
       });
     }
-    updateClientSettings({ sidebarProjectAccentColors: {} });
-  }, [
-    accentColorsByEnvironment,
-    persistAccentColors,
-    updateClientSettings,
-    writableEnvironmentIds,
-  ]);
+  }, [accentColorsByEnvironment, persistAccentColors, writableEnvironmentIds]);
 
   const hasAnyServerAccentColors = useMemo(
     () =>
@@ -149,8 +165,8 @@ export function useProjectAccentColors(): ProjectAccentColors {
   );
 
   return useMemo(
-    () => ({ resolve, update, clearAll, hasAnyServerAccentColors }),
-    [clearAll, hasAnyServerAccentColors, resolve, update],
+    () => ({ resolve, update, clearAllServerColors, hasAnyServerAccentColors }),
+    [clearAllServerColors, hasAnyServerAccentColors, resolve, update],
   );
 }
 
@@ -164,15 +180,30 @@ export function useProjectAccentColors(): ProjectAccentColors {
  * color is dropped rather than overwriting it — so re-running is a no-op.
  */
 export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAccentSource>): void {
-  const { accentColorsByEnvironment, writableEnvironmentIds } = useAccentEnvironmentState();
+  const { accentColorsByEnvironment, fillCapableEnvironmentIds } = useAccentEnvironmentState();
   const legacyAccentColors = useClientSettings((settings) => settings.sidebarProjectAccentColors);
-  const persistAccentColors = usePersistProjectAccentColors();
+  const fillProjectAccentColors = useFillProjectAccentColors();
   const updateClientSettings = useUpdateClientSettings();
   const accentColorsRef = useRef(accentColorsByEnvironment);
   accentColorsRef.current = accentColorsByEnvironment;
   // One in-flight migration at a time: the server patches are async, so a
   // re-render before they land would otherwise re-send the same writes.
   const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryDelayRef = useRef(1_000);
+  const [retryGeneration, setRetryGeneration] = useState(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (retryTimeoutRef.current !== null) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (inFlightRef.current) return;
@@ -182,7 +213,7 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
       clientAccentColors: legacyAccentColors,
       projects,
       accentColorsByEnvironment,
-      writableEnvironmentIds,
+      fillCapableEnvironmentIds,
       deriveLegacyKey: derivePhysicalProjectKey,
     });
     if (plan.patches.length === 0 && plan.consumedWithoutWrite.length === 0) return;
@@ -190,31 +221,32 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
     inFlightRef.current = true;
     void (async () => {
       const consumedLegacyKeys = new Set(plan.consumedWithoutWrite);
+      let retryNeeded = false;
       try {
         await Promise.all(
           plan.patches.map(async (patch) => {
             const persisted = await enqueueProjectAccentColorWrite({
               environmentId: patch.environmentId,
-              fallbackMap:
-                accentColorsByEnvironment.get(patch.environmentId) ?? patch.projectAccentColors,
+              fallbackMap: accentColorsByEnvironment.get(patch.environmentId) ?? {},
               readCurrentMap: () => accentColorsRef.current.get(patch.environmentId),
-              update: (current) => {
-                const next = { ...current };
-                let changed = false;
-                for (const migration of patch.migrations) {
-                  if (next[migration.accentKey] !== undefined) continue;
-                  next[migration.accentKey] = migration.color;
-                  changed = true;
-                }
-                return { next, changed };
-              },
-              persist: (projectAccentColors) =>
-                persistAccentColors(patch.environmentId, projectAccentColors),
+              update: (current) => ({
+                payload: patch.projectAccentColorsFill,
+                changed: patch.migrations.some(
+                  (migration) => current[migration.accentKey] === undefined,
+                ),
+              }),
+              persist: (projectAccentColorsFill) =>
+                fillProjectAccentColors(patch.environmentId, projectAccentColorsFill),
             });
-            if (persisted === null) return;
+            if (persisted === null) {
+              retryNeeded = true;
+              return;
+            }
             for (const migration of patch.migrations) {
               if (persisted[migration.accentKey] !== undefined) {
                 consumedLegacyKeys.add(migration.legacyKey);
+              } else {
+                retryNeeded = true;
               }
             }
           }),
@@ -230,16 +262,34 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
             ),
           });
         }
+
+        if (retryNeeded && mountedRef.current && retryTimeoutRef.current === null) {
+          const retryDelay = retryDelayRef.current;
+          retryDelayRef.current = Math.min(retryDelay * 2, 30_000);
+          retryTimeoutRef.current = setTimeout(() => {
+            retryTimeoutRef.current = null;
+            if (mountedRef.current) {
+              setRetryGeneration((generation) => generation + 1);
+            }
+          }, retryDelay);
+        } else if (!retryNeeded) {
+          retryDelayRef.current = 1_000;
+          if (retryTimeoutRef.current !== null) {
+            clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = null;
+          }
+        }
       } finally {
         inFlightRef.current = false;
       }
     })();
   }, [
     accentColorsByEnvironment,
+    fillProjectAccentColors,
     legacyAccentColors,
-    persistAccentColors,
+    fillCapableEnvironmentIds,
     projects,
+    retryGeneration,
     updateClientSettings,
-    writableEnvironmentIds,
   ]);
 }

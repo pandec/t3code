@@ -2,4 +2,7 @@
 
 No items deferred this run.
 
-> cy-review complete — 2026-07-29T07:50:56Z — rounds: 1
+Round 2 found and fixed five worthwhile issues. No valid findings remain
+deferred after either pass.
+
+> cy-review complete — 2026-07-29T08:14:07Z — rounds: 2

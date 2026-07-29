@@ -720,6 +720,12 @@ export const ServerSettingsPatch = Schema.Struct({
   projectAccentColors: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor),
   ),
+  // Migration-only fill: the server applies each entry iff its key is absent
+  // inside the serialized settings write. This keeps a legacy client value
+  // from racing with and overwriting an authoritative server-side choice.
+  projectAccentColorsFill: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

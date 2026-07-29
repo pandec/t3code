@@ -60,6 +60,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       whole-map patch. Absent on older servers, whose patch decoder silently
       drops the unknown key, so clients must not send accent writes. */
   projectAccentColors: Schema.optionalKey(Schema.Boolean),
+  /** Server atomically fills absent project accent keys during legacy
+      migration. Absent on servers that only support whole-map replacement. */
+  projectAccentColorsFill: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

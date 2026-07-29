@@ -147,6 +147,7 @@ export const make = Effect.gen(function* () {
       providerCatalog: true,
       threadSnooze: true,
       projectAccentColors: true,
+      projectAccentColorsFill: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
     },
   };
