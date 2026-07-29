@@ -419,6 +419,15 @@ describe("EnvironmentThreads", () => {
       );
       expect(Option.getOrThrow(state.data).completedTurnAssistantMessageIds).toEqual(["message-1"]);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+
+      // The hydrated artifacts must reach the cache even though the stored
+      // snapshot sits at the same sequence: the persist guard only rejects
+      // strictly newer stored data.
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
+      expect(saved?.snapshotSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(saved?.thread.messages[0]?.generatedSummary?.summary).toBe("Persisted summary");
     }),
   );
 
