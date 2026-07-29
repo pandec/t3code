@@ -42,40 +42,43 @@ resort and would not reduce the single-process floor anyway.
 - **`vp run -r test` bails at the first failing project**, so one broken
   package makes the whole-workspace run unable to complete.
 
-## Open items
+## `apps/web` split isolation (shipped)
 
-### Import cost in `apps/web` (largest remaining win)
+Under full isolation every worker re-imports the module graph per file, so
+import CPU scales with workers: 37 s → 99 s of import CPU between one and
+eight workers, against ~10 s of actual test CPU (`from "vite-plus/test"`
+appears in nearly every test file, so the heavy entry is paid each time).
 
-Under isolation every worker re-imports the module graph per file, so import
-CPU scales with workers: 37 s → 99 s of import CPU between one and eight
-workers, against ~10 s of actual test CPU. `from "vite-plus/test"` appears in
-175 of 181 test files, so the heavy entry is paid every time.
+The suite is therefore split into two projects in `apps/web/vite.config.ts`:
 
-Measured with `--no-isolate` at 4 workers: import CPU 56.5 s → 6.6 s, wall
-21.7 s → **4.1 s**, but **5 files fail** on module-state pollution
-(module-level caches and `vi.mock` leakage):
+- **`unit`** — `isolate: false`; the bulk of the files share a module registry
+  per worker and import the graph once.
+- **`unit-isolated`** — default isolation for the `ISOLATED_TEST_FILES` list:
+  files using `vi.mock` (whose factories leak into _unrelated_ files through a
+  shared registry — the victim reports "No X export is defined on the mock"
+  for a mock it never registered), fake timers, or `vi.resetModules`.
 
-- `src/branding.test.ts`
-- `src/composerDraftStore.test.ts`
-- `src/hooks/useLocalStorage.test.ts`
-- `src/providerUpdateDismissal.test.ts`
-- `src/components/preview/addBrowserSurface.test.ts`
+Measured effect: 21.7 s → ~8 s wall for the whole suite, 7/7 repeat runs
+green. Two source modules were also fixed to resolve storage lazily instead of
+capturing `window.localStorage`/`localStorage` at import
+(`src/hooks/useLocalStorage.ts`, `src/promptStashStore.ts`) — module-scope
+capture pins whatever global existed when the module first evaluated, which
+under a shared registry is some other file's stub.
 
-The path is: fix those files' isolation assumptions, then set
-`isolate: false` for the web unit project. Caveat: no-isolate _raises_ peak
-memory (943 MB → 1612 MB measured) because workers accumulate the graph — it
-is a speed fix, not a memory fix.
+**Maintenance rule:** a test that gains `vi.mock`, `vi.useFakeTimers`, or
+`vi.resetModules` must be added to `ISOLATED_TEST_FILES`. The symptom of
+forgetting is order-dependent failures in _other_ files, not in the new test.
 
-### macOS verification of `apps/server` file parallelism
+Caveat kept from the original analysis: no-isolate _raises_ peak memory
+(943 MB → 1612 MB measured at 4 workers) because workers accumulate the graph
+— it is a speed fix, not a memory fix.
 
-Parallel files were verified green only on Linux. The flake class the old
-serialization guarded (sqlite, git, temp worktrees) is exactly where macOS
-differs — case-insensitive APFS, different temp-dir and fsync behaviour. Run
-`pnpm --filter t3 test` once on a Mac; if something flakes, fix that test's
-isolation rather than reinstating blanket serialization.
+## Closed items
 
-### Not yet measured
-
-- Build times (`pnpm build`) — never profiled.
-- Vite dev server memory growth — reported fluctuating 0.5–2 GB in earlier
-  diagnostics; unverified.
+- **macOS verification of `apps/server` file parallelism** — done 2026-07-29,
+  suite green on macOS.
+- **Build times** — deprioritized 2026-07-29: builds are infrequent enough on
+  this setup that profiling is not worth it.
+- **Vite dev server memory growth** — deprioritized 2026-07-29: the dev server
+  is rarely used (packaged builds instead); the earlier "fluctuating
+  0.5–2 GB" observation remains unverified.

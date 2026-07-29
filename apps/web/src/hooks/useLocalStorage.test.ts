@@ -1,6 +1,13 @@
 import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  getLocalStorageItem,
+  LocalStorageOperationError,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "./useLocalStorage";
+
 function createStorage(overrides: Partial<Storage> = {}): Storage {
   const store = new Map<string, string>();
   return {
@@ -20,21 +27,21 @@ function createStorage(overrides: Partial<Storage> = {}): Storage {
   };
 }
 
-async function loadWithStorage(storage: Storage) {
+// The module resolves its storage on every call, so a plain global stub is
+// enough — no module re-import needed for it to take effect.
+function useStorage(storage: Storage) {
   vi.stubGlobal("window", { localStorage: storage });
   vi.stubGlobal("localStorage", storage);
-  return import("./useLocalStorage");
 }
 
 afterEach(() => {
-  vi.resetModules();
   vi.unstubAllGlobals();
 });
 
 describe("local storage errors", () => {
-  it("preserves read failure context", async () => {
+  it("preserves read failure context", () => {
     const cause = new Error("storage unavailable");
-    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
+    useStorage(
       createStorage({
         getItem: () => {
           throw cause;
@@ -55,10 +62,8 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves decode failure context", async () => {
-    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
-      createStorage({ getItem: () => "not-json" }),
-    );
+  it("preserves decode failure context", () => {
+    useStorage(createStorage({ getItem: () => "not-json" }));
 
     try {
       getLocalStorageItem("decode-key", Schema.String);
@@ -73,9 +78,9 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves write failure context", async () => {
+  it("preserves write failure context", () => {
     const cause = new Error("storage quota exceeded");
-    const { LocalStorageOperationError, setLocalStorageItem } = await loadWithStorage(
+    useStorage(
       createStorage({
         setItem: () => {
           throw cause;
@@ -96,9 +101,9 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves removal failure context", async () => {
+  it("preserves removal failure context", () => {
     const cause = new Error("storage unavailable");
-    const { LocalStorageOperationError, removeLocalStorageItem } = await loadWithStorage(
+    useStorage(
       createStorage({
         removeItem: () => {
           throw cause;

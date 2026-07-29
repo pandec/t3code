@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
@@ -7,6 +7,14 @@ import {
 } from "./branding.logic";
 
 const originalWindow = globalThis.window;
+
+// Reset before as well as after: these tests re-import `./branding` to observe
+// its module-init behaviour, and when test files share a module registry the
+// first import here would otherwise return the copy some earlier file already
+// evaluated — with its constants frozen under that file's globals.
+beforeEach(() => {
+  vi.resetModules();
+});
 
 afterEach(() => {
   vi.resetModules();
