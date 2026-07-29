@@ -19,6 +19,7 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
+import { useThreadPrewarm } from "./state/prewarm";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { appBlurTargetRef } from "./lib/appBlurTarget";
 import { useThemeColor } from "./lib/useThemeColor";
@@ -57,6 +58,11 @@ function SplashScreenCoordinator() {
   return null;
 }
 
+function ThreadPrewarmCoordinator() {
+  useThreadPrewarm();
+  return null;
+}
+
 export default function App() {
   const colorScheme = useColorScheme();
   const statusBarBg = useThemeColor("--color-status-bar");
@@ -66,6 +72,7 @@ export default function App() {
       <CloudAuthProvider>
         <AppearancePreferencesProvider>
           <SplashScreenCoordinator />
+          <ThreadPrewarmCoordinator />
           <GestureHandlerRootView className="flex-1">
             <KeyboardProvider statusBarTranslucent>
               <SafeAreaProvider>
