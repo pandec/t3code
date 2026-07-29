@@ -1008,6 +1008,11 @@ function ThreadNavigationSidebarPane(
         onEnvironmentChange: setSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
         onModelChange: setSelectedModel,
+        onClearFilters: () => {
+          setSelectedEnvironmentId(null);
+          setSelectedProjectKey(null);
+          setSelectedModel(null);
+        },
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization: !threadListV2Enabled,

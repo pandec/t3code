@@ -77,6 +77,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     : hasCustomHomeListOptions(props);
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      ...(hasCustomListOptions
+        ? ([
+            {
+              id: "clear-filters",
+              title: "Clear filters",
+            },
+          ] satisfies MenuAction[])
+        : []),
       {
         id: "environment",
         title: "Environment",
@@ -169,12 +177,20 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.selectedModel,
       props.selectedProjectKey,
       props.threadSortOrder,
+      hasCustomListOptions,
       threadListV2Enabled,
     ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
+      if (id === "clear-filters") {
+        props.onEnvironmentChange(null);
+        props.onProjectChange(null);
+        props.onModelChange(null);
+        return;
+      }
+
       if (id === "environment:all") {
         props.onEnvironmentChange(null);
         return;
@@ -258,6 +274,17 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               </View>
             </View>
 
+            {/* Built identically to the filter button so the two circles
+                match exactly (ControlPill sizes via Tailwind classes and
+                resolves to a different box). */}
+            <Pressable
+              accessibilityLabel="Open settings"
+              accessibilityRole="button"
+              onPress={props.onOpenSettings}
+              className="size-11 items-center justify-center rounded-full bg-subtle"
+            >
+              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
+            </Pressable>
             <ControlPillMenu
               actions={menuActions}
               isAnchoredToRight
@@ -280,17 +307,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 />
               </Pressable>
             </ControlPillMenu>
-            {/* Built identically to the filter button so the two circles
-                match exactly (ControlPill sizes via Tailwind classes and
-                resolves to a different box). */}
-            <Pressable
-              accessibilityLabel="Open settings"
-              accessibilityRole="button"
-              onPress={props.onOpenSettings}
-              className="size-11 items-center justify-center rounded-full bg-subtle"
-            >
-              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
-            </Pressable>
           </View>
 
           <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
@@ -344,6 +360,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu({
     ...props,
+    onClearFilters: () => {
+      props.onEnvironmentChange(null);
+      props.onProjectChange(null);
+      props.onModelChange(null);
+    },
     listOrganization: !threadListV2Enabled,
   });
 
@@ -358,15 +379,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
-                  // Filter sits left of the "..." button so the environment
-                  // filter is reachable from the title bar, not just the
-                  // Mail-style bottom toolbar.
-                  createNativeFilterMenuHeaderItem({
-                    filterIcon: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease.circle",
-                    filterMenu,
-                  }),
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -374,6 +386,12 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     label: "",
                     onPress: props.onOpenSettings,
                     type: "button",
+                  }),
+                  createNativeFilterMenuHeaderItem({
+                    filterIcon: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle",
+                    filterMenu,
                   }),
                 ]
               : undefined,

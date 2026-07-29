@@ -15,16 +15,16 @@ export function createSidebarHeaderItems(input: {
   readonly onOpenSettings: () => void;
 }): NativeStackHeaderItem[] {
   return [
-    createNativeFilterMenuHeaderItem({
-      filterIcon: input.filterIcon,
-      filterMenu: input.filterMenu,
-    }),
     withNativeGlassHeaderItem({
       type: "button",
       label: "",
       accessibilityLabel: "Open settings",
       icon: sfSymbolIcon("gearshape"),
       onPress: input.onOpenSettings,
+    }),
+    createNativeFilterMenuHeaderItem({
+      filterIcon: input.filterIcon,
+      filterMenu: input.filterMenu,
     }),
   ];
 }

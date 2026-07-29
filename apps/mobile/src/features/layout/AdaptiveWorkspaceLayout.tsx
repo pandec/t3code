@@ -482,6 +482,9 @@ function AdaptiveWorkspaceLayoutContent(
         usesSplitView: layout.usesSplitView,
         pathname,
       });
+      if (!layout.usesSplitView) {
+        setPrimarySidebarSearchQuery("");
+      }
       if (navigationAction === "set-params") {
         const nextThreadKey = scopedThreadKey(thread.environmentId, thread.id);
         if (nextThreadKey === selectedThreadKey) {

@@ -50,6 +50,7 @@ export function buildHomeListFilterMenu(props: {
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onModelChange: (model: string | null) => void;
+  readonly onClearFilters: () => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   /** False hides the sort/group submenus. Thread List v2 uses a fixed
@@ -58,6 +59,18 @@ export function buildHomeListFilterMenu(props: {
   readonly listOrganization?: boolean;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
+
+  if (
+    props.selectedEnvironmentId !== null ||
+    props.selectedProjectKey !== null ||
+    props.selectedModel !== null
+  ) {
+    items.push({
+      type: "action",
+      title: "Clear filters",
+      onPress: props.onClearFilters,
+    });
+  }
 
   items.push({
     type: "submenu",
