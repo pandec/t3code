@@ -126,6 +126,16 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     SidebarProjectGroupingMode,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * @deprecated Superseded by `ServerSettings.projectAccentColors`, which is
+   * machine-independent and therefore reaches mobile and other clients. Kept in
+   * the schema (not dropped) so the one-shot client-side migration can still
+   * read pre-migration entries — clients that never reconnect an environment
+   * keep their colors here until that environment is seen again. Nothing writes
+   * new entries to this map.
+   *
+   * Keys are `${environmentId}:${normalizedWorkspacePath}`.
+   */
   sidebarProjectAccentColors: Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -548,6 +558,24 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * Per-project accent colors, shared by every client connected to this
+   * server (sidebar v2 on web/desktop, the mobile thread list).
+   *
+   * Keys are machine-independent on purpose — the repository canonical key
+   * when the project has a git remote, otherwise the normalized workspace
+   * path — because this map is persisted per environment in that server's
+   * `settings.json`. An environmentId in the key would make the entry
+   * meaningless the moment another client read it. All worktrees/checkouts
+   * of one repository therefore share a single color.
+   *
+   * Clients merge across every connected environment on read and fan the
+   * write out to each environment owning a member of the project group, so
+   * the color survives on each machine independently.
+   */
+  projectAccentColors: Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -687,6 +715,11 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-map replacement, like `providerInstances`: clearing a project's
+  // accent removes its key, and a deep merge could never express a removal.
+  projectAccentColors: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

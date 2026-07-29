@@ -295,4 +295,21 @@ describe("serverSettings helpers", () => {
       config: { homePath: "~/.codex" },
     });
   });
+
+  it("replaces the project accent map wholesale so a cleared accent is removed", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectAccentColors: { "repo/a": "#0055aa", "repo/b": "#00aa55" },
+    };
+
+    // A deep merge would keep "repo/a"; clearing an accent IS removing its key.
+    expect(
+      applyServerSettingsPatch(current, {
+        projectAccentColors: { "repo/b": "#00aa55" },
+      }).projectAccentColors,
+    ).toEqual({ "repo/b": "#00aa55" });
+    expect(applyServerSettingsPatch(current, {}).projectAccentColors).toEqual(
+      current.projectAccentColors,
+    );
+  });
 });

@@ -127,6 +127,11 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    // Replaced wholesale, never deep-merged: a merge cannot express clearing
+    // a project's accent, which is the removal of its key.
+    ...(patch.projectAccentColors !== undefined
+      ? { projectAccentColors: patch.projectAccentColors }
+      : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),
