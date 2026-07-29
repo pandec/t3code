@@ -24,45 +24,56 @@ In T3 Code Settings, your Claude provider can stay like this:
 ```text
 Display name: Claude
 Binary path: claude
-Claude HOME path: empty
+CLAUDE_CONFIG_DIR path: empty
 ```
 
-An empty `Claude HOME path` means T3 Code uses your normal home directory.
+An empty `CLAUDE_CONFIG_DIR path` means T3 Code uses Claude Code's default config dir
+(`~/.claude`).
 
 ## I Want Work And Personal Claude Accounts
 
-Use a different Claude home for each account.
+Use one shared Claude config dir and one shadow config dir.
 
-Example:
+Recommended setup:
 
 ```text
-default home                 work account
-~/.claude_personal_home       personal account
+~/.claude              shared config dir
+~/.claude-t3/personal  second account auth
 ```
+
+The idea is:
+
+- both accounts see the same sessions, skills, and agents
+- each account keeps its own login
+- existing threads can continue with either account
 
 ### Set Up The First Account
 
-Log in normally:
+Log in with the shared config dir spelled out explicitly:
 
 ```bash
-claude auth login
+CLAUDE_CONFIG_DIR=~/.claude claude auth login
 ```
+
+The explicit path matters on macOS: Claude Code keys its keychain credentials by the exact
+`CLAUDE_CONFIG_DIR` value, and an unset variable is a different credential slot than an explicit
+`~/.claude`. Logging in with the explicit path makes the CLI and this provider agree on the slot.
 
 In T3 Code Settings:
 
 ```text
 Display name: Claude Work
 Binary path: claude
-Claude HOME path: empty
+CLAUDE_CONFIG_DIR path: ~/.claude
+Shadow config dir path: empty
 ```
 
 ### Set Up The Second Account
 
-Log in with a separate home:
+Log in with a separate config dir:
 
 ```bash
-mkdir -p ~/.claude_personal_home
-HOME=~/.claude_personal_home claude auth login
+CLAUDE_CONFIG_DIR=~/.claude-t3/personal claude auth login
 ```
 
 Then add another Claude provider in T3 Code:
@@ -70,22 +81,38 @@ Then add another Claude provider in T3 Code:
 ```text
 Display name: Claude Personal
 Binary path: claude
-Claude HOME path: ~/.claude_personal_home
+CLAUDE_CONFIG_DIR path: ~/.claude
+Shadow config dir path: ~/.claude-t3/personal
 ```
+
+The important part is that both providers use the same `CLAUDE_CONFIG_DIR path`, but only the
+second one has a `Shadow config dir path`. T3 Code fills the shadow dir with symlinks so session
+transcripts, skills, agents, and commands — plus global settings and `CLAUDE.md` when present —
+come from the shared dir, while credentials stay per-account.
+
+Not everything is shared: MCP server registrations and per-project prompt history live in the
+account-private `.claude.json`, so `claude mcp add` in one account is not visible to the other.
 
 Use the email shown in Settings to confirm each provider is using the intended account. Emails are
 blurred by default; click the blurred email to reveal it.
 
 ## Can I Switch Claude Accounts In An Existing Thread?
 
-Usually, no.
+Yes, when both Claude providers share the same `CLAUDE_CONFIG_DIR path`.
 
-T3 Code only offers Claude providers that use the same Claude home for an existing thread. A
-different Claude home is treated as a different Claude environment.
+For example:
 
-This is different from the recommended Codex setup. Claude Code keeps account and local state across
-multiple files under its home directory, so T3 Code keeps separate Claude homes isolated instead of
-trying to share part of the state.
+```text
+Claude Work      CLAUDE_CONFIG_DIR path: ~/.claude
+Claude Personal  CLAUDE_CONFIG_DIR path: ~/.claude, Shadow config dir path: ~/.claude-t3/personal
+```
+
+Those two providers are considered compatible for continuation, so the locked model picker can show
+both, and a thread started on one account can resume on the other.
+
+If you add a Claude provider with a completely different `CLAUDE_CONFIG_DIR path` (and no shadow),
+T3 Code treats it as a separate Claude environment. It will not be offered for existing threads.
+Use that full-isolation setup when you do not want any shared state between the accounts.
 
 ## I Want To Use OpenRouter
 
@@ -102,7 +129,7 @@ Add or edit a Claude provider in T3 Code Settings:
 ```text
 Display name: Claude OpenRouter
 Binary path: claude
-Claude HOME path: ~/.claude_openrouter_home
+CLAUDE_CONFIG_DIR path: ~/.claude_openrouter_home
 ```
 
 In that provider's Environment variables section, add:
@@ -189,7 +216,7 @@ Configure a Claude provider:
 ```text
 Display name: Claude Router
 Binary path: claude
-Claude HOME path: ~/.claude_router_home
+CLAUDE_CONFIG_DIR path: ~/.claude_router_home
 ```
 
 Then copy the variables that `ccr activate` would export into the provider's Environment variables
@@ -202,7 +229,7 @@ in with a dedicated home first:
 mkdir -p ~/.claude_router_home
 ccr start
 ccr activate
-HOME=~/.claude_router_home claude auth login
+CLAUDE_CONFIG_DIR=~/.claude_router_home claude auth login
 ```
 
 Claude Code Router's setup can change over time. Use its upstream README for the current install and
@@ -218,7 +245,7 @@ Examples:
 - "Claude Router"
 - "Claude Experimental"
 
-If the preset needs different Claude files, give it a different `Claude HOME path`. If it needs
+If the preset needs different Claude files, give it a different `CLAUDE_CONFIG_DIR path`. If it needs
 different API keys, base URLs, or router settings, use Environment variables.
 
 Do not put environment variable assignments in `Launch arguments`.

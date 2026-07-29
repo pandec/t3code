@@ -288,7 +288,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "CLAUDE_CONFIG_DIR path",
         description:
-          "Custom Claude home and config directory. Keeps .claude.json and .claude separate.",
+          "Shared Claude config dir for this instance. Used directly as CLAUDE_CONFIG_DIR unless a shadow config dir is set below.",
         providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
       }),
     ),
@@ -297,7 +297,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Shadow config dir path",
         description:
-          "Account-specific Claude config dir. Keeps credentials and account state separate while sharing sessions from the main config dir.",
+          "Account-specific config dir used as CLAUDE_CONFIG_DIR for this instance; sessions, skills, and settings are shared from the dir above via symlinks. Log in to it separately: CLAUDE_CONFIG_DIR=<this dir> claude, then /login.",
         providerSettingsForm: {
           placeholder: "~/.claude-t3/personal",
           clearWhenEmpty: "omit",

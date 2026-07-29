@@ -214,7 +214,7 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
       }),
     );
 
-    it.effect("fails when a shared entry exists in the shadow dir as a real directory", () =>
+    it.effect("fails on a real-directory conflict before touching private entries", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
