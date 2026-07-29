@@ -186,6 +186,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         enabled: true,
         binaryPath: "/usr/local/bin/claude",
         homePath: "",
+        shadowHomePath: "",
         customModels: ["claude-custom"],
         launchArgs: "",
       });
@@ -474,6 +475,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
           claudeAgent: {
             binaryPath: "  /opt/homebrew/bin/claude  ",
+            shadowHomePath: "  ~/.claude-t3/work  ",
           },
           opencode: {
             binaryPath: "  /opt/homebrew/bin/opencode  ",
@@ -495,6 +497,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         enabled: true,
         binaryPath: "/opt/homebrew/bin/claude",
         homePath: "",
+        shadowHomePath: "~/.claude-t3/work",
         customModels: [],
         launchArgs: "",
       });

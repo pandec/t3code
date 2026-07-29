@@ -288,8 +288,20 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "CLAUDE_CONFIG_DIR path",
         description:
-          "Custom Claude home and config directory. Keeps .claude.json and .claude separate.",
+          "Shared Claude config dir for this instance. Used directly as CLAUDE_CONFIG_DIR unless a shadow config dir is set below.",
         providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
+      }),
+    ),
+    shadowHomePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Shadow config dir path",
+        description:
+          "Account-specific config dir used as CLAUDE_CONFIG_DIR for this instance; sessions, skills, and settings are shared from the dir above via symlinks. Log in to it separately: CLAUDE_CONFIG_DIR=<this dir> claude, then /login.",
+        providerSettingsForm: {
+          placeholder: "~/.claude-t3/personal",
+          clearWhenEmpty: "omit",
+        },
       }),
     ),
     customModels: Schema.Array(Schema.String).pipe(
@@ -309,7 +321,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -616,6 +628,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
+  shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
 });
