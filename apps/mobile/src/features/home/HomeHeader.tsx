@@ -23,6 +23,7 @@ import {
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
 import {
+  hasActiveHomeListFilters,
   hasCustomHomeListOptions,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
@@ -70,13 +71,23 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
+  const hasActiveFilters = hasActiveHomeListFilters(props);
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null ||
-      props.selectedProjectKey !== null ||
-      props.selectedModel !== null
+    ? hasActiveFilters
     : hasCustomHomeListOptions(props);
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      // Gated on the scope filters alone, matching the shared iOS builder:
+      // "Clear filters" leaves sort order untouched, so offering it for a
+      // non-default sort would be a no-op menu item.
+      ...(hasActiveFilters
+        ? ([
+            {
+              id: "clear-filters",
+              title: "Clear filters",
+            },
+          ] satisfies MenuAction[])
+        : []),
       {
         id: "environment",
         title: "Environment",
@@ -169,12 +180,20 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.selectedModel,
       props.selectedProjectKey,
       props.threadSortOrder,
+      hasActiveFilters,
       threadListV2Enabled,
     ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
+      if (id === "clear-filters") {
+        props.onEnvironmentChange(null);
+        props.onProjectChange(null);
+        props.onModelChange(null);
+        return;
+      }
+
       if (id === "environment:all") {
         props.onEnvironmentChange(null);
         return;
@@ -258,6 +277,17 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               </View>
             </View>
 
+            {/* Built identically to the filter button so the two circles
+                match exactly (ControlPill sizes via Tailwind classes and
+                resolves to a different box). */}
+            <Pressable
+              accessibilityLabel="Open settings"
+              accessibilityRole="button"
+              onPress={props.onOpenSettings}
+              className="size-11 items-center justify-center rounded-full bg-subtle"
+            >
+              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
+            </Pressable>
             <ControlPillMenu
               actions={menuActions}
               isAnchoredToRight
@@ -280,17 +310,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 />
               </Pressable>
             </ControlPillMenu>
-            {/* Built identically to the filter button so the two circles
-                match exactly (ControlPill sizes via Tailwind classes and
-                resolves to a different box). */}
-            <Pressable
-              accessibilityLabel="Open settings"
-              accessibilityRole="button"
-              onPress={props.onOpenSettings}
-              className="size-11 items-center justify-center rounded-full bg-subtle"
-            >
-              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
-            </Pressable>
           </View>
 
           <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
@@ -333,9 +352,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null ||
-      props.selectedProjectKey !== null ||
-      props.selectedModel !== null
+    ? hasActiveHomeListFilters(props)
     : hasCustomHomeListOptions(props);
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
@@ -344,6 +361,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu({
     ...props,
+    onClearFilters: () => {
+      props.onEnvironmentChange(null);
+      props.onProjectChange(null);
+      props.onModelChange(null);
+    },
     listOrganization: !threadListV2Enabled,
   });
 
@@ -358,15 +380,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
-                  // Filter sits left of the "..." button so the environment
-                  // filter is reachable from the title bar, not just the
-                  // Mail-style bottom toolbar.
-                  createNativeFilterMenuHeaderItem({
-                    filterIcon: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease.circle",
-                    filterMenu,
-                  }),
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -374,6 +387,12 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     label: "",
                     onPress: props.onOpenSettings,
                     type: "button",
+                  }),
+                  createNativeFilterMenuHeaderItem({
+                    filterIcon: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle",
+                    filterMenu,
                   }),
                 ]
               : undefined,

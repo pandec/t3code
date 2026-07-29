@@ -88,6 +88,24 @@ export function HomeListOptionsProvider({
   return createElement(HomeListOptionsContext, { value }, children);
 }
 
+/**
+ * True when a structured scope filter narrows the list. Sort/group choices are
+ * deliberately excluded: they reorder the list rather than hide threads, and
+ * "Clear filters" does not reset them — gating that action on sort order would
+ * offer a menu item that does nothing.
+ */
+export function hasActiveHomeListFilters(filters: {
+  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedModel: string | null;
+  readonly selectedProjectKey?: string | null;
+}): boolean {
+  return (
+    filters.selectedEnvironmentId !== null ||
+    filters.selectedModel !== null ||
+    (filters.selectedProjectKey !== null && filters.selectedProjectKey !== undefined)
+  );
+}
+
 export function hasCustomHomeListOptions(
   options: HomeListOptions & {
     readonly selectedProjectKey?: string | null;
@@ -98,9 +116,7 @@ export function hasCustomHomeListOptions(
       ? "updated_at"
       : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
   return (
-    options.selectedEnvironmentId !== null ||
-    options.selectedModel !== null ||
-    (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
+    hasActiveHomeListFilters(options) ||
     options.projectSortOrder !== defaultProjectSortOrder ||
     options.threadSortOrder !== DEFAULT_SIDEBAR_THREAD_SORT_ORDER
   );

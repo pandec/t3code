@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
@@ -20,6 +21,7 @@ describe("buildHomeListFilterMenu", () => {
       onEnvironmentChange: vi.fn(),
       onProjectChange,
       onModelChange: vi.fn(),
+      onClearFilters: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
@@ -61,6 +63,7 @@ describe("buildHomeListFilterMenu", () => {
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange,
+      onClearFilters: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
@@ -95,10 +98,58 @@ describe("buildHomeListFilterMenu", () => {
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange: vi.fn(),
+      onClearFilters: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
 
     expect(menu.items.some((item) => item.title === "Model")).toBe(false);
+  });
+
+  it("offers one action that clears all active filters", () => {
+    const onClearFilters = vi.fn();
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      models: [],
+      selectedEnvironmentId: EnvironmentId.make("environment-1"),
+      selectedProjectKey: "environment-1:project-1",
+      selectedModel: "gpt-5.6-sol",
+      projectSortOrder: "updated_at",
+      threadSortOrder: "updated_at",
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onClearFilters,
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    expect(menu.items[0]).toMatchObject({ type: "action", title: "Clear filters" });
+    if (menu.items[0]?.type !== "action") throw new Error("Expected clear filters action");
+
+    menu.items[0].onPress();
+    expect(onClearFilters).toHaveBeenCalledOnce();
+  });
+
+  it("omits the clear action when only the sort order is non-default", () => {
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      models: [],
+      selectedEnvironmentId: null,
+      selectedProjectKey: null,
+      selectedModel: null,
+      projectSortOrder: "created_at",
+      threadSortOrder: "created_at",
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onClearFilters: vi.fn(),
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    expect(menu.items.some((item) => item.title === "Clear filters")).toBe(false);
   });
 });
