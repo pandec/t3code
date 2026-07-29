@@ -292,6 +292,18 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
       }),
     ),
+    shadowHomePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Shadow config dir path",
+        description:
+          "Account-specific Claude config dir. Keeps credentials and account state separate while sharing sessions from the main config dir.",
+        providerSettingsForm: {
+          placeholder: "~/.claude-t3/personal",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
@@ -309,7 +321,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;

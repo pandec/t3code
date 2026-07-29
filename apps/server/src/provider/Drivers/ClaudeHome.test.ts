@@ -24,7 +24,9 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* resolveClaudeConfigDirPath({ homePath: "" })).toBe(
           path.join(resolved, ".claude"),
         );
-        expect(yield* makeClaudeEnvironment({ homePath: "" })).toBe(process.env);
+        expect(yield* makeClaudeEnvironment({ homePath: "", shadowHomePath: "" })).toBe(
+          process.env,
+        );
       }),
     );
 
@@ -36,19 +38,75 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
 
         expect(yield* resolveClaudeHomePath({ homePath })).toBe(resolved);
         expect(yield* resolveClaudeConfigDirPath({ homePath })).toBe(resolved);
-        expect((yield* makeClaudeEnvironment({ homePath })).CLAUDE_CONFIG_DIR).toBe(resolved);
+        expect(
+          (yield* makeClaudeEnvironment({ homePath, shadowHomePath: "" })).CLAUDE_CONFIG_DIR,
+        ).toBe(resolved);
         expect(yield* makeClaudeContinuationGroupKey({ homePath })).toBe(`claude:home:${resolved}`);
-        expect(yield* makeClaudeCapabilitiesCacheKey({ binaryPath: "claude", homePath })).toBe(
-          `claude\0${resolved}\0`,
-        );
+        expect(
+          yield* makeClaudeCapabilitiesCacheKey({
+            binaryPath: "claude",
+            homePath,
+            shadowHomePath: "",
+          }),
+        ).toBe(`claude\0${resolved}\0\0`);
       }),
     );
 
     it.effect("separates capability probes by cwd", () =>
       Effect.gen(function* () {
-        const config = { binaryPath: "claude", homePath: "" };
+        const config = { binaryPath: "claude", homePath: "", shadowHomePath: "" };
         const first = yield* makeClaudeCapabilitiesCacheKey(config, "/repo-a");
         const second = yield* makeClaudeCapabilitiesCacheKey(config, "/repo-b");
+        expect(first).not.toBe(second);
+      }),
+    );
+
+    it.effect("points the CLI at the shadow config dir when one is configured", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const resolvedShadow = path.resolve(NodeOS.homedir(), ".claude-t3", "personal");
+
+        expect(
+          (yield* makeClaudeEnvironment({ homePath: "", shadowHomePath: "~/.claude-t3/personal" }))
+            .CLAUDE_CONFIG_DIR,
+        ).toBe(resolvedShadow);
+        // The shadow dir wins over homePath for the spawned CLI: credentials
+        // must come from the account-specific slot.
+        expect(
+          (yield* makeClaudeEnvironment({
+            homePath: "~/.claude",
+            shadowHomePath: "~/.claude-t3/personal",
+          })).CLAUDE_CONFIG_DIR,
+        ).toBe(resolvedShadow);
+      }),
+    );
+
+    it.effect("keeps shadow instances in the shared config dir's continuation group", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const homePath = "~/.claude";
+        const resolved = path.resolve(NodeOS.homedir(), ".claude");
+        const shadowConfig = { homePath, shadowHomePath: "~/.claude-t3/personal" };
+
+        expect(yield* makeClaudeContinuationGroupKey(shadowConfig)).toBe(`claude:home:${resolved}`);
+        expect(yield* makeClaudeContinuationGroupKey(shadowConfig)).toBe(
+          yield* makeClaudeContinuationGroupKey({ homePath }),
+        );
+      }),
+    );
+
+    it.effect("separates capability probes by shadow config dir", () =>
+      Effect.gen(function* () {
+        const first = yield* makeClaudeCapabilitiesCacheKey({
+          binaryPath: "claude",
+          homePath: "~/.claude",
+          shadowHomePath: "~/.claude-t3/personal",
+        });
+        const second = yield* makeClaudeCapabilitiesCacheKey({
+          binaryPath: "claude",
+          homePath: "~/.claude",
+          shadowHomePath: "~/.claude-t3/work",
+        });
         expect(first).not.toBe(second);
       }),
     );
