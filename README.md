@@ -33,7 +33,6 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### Agents & skills
 
-- **Mobile agent steering** — steer an active agent turn directly from the mobile app.
 - **Project-aware Codex skills** — Codex skill discovery respects the active project.
 - **Claude skill picker** — the `$` composer skill picker discovers workspace and user-invocable
   manual-only skills for Claude, and makes references to them work anywhere in a message. Claude
