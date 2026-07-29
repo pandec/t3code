@@ -443,6 +443,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
+      ...(Object.keys(settings.sidebarProjectAccentColors).length > 0
+        ? ["Project accent colors"]
+        : []),
+      ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
+        ? ["Compact Sidebar V2 cards"]
+        : []),
       ...(settings.sidebarThreadProviderIconVisibility !==
       DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
         ? ["Thread provider icon"]
@@ -510,9 +516,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
+      settings.sidebarProjectAccentColors,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
+      settings.sidebarV2CompactCards,
       settings.timestampFormat,
       settings.wordWrap,
       theme,
@@ -537,6 +545,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      sidebarProjectAccentColors: DEFAULT_UNIFIED_SETTINGS.sidebarProjectAccentColors,
+      sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
@@ -723,6 +733,30 @@ export function GeneralSettingsPanel() {
                 });
               }}
               aria-label="Project Grouping"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Compact Sidebar V2 cards"
+          description="Show active threads in two lines by hiding branch details and moving metadata beside the title."
+          resetAction={
+            settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
+              <SettingResetButton
+                label="compact Sidebar V2 cards"
+                onClick={() =>
+                  updateSettings({
+                    sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarV2CompactCards}
+              onCheckedChange={(sidebarV2CompactCards) => updateSettings({ sidebarV2CompactCards })}
+              aria-label="Compact Sidebar V2 cards"
             />
           }
         />
