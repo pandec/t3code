@@ -1,4 +1,6 @@
 import "vite-plus/test/config";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Effect from "effect/Effect";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
@@ -18,6 +20,14 @@ export function shouldBundleCliDependency(id: string): boolean {
 
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const macLoopbackTransportRetry =
+  Effect.runSync(HostProcessPlatform) === "darwin"
+    ? {
+        count: 2,
+        condition:
+          /(?:Transport error \([A-Z]+ http:\/\/127\.0\.0\.1:\d+|UND_ERR_SOCKET|other side closed|connect ETIMEDOUT 127\.0\.0\.1)/,
+      }
+    : 0;
 
 export default mergeConfig(
   baseConfig,
@@ -81,6 +91,10 @@ export default mergeConfig(
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
+      // macOS intermittently drops the first request to an ephemeral Effect test
+      // server under package-wide load. Retry only that loopback transport failure;
+      // assertions and persistent server failures still fail normally.
+      retry: macLoopbackTransportRetry,
       testTimeout: 120_000,
     },
   }),
