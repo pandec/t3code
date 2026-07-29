@@ -15,26 +15,36 @@ export class LocalStorageOperationError extends Schema.TaggedErrorClass<LocalSto
   }
 }
 
-const isomorphicLocalStorage: Storage =
-  typeof window !== "undefined"
-    ? window.localStorage
-    : (function () {
-        const store = new Map<string, string>();
-        return {
-          clear: () => store.clear(),
-          getItem: (_) => store.get(_) ?? null,
-          key: (_) => Record.keys(store).at(_) ?? null,
-          get length() {
-            return store.size;
-          },
-          removeItem: (_) => store.delete(_),
-          setItem: (_, value) => store.set(_, value),
-        };
-      })();
+const fallbackLocalStorage: Storage = (function () {
+  const store = new Map<string, string>();
+  return {
+    clear: () => store.clear(),
+    getItem: (_) => store.get(_) ?? null,
+    key: (_) => Record.keys(store).at(_) ?? null,
+    get length() {
+      return store.size;
+    },
+    removeItem: (_) => store.delete(_),
+    setItem: (_, value) => store.set(_, value),
+  };
+})();
+
+/**
+ * Resolved on every call rather than captured at import. A module-scope
+ * capture pins whatever `window.localStorage` was when this module first
+ * evaluated — under a shared test module registry that is some other file's
+ * stub (or `undefined`), and in a sandboxed page the property access itself
+ * can throw at import time, outside any error wrapping. Resolving inside the
+ * callers' try blocks turns both into ordinary LocalStorageOperationErrors.
+ */
+const resolveLocalStorage = (): Storage =>
+  typeof window === "undefined" || window.localStorage === undefined
+    ? fallbackLocalStorage
+    : window.localStorage;
 
 const read = (key: string) => {
   try {
-    return isomorphicLocalStorage.getItem(key);
+    return resolveLocalStorage().getItem(key);
   } catch (cause) {
     throw new LocalStorageOperationError({ operation: "read", storageKey: key, cause });
   }
@@ -64,7 +74,7 @@ export const getLocalStorageItem = <T, E>(key: string, schema: Schema.Codec<T, E
 export const setLocalStorageItem = <T, E>(key: string, value: T, schema: Schema.Codec<T, E>) => {
   const valueToSet = encode(key, schema, value);
   try {
-    isomorphicLocalStorage.setItem(key, valueToSet);
+    resolveLocalStorage().setItem(key, valueToSet);
   } catch (cause) {
     throw new LocalStorageOperationError({ operation: "write", storageKey: key, cause });
   }
@@ -72,7 +82,7 @@ export const setLocalStorageItem = <T, E>(key: string, value: T, schema: Schema.
 
 export const removeLocalStorageItem = (key: string) => {
   try {
-    isomorphicLocalStorage.removeItem(key);
+    resolveLocalStorage().removeItem(key);
   } catch (cause) {
     throw new LocalStorageOperationError({ operation: "remove", storageKey: key, cause });
   }

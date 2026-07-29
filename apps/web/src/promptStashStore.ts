@@ -127,7 +127,15 @@ export function partitionStashAttachments(
  * `durable` is false for the in-memory fallback: writes there "succeed" but
  * vanish on reload, and callers clear the composer on the strength of a
  * successful stash, so they must be told the difference.
+ *
+ * Resolved on every access rather than captured at import: a module-scope
+ * capture pins whatever `localStorage` global happened to exist when this
+ * module first evaluated, which under a shared test module registry is some
+ * other file's stub. The in-memory fallback stays a single instance so
+ * memory-only writes remain readable for the rest of the session.
  */
+const memoryStashStorage = createMemoryStorage();
+
 function resolveBaseStorage(): { storage: StateStorage; durable: boolean } {
   try {
     if (typeof localStorage !== "undefined") {
@@ -136,10 +144,8 @@ function resolveBaseStorage(): { storage: StateStorage; durable: boolean } {
   } catch {
     // Fall through to the in-memory store.
   }
-  return { storage: createMemoryStorage(), durable: false };
+  return { storage: memoryStashStorage, durable: false };
 }
-
-const { storage: baseStashStorage, durable: storageIsDurable } = resolveBaseStorage();
 
 /**
  * Persists the queue, immediately rather than debounced. Stashing is a
@@ -157,14 +163,15 @@ function persistEntries(entries: ReadonlyArray<PromptStashEntry>): {
   durable: boolean;
 } {
   try {
-    baseStashStorage.setItem(
+    const { storage, durable } = resolveBaseStorage();
+    storage.setItem(
       PROMPT_STASH_STORAGE_KEY,
       JSON.stringify({
         version: PROMPT_STASH_STORAGE_VERSION,
         state: { entries },
       }),
     );
-    return { written: true, durable: storageIsDurable };
+    return { written: true, durable };
   } catch (error) {
     console.error("[PROMPT-STASH] Could not persist stash (storage quota?).", error);
     return { written: false, durable: false };
@@ -174,7 +181,7 @@ function persistEntries(entries: ReadonlyArray<PromptStashEntry>): {
 /** Reads the persisted queue, settling stale pending counts. */
 function readPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
   try {
-    const raw = baseStashStorage.getItem(PROMPT_STASH_STORAGE_KEY);
+    const raw = resolveBaseStorage().storage.getItem(PROMPT_STASH_STORAGE_KEY);
     if (typeof raw !== "string" || raw.length === 0) return null;
     const parsed: unknown = JSON.parse(raw);
     const state = (parsed as { state?: unknown } | null)?.state;
@@ -271,7 +278,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
 // last-write-wins: no cross-tab merging or storage-event syncing.
 {
   try {
-    baseStashStorage.removeItem(LEGACY_PROMPT_STASH_STORAGE_KEY);
+    resolveBaseStorage().storage.removeItem(LEGACY_PROMPT_STASH_STORAGE_KEY);
   } catch {
     // Purging the v1 payload is best-effort; a storage policy that rejects
     // the delete must not take down module init.
@@ -288,6 +295,6 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
  * Pass an empty string to clear.
  */
 export function writePromptStashStorageForTest(raw: string): void {
-  baseStashStorage.setItem(PROMPT_STASH_STORAGE_KEY, raw);
+  resolveBaseStorage().storage.setItem(PROMPT_STASH_STORAGE_KEY, raw);
   usePromptStashStore.setState({ entries: readPersistedEntries() ?? [] });
 }

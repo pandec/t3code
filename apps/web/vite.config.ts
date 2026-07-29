@@ -66,12 +66,63 @@ const buildSourcemap: boolean | "hidden" =
       ? "hidden"
       : true;
 
+/**
+ * Test files that require worker isolation because they mutate cross-file
+ * runtime state: `vi.mock` factories (which leak into unrelated files through
+ * a shared module registry — the victim sees "No X export is defined on the
+ * mock" for a mock it never registered), fake timers, and `vi.resetModules`
+ * registry games. Everything else runs with `isolate: false`, importing the
+ * module graph once per worker instead of once per file — measured 21.7s ->
+ * ~5s for this suite.
+ *
+ * When a test gains `vi.mock`, `vi.useFakeTimers`, or `vi.resetModules`, add
+ * it here; the symptom of forgetting is order-dependent failures in *other*
+ * files, not in the new test.
+ */
+const ISOLATED_TEST_FILES = [
+  "src/authBootstrap.test.ts",
+  "src/branding.test.ts",
+  "src/browser/browserRecording.test.ts",
+  "src/browser/browserTargetResolver.test.ts",
+  "src/browser/browserViewportActions.test.ts",
+  "src/browser/desktopTabLifetime.test.ts",
+  "src/clientPersistenceStorage.test.ts",
+  "src/cloud/linkEnvironment.test.ts",
+  "src/cloud/managedAuth.test.ts",
+  "src/components/chat/MessagesTimeline.test.tsx",
+  "src/components/CommandPalette.logic.test.ts",
+  "src/components/files/fileSaveCoordinator.test.ts",
+  "src/components/preview/openTerminalLinkInPreview.test.ts",
+  "src/components/preview/previewNavigationReadiness.test.ts",
+  "src/components/preview/PreviewView.test.tsx",
+  "src/components/ProviderUpdateEnvironmentRows.test.tsx",
+  "src/components/ServerUpdateAction.test.tsx",
+  "src/components/Sidebar.logic.test.ts",
+  "src/composerDraftStore.test.ts",
+  "src/hooks/useTheme.test.ts",
+  "src/localApi.test.ts",
+  "src/notifications/turnCompletion.test.ts",
+  "src/rpc/requestLatencyState.test.ts",
+  "src/timestampFormat.test.ts",
+];
+
 const unitTestProject = {
   extends: true,
   test: {
     ...sharedTestDefaults,
     name: "unit",
     include: ["src/**/*.test.{ts,tsx}"],
+    exclude: ISOLATED_TEST_FILES,
+    isolate: false,
+  },
+} satisfies TestProjectInlineConfiguration;
+
+const isolatedUnitTestProject = {
+  extends: true,
+  test: {
+    ...sharedTestDefaults,
+    name: "unit-isolated",
+    include: ISOLATED_TEST_FILES,
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -224,7 +275,7 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject)],
+      projects: [defineProject(unitTestProject), defineProject(isolatedUnitTestProject)],
     },
   };
 });

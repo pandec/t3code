@@ -1,0 +1,29 @@
+# Fork-local setup facts
+
+Fork-specific and machine-specific facts for `test-t3-mobile`. Never upstream this file; the sync-upstream LEDGER records how to reconcile the skill on sync.
+
+## Bundle identifier override (active on this fork)
+
+Root `.env.local` sets `T3CODE_IOS_BUNDLE_ID=com.pandec.tools.t3code` with `T3CODE_APPLE_TEAM_ID=2BY9VZMTHG` and `T3CODE_IOS_PERSONAL_TEAM=0`. Consequences:
+
+- Every iOS variant on this machine builds as `com.pandec.tools.t3code` (widgets: `.widgets`, sharing: `.sharing`). The skill's default `com.t3tools.t3code.dev` never matches an installed app here.
+- The URL scheme stays `t3code-dev` for development builds regardless of the override — which is exactly why scheme-based `simctl openurl` can hit the wrong app.
+- Android is unaffected: the package remains `com.t3tools.t3code.dev`.
+
+## Workspace naming — last prebuild wins
+
+The main checkout usually holds `T3Code.xcworkspace` / scheme `T3Code`, because the habitual device command (`vp run ios:local:release`) runs a **production** prebuild. A development prebuild replaces it with `T3CodeDev.xcworkspace` / scheme `T3CodeDev`. Always `ls -d apps/mobile/ios/*.xcworkspace` before setting XcodeBuildMCP defaults; fresh worktrees have no `ios/` directory at all.
+
+## Known `t3code-dev` scheme collider
+
+`vp run ios:local` combines `APP_VARIANT=development` (scheme `t3code-dev`, name "T3 Code Dev") with the custom bundle id — producing an app that looks identical to the standard dev client but is `com.pandec.tools.t3code`. After any `openurl`, confirm which bundle id actually handled the URL before trusting UI state.
+
+## Physical iPhone
+
+- Install path: `vp run ios:local:release` = production, Release, `--no-bundler`. Embedded JS bundle; Metro and dev-client URLs do not apply.
+- Signing: team `2BY9VZMTHG` must be signed into Xcode once per machine, interactively (never over SSH). `No Account for Team` means this machine's Xcode account state, not a source problem.
+
+## Host quirks
+
+- `vp run lint:mobile` detekt exits 126: the Homebrew detekt wrapper points at a removed JDK 17. Run `JAVA_HOME=$(/usr/libexec/java_home -v 21) vp run lint:mobile`.
+- The Codex sandbox rejects `rm -rf`. Move disposable base directories to the trash instead (`mv <base-dir> ~/.Trash/` or `/usr/bin/trash`); do not escalate permissions for cleanup.
