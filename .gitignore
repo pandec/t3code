@@ -51,6 +51,7 @@ node_modules/
 
 # Local review/planning artifacts (kept out of the repo)
 .nexus/
+.scarf/
 .playwright-cli/
 docs/codex-results/
 rev/
