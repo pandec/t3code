@@ -63,6 +63,7 @@ import {
 } from "./thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "./thread-list-v2-items";
 import { resolveThreadProviderDriver } from "./thread-provider";
+import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -252,6 +253,27 @@ function ThreadNavigationSidebarPane(
       ),
     [projectScopes],
   );
+  // Accents are shared server settings, so the iPad sidebar tints rows with
+  // the same color the desktop sidebar and the Home list use.
+  const resolveProjectAccentColor = useProjectAccentColors();
+  const projectAccentByProjectKey = useMemo(
+    () =>
+      new Map(
+        projectScopes.flatMap((scope) => {
+          const accentColor = resolveProjectAccentColor(scope.projects);
+          return accentColor === null
+            ? []
+            : scope.projectRefs.map(
+                (projectRef) =>
+                  [
+                    scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+                    accentColor,
+                  ] as const,
+              );
+        }),
+      ),
+    [projectScopes, resolveProjectAccentColor],
+  );
   const selectedProjectScope = useMemo(
     () =>
       selectedProjectKey === null
@@ -336,6 +358,16 @@ function ThreadNavigationSidebarPane(
     });
   }, []);
   const hasSearchQuery = props.searchQuery.trim().length > 0;
+  const projectAccentByGroupKey = useMemo(
+    () =>
+      new Map(
+        groups.flatMap((group) => {
+          const accentColor = resolveProjectAccentColor(group.projects);
+          return accentColor === null ? [] : [[group.key, accentColor] as const];
+        }),
+      ),
+    [groups, resolveProjectAccentColor],
+  );
   const listLayout = useMemo(
     () =>
       buildHomeListLayout({
@@ -825,6 +857,7 @@ function ThreadNavigationSidebarPane(
               pendingTask={item.pendingTask}
               project={projectByKey.get(pendingScopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(pendingScopeKey)}
+              projectAccentColor={projectAccentByProjectKey.get(pendingScopeKey) ?? null}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
                   ? (savedConnectionsById[item.pendingTask.message.environmentId]
@@ -848,6 +881,7 @@ function ThreadNavigationSidebarPane(
               showSettledDivider={item.item.showSettledDivider}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
+              projectAccentColor={projectAccentByProjectKey.get(scopeKey) ?? null}
               providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
@@ -891,6 +925,7 @@ function ThreadNavigationSidebarPane(
           return (
             <ThreadListGroupHeader
               variant="sidebar"
+              accentColor={projectAccentByGroupKey.get(item.group.key) ?? null}
               collapsed={item.collapsed}
               isFirst={item.isFirst}
               groupKey={item.group.key}

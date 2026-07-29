@@ -85,6 +85,11 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
   /** Project a quick new thread should target; null hides the button. */
   readonly newThreadTarget?: EnvironmentProject | null;
   readonly onNewThread?: (project: EnvironmentProject) => void;
+  /** Shared project accent from server settings. A header is a single line
+      of small type, so a tinted fill would read as a selection state; the
+      accent shows as a dot after the title instead — the same affordance the
+      web sidebar uses for project rows. */
+  readonly accentColor?: string | null;
 }) {
   const iconMutedColor = useThemeColor("--color-icon-muted");
   const { groupKey, onGroupAction, onNewThread } = props;
@@ -148,6 +153,16 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
         >
           {props.title}
         </Text>
+        {props.accentColor ? (
+          <View
+            style={{
+              backgroundColor: props.accentColor,
+              borderRadius: compact ? 4 : 3,
+              height: compact ? 8 : 6,
+              width: compact ? 8 : 6,
+            }}
+          />
+        ) : null}
         <Text
           className={
             compact
