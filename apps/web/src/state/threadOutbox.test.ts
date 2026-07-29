@@ -15,6 +15,7 @@ import {
   editingQueuedMessageIdsAtom,
   holdEditingQueuedMessage,
   isThreadOutboxMessageQueued,
+  isThreadOutboxMessageWaitingForClientSettings,
   releaseEditingQueuedMessage,
   threadOutboxManager,
 } from "./threadOutbox";
@@ -31,6 +32,20 @@ describe("web queued-message edit holds", () => {
     expect(holdEditingQueuedMessage(messageId)).toBe(false);
     releaseEditingQueuedMessage(messageId);
     expect(holdEditingQueuedMessage(messageId)).toBe(true);
+  });
+});
+
+describe("client settings hydration hold", () => {
+  it("holds only steers until their grace setting hydrates", () => {
+    expect(isThreadOutboxMessageWaitingForClientSettings({ deliveryIntent: "steer" }, false)).toBe(
+      true,
+    );
+    expect(isThreadOutboxMessageWaitingForClientSettings({ deliveryIntent: "queue" }, false)).toBe(
+      false,
+    );
+    expect(isThreadOutboxMessageWaitingForClientSettings({ deliveryIntent: "steer" }, true)).toBe(
+      false,
+    );
   });
 });
 

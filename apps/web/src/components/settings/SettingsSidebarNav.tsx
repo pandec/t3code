@@ -9,6 +9,7 @@ import {
   Link2Icon,
   PaletteIcon,
   Settings2Icon,
+  SparklesIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
 
@@ -31,6 +32,7 @@ export type SettingsSectionPath =
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/beta"
+  | "/settings/extras"
   | "/settings/archived";
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
@@ -45,6 +47,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
   { label: "Beta", to: "/settings/beta", icon: FlaskConicalIcon },
+  { label: "Extras", to: "/settings/extras", icon: SparklesIcon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
 ];
 

@@ -21,7 +21,7 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
-export const SidebarThreadProviderIconVisibility = Schema.Literals(["hover", "always"]);
+export const SidebarThreadProviderIconVisibility = Schema.Literals(["hover", "always", "never"]);
 export type SidebarThreadProviderIconVisibility = typeof SidebarThreadProviderIconVisibility.Type;
 export const DEFAULT_SIDEBAR_THREAD_PROVIDER_ICON_VISIBILITY: SidebarThreadProviderIconVisibility =
   "hover";
@@ -70,7 +70,125 @@ export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill",
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
+/**
+ * Clamp helper shared by every numeric client setting below.
+ *
+ * Client settings are persisted as one blob and rehydrated by spreading over
+ * the defaults rather than by decoding, so a hand-edited or downgraded store
+ * can hand a consumer any number at all. Every read site therefore clamps.
+ */
+function clampSettingNumber(input: {
+  readonly value: number;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly fallback: number;
+  readonly integer: boolean;
+}): number {
+  if (!Number.isFinite(input.value)) {
+    return input.fallback;
+  }
+  const bounded = Math.min(input.maximum, Math.max(input.minimum, input.value));
+  return input.integer ? Math.round(bounded) : bounded;
+}
+
+export const MIN_STEER_GRACE_WINDOW_MS = 0;
+export const MAX_STEER_GRACE_WINDOW_MS = 15_000;
+export const SteerGraceWindowMs = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_STEER_GRACE_WINDOW_MS,
+    maximum: MAX_STEER_GRACE_WINDOW_MS,
+  }),
+);
+export type SteerGraceWindowMs = typeof SteerGraceWindowMs.Type;
+export const DEFAULT_STEER_GRACE_WINDOW_MS: SteerGraceWindowMs = 5_000;
+export function clampSteerGraceWindowMs(value: number): SteerGraceWindowMs {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_STEER_GRACE_WINDOW_MS,
+    maximum: MAX_STEER_GRACE_WINDOW_MS,
+    fallback: DEFAULT_STEER_GRACE_WINDOW_MS,
+    integer: true,
+  }) as SteerGraceWindowMs;
+}
+
+export const MIN_PROVIDER_USAGE_ALERT_PERCENT = 1;
+export const MAX_PROVIDER_USAGE_ALERT_PERCENT = 100;
+export const ProviderUsageAlertPercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_PROVIDER_USAGE_ALERT_PERCENT,
+    maximum: MAX_PROVIDER_USAGE_ALERT_PERCENT,
+  }),
+);
+export type ProviderUsageAlertPercent = typeof ProviderUsageAlertPercent.Type;
+export const DEFAULT_PROVIDER_USAGE_WARNING_PERCENT: ProviderUsageAlertPercent = 80;
+export const DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT: ProviderUsageAlertPercent = 95;
+export function clampProviderUsageAlertPercent(
+  value: number,
+  fallback: ProviderUsageAlertPercent,
+): ProviderUsageAlertPercent {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_PROVIDER_USAGE_ALERT_PERCENT,
+    maximum: MAX_PROVIDER_USAGE_ALERT_PERCENT,
+    fallback,
+    integer: true,
+  }) as ProviderUsageAlertPercent;
+}
+
+export const MIN_ACCENT_TINT_INTENSITY_PERCENT = 4;
+export const MAX_ACCENT_TINT_INTENSITY_PERCENT = 30;
+export const AccentTintIntensityPercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_ACCENT_TINT_INTENSITY_PERCENT,
+    maximum: MAX_ACCENT_TINT_INTENSITY_PERCENT,
+  }),
+);
+export type AccentTintIntensityPercent = typeof AccentTintIntensityPercent.Type;
+export const DEFAULT_ACCENT_TINT_INTENSITY_PERCENT: AccentTintIntensityPercent = 12;
+export function clampAccentTintIntensityPercent(value: number): AccentTintIntensityPercent {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_ACCENT_TINT_INTENSITY_PERCENT,
+    maximum: MAX_ACCENT_TINT_INTENSITY_PERCENT,
+    fallback: DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
+    integer: true,
+  }) as AccentTintIntensityPercent;
+}
+
+export const MIN_TURN_COMPLETION_MIN_DURATION_SECONDS = 0;
+export const MAX_TURN_COMPLETION_MIN_DURATION_SECONDS = 3_600;
+export const TurnCompletionMinDurationSeconds = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
+    maximum: MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
+  }),
+);
+export type TurnCompletionMinDurationSeconds = typeof TurnCompletionMinDurationSeconds.Type;
+export const DEFAULT_TURN_COMPLETION_MIN_DURATION_SECONDS: TurnCompletionMinDurationSeconds = 0;
+export function clampTurnCompletionMinDurationSeconds(
+  value: number,
+): TurnCompletionMinDurationSeconds {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
+    maximum: MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
+    fallback: DEFAULT_TURN_COMPLETION_MIN_DURATION_SECONDS,
+    integer: true,
+  }) as TurnCompletionMinDurationSeconds;
+}
+
 export const ClientSettingsSchema = Schema.Struct({
+  /**
+   * Web-only: whether project accent colors tint the surfaces that carry them
+   * (today the sidebar v2 thread rows). Off leaves the per-project color
+   * picker fully functional — the color still shows as a dot, it just stops
+   * washing over rows.
+   */
+  accentTintsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Alpha, in percent, of the web accent tint overlay. */
+  accentTintIntensityPercent: AccentTintIntensityPercent.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ACCENT_TINT_INTENSITY_PERCENT)),
+  ),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -116,6 +234,17 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * Usage percentages at which the provider quota meter turns amber and red,
+   * and at which rate-limit alerts fire. Only web reads these; mobile keeps
+   * the defaults because it does not sync client settings.
+   */
+  providerUsageWarningPercent: ProviderUsageAlertPercent.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_WARNING_PERCENT)),
+  ),
+  providerUsageCriticalPercent: ProviderUsageAlertPercent.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT)),
+  ),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -159,8 +288,22 @@ export const ClientSettingsSchema = Schema.Struct({
   // there is no way to tell that apart from "left alone", and a channel-derived
   // default could never reach them. Mirrors `updateChannelConfiguredByUser`.
   sidebarV2ConfiguredByUser: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * How long a steer rests in the outbox before delivery. 0 sends immediately;
+   * mobile is unaffected (it keeps the model's built-in default).
+   */
+  steerGraceWindowMs: SteerGraceWindowMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_STEER_GRACE_WINDOW_MS)),
+  ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
+  /**
+   * Turns shorter than this announce nothing — neither toast nor system
+   * notification. 0 (the default) announces every completed turn.
+   */
+  turnCompletionMinDurationSeconds: TurnCompletionMinDurationSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TURN_COMPLETION_MIN_DURATION_SECONDS)),
   ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
@@ -497,6 +640,17 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+/**
+ * Text-to-speech overrides for message playback. Empty means "unset": the
+ * server falls back to its `ELEVENLABS_TTS_*` environment variables and then
+ * to its built-in defaults, so an untouched install behaves exactly as before.
+ */
+export const VoiceSettings = Schema.Struct({
+  ttsModelId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  ttsVoiceId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type VoiceSettings = typeof VoiceSettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -570,6 +724,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  voice: VoiceSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /**
    * Per-project accent colors, shared by every client connected to this
    * server (sidebar v2 on web/desktop, the mobile thread list).
@@ -713,6 +868,12 @@ export const ServerSettingsPatch = Schema.Struct({
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
     }),
   ),
+  voice: Schema.optionalKey(
+    Schema.Struct({
+      ttsModelId: Schema.optionalKey(TrimmedString),
+      ttsVoiceId: Schema.optionalKey(TrimmedString),
+    }),
+  ),
   providers: Schema.optionalKey(
     Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
@@ -743,6 +904,8 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  accentTintsEnabled: Schema.optionalKey(Schema.Boolean),
+  accentTintIntensityPercent: Schema.optionalKey(AccentTintIntensityPercent),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
@@ -773,6 +936,8 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  providerUsageWarningPercent: Schema.optionalKey(ProviderUsageAlertPercent),
+  providerUsageCriticalPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
@@ -788,7 +953,9 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
   sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
+  turnCompletionMinDurationSeconds: Schema.optionalKey(TurnCompletionMinDurationSeconds),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

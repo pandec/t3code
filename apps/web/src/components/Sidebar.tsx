@@ -431,10 +431,12 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   });
   const environment = useEnvironment(thread.environmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(thread.environmentId));
-  const providerInstance = getProviderInstanceEntry(
-    serverConfig?.providers ?? [],
-    thread.modelSelection.instanceId,
-  );
+  // "never" drops the provider instance rather than hiding its badge, so the
+  // row's padding and hover affordances lay out as if it were never there.
+  const providerInstance =
+    providerIconVisibility === "never"
+      ? undefined
+      : getProviderInstanceEntry(serverConfig?.providers ?? [], thread.modelSelection.instanceId);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;

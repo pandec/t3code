@@ -59,7 +59,6 @@ export function BetaSettingsPanel() {
   const sidebarAutoSettleAfterDays = useClientSettings(
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
-  const sidebarV2CompactCards = useClientSettings((settings) => settings.sidebarV2CompactCards);
   const updateSettings = useUpdateClientSettings();
 
   return (
@@ -85,19 +84,6 @@ export function BetaSettingsPanel() {
         />
         {sidebarV2Enabled ? (
           <>
-            <SettingsRow
-              title="Compact thread cards"
-              description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
-              control={
-                <Switch
-                  checked={sidebarV2CompactCards}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ sidebarV2CompactCards: Boolean(checked) })
-                  }
-                  aria-label="Compact sidebar v2 thread cards"
-                />
-              }
-            />
             <SettingsRow
               title="Auto-settle inactive threads"
               description="Threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."

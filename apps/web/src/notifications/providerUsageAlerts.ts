@@ -1,12 +1,13 @@
 import {
+  applyProviderUsageThresholds,
   collectProviderUsageAlerts,
   type ProviderUsageAlert,
   type ProviderUsageSnapshot,
 } from "@t3tools/client-runtime/state/provider-usage";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { toastManager } from "../components/ui/toast";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useProviderUsageThresholds } from "../hooks/useSettings";
 import { showSystemNotification } from "./turnCompletion";
 
 /**
@@ -98,12 +99,23 @@ export function useProviderUsageAlerts(
   alertScope: string,
 ): void {
   const enabled = useClientSettings((settings) => settings.enableRateLimitAlerts);
+  const thresholds = useProviderUsageThresholds();
+  // Alerts fire off the user's thresholds even when the snapshot was derived
+  // with the defaults, so a threshold change takes effect without a reload.
+  const thresholdedSnapshot = useMemo(
+    () => applyProviderUsageThresholds(snapshot, thresholds),
+    [snapshot, thresholds],
+  );
 
   useEffect(() => {
-    if (!enabled || !snapshot) return;
+    if (!enabled || !thresholdedSnapshot) return;
     const nowMs = Date.now();
     const fired = readFiredAlerts(nowMs);
-    const alerts = collectProviderUsageAlerts(snapshot, new Set(fired.keys()), alertScope);
+    const alerts = collectProviderUsageAlerts(
+      thresholdedSnapshot,
+      new Set(fired.keys()),
+      alertScope,
+    );
     if (alerts.length === 0) return;
 
     for (const alert of alerts) {
@@ -131,5 +143,5 @@ export function useProviderUsageAlerts(
       }
     }
     writeFiredAlerts(fired);
-  }, [alertScope, enabled, snapshot]);
+  }, [alertScope, enabled, thresholdedSnapshot]);
 }

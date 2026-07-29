@@ -110,8 +110,18 @@ export function queuedThreadMessageIntent(
  * How long a steer waits in the queue before it is delivered. Steering is
  * one-way — once a message reaches the provider's prompt stream it cannot be
  * recalled — so it rests here first, long enough to fix a typo or drop it.
+ *
+ * The default for every caller that does not pass a window. Web overrides it
+ * per call from the `steerGraceWindowMs` client setting; mobile does not sync
+ * client settings, so it keeps this value.
  */
 export const STEER_GRACE_WINDOW_MS = 5_000;
+
+function resolveGraceWindowMs(graceWindowMs: number | undefined): number {
+  return graceWindowMs === undefined || !Number.isFinite(graceWindowMs)
+    ? STEER_GRACE_WINDOW_MS
+    : Math.max(0, graceWindowMs);
+}
 
 /**
  * Milliseconds left before a steer is delivered, or 0 once it is due. Queued
@@ -120,6 +130,7 @@ export const STEER_GRACE_WINDOW_MS = 5_000;
 export function steerGraceRemainingMs(
   message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">,
   nowMs: number,
+  graceWindowMs?: number,
 ): number {
   if (queuedThreadMessageIntent(message) !== "steer") {
     return 0;
@@ -128,7 +139,7 @@ export function steerGraceRemainingMs(
   if (Number.isNaN(createdAtMs) || createdAtMs > nowMs) {
     return 0;
   }
-  return Math.max(0, createdAtMs + STEER_GRACE_WINDOW_MS - nowMs);
+  return Math.max(0, createdAtMs + resolveGraceWindowMs(graceWindowMs) - nowMs);
 }
 
 /**
@@ -137,12 +148,16 @@ export function steerGraceRemainingMs(
  */
 export function isSteerWaitingOutGraceWindow(
   message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt" | "messageId">,
-  input: { readonly nowMs: number; readonly expedited: Readonly<Record<MessageId, true>> },
+  input: {
+    readonly nowMs: number;
+    readonly expedited: Readonly<Record<MessageId, true>>;
+    readonly graceWindowMs?: number;
+  },
 ): boolean {
   if (input.expedited[message.messageId]) {
     return false;
   }
-  return steerGraceRemainingMs(message, input.nowMs) > 0;
+  return steerGraceRemainingMs(message, input.nowMs, input.graceWindowMs) > 0;
 }
 
 /**
@@ -168,10 +183,11 @@ export function pruneExpeditedQueuedMessageIds(
 export function soonestSteerGraceRemainingMs(
   messages: ReadonlyArray<Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">>,
   nowMs: number,
+  graceWindowMs?: number,
 ): number | null {
   let soonest: number | null = null;
   for (const message of messages) {
-    const remainingMs = steerGraceRemainingMs(message, nowMs);
+    const remainingMs = steerGraceRemainingMs(message, nowMs, graceWindowMs);
     if (remainingMs > 0 && (soonest === null || remainingMs < soonest)) {
       soonest = remainingMs;
     }

@@ -4,13 +4,18 @@ import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
-import { useClientSettings, useClientSettingsHydrated } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  useClientSettingsHydrated,
+  useTurnCompletionMinDurationSeconds,
+} from "../hooks/useSettings";
 import { useEnvironmentIdsReadyForTurnCompletion, useThreadShells } from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   advanceTurnCompletionSnapshot,
   buildTurnCompletionCopy,
   filterShellsForTurnCompletion,
+  filterTurnCompletionCandidatesByDuration,
   resolveTurnCompletionCandidatesForDelivery,
   seedTurnCompletionSnapshot,
   type TurnCompletionCandidate,
@@ -125,6 +130,7 @@ export function TurnCompletionNotifications() {
   const systemEnabled = useClientSettings(
     (settings) => settings.enableTurnCompletionSystemNotifications,
   );
+  const minDurationSeconds = useTurnCompletionMinDurationSeconds();
   const settingsHydrated = useClientSettingsHydrated();
   const threadShells = useThreadShells();
   const readyEnvironmentIds = useEnvironmentIdsReadyForTurnCompletion();
@@ -175,7 +181,13 @@ export function TurnCompletionNotifications() {
       settingsHydrated,
     );
     pendingCandidatesRef.current = [...resolvedCandidates.pending];
-    const candidatesToDeliver = resolvedCandidates.deliver;
+    // Short turns are dropped after the snapshot advanced, so raising the
+    // threshold never resurrects them later; both channels are suppressed
+    // together — a toast is as interrupting as a notification here.
+    const candidatesToDeliver = filterTurnCompletionCandidatesByDuration(
+      resolvedCandidates.deliver,
+      minDurationSeconds,
+    );
 
     if (candidatesToDeliver.length === 0 || (!toastsEnabled && !systemEnabled)) {
       return;
@@ -212,7 +224,14 @@ export function TurnCompletionNotifications() {
         });
       }
     }
-  }, [authoritativeThreadShells, settingsHydrated, toastsEnabled, systemEnabled, navigateToThread]);
+  }, [
+    authoritativeThreadShells,
+    minDurationSeconds,
+    settingsHydrated,
+    toastsEnabled,
+    systemEnabled,
+    navigateToThread,
+  ]);
 
   return null;
 }

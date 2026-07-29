@@ -9,10 +9,56 @@ import type { OrchestrationThreadActivity } from "@t3tools/contracts";
  * a percentage is never fabricated.
  */
 
-/** Windows at or above this usage render as a warning. */
+/** Windows at or above this usage render as a warning, unless overridden. */
 export const PROVIDER_USAGE_WARNING_PERCENT = 80;
-/** Windows at or above this usage render as critical. */
+/** Windows at or above this usage render as critical, unless overridden. */
 export const PROVIDER_USAGE_CRITICAL_PERCENT = 95;
+
+/**
+ * Usage percentages at which windows turn amber and red. Web reads these from
+ * client settings; mobile does not sync client settings and keeps the defaults.
+ */
+export type ProviderUsageThresholds = {
+  readonly warningPercent: number;
+  readonly criticalPercent: number;
+};
+
+export const DEFAULT_PROVIDER_USAGE_THRESHOLDS: ProviderUsageThresholds = {
+  warningPercent: PROVIDER_USAGE_WARNING_PERCENT,
+  criticalPercent: PROVIDER_USAGE_CRITICAL_PERCENT,
+};
+
+const MIN_PROVIDER_USAGE_THRESHOLD_PERCENT = 1;
+const MAX_PROVIDER_USAGE_THRESHOLD_PERCENT = 100;
+
+function clampThresholdPercent(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(
+    MAX_PROVIDER_USAGE_THRESHOLD_PERCENT,
+    Math.max(MIN_PROVIDER_USAGE_THRESHOLD_PERCENT, Math.round(value)),
+  );
+}
+
+/**
+ * Clamps both thresholds into 1-100 and keeps warning at or below critical: a
+ * warning threshold above the critical one could otherwise mask the critical
+ * state entirely, which is the one state the meter exists to surface.
+ */
+export function normalizeProviderUsageThresholds(
+  thresholds: Partial<ProviderUsageThresholds> | undefined,
+): ProviderUsageThresholds {
+  const criticalPercent = clampThresholdPercent(
+    thresholds?.criticalPercent,
+    PROVIDER_USAGE_CRITICAL_PERCENT,
+  );
+  return {
+    warningPercent: Math.min(
+      clampThresholdPercent(thresholds?.warningPercent, PROVIDER_USAGE_WARNING_PERCENT),
+      criticalPercent,
+    ),
+    criticalPercent,
+  };
+}
 
 /** A snapshot older than this no longer reflects reality; render nothing. */
 const PROVIDER_USAGE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -38,6 +84,13 @@ export type ProviderUsageWindow = {
   /** Unix seconds when this window resets, or null if unknown. */
   readonly resetsAt: number | null;
   readonly status: ProviderUsageStatus;
+  /**
+   * Severity the provider itself signalled (Claude's `rejected`, Codex's
+   * exhausted limit), independent of any percentage threshold. Retained so a
+   * snapshot can be re-evaluated against different thresholds without losing
+   * a state that no percentage implies.
+   */
+  readonly reportedStatus?: ProviderUsageStatus;
 };
 
 export type ProviderUsageSnapshot = {
@@ -49,6 +102,8 @@ export type ProviderUsageSnapshot = {
   /** The most constrained window; what the collapsed trigger surfaces. */
   readonly constrainedWindow: ProviderUsageWindow | null;
   readonly updatedAt: string;
+  /** Window the provider flagged as binding, when it says so. */
+  readonly activeWindowId?: string | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -72,10 +127,13 @@ function normalizeRatioOrPercent(value: number): number {
   return clampPercent(value <= 1 ? value * 100 : value);
 }
 
-function statusForPercent(percent: number | null): ProviderUsageStatus {
+function statusForPercent(
+  percent: number | null,
+  thresholds: ProviderUsageThresholds = DEFAULT_PROVIDER_USAGE_THRESHOLDS,
+): ProviderUsageStatus {
   if (percent === null) return "ok";
-  if (percent >= PROVIDER_USAGE_CRITICAL_PERCENT) return "critical";
-  if (percent >= PROVIDER_USAGE_WARNING_PERCENT) return "warning";
+  if (percent >= thresholds.criticalPercent) return "critical";
+  if (percent >= thresholds.warningPercent) return "warning";
   return "ok";
 }
 
@@ -176,10 +234,9 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
   }
 
   const { label, shortLabel } = claudeWindowLabels(rateLimitType);
-  const windowStatus = maxStatus(
-    statusForPercent(usedPercent),
-    status === "rejected" ? "critical" : status === "allowed_warning" ? "warning" : "ok",
-  );
+  const reportedStatus: ProviderUsageStatus =
+    status === "rejected" ? "critical" : status === "allowed_warning" ? "warning" : "ok";
+  const windowStatus = maxStatus(statusForPercent(usedPercent), reportedStatus);
 
   return {
     providerLabel: "Claude",
@@ -193,6 +250,7 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
         usedPercent,
         resetsAt,
         status: windowStatus,
+        reportedStatus,
       },
     ],
   };
@@ -356,6 +414,7 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
           statusForPercent(usedPercent),
           asString(limit.severity) === "critical" ? "critical" : "ok",
         ),
+        reportedStatus: asString(limit.severity) === "critical" ? "critical" : "ok",
       });
     }
   } else {
@@ -582,6 +641,8 @@ export type DeriveProviderUsageOptions = {
   readonly providerInstanceId?: string | null;
   /** Reference time for staleness and reset-expiry checks. */
   readonly now?: number;
+  /** Warning/critical percentages; defaults to 80/95 when omitted. */
+  readonly thresholds?: Partial<ProviderUsageThresholds> | undefined;
 };
 
 /**
@@ -737,8 +798,14 @@ export function deriveLatestProviderUsageSnapshot(
       nowMs === undefined ||
       !Number.isFinite(forcedCriticalAtMs) ||
       nowMs - forcedCriticalAtMs < PROVIDER_USAGE_MAX_AGE_MS;
+    // `reportedStatus` too: the provider said the limit is spent, so no
+    // threshold change may ever soften this window back to a warning.
     return forcedCriticalIsFresh
-      ? { ...window, status: maxStatus(window.status, "critical") }
+      ? {
+          ...window,
+          status: maxStatus(window.status, "critical"),
+          reportedStatus: maxStatus(window.reportedStatus ?? "ok", "critical"),
+        }
       : window;
   });
   let updatedAt = mergedWindows[0]?.sourceAt;
@@ -752,19 +819,48 @@ export function deriveLatestProviderUsageSnapshot(
   }
   if (!updatedAt) return null;
 
+  const { status, constrainedWindow } = summarizeProviderUsageWindows(windows, activeWindowId);
+
+  return applyProviderUsageThresholds(
+    {
+      providerLabel,
+      providerInstanceId,
+      windows,
+      status,
+      constrainedWindow,
+      updatedAt,
+      activeWindowId,
+    },
+    options.thresholds,
+  );
+}
+
+/**
+ * Snapshot-level severity and the window a compact surface should feature.
+ *
+ * The provider's own "active" flag beats inferring the binding window from
+ * percentages — a 44% Fable weekly can bind while a 24% all-models weekly does
+ * not. It may NOT downgrade severity though: compact surfaces render this
+ * window alone, so preferring an active warning over a critical window
+ * elsewhere would hide the very state the meter exists to surface.
+ */
+function summarizeProviderUsageWindows(
+  windows: ReadonlyArray<ProviderUsageWindow>,
+  activeWindowId: string | null | undefined,
+): {
+  readonly status: ProviderUsageStatus;
+  readonly constrainedWindow: ProviderUsageWindow | null;
+} {
   const status = windows.reduce<ProviderUsageStatus>(
     (acc, window) => maxStatus(acc, window.status),
     "ok",
   );
-  // The provider's own "active" flag beats inferring the binding window from
-  // percentages — a 44% Fable weekly can bind while a 24% all-models weekly
-  // does not. It may NOT downgrade severity though: compact surfaces render
-  // this window alone, so preferring an active warning over a critical window
-  // elsewhere would hide the very state the meter exists to surface.
   const flaggedActiveWindow =
-    activeWindowId !== null ? (windows.find((w) => w.id === activeWindowId) ?? null) : null;
+    activeWindowId !== null && activeWindowId !== undefined
+      ? (windows.find((w) => w.id === activeWindowId) ?? null)
+      : null;
   const constrainedWindow =
-    status === "ok"
+    status === "ok" || windows.length === 0
       ? null
       : flaggedActiveWindow !== null && flaggedActiveWindow.status === status
         ? flaggedActiveWindow
@@ -773,15 +869,48 @@ export function deriveLatestProviderUsageSnapshot(
             if (severityDelta !== 0) return severityDelta > 0 ? window : worst;
             return (window.usedPercent ?? 0) > (worst.usedPercent ?? 0) ? window : worst;
           });
+  return { status, constrainedWindow };
+}
 
-  return {
-    providerLabel,
-    providerInstanceId,
+/**
+ * Re-evaluates a snapshot's severities against different warning/critical
+ * thresholds. Percentage-derived severity is recomputed; a severity the
+ * provider itself reported is a floor and survives untouched, as does the
+ * severity of a window that carries a state but no percentage.
+ *
+ * Lets a surface honour user thresholds without re-deriving from activities.
+ */
+export function applyProviderUsageThresholds(
+  snapshot: ProviderUsageSnapshot,
+  thresholds: Partial<ProviderUsageThresholds> | undefined,
+): ProviderUsageSnapshot;
+export function applyProviderUsageThresholds(
+  snapshot: ProviderUsageSnapshot | null,
+  thresholds: Partial<ProviderUsageThresholds> | undefined,
+): ProviderUsageSnapshot | null;
+export function applyProviderUsageThresholds(
+  snapshot: ProviderUsageSnapshot | null,
+  thresholds: Partial<ProviderUsageThresholds> | undefined,
+): ProviderUsageSnapshot | null {
+  if (snapshot === null) return null;
+  const resolved = normalizeProviderUsageThresholds(thresholds);
+  const windows = snapshot.windows.map((window) => {
+    if (window.usedPercent === null) {
+      // No number to threshold against; whatever state the provider signalled
+      // is all this window has ever had.
+      return window;
+    }
+    const status = maxStatus(
+      statusForPercent(window.usedPercent, resolved),
+      window.reportedStatus ?? "ok",
+    );
+    return status === window.status ? window : { ...window, status };
+  });
+  const { status, constrainedWindow } = summarizeProviderUsageWindows(
     windows,
-    status,
-    constrainedWindow,
-    updatedAt,
-  };
+    snapshot.activeWindowId,
+  );
+  return { ...snapshot, windows, status, constrainedWindow };
 }
 
 /**

@@ -21,6 +21,32 @@ describe("steerGraceRemainingMs", () => {
     );
   });
 
+  it("honours a caller-supplied window and keeps the default otherwise", () => {
+    expect(steerGraceRemainingMs({ deliveryIntent: "steer", createdAt }, createdAtMs, 12_000)).toBe(
+      12_000,
+    );
+    // 0 disables the wait entirely; a nonsense value falls back to the default.
+    expect(steerGraceRemainingMs({ deliveryIntent: "steer", createdAt }, createdAtMs, 0)).toBe(0);
+    expect(
+      steerGraceRemainingMs({ deliveryIntent: "steer", createdAt }, createdAtMs, Number.NaN),
+    ).toBe(STEER_GRACE_WINDOW_MS);
+    expect(
+      soonestSteerGraceRemainingMs([{ deliveryIntent: "steer", createdAt }], createdAtMs, 1_000),
+    ).toBe(1_000);
+    expect(
+      isSteerWaitingOutGraceWindow(
+        { deliveryIntent: "steer", createdAt, messageId: MessageId.make("m1") },
+        { nowMs: createdAtMs + 6_000, expedited: {}, graceWindowMs: 15_000 },
+      ),
+    ).toBe(true);
+    expect(
+      isSteerWaitingOutGraceWindow(
+        { deliveryIntent: "steer", createdAt, messageId: MessageId.make("m1") },
+        { nowMs: createdAtMs, expedited: {}, graceWindowMs: 0 },
+      ),
+    ).toBe(false);
+  });
+
   it("counts the window down", () => {
     expect(steerGraceRemainingMs({ deliveryIntent: "steer", createdAt }, createdAtMs + 2_000)).toBe(
       STEER_GRACE_WINDOW_MS - 2_000,

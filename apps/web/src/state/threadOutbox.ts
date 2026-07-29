@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { createThreadOutboxManager } from "@t3tools/client-runtime/state/thread-outbox-manager";
 import {
+  queuedThreadMessageIntent,
   scopedThreadKey as outboxScopedThreadKey,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -21,6 +22,18 @@ export const threadOutboxManager = createThreadOutboxManager({
 
 export function ensureThreadOutboxLoaded(): void {
   void threadOutboxManager.load();
+}
+
+/**
+ * Only steers depend on the client-local grace setting. Before that setting
+ * hydrates, hold those rows without delaying ordinary queued delivery or stale
+ * row cleanup.
+ */
+export function isThreadOutboxMessageWaitingForClientSettings(
+  message: Pick<QueuedThreadMessage, "deliveryIntent">,
+  clientSettingsHydrated: boolean,
+): boolean {
+  return !clientSettingsHydrated && queuedThreadMessageIntent(message) === "steer";
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {

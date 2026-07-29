@@ -18,12 +18,25 @@ import {
   ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
+  type AccentTintIntensityPercent,
+  clampAccentTintIntensityPercent,
+  clampProviderUsageAlertPercent,
+  clampSteerGraceWindowMs,
+  clampTurnCompletionMinDurationSeconds,
   type ClientSettingsPatch,
   type ClientSettings,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT,
+  DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
   type EnvironmentIdentificationMode,
+  type SteerGraceWindowMs,
+  type TurnCompletionMinDurationSeconds,
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
+import {
+  normalizeProviderUsageThresholds,
+  type ProviderUsageThresholds,
+} from "@t3tools/client-runtime/state/provider-usage";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { APP_STAGE_LABEL } from "~/branding";
 import { resolveSidebarV2Enabled } from "~/branding.logic";
@@ -228,6 +241,61 @@ export function useClientSettings<T = ClientSettings>(
 ): T {
   const settings = useClientSettingsValue();
   return useMemo(() => (selector ? selector(settings) : (settings as T)), [selector, settings]);
+}
+
+/**
+ * Steer grace window in milliseconds, clamped on read.
+ *
+ * Persisted client settings are rehydrated by spreading over the defaults
+ * rather than by decoding, so the stored number is not schema-checked at
+ * runtime; every consumer of a numeric setting clamps it here instead.
+ */
+export function useSteerGraceWindowMs(): SteerGraceWindowMs {
+  const value = useClientSettingsValue().steerGraceWindowMs;
+  return useMemo(() => clampSteerGraceWindowMs(value), [value]);
+}
+
+/** Warning/critical usage thresholds for the provider quota meter and alerts. */
+export function useProviderUsageThresholds(): ProviderUsageThresholds {
+  const settings = useClientSettingsValue();
+  const warningPercent = settings.providerUsageWarningPercent;
+  const criticalPercent = settings.providerUsageCriticalPercent;
+  return useMemo(
+    () =>
+      normalizeProviderUsageThresholds({
+        warningPercent: clampProviderUsageAlertPercent(
+          warningPercent,
+          DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
+        ),
+        criticalPercent: clampProviderUsageAlertPercent(
+          criticalPercent,
+          DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT,
+        ),
+      }),
+    [criticalPercent, warningPercent],
+  );
+}
+
+export interface AccentTintSettings {
+  readonly enabled: boolean;
+  readonly intensityPercent: AccentTintIntensityPercent;
+}
+
+/** Whether (and how strongly) project accent colors tint web surfaces. */
+export function useAccentTintSettings(): AccentTintSettings {
+  const settings = useClientSettingsValue();
+  const enabled = settings.accentTintsEnabled;
+  const intensity = settings.accentTintIntensityPercent;
+  return useMemo(
+    () => ({ enabled, intensityPercent: clampAccentTintIntensityPercent(intensity) }),
+    [enabled, intensity],
+  );
+}
+
+/** Minimum turn duration, in seconds, before a completion is announced. */
+export function useTurnCompletionMinDurationSeconds(): TurnCompletionMinDurationSeconds {
+  const value = useClientSettingsValue().turnCompletionMinDurationSeconds;
+  return useMemo(() => clampTurnCompletionMinDurationSeconds(value), [value]);
 }
 
 export function resolveEnvironmentIdentificationMode(input: {

@@ -7,8 +7,10 @@ import {
   buildTurnCompletionCopy,
   collectTurnCompletionCandidates,
   filterShellsForTurnCompletion,
+  filterTurnCompletionCandidatesByDuration,
   resolveTurnCompletionCandidatesForDelivery,
   seedTurnCompletionSnapshot,
+  shouldAnnounceTurnCompletion,
 } from "./turnCompletion.logic";
 
 function makeTurn(input: {
@@ -57,6 +59,7 @@ describe("collectTurnCompletionCandidates", () => {
         threadId: "a",
         turnId: "a-turn",
         title: "Thread a",
+        durationMs: 59_000,
       },
     ]);
   });
@@ -71,6 +74,7 @@ describe("collectTurnCompletionCandidates", () => {
         threadId: "a",
         turnId: "a-turn",
         title: "Thread a",
+        durationMs: 59_000,
       },
     ]);
   });
@@ -257,12 +261,122 @@ describe("turn completion snapshot", () => {
   });
 });
 
+describe("turn completion minimum duration", () => {
+  const candidate = (durationMs: number | null) => ({
+    environmentId: "env-1" as EnvironmentId,
+    threadId: "a" as ThreadId,
+    turnId: "turn-a",
+    title: "Thread a",
+    durationMs,
+  });
+
+  it("measures the turn from startedAt to completedAt", () => {
+    expect(collectTurnCompletionCandidates([running("a")], [completed("a")])[0]?.durationMs).toBe(
+      59_000,
+    );
+  });
+
+  it("falls back to requestedAt when the turn was never stamped as started", () => {
+    const before = makeShell({
+      id: "a",
+      latestTurn: { ...makeTurn({ turnId: "a-turn", state: "running" }), completedAt: null },
+    });
+    const after = makeShell({
+      id: "a",
+      latestTurn: { ...makeTurn({ turnId: "a-turn", state: "completed" }), startedAt: null },
+    });
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBe(60_000);
+  });
+
+  it("reports no duration when the timestamps are unusable", () => {
+    const before = makeShell({
+      id: "a",
+      latestTurn: { ...makeTurn({ turnId: "a-turn", state: "running" }), completedAt: null },
+    });
+    const after = makeShell({
+      id: "a",
+      latestTurn: {
+        ...makeTurn({ turnId: "a-turn", state: "completed" }),
+        completedAt: "not-a-date",
+      },
+    });
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
+  it("reports no duration when completion precedes the stamped start", () => {
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: makeTurn({
+        turnId: "a-turn",
+        state: "completed",
+        completedAt: "2026-07-24T09:59:59.000Z",
+      }),
+    });
+
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
+  it("reports no duration for a checkpoint-only synthetic timestamp", () => {
+    const syntheticAt = "2026-07-24T10:00:01.000Z";
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: {
+        ...makeTurn({ turnId: "a-turn", state: "completed", completedAt: syntheticAt }),
+        requestedAt: syntheticAt,
+        startedAt: syntheticAt,
+      },
+    });
+
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
+  it("keeps a known zero duration when the request preceded the stamped start", () => {
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: makeTurn({
+        turnId: "a-turn",
+        state: "completed",
+        completedAt: "2026-07-24T10:00:01.000Z",
+      }),
+    });
+    const completedCandidate = collectTurnCompletionCandidates([before], [after])[0];
+
+    expect(completedCandidate?.durationMs).toBe(0);
+    expect(completedCandidate && shouldAnnounceTurnCompletion(completedCandidate, 1)).toBe(false);
+  });
+
+  it("announces everything when the threshold is zero or invalid", () => {
+    expect(shouldAnnounceTurnCompletion(candidate(10), 0)).toBe(true);
+    expect(shouldAnnounceTurnCompletion(candidate(10), Number.NaN)).toBe(true);
+    expect(filterTurnCompletionCandidatesByDuration([candidate(10)], 0)).toHaveLength(1);
+  });
+
+  it("suppresses turns shorter than the threshold and keeps the rest", () => {
+    expect(shouldAnnounceTurnCompletion(candidate(29_999), 30)).toBe(false);
+    expect(shouldAnnounceTurnCompletion(candidate(30_000), 30)).toBe(true);
+    expect(
+      filterTurnCompletionCandidatesByDuration([candidate(1_000), candidate(60_000)], 30).map(
+        (entry) => entry.durationMs,
+      ),
+    ).toEqual([60_000]);
+  });
+
+  it("announces a turn whose duration is unknown rather than guessing", () => {
+    expect(shouldAnnounceTurnCompletion(candidate(null), 3_600)).toBe(true);
+    expect(filterTurnCompletionCandidatesByDuration([candidate(null)], 3_600)).toHaveLength(1);
+  });
+});
+
 describe("turn completion settings hydration", () => {
   const candidate = {
     environmentId: "env-1" as EnvironmentId,
     threadId: "a" as ThreadId,
     turnId: "turn-a",
     title: "Thread a",
+    durationMs: 59_000,
   };
 
   it("holds observed candidates until persisted settings hydrate", () => {
@@ -282,24 +396,13 @@ describe("turn completion settings hydration", () => {
 
 describe("buildTurnCompletionCopy", () => {
   it("uses the thread title as the body", () => {
-    expect(
-      buildTurnCompletionCopy({
-        environmentId: "env-1" as EnvironmentId,
-        threadId: "a" as ThreadId,
-        turnId: "turn-a",
-        title: "Fix the flaky test",
-      }),
-    ).toEqual({ title: "Agent finished", body: "Fix the flaky test" });
+    expect(buildTurnCompletionCopy({ title: "Fix the flaky test" })).toEqual({
+      title: "Agent finished",
+      body: "Fix the flaky test",
+    });
   });
 
   it("falls back for whitespace-only titles", () => {
-    expect(
-      buildTurnCompletionCopy({
-        environmentId: "env-1" as EnvironmentId,
-        threadId: "a" as ThreadId,
-        turnId: "turn-a",
-        title: "  ",
-      }).body,
-    ).toBe("A thread finished working.");
+    expect(buildTurnCompletionCopy({ title: "  " }).body).toBe("A thread finished working.");
   });
 });

@@ -8,10 +8,13 @@ import * as Ref from "effect/Ref";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  DEFAULT_ELEVENLABS_TTS_MODEL,
+  DEFAULT_ELEVENLABS_TTS_VOICE_ID,
   getElevenLabsTtsCharacterLimit,
   isMessageSpeechCacheReusable,
   isMessageSpeechSourceEligible,
   makeMessageSpeechLockCoordinator,
+  resolveMessageSpeechVoiceSetting,
 } from "./MessageSpeech.ts";
 
 describe("message speech locking", () => {
@@ -105,6 +108,33 @@ describe("ElevenLabs TTS character limits", () => {
     expect(getElevenLabsTtsCharacterLimit("eleven_multilingual_v2")).toBe(10_000);
     expect(getElevenLabsTtsCharacterLimit("eleven_v3")).toBe(5_000);
     expect(getElevenLabsTtsCharacterLimit("future_model")).toBe(5_000);
+  });
+});
+
+describe("TTS model and voice resolution", () => {
+  it("prefers the server setting, then the environment, then the default", () => {
+    expect(resolveMessageSpeechVoiceSetting("eleven_v3", "eleven_turbo_v2", "fallback-model")).toBe(
+      "eleven_v3",
+    );
+    expect(resolveMessageSpeechVoiceSetting("", "eleven_turbo_v2", "fallback-model")).toBe(
+      "eleven_turbo_v2",
+    );
+    expect(resolveMessageSpeechVoiceSetting(undefined, "", DEFAULT_ELEVENLABS_TTS_MODEL)).toBe(
+      DEFAULT_ELEVENLABS_TTS_MODEL,
+    );
+    expect(resolveMessageSpeechVoiceSetting(null, "   ", DEFAULT_ELEVENLABS_TTS_VOICE_ID)).toBe(
+      DEFAULT_ELEVENLABS_TTS_VOICE_ID,
+    );
+  });
+
+  it("treats whitespace-only values as unset and trims the rest", () => {
+    expect(resolveMessageSpeechVoiceSetting("   ", "env-voice", "default-voice")).toBe("env-voice");
+    expect(resolveMessageSpeechVoiceSetting("  voice-a  ", "env-voice", "default-voice")).toBe(
+      "voice-a",
+    );
+    expect(resolveMessageSpeechVoiceSetting("", "  env-voice  ", "default-voice")).toBe(
+      "env-voice",
+    );
   });
 });
 

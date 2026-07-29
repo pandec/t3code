@@ -75,12 +75,6 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
-  buildNotificationSettingsSupportText,
-  readBrowserNotificationPermissionState,
-  requestBrowserNotificationPermission,
-  showSystemNotification,
-} from "../../notifications/turnCompletion";
-import {
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
   serverEnvironment,
@@ -471,6 +465,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
         ? ["Thread provider icon"]
         : []),
+      ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
+        ? ["Compact thread cards"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -516,10 +513,46 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts
         ? ["Rate limit alerts"]
         : []),
+      ...(settings.turnCompletionMinDurationSeconds !==
+      DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds
+        ? ["Minimum turn duration"]
+        : []),
+      ...(settings.providerUsageWarningPercent !==
+      DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent
+        ? ["Warning threshold"]
+        : []),
+      ...(settings.providerUsageCriticalPercent !==
+      DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent
+        ? ["Critical threshold"]
+        : []),
+      ...(settings.steerGraceWindowMs !== DEFAULT_UNIFIED_SETTINGS.steerGraceWindowMs
+        ? ["Steer grace window"]
+        : []),
+      ...(settings.accentTintsEnabled !== DEFAULT_UNIFIED_SETTINGS.accentTintsEnabled
+        ? ["Project accent tints"]
+        : []),
+      ...(settings.accentTintIntensityPercent !==
+      DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent
+        ? ["Tint intensity"]
+        : []),
+      ...(settings.voice.ttsModelId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId
+        ? ["Text-to-speech model"]
+        : []),
+      ...(settings.voice.ttsVoiceId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId
+        ? ["Text-to-speech voice"]
+        : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ],
     [
       isTextGenerationModelDirty,
+      settings.accentTintsEnabled,
+      settings.accentTintIntensityPercent,
+      settings.providerUsageWarningPercent,
+      settings.providerUsageCriticalPercent,
+      settings.steerGraceWindowMs,
+      settings.turnCompletionMinDurationSeconds,
+      settings.voice.ttsModelId,
+      settings.voice.ttsVoiceId,
       projectAccentColors.hasAnyServerAccentColors,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
@@ -540,6 +573,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
+      settings.sidebarV2CompactCards,
       settings.timestampFormat,
       settings.wordWrap,
       theme,
@@ -569,6 +603,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectAccentColors: {},
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
+      sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -582,6 +617,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableTurnCompletionSystemNotifications:
         DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
       enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
+      turnCompletionMinDurationSeconds: DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds,
+      providerUsageWarningPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
+      providerUsageCriticalPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent,
+      steerGraceWindowMs: DEFAULT_UNIFIED_SETTINGS.steerGraceWindowMs,
+      accentTintsEnabled: DEFAULT_UNIFIED_SETTINGS.accentTintsEnabled,
+      accentTintIntensityPercent: DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent,
+      voice: {
+        ttsModelId: DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId,
+        ttsVoiceId: DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId,
+      },
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
@@ -603,8 +648,8 @@ export function AppearanceSettingsPanel() {
   const glassOpacityRatio =
     (settings.glassOpacity - MIN_GLASS_OPACITY) / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY);
   const glassOpacitySliderStyle = {
-    "--glass-slider-progress": `${glassOpacityRatio * 100}%`,
-    "--glass-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
+    "--settings-slider-progress": `${glassOpacityRatio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
   } as CSSProperties;
 
   return (
@@ -666,7 +711,7 @@ export function AppearanceSettingsPanel() {
               </output>
               <input
                 aria-label="Glass opacity"
-                className="glass-opacity-slider min-w-0 flex-1"
+                className="settings-range-slider min-w-0 flex-1"
                 id="glass-opacity"
                 max={MAX_GLASS_OPACITY}
                 min={MIN_GLASS_OPACITY}
@@ -834,51 +879,6 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project Grouping"
             />
-          }
-        />
-
-        <SettingsRow
-          title="Thread provider icon"
-          description="Choose whether thread rows show their provider only on hover or at all times."
-          resetAction={
-            settings.sidebarThreadProviderIconVisibility !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility ? (
-              <SettingResetButton
-                label="thread provider icon"
-                onClick={() =>
-                  updateSettings({
-                    sidebarThreadProviderIconVisibility:
-                      DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.sidebarThreadProviderIconVisibility}
-              onValueChange={(value) => {
-                if (value === "hover" || value === "always") {
-                  updateSettings({ sidebarThreadProviderIconVisibility: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Thread provider icon">
-                <SelectValue>
-                  {settings.sidebarThreadProviderIconVisibility === "always"
-                    ? "Always"
-                    : "On hover"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="hover">
-                  On hover
-                </SelectItem>
-                <SelectItem hideIndicator value="always">
-                  Always
-                </SelectItem>
-              </SelectPopup>
-            </Select>
           }
         />
 
@@ -1261,8 +1261,6 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
-      <NotificationsSettingsSection />
-
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
           <AboutVersionSection />
@@ -1283,138 +1281,6 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
     </SettingsPageContainer>
-  );
-}
-
-function NotificationsSettingsSection() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const [browserPermissionState, setBrowserPermissionState] = useState(
-    readBrowserNotificationPermissionState,
-  );
-
-  const handleSystemNotificationsChange = useCallback(
-    async (checked: boolean) => {
-      if (!checked || isElectron) {
-        updateSettings({ enableTurnCompletionSystemNotifications: checked });
-        return;
-      }
-      const permissionState = await requestBrowserNotificationPermission();
-      setBrowserPermissionState(permissionState);
-      if (permissionState === "granted") {
-        updateSettings({ enableTurnCompletionSystemNotifications: true });
-        return;
-      }
-      updateSettings({ enableTurnCompletionSystemNotifications: false });
-      toastManager.add({
-        type: "warning",
-        title: "System notifications unavailable",
-        description: buildNotificationSettingsSupportText(permissionState),
-      });
-    },
-    [updateSettings],
-  );
-
-  const handleTestNotification = useCallback(async () => {
-    const shown = await showSystemNotification({
-      title: "Test notification",
-      body: "This is how a finished agent turn will be announced.",
-    });
-    if (!shown) {
-      toastManager.add({
-        type: "warning",
-        title: "Could not show a test notification",
-        description: buildNotificationSettingsSupportText(readBrowserNotificationPermissionState()),
-      });
-    }
-  }, []);
-
-  return (
-    <SettingsSection title="Notifications">
-      <SettingsRow
-        title="Completion toasts"
-        description="Show an in-app toast when an agent turn finishes."
-        resetAction={
-          settings.enableTurnCompletionToasts !==
-          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts ? (
-            <SettingResetButton
-              label="completion toasts"
-              onClick={() =>
-                updateSettings({
-                  enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableTurnCompletionToasts}
-            onCheckedChange={(checked) =>
-              updateSettings({ enableTurnCompletionToasts: Boolean(checked) })
-            }
-            aria-label="Show completion toasts"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="System notifications"
-        description={`Notify through the operating system when an agent turn finishes while the app is in the background. ${buildNotificationSettingsSupportText(browserPermissionState)}`}
-        resetAction={
-          settings.enableTurnCompletionSystemNotifications !==
-          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications ? (
-            <SettingResetButton
-              label="system notifications"
-              onClick={() =>
-                updateSettings({
-                  enableTurnCompletionSystemNotifications:
-                    DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <div className="flex items-center gap-3">
-            <Button size="xs" variant="outline" onClick={() => void handleTestNotification()}>
-              Test
-            </Button>
-            <Switch
-              checked={settings.enableTurnCompletionSystemNotifications}
-              onCheckedChange={(checked) => void handleSystemNotificationsChange(Boolean(checked))}
-              aria-label="Show system notifications"
-            />
-          </div>
-        }
-      />
-
-      <SettingsRow
-        title="Rate limit alerts"
-        description="Warn once per rate-limit window when subscription usage crosses the warning or critical threshold."
-        resetAction={
-          settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts ? (
-            <SettingResetButton
-              label="rate limit alerts"
-              onClick={() =>
-                updateSettings({
-                  enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableRateLimitAlerts}
-            onCheckedChange={(checked) =>
-              updateSettings({ enableRateLimitAlerts: Boolean(checked) })
-            }
-            aria-label="Warn about rate limit usage"
-          />
-        }
-      />
-    </SettingsSection>
   );
 }
 

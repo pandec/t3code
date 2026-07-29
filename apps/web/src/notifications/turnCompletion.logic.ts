@@ -7,6 +7,12 @@ export interface TurnCompletionCandidate {
   readonly threadId: ThreadId;
   readonly turnId: string;
   readonly title: string;
+  /**
+   * How long the turn ran, from the thread's own timestamps. Null when the
+   * server sent timestamps this client cannot parse — no duration filter may
+   * silence a completion on a guess.
+   */
+  readonly durationMs: number | null;
 }
 
 export interface TurnCompletionSnapshot {
@@ -51,6 +57,67 @@ function completedTurnId(shell: EnvironmentThreadShell): string | null {
     : null;
 }
 
+/**
+ * Wall-clock length of the shell's completed turn.
+ *
+ * `startedAt` is when the provider actually began; `requestedAt` covers turns
+ * whose start was never stamped (older servers, queued starts) so a completion
+ * is never treated as instantaneous just because one field is missing.
+ */
+function completedTurnDurationMs(shell: EnvironmentThreadShell): number | null {
+  const latestTurn = shell.latestTurn;
+  if (!latestTurn || latestTurn.completedAt === null) {
+    return null;
+  }
+  const startedAtMs = Date.parse(latestTurn.startedAt ?? latestTurn.requestedAt);
+  const requestedAtMs = Date.parse(latestTurn.requestedAt);
+  const completedAtMs = Date.parse(latestTurn.completedAt);
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)) {
+    return null;
+  }
+  const durationMs = completedAtMs - startedAtMs;
+  if (durationMs < 0) {
+    return null;
+  }
+  if (durationMs === 0 && (!Number.isFinite(requestedAtMs) || requestedAtMs >= startedAtMs)) {
+    // Checkpoint-only reconstruction stamps request, start, and completion from
+    // the same fallback timestamp. That is unknown duration, not a known zero.
+    return null;
+  }
+  return durationMs;
+}
+
+/**
+ * Whether a completion clears the "only tell me about long turns" threshold.
+ * A turn whose duration could not be determined always announces: staying
+ * quiet would be a guess, and a missed completion is the costlier mistake.
+ */
+export function shouldAnnounceTurnCompletion(
+  candidate: Pick<TurnCompletionCandidate, "durationMs">,
+  minDurationSeconds: number,
+): boolean {
+  if (!Number.isFinite(minDurationSeconds) || minDurationSeconds <= 0) {
+    return true;
+  }
+  if (candidate.durationMs === null) {
+    return true;
+  }
+  return candidate.durationMs >= minDurationSeconds * 1_000;
+}
+
+/** Drops completions shorter than the configured minimum turn duration. */
+export function filterTurnCompletionCandidatesByDuration(
+  candidates: ReadonlyArray<TurnCompletionCandidate>,
+  minDurationSeconds: number,
+): ReadonlyArray<TurnCompletionCandidate> {
+  if (!Number.isFinite(minDurationSeconds) || minDurationSeconds <= 0) {
+    return candidates;
+  }
+  return candidates.filter((candidate) =>
+    shouldAnnounceTurnCompletion(candidate, minDurationSeconds),
+  );
+}
+
 function collectCompletedTurnIds(
   shells: ReadonlyArray<EnvironmentThreadShell>,
 ): ReadonlySet<string> {
@@ -93,6 +160,7 @@ export function collectTurnCompletionCandidates(
       threadId: shell.id,
       turnId,
       title: shell.title,
+      durationMs: completedTurnDurationMs(shell),
     });
   }
   return candidates;
@@ -132,7 +200,7 @@ export function advanceTurnCompletionSnapshot(
   };
 }
 
-export function buildTurnCompletionCopy(candidate: TurnCompletionCandidate): {
+export function buildTurnCompletionCopy(candidate: Pick<TurnCompletionCandidate, "title">): {
   title: string;
   body: string;
 } {

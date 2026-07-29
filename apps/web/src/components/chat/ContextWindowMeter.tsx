@@ -1,10 +1,13 @@
 import {
+  applyProviderUsageThresholds,
   primaryProviderUsageWindow,
   type ProviderUsageSnapshot,
   type ProviderUsageStatus,
   type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
+import { useMemo } from "react";
 
+import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -136,7 +139,14 @@ export function ContextWindowMeter(props: {
   providerUsage?: ProviderUsageSnapshot | null;
   providerDisplayName?: string | null;
 }) {
-  const { usage, providerUsage, providerDisplayName } = props;
+  const { usage, providerDisplayName } = props;
+  // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
+  // change applies to whatever is already on screen.
+  const usageThresholds = useProviderUsageThresholds();
+  const providerUsage = useMemo(
+    () => applyProviderUsageThresholds(props.providerUsage ?? null, usageThresholds),
+    [props.providerUsage, usageThresholds],
+  );
   const nowMs = Date.now();
 
   const usedPercentage = usage ? formatPercentage(usage.usedPercentage) : null;

@@ -2,8 +2,10 @@ import { EventId, TurnId, type OrchestrationThreadActivity } from "@t3tools/cont
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  applyProviderUsageThresholds,
   collectProviderUsageAlerts,
   deriveLatestProviderUsageSnapshot,
+  normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
 } from "./providerUsage.ts";
@@ -62,6 +64,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
         usedPercent: 42,
         resetsAt: 1784970000,
         status: "ok",
+        reportedStatus: "ok",
       },
     ]);
   });
@@ -189,6 +192,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
         usedPercent: 90,
         resetsAt: 1784970000,
         status: "warning",
+        reportedStatus: "ok",
       },
     ]);
   });
@@ -758,6 +762,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
           usedPercent: 3,
           resetsAt: Math.round(Date.parse("2026-07-26T07:00:00.990433+00:00") / 1_000),
           status: "ok",
+          reportedStatus: "ok",
         },
         {
           id: "seven_day",
@@ -767,6 +772,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
           usedPercent: 24,
           resetsAt: Math.round(Date.parse("2026-07-31T02:59:59.990456+00:00") / 1_000),
           status: "ok",
+          reportedStatus: "ok",
         },
         {
           id: "seven_day_fable",
@@ -776,6 +782,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
           usedPercent: 44,
           resetsAt: Math.round(Date.parse("2026-07-31T02:59:59.990712+00:00") / 1_000),
           status: "ok",
+          reportedStatus: "ok",
         },
       ]);
     });
@@ -1149,5 +1156,80 @@ describe("collectProviderUsageAlerts", () => {
     expect(
       providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-b"),
     ).not.toBe(providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-a"));
+  });
+});
+
+describe("provider usage thresholds", () => {
+  const snapshotAt = (utilization: number) =>
+    deriveLatestProviderUsageSnapshot([
+      claudeActivity("a1", {
+        status: "allowed",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
+        utilization,
+      }),
+    ]);
+
+  it("normalizes out-of-range and inverted thresholds", () => {
+    expect(normalizeProviderUsageThresholds(undefined)).toEqual({
+      warningPercent: 80,
+      criticalPercent: 95,
+    });
+    expect(normalizeProviderUsageThresholds({ warningPercent: 0, criticalPercent: 400 })).toEqual({
+      warningPercent: 1,
+      criticalPercent: 100,
+    });
+    // A warning above critical would mask the critical state entirely.
+    expect(normalizeProviderUsageThresholds({ warningPercent: 90, criticalPercent: 60 })).toEqual({
+      warningPercent: 60,
+      criticalPercent: 60,
+    });
+    expect(
+      normalizeProviderUsageThresholds({ warningPercent: Number.NaN, criticalPercent: 70 }),
+    ).toEqual({ warningPercent: 70, criticalPercent: 70 });
+  });
+
+  it("derives severities against caller thresholds", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot(
+      [
+        claudeActivity("a1", {
+          status: "allowed",
+          resetsAt: 1784970000,
+          rateLimitType: "five_hour",
+          utilization: 0.55,
+        }),
+      ],
+      { thresholds: { warningPercent: 50, criticalPercent: 90 } },
+    );
+    expect(snapshot?.status).toBe("warning");
+    expect(snapshot?.constrainedWindow?.id).toBe("five_hour");
+  });
+
+  it("re-evaluates an existing snapshot without re-deriving it", () => {
+    const snapshot = snapshotAt(0.5);
+    expect(snapshot?.status).toBe("ok");
+    expect(applyProviderUsageThresholds(snapshot, { warningPercent: 40 })?.status).toBe("warning");
+    expect(
+      applyProviderUsageThresholds(snapshot, { warningPercent: 20, criticalPercent: 40 })?.status,
+    ).toBe("critical");
+    // Relaxing the thresholds calms the same snapshot back down.
+    expect(applyProviderUsageThresholds(snapshotAt(0.85), { warningPercent: 90 })?.status).toBe(
+      "ok",
+    );
+    expect(applyProviderUsageThresholds(null, undefined)).toBeNull();
+  });
+
+  it("never softens a severity the provider itself reported", () => {
+    const rejected = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a1", {
+        status: "rejected",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
+        utilization: 0.2,
+      }),
+    ]);
+    expect(
+      applyProviderUsageThresholds(rejected, { warningPercent: 99, criticalPercent: 100 })?.status,
+    ).toBe("critical");
   });
 });
