@@ -44,6 +44,64 @@ type LogicalSidebarProject = SidebarProject & {
   }[];
 };
 
+export type SidebarProjectScope = ReadonlySet<string> | null;
+
+export function toggleSidebarProjectScope(
+  scope: SidebarProjectScope,
+  projectKey: string,
+): SidebarProjectScope {
+  if (scope === null) {
+    return new Set([projectKey]);
+  }
+
+  const next = new Set(scope);
+  if (next.has(projectKey)) {
+    next.delete(projectKey);
+  } else {
+    next.add(projectKey);
+  }
+  return next.size === 0 ? null : next;
+}
+
+export function sidebarProjectScopeSignature(scope: SidebarProjectScope): string {
+  return scope === null ? "all" : `projects:${JSON.stringify([...scope].toSorted())}`;
+}
+
+// The scope stores intent and is resolved against the projects that exist right
+// now instead of being pruned into state: an environment that drops out of the
+// catalog (reconnect, reload) would otherwise silently and permanently narrow a
+// multi-project selection, with no way to tell that from a deliberate one. An
+// explicit scope stays explicit even when none of its projects are currently
+// available, so a temporary disconnect never broadens the filter to all
+// projects.
+export function resolveSidebarProjectScope(
+  projects: readonly Pick<LogicalSidebarProject, "projectKey">[],
+  scope: SidebarProjectScope,
+): SidebarProjectScope {
+  if (scope === null) return null;
+
+  return new Set(
+    projects.flatMap((project) => (scope.has(project.projectKey) ? [project.projectKey] : [])),
+  );
+}
+
+export function resolveSidebarProjectScopePhysicalKeys(
+  projects: readonly Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs">[],
+  scope: SidebarProjectScope,
+): ReadonlySet<string> | null {
+  if (scope === null) return null;
+
+  return new Set(
+    projects.flatMap((project) =>
+      scope.has(project.projectKey)
+        ? project.memberProjectRefs.map(
+            (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+          )
+        : [],
+    ),
+  );
+}
+
 export type ThreadTraversalDirection = "previous" | "next";
 
 export function canForkConversation(

@@ -27,7 +27,7 @@ When the incoming upstream range touches a path below, spawn one targeted sub-ag
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | `apps/server/src/provider/Layers/ProviderService.ts`           | Does the fork's `strandedPriorTurn` input augmentation still wrap upstream's `sendTurn` call?                        | 1                |
 | `apps/web/src/components/settings/SettingsPanels.tsx`          | Do the fork's dirty-badge entries still reference settings upstream has not renamed away?                            | 1                |
-| `apps/web/src/components/SidebarV2.tsx`                        | Do the fork's archived-threads entry, provider icons, and compact time labels survive upstream's rework?             | 0                |
+| `apps/web/src/components/SidebarV2.tsx`                        | Do the fork's multi-project scope, archived-threads entry, provider icons, and compact time labels survive upstream? | 0                |
 | `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` | Does the fork's model-filter wiring (`useHomeModelFilterOptions`) still supply upstream's `serverConfigs` consumers? | 0                |
 
 ## Full audit

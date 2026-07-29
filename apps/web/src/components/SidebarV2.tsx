@@ -117,14 +117,19 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
+  resolveSidebarProjectScope,
+  resolveSidebarProjectScopePhysicalKeys,
   resolveSettledTimestamp,
   resolveSidebarV2Status,
   resolveWorkingStartedAt,
+  sidebarProjectScopeSignature,
   shouldNavigateAfterProjectRemoval,
   sortLogicalProjectsForSidebar,
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
+  toggleSidebarProjectScope,
 } from "./Sidebar.logic";
+import type { SidebarProjectScope } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   prStatusIndicator,
@@ -155,7 +160,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Kbd } from "./ui/kbd";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -1251,37 +1256,92 @@ export default function SidebarV2() {
     [],
   );
 
-  // Project scope: one menu above the list. Scoping filters the list without
-  // making the header width depend on the number or length of project names.
-  const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
-  const scopedProjectGroup = useMemo(
+  // Project scope: one menu above the list. null means All projects, while a
+  // non-empty set keeps an explicit selection (including when it currently
+  // contains every project, so newly added projects do not join implicitly).
+  // The set holds intent and is never pruned by availability: a project that
+  // disappears with its environment rejoins the scope when it comes back.
+  // Everything rendered reads the resolved scope below instead, and editing
+  // the scope rewrites it from that resolved value.
+  const [projectScopeKeys, setProjectScopeKeys] = useState<SidebarProjectScope>(null);
+  const scopedProjectGroups = useMemo(
     () =>
-      projectScopeKey === null
-        ? null
-        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
-    [projectGroups, projectScopeKey],
+      projectScopeKeys === null
+        ? []
+        : projectGroups.filter((project) => projectScopeKeys.has(project.projectKey)),
+    [projectGroups, projectScopeKeys],
+  );
+  const singleScopedProjectGroup =
+    projectScopeKeys?.size === 1 && scopedProjectGroups.length === 1
+      ? scopedProjectGroups[0]!
+      : null;
+  const resolvedProjectScopeKeys = useMemo(
+    () => resolveSidebarProjectScope(projectGroups, projectScopeKeys),
+    [projectGroups, projectScopeKeys],
   );
   const scopedProjectKeys = useMemo(
-    () =>
-      scopedProjectGroup === null
-        ? null
-        : new Set(
-            scopedProjectGroup.memberProjectRefs.map(
-              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
-            ),
-          ),
-    [scopedProjectGroup],
+    () => resolveSidebarProjectScopePhysicalKeys(projectGroups, resolvedProjectScopeKeys),
+    [projectGroups, resolvedProjectScopeKeys],
   );
-  useEffect(() => {
-    if (projectScopeKey !== null && scopedProjectGroup === null) {
-      setProjectScopeKey(null);
-    }
-  }, [projectScopeKey, scopedProjectGroup]);
+  // Keyed on the stored intent, not the resolved scope: clearing the selection
+  // and collapsing the settled tail answer "the user changed the filter", and
+  // an environment reconnecting must not wipe staged bulk work. Bulk actions
+  // already ignore selected keys whose rows are not rendered.
+  const projectScopeSignature = useMemo(
+    () => sidebarProjectScopeSignature(projectScopeKeys),
+    [projectScopeKeys],
+  );
+  // The menu stays open across clicks now that it multi-selects, and
+  // projectGroups is activity-sorted, so a background thread update would
+  // reorder rows under the pointer mid-selection. Freeze the order while the
+  // popup is open; projects added or removed meanwhile still appear.
+  const openProjectScopeOrderRef = useRef(projectGroups);
+  if (!projectScopeMenuOpen) openProjectScopeOrderRef.current = projectGroups;
+  const menuProjectGroups = useMemo(() => {
+    if (!projectScopeMenuOpen) return projectGroups;
+    const frozenRank = new Map(
+      openProjectScopeOrderRef.current.map(
+        (project, index) => [project.projectKey, index] as const,
+      ),
+    );
+    return projectGroups
+      .map((project, index) => ({
+        project,
+        rank: frozenRank.get(project.projectKey) ?? frozenRank.size + index,
+      }))
+      .toSorted((left, right) => left.rank - right.rank)
+      .map((entry) => entry.project);
+  }, [projectGroups, projectScopeMenuOpen]);
+  // The trigger has one line of sidebar width, so a multi-project scope shows
+  // only a count. The names still have to reach a screen reader and a hover,
+  // otherwise the current filter is unreadable without opening the menu.
+  const unavailableProjectCount =
+    projectScopeKeys === null ? 0 : projectScopeKeys.size - scopedProjectGroups.length;
+  const projectScopeLabel =
+    projectScopeKeys === null
+      ? "All projects"
+      : unavailableProjectCount === projectScopeKeys.size
+        ? `${projectScopeKeys.size} ${projectScopeKeys.size === 1 ? "project" : "projects"} unavailable`
+        : (singleScopedProjectGroup?.displayName ?? `${projectScopeKeys.size} projects`);
+  const projectScopeDetailParts = [
+    ...scopedProjectGroups.map((project) => project.displayName),
+    ...(unavailableProjectCount > 0
+      ? [
+          `${unavailableProjectCount} ${
+            unavailableProjectCount === 1 ? "project" : "projects"
+          } unavailable`,
+        ]
+      : []),
+  ];
+  const projectScopeDetail =
+    singleScopedProjectGroup === null && projectScopeKeys !== null && scopedProjectGroups.length > 0
+      ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
+      : projectScopeLabel;
   // Scope flips drop the selection: rows selected under the old scope may be
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
+  }, [clearSelection, projectScopeSignature]);
 
   const handleRemoveProjectMembers = useCallback(
     async (projectGroup: SidebarProjectSnapshot, members: readonly SidebarProjectGroupMember[]) => {
@@ -1525,7 +1585,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = projectScopeSignature;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -2404,71 +2464,81 @@ export default function SidebarV2() {
                   <MenuTrigger
                     render={
                       <SidebarMenuButton
-                        aria-label="Filter threads by project"
+                        aria-label={`Filter threads by project — ${projectScopeDetail}`}
+                        title={projectScopeDetail}
                         className="min-w-0 flex-1 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                       />
                     }
                   >
-                    {scopedProjectGroup ? (
+                    {singleScopedProjectGroup ? (
                       <ProjectFavicon
-                        environmentId={scopedProjectGroup.environmentId}
-                        cwd={scopedProjectGroup.workspaceRoot}
+                        environmentId={singleScopedProjectGroup.environmentId}
+                        cwd={singleScopedProjectGroup.workspaceRoot}
                         className="size-4 shrink-0"
                       />
                     ) : (
                       <FolderIcon className="size-4 shrink-0" />
                     )}
-                    <span className="min-w-0 flex-1 truncate">
-                      {scopedProjectGroup?.displayName ?? "All projects"}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
                     <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                   </MenuTrigger>
                   <MenuPopup align="start" className="w-(--anchor-width)">
-                    <MenuRadioGroup
-                      value={projectScopeKey ?? "all"}
-                      onValueChange={(value) =>
-                        setProjectScopeKey(value === "all" ? null : (value as string))
-                      }
+                    <MenuCheckboxItem
+                      checked={resolvedProjectScopeKeys === null}
+                      closeOnClick
+                      onCheckedChange={() => setProjectScopeKeys(null)}
+                      className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                     >
-                      <MenuRadioItem
-                        value="all"
-                        closeOnClick
-                        className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                      >
-                        <FolderIcon className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm">All projects</span>
-                      </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                      <FolderIcon className="size-4 shrink-0" />
+                      <span className="min-w-0 truncate text-sm">All projects</span>
+                    </MenuCheckboxItem>
+                    {menuProjectGroups.map((project) => {
+                      const scopeKey = project.projectKey;
+                      return (
+                        <MenuCheckboxItem
+                          key={scopeKey}
+                          checked={resolvedProjectScopeKeys?.has(scopeKey) ?? false}
+                          // Toggling edits the resolved scope, not the stored
+                          // intent: a project the user cannot currently see
+                          // must not reappear in the filter later. Resolving
+                          // inside the updater keeps two toggles in one batch
+                          // from dropping the first.
+                          onCheckedChange={() =>
+                            setProjectScopeKeys((current) =>
+                              toggleSidebarProjectScope(
+                                resolveSidebarProjectScope(projectGroups, current),
+                                scopeKey,
+                              ),
+                            )
+                          }
+                          className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        >
+                          <ProjectFavicon
+                            environmentId={project.environmentId}
+                            cwd={project.workspaceRoot}
+                            className="size-4 shrink-0"
+                          />
+                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                          <button
+                            type="button"
+                            aria-label={`Project actions for ${project.displayName}`}
+                            title={`Project actions for ${project.displayName}`}
+                            className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            // Menu items synthesize a click on mouseup once the
+                            // trigger's press-drag-release window opens, so a
+                            // drag onto this button would toggle the scope
+                            // instead of opening project actions.
+                            onMouseUp={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              void handleProjectActions(event, project);
+                            }}
                           >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <button
-                              type="button"
-                              aria-label={`Project actions for ${project.displayName}`}
-                              title={`Project actions for ${project.displayName}`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectActions(event, project);
-                              }}
-                            >
-                              <EllipsisIcon className="size-3.5" />
-                            </button>
-                          </MenuRadioItem>
-                        );
-                      })}
-                    </MenuRadioGroup>
+                            <EllipsisIcon className="size-3.5" />
+                          </button>
+                        </MenuCheckboxItem>
+                      );
+                    })}
                   </MenuPopup>
                 </Menu>
                 <Tooltip>
@@ -2682,8 +2752,10 @@ export default function SidebarV2() {
                     Add project
                   </button>
                 </>
-              ) : scopedProjectGroup ? (
-                `No threads in ${scopedProjectGroup.displayName} yet`
+              ) : singleScopedProjectGroup ? (
+                `No threads in ${singleScopedProjectGroup.displayName} yet`
+              ) : resolvedProjectScopeKeys !== null ? (
+                "No threads in the selected projects yet"
               ) : (
                 "No threads yet"
               )}

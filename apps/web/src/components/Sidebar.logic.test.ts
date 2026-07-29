@@ -15,11 +15,14 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
+  resolveSidebarProjectScope,
+  resolveSidebarProjectScopePhysicalKeys,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  sidebarProjectScopeSignature,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
@@ -28,6 +31,7 @@ import {
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  toggleSidebarProjectScope,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -46,6 +50,135 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("Sidebar V2 project scope", () => {
+  it("starts an explicit selection from All and returns to All after the last project is removed", () => {
+    const selected = toggleSidebarProjectScope(null, "project-a");
+    expect(selected).toEqual(new Set(["project-a"]));
+    expect(toggleSidebarProjectScope(selected, "project-a")).toBeNull();
+  });
+
+  it("keeps selecting every current project distinct from All projects", () => {
+    const first = toggleSidebarProjectScope(null, "project-a");
+    const allCurrent = toggleSidebarProjectScope(first, "project-b");
+
+    expect(allCurrent).toEqual(new Set(["project-a", "project-b"]));
+    expect(allCurrent).not.toBeNull();
+  });
+
+  it("builds an order-independent scope signature", () => {
+    expect(sidebarProjectScopeSignature(new Set(["project-b", "project-a"]))).toBe(
+      sidebarProjectScopeSignature(new Set(["project-a", "project-b"])),
+    );
+    expect(sidebarProjectScopeSignature(null)).toBe("all");
+    expect(sidebarProjectScopeSignature(new Set(["all"]))).not.toBe(
+      sidebarProjectScopeSignature(null),
+    );
+  });
+
+  it("unions physical project members across selected logical projects and environments", () => {
+    const physicalKeys = resolveSidebarProjectScopePhysicalKeys(
+      [
+        {
+          projectKey: "project-a",
+          memberProjectRefs: [
+            { environmentId: "environment-local", projectId: "physical-a-local" },
+            { environmentId: "environment-remote", projectId: "physical-a-remote" },
+          ],
+        },
+        {
+          projectKey: "project-b",
+          memberProjectRefs: [
+            { environmentId: "environment-local", projectId: "physical-b-local" },
+          ],
+        },
+        {
+          projectKey: "project-c",
+          memberProjectRefs: [
+            { environmentId: "environment-local", projectId: "physical-c-local" },
+          ],
+        },
+      ],
+      new Set(["project-a", "project-b"]),
+    );
+
+    expect(physicalKeys).toEqual(
+      new Set([
+        "environment-local:physical-a-local",
+        "environment-remote:physical-a-remote",
+        "environment-local:physical-b-local",
+      ]),
+    );
+    expect(resolveSidebarProjectScopePhysicalKeys([], null)).toBeNull();
+  });
+
+  it("resolves the available part of a scope without mutating its stored intent", () => {
+    // A dropped environment takes its projects with it; the scope is intent,
+    // so the missing project must stay selected and re-narrow the list once
+    // its environment comes back.
+    const scope = new Set(["project-local", "project-remote"]);
+
+    expect(resolveSidebarProjectScope([{ projectKey: "project-local" }], scope)).toEqual(
+      new Set(["project-local"]),
+    );
+    expect(
+      resolveSidebarProjectScope(
+        [{ projectKey: "project-local" }, { projectKey: "project-remote" }],
+        scope,
+      ),
+    ).toEqual(scope);
+    expect(scope).toEqual(new Set(["project-local", "project-remote"]));
+  });
+
+  it("keeps an unavailable explicit scope distinct from All projects", () => {
+    expect(
+      resolveSidebarProjectScope([{ projectKey: "project-a" }], new Set(["project-b"])),
+    ).toEqual(new Set());
+    expect(
+      resolveSidebarProjectScopePhysicalKeys(
+        [
+          {
+            projectKey: "project-a",
+            memberProjectRefs: [
+              { environmentId: "environment-local", projectId: "physical-a-local" },
+            ],
+          },
+        ],
+        new Set(),
+      ),
+    ).toEqual(new Set());
+    expect(resolveSidebarProjectScope([], null)).toBeNull();
+  });
+
+  it("does not broaden an unavailable explicit scope to All projects", () => {
+    expect(
+      resolveSidebarProjectScopePhysicalKeys(
+        [
+          {
+            projectKey: "project-a",
+            memberProjectRefs: [
+              { environmentId: "environment-local", projectId: "physical-a-local" },
+            ],
+          },
+        ],
+        resolveSidebarProjectScope([{ projectKey: "project-a" }], new Set(["project-unavailable"])),
+      ),
+    ).toEqual(new Set());
+    expect(
+      resolveSidebarProjectScopePhysicalKeys(
+        [
+          {
+            projectKey: "project-a",
+            memberProjectRefs: [
+              { environmentId: "environment-local", projectId: "physical-a-local" },
+            ],
+          },
+        ],
+        null,
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("canForkConversation", () => {
   const thread = {
