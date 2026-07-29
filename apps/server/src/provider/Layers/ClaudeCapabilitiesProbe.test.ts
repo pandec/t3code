@@ -89,7 +89,14 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           "    },",
           '  }) + "\\n");',
           "});",
-          "setInterval(() => {}, 1_000);",
+          // Exit once the SDK closes stdin, the way the real binary does. An
+          // open readline on stdin already keeps the event loop alive until
+          // then, so nothing else is needed to stay up long enough to answer.
+          // Without this the fake outlives the run: the probe's abort closes
+          // stdin rather than signalling, `makeTempDirectoryScoped` removes the
+          // directory underneath it, and the orphan is reparented to init and
+          // leaks ~50MB per test run.
+          'lines.on("close", () => { process.exit(0); });',
           "",
         ].join("\n"),
       );
