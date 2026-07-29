@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { ProviderInstanceHealthLive } from "../../provider/Layers/ProviderInstanceHealthLive.ts";
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -91,7 +93,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | ProviderInstanceHealth,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -141,6 +146,10 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  // Unix seconds in 2096: a reset time safely ahead of the harness's real
+  // clock without reading Date.now(), which the effect lint bans.
+  const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
+
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
@@ -150,6 +159,9 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    /** Envelope failover targets surfaced by the fake getInstanceInfo. */
+    readonly failoverInstanceIds?: Record<string, string>;
+    readonly continuationKeys?: Record<string, string>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -327,6 +339,7 @@ describe("ProviderCommandReactor", () => {
         const driverKind = ProviderDriverKind.make(
           raw.startsWith("claude") ? "claudeAgent" : raw.startsWith("codex") ? "codex" : raw,
         );
+        const failoverTarget = input?.failoverInstanceIds?.[raw];
         return Effect.succeed({
           instanceId,
           driverKind,
@@ -335,10 +348,14 @@ describe("ProviderCommandReactor", () => {
           continuationIdentity: {
             driverKind,
             continuationKey:
-              driverKind === ProviderDriverKind.make("codex")
+              input?.continuationKeys?.[raw] ??
+              (driverKind === ProviderDriverKind.make("codex")
                 ? "codex:home:/shared-codex"
-                : `${driverKind}:instance:${instanceId}`,
+                : `${driverKind}:instance:${instanceId}`),
           },
+          ...(failoverTarget !== undefined
+            ? { failoverInstanceId: ProviderInstanceId.make(failoverTarget) }
+            : {}),
         });
       },
       rollbackConversation: () => unsupported(),
@@ -386,43 +403,47 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(ProviderInstanceHealthLive),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
+    // Promise-facing helpers so new tests do not add manual Effect runners
+    // (see oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts).
+    const dispatch = (command: Parameters<(typeof engine)["dispatch"]>[0]) =>
+      Effect.runPromise(engine.dispatch(command));
+    const reportRateLimit = (targetInstanceId: ProviderInstanceId, payload: unknown) =>
+      Effect.runPromise(providerInstanceHealth.reportRateLimitPayload(targetInstanceId, payload));
 
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-project-create"),
-        projectId: asProjectId("project-1"),
-        title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
-        defaultModelSelection: modelSelection,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("cmd-thread-create"),
-        threadId: ThreadId.make("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Thread",
-        modelSelection: modelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await dispatch({
+      type: "project.create",
+      commandId: CommandId.make("cmd-project-create"),
+      projectId: asProjectId("project-1"),
+      title: "Provider Project",
+      workspaceRoot: "/tmp/provider-project",
+      defaultModelSelection: modelSelection,
+      createdAt: now,
+    });
+    await dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("cmd-thread-create"),
+      threadId: ThreadId.make("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Thread",
+      modelSelection: modelSelection,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    });
 
     return {
       engine,
@@ -441,6 +462,8 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions,
       stateDir,
       drain,
+      dispatch,
+      reportRateLimit,
     };
   }
 
@@ -1520,6 +1543,434 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+  });
+
+  it("reroutes a turn to the failover instance while the desired instance is rate limited", async () => {
+    const failoverInstanceIds: Record<string, string> = { codex: "codex_work" };
+    const harness = await createHarness({
+      failoverInstanceIds,
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    });
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex_work"),
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.instance.failover"),
+    ).toBe(true);
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "provider.instance.failover"),
+    ).toHaveLength(1);
+
+    const failoverActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.instance.failover",
+    );
+    // The work log renders `detail`; the window and reset time must reach it.
+    expect(failoverActivity?.payload).toMatchObject({ direction: "failover" });
+    const failoverDetail = (failoverActivity?.payload as { detail?: string } | undefined)?.detail;
+    expect(failoverDetail).toContain("five_hour");
+    expect(failoverDetail).toContain("resets");
+  });
+
+  it("announces the reroute again when the user explicitly re-picks the limited instance", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+
+    for (const [index, createdAt] of [
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:01:00.000Z",
+    ].entries()) {
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`cmd-turn-start-failover-repick-${index}`),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId(`user-message-failover-repick-${index}`),
+          role: "user",
+          text: `turn ${index}`,
+          attachments: [],
+        },
+        // The user keeps picking the limited instance in the model picker.
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+    }
+    await harness.drain();
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    // Both explicit picks were overridden, so both are reported — silently
+    // ignoring the second would leave the user no feedback at all.
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "provider.instance.failover"),
+    ).toHaveLength(2);
+  });
+
+  it("announces the return to the preferred instance once the limit lifts", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-return-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-return-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "allowed" },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-return-2"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-return-2"),
+        role: "user",
+        text: "second",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const activities = thread?.activities.filter(
+      (activity) => activity.kind === "provider.instance.failover",
+    );
+    expect(activities).toHaveLength(2);
+    expect(activities?.[1]?.payload).toMatchObject({
+      direction: "return",
+      returnCause: "limit-lifted",
+      toInstanceId: ProviderInstanceId.make("codex"),
+    });
+  });
+
+  it("returns to the preferred instance when the failover setting is cleared mid-limit", async () => {
+    const failoverInstanceIds: Record<string, string> = { codex: "codex_work" };
+    const harness = await createHarness({ failoverInstanceIds });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-cleared-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-cleared-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The limit persists; only the setting goes away. A runtime-mode change is
+    // not itself a turn, so this also covers the non-turn ensure path.
+    delete failoverInstanceIds.codex;
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.make("cmd-runtime-mode-set-during-failover"),
+      threadId: ThreadId.make("thread-1"),
+      runtimeMode: "full-access",
+      createdAt: "2026-01-01T00:00:30.000Z",
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const activities = thread?.activities.filter(
+      (activity) => activity.kind === "provider.instance.failover",
+    );
+    expect(activities).toHaveLength(2);
+    expect(activities?.[1]?.payload).toMatchObject({
+      direction: "return",
+      returnCause: "failover-unavailable",
+    });
+  });
+
+  it("does not use an effective failover instance as a new routing origin", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work", codex_work: "codex_backup" },
+    });
+    const limitedPayload = {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    };
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), limitedPayload);
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-runtime-no-chain"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-runtime-no-chain"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex_work"),
+    });
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex_work"), limitedPayload);
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.make("cmd-runtime-mode-no-chain"),
+      threadId: ThreadId.make("thread-1"),
+      runtimeMode: "full-access",
+      createdAt: "2026-01-01T00:00:30.000Z",
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+    });
+    expect(
+      harness.startSession.mock.calls.some(
+        (call) =>
+          (call[1] as { providerInstanceId?: ProviderInstanceId }).providerInstanceId ===
+          ProviderInstanceId.make("codex_backup"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not announce failover when the target session fails to start", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+      startSessionEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: ProviderDriverKind.make("codex"),
+            method: "thread.turn.start",
+            detail: "simulated failover startup failure",
+          }),
+        ),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-start-failed"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-start-failed"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((entry) => entry.id === ThreadId.make("thread-1"))
+          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      );
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.instance.failover"),
+    ).toBe(false);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the turn on the desired instance instead of chaining past a limited target", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work", codex_work: "codex_backup" },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedPayload = {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    };
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), limitedPayload);
+    await harness.reportRateLimit(ProviderInstanceId.make("codex_work"), limitedPayload);
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-both-limited"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-both-limited"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex_backup"),
+    });
+  });
+
+  it("keeps the turn on the desired instance when the target cannot resume its conversation", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+      continuationKeys: {
+        codex: "codex:home:/personal",
+        codex_work: "codex:home:/work",
+      },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-incompatible-failover"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-incompatible-failover"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.instance.failover"),
+    ).toBe(false);
   });
 
   it("restarts the provider session when the thread workspace changes", async () => {

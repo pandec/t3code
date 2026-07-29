@@ -1,4 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { ProviderInstanceHealthLive } from "../../provider/Layers/ProviderInstanceHealthLive.ts";
+import {
+  ProviderInstanceHealth,
+  type ProviderInstanceHealthShape,
+} from "../../provider/Services/ProviderInstanceHealth.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -194,7 +199,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProviderInstanceHealth,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -220,7 +228,14 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  // Unix seconds in 2096: a reset time safely ahead of the harness's real
+  // clock without reading Date.now(), which the effect lint bans.
+  const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
+
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    providerInstanceHealth?: ProviderInstanceHealthShape;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -243,6 +258,11 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(
+        options?.providerInstanceHealth === undefined
+          ? ProviderInstanceHealthLive
+          : Layer.succeed(ProviderInstanceHealth, options.providerInstanceHealth),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -252,57 +272,55 @@ describe("ProviderRuntimeIngestion", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
+    // Promise-facing helper so new tests do not add manual Effect runners
+    // (see oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts).
+    const seedDispatch = (command: Parameters<(typeof engine)["dispatch"]>[0]) =>
+      Effect.runPromise(engine.dispatch(command));
 
     const createdAt = "2026-01-01T00:00:00.000Z";
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-provider-project-create"),
-        projectId: asProjectId("project-1"),
-        title: "Provider Project",
-        workspaceRoot,
-        defaultModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("cmd-thread-create"),
+    await seedDispatch({
+      type: "project.create",
+      commandId: CommandId.make("cmd-provider-project-create"),
+      projectId: asProjectId("project-1"),
+      title: "Provider Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      createdAt,
+    });
+    await seedDispatch({
+      type: "thread.create",
+      commandId: CommandId.make("cmd-thread-create"),
+      threadId: ThreadId.make("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Thread",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+    await seedDispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-seed"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
         threadId: ThreadId.make("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Thread",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        status: "ready",
+        providerName: "codex",
         runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-seed"),
-        threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          updatedAt: createdAt,
-          lastError: null,
-        },
-        createdAt,
-      }),
-    );
+        activeTurnId: null,
+        updatedAt: createdAt,
+        lastError: null,
+      },
+      createdAt,
+    });
     provider.setSession({
       provider: ProviderDriverKind.make("codex"),
       status: "ready",
@@ -312,12 +330,17 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
+    const getRateLimitState = (targetInstanceId: ProviderInstanceId) =>
+      Effect.runPromise(providerInstanceHealth.getRateLimitState(targetInstanceId));
+
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
+      getRateLimitState,
     };
   }
 
@@ -2987,6 +3010,218 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
     });
+  });
+
+  it("feeds instance rate-limit health from runtime events", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedInstanceId = ProviderInstanceId.make("codex-work");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-rate-limit-turn-started-1"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-1"),
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-rate-limit-turn-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-1"),
+      payload: { state: "failed", errorMessage: "API error 429: rate limit reached" },
+    });
+    await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-rate-limit-turn-started-2"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-2"),
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-rate-limit-turn-success"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-rate-limit-2"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeUndefined();
+  });
+
+  it("keeps health unchanged for a stale conflicting turn completion", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedInstanceId = ProviderInstanceId.make("codex-work");
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-stale-completion-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-active-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-active"),
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-stale-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-stale"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    const healthyInstanceId = ProviderInstanceId.make("claude-work");
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-stale-failure"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: healthyInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-stale-failure"),
+      payload: { state: "failed", errorMessage: "Claude usage limit reached" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(healthyInstanceId)).toBeUndefined();
+  });
+
+  it("keeps health unchanged for an unmatched completion with no active turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedInstanceId = ProviderInstanceId.make("codex-work");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-no-active-limit-started"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-limit"),
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-limit-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-limit"),
+      payload: { state: "failed", errorMessage: "API error 429: rate limit reached" },
+    });
+    await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-no-active-stale-success"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-active-stale"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+  });
+
+  it("isolates health-reporting defects from runtime event ingestion", async () => {
+    const harness = await createHarness({
+      providerInstanceHealth: {
+        reportRateLimitPayload: () => Effect.die(new Error("simulated health reporting defect")),
+        reportTurnOutcome: () => Effect.void,
+        getRateLimitState: () => Effect.succeed(undefined),
+      },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-health-defect-rate-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex-work"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    ).toBe(true);
+  });
+
+  it("learns account rate limits even when the source thread is absent", async () => {
+    const harness = await createHarness();
+    const limitedInstanceId = ProviderInstanceId.make("claude-work");
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-missing-thread-rate-limit"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("missing-thread"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
   });
 
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {

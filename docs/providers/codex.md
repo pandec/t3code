@@ -132,6 +132,16 @@ Example cleanup:
 find ~/.codex_p -mindepth 1 ! -name auth.json -exec rm -rf {} +
 ```
 
+## Can T3 Code Switch Accounts Automatically When I Hit A Limit?
+
+Yes. In each provider's settings card, set `Failover instance` to the other account's provider.
+When an instance is rate limited — for Codex, detected when a turn fails with a rate-limit
+error — turns route to the failover instance until the limit lifts, then return.
+
+Both providers must share the same `CODEX_HOME path` (the shadow-home setup above). Without that,
+failover never runs at all, for new and existing threads alike: T3 Code will not move a thread to
+an account that cannot resume its conversation.
+
 ## When To Use A Separate CODEX_HOME
 
 Use a totally separate `CODEX_HOME path` only when you want a separate Codex workspace.

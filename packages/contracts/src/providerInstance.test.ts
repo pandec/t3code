@@ -109,6 +109,20 @@ describe("ProviderInstanceConfig", () => {
     expect(decoded.config).toEqual(opaqueConfig);
   });
 
+  it("round-trips the failover target and rejects malformed ids", () => {
+    const decoded = decodeProviderInstanceConfig({
+      driver: "claudeAgent",
+      failoverInstanceId: "claude_second",
+    });
+    expect(decoded.failoverInstanceId).toBe("claude_second");
+    expect(
+      decodeProviderInstanceConfig({ driver: "claudeAgent" }).failoverInstanceId,
+    ).toBeUndefined();
+    expect(() =>
+      decodeProviderInstanceConfig({ driver: "claudeAgent", failoverInstanceId: "9-bad" }),
+    ).toThrow();
+  });
+
   it("trims provider instance envelope fields", () => {
     const decoded = decodeProviderInstanceConfig({
       driver: "  codex  ",

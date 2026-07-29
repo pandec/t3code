@@ -152,3 +152,49 @@ export function buildProviderInstanceUpdatePatch(input: {
       : {}),
   };
 }
+
+/**
+ * Whether the server would actually route to this failover target. Mirrors the
+ * turn-start preconditions in `ProviderCommandReactor.resolveRateLimitFailoverTarget`
+ * (enabled, same continuation group) so the settings card can warn while the
+ * user configures rather than leaving a silent no-op at runtime. The driver
+ * check lives in the caller, which only offers same-driver candidates.
+ *
+ * A group key is only known once an instance has been probed; an unknown key
+ * on either side reports compatible, so a cold start does not flash a warning
+ * at a correct configuration.
+ */
+export function isFailoverTargetCompatible(input: {
+  readonly sourceContinuationGroupKey: string | undefined;
+  readonly targetContinuationGroupKey: string | undefined;
+  readonly targetEnabled: boolean;
+}): boolean {
+  if (!input.targetEnabled) return false;
+  if (
+    input.sourceContinuationGroupKey === undefined ||
+    input.targetContinuationGroupKey === undefined
+  ) {
+    return true;
+  }
+  return input.sourceContinuationGroupKey === input.targetContinuationGroupKey;
+}
+
+export function removeProviderInstanceAndInboundFailovers(
+  providerInstances: Readonly<Record<ProviderInstanceId, ProviderInstanceConfig>> | undefined,
+  deletedInstanceId: ProviderInstanceId,
+): Record<ProviderInstanceId, ProviderInstanceConfig> {
+  const next = {} as Record<ProviderInstanceId, ProviderInstanceConfig>;
+  for (const [rawInstanceId, instance] of Object.entries(providerInstances ?? {})) {
+    const instanceId = rawInstanceId as ProviderInstanceId;
+    if (instanceId === deletedInstanceId) {
+      continue;
+    }
+    if (instance.failoverInstanceId === deletedInstanceId) {
+      const { failoverInstanceId: _omit, ...rest } = instance;
+      next[instanceId] = rest as ProviderInstanceConfig;
+    } else {
+      next[instanceId] = instance;
+    }
+  }
+  return next;
+}

@@ -33,6 +33,7 @@ import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import { DraftInput } from "../ui/draft-input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ScrollArea } from "../ui/scroll-area";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -341,6 +342,22 @@ interface ProviderInstanceCardProps {
    * omit it.
    */
   readonly headerAction?: ReactNode | undefined;
+  /**
+   * Same-driver sibling instances offered as rate-limit failover targets.
+   * Empty (or absent) hides the failover control — with a single instance
+   * of a driver there is nothing to fail over to.
+   */
+  readonly failoverOptions?: ReadonlyArray<{
+    readonly id: ProviderInstanceId;
+    readonly label: string;
+    /**
+     * False when the server would refuse to route to this target — disabled,
+     * or in a different continuation group (no shared session state). Such a
+     * target is still selectable, but the card warns that failover will not
+     * run, since the server only logs the refusal.
+     */
+    readonly compatible: boolean;
+  }>;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -385,6 +402,7 @@ export function ProviderInstanceCard({
   onUpdate,
   onDelete,
   headerAction,
+  failoverOptions,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -489,6 +507,35 @@ export function ProviderInstanceCard({
     const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const failoverInstanceId = instance.failoverInstanceId;
+  const selectedFailoverOption =
+    failoverInstanceId !== undefined
+      ? (failoverOptions?.find((option) => option.id === failoverInstanceId) ?? {
+          id: failoverInstanceId,
+          label: String(failoverInstanceId),
+          // Not in the options list at all: the referenced instance no longer
+          // exists (renamed or deleted elsewhere).
+          compatible: false,
+        })
+      : undefined;
+  const failoverWarning =
+    selectedFailoverOption === undefined || selectedFailoverOption.compatible
+      ? null
+      : failoverOptions?.some((option) => option.id === selectedFailoverOption.id)
+        ? "This instance does not share session state with the one above (or is disabled), so failover will not run. Give both instances the same config dir — differing only by shadow config dir — or pick another instance."
+        : "This instance no longer exists. Failover will not run until you pick another instance.";
+  const updateFailoverInstanceId = (value: string) => {
+    // Map the select's string back to the branded id; "None" and stale
+    // values both clear the field.
+    const target = failoverOptions?.find((option) => String(option.id) === value)?.id;
+    const { failoverInstanceId: _omit, ...rest } = instance;
+    onUpdate(
+      target !== undefined
+        ? ({ ...rest, failoverInstanceId: target } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
   };
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
@@ -756,6 +803,46 @@ export function ProviderInstanceCard({
                 description="Used to distinguish this instance in picker rails and model lists."
               />
             </div>
+
+            {failoverOptions !== undefined &&
+            (failoverOptions.length > 0 || failoverInstanceId !== undefined) ? (
+              <div>
+                <span className="text-xs font-medium text-foreground">Failover instance</span>
+                <div className="mt-1.5">
+                  <Select
+                    value={failoverInstanceId !== undefined ? String(failoverInstanceId) : ""}
+                    onValueChange={(value) => updateFailoverInstanceId(value ?? "")}
+                  >
+                    <SelectTrigger
+                      className="w-full sm:w-64"
+                      aria-label={`Failover instance for ${displayName}`}
+                    >
+                      <SelectValue>{selectedFailoverOption?.label ?? "None"}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="start" alignItemWithTrigger={false}>
+                      <SelectItem hideIndicator value="">
+                        None
+                      </SelectItem>
+                      {failoverOptions.map((option) => (
+                        <SelectItem hideIndicator key={option.id} value={String(option.id)}>
+                          {option.compatible ? option.label : `${option.label} — no shared session`}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  When this instance hits its usage limit, turns route to the selected instance
+                  until the limit lifts. Both instances must share their session state — the same
+                  config dir, differing only by shadow config dir.
+                </span>
+                {failoverWarning ? (
+                  <span className="mt-1 block text-xs text-amber-600 dark:text-amber-500">
+                    {failoverWarning}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
 
             <div>
               <ProviderEnvironmentSection

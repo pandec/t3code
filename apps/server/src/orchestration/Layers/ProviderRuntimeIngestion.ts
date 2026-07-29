@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -713,6 +714,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerInstanceHealth = yield* ProviderInstanceHealth;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
@@ -1312,8 +1314,57 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const reportHealthSafely = (event: ProviderRuntimeEvent, report: Effect.Effect<void>) =>
+    report.pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning("provider runtime ingestion failed to report instance health", {
+          eventId: event.eventId,
+          eventType: event.type,
+          providerInstanceId: event.providerInstanceId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
+  // Account-level reports are keyed by provider instance, not thread, so they
+  // run before the thread-existence bail. The auxiliary health observer is
+  // best-effort and must never suppress ingestion of the runtime event.
+  const reportRateLimitHealth = Effect.fn("reportRateLimitHealth")(function* (
+    event: ProviderRuntimeEvent,
+  ) {
+    const instanceId = event.providerInstanceId;
+    if (instanceId === undefined || event.type !== "account.rate-limits.updated") return;
+    yield* reportHealthSafely(
+      event,
+      providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits),
+    );
+  });
+
+  const reportTurnOutcomeHealth = Effect.fn("reportTurnOutcomeHealth")(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+  ) {
+    const instanceId = event.providerInstanceId;
+    if (instanceId === undefined) return;
+    const state = normalizeRuntimeTurnState(event.payload.state);
+    if (state === "completed") {
+      yield* reportHealthSafely(
+        event,
+        providerInstanceHealth.reportTurnOutcome(instanceId, "success"),
+      );
+    } else if (state === "failed") {
+      yield* reportHealthSafely(
+        event,
+        providerInstanceHealth.reportTurnOutcome(instanceId, "failed", event.payload.errorMessage),
+      );
+    }
+  });
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      yield* reportRateLimitHealth(event);
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
 
@@ -1382,6 +1433,14 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
+      const turnCompletionMatchesActiveTurn =
+        event.type === "turn.completed" &&
+        activeTurnId !== null &&
+        eventTurnId !== undefined &&
+        sameId(activeTurnId, eventTurnId);
+      if (event.type === "turn.completed" && turnCompletionMatchesActiveTurn) {
+        yield* reportTurnOutcomeHealth(event);
+      }
 
       if (
         event.type === "session.started" ||
