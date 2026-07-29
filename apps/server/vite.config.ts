@@ -64,9 +64,20 @@ export default mergeConfig(
       },
     },
     test: {
-      // The server suite exercises sqlite, git, temp worktrees, and orchestration
-      // runtimes heavily. Running files in parallel introduces load-sensitive flakes.
-      fileParallelism: false,
+      // This suite ran with `fileParallelism: false` to avoid load-sensitive
+      // flakes from its sqlite, git, temp-worktree, and orchestration work.
+      // That serialization cost more than half the runtime: the same 213 files
+      // take 143.2s serialized versus 62.4s at four workers, both fully green.
+      // It also never bounded resource use the way it appeared to — the suite
+      // spawns git and sqlite children regardless, and peaked at 17 processes
+      // even when Vitest was pinned to a single worker. Worker count is now
+      // bounded centrally in scripts/lib/vitest-shared.ts instead.
+      //
+      // Re-verified only on Linux. If parallel files prove flaky here — macOS
+      // is the likelier place, given case-insensitive APFS and different
+      // temp-dir and fsync behaviour — fix the offending test's isolation
+      // rather than reinstating blanket serialization.
+      //
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
