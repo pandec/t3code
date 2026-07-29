@@ -26,6 +26,9 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
+  sidebarProjectAccentColors: {
+    "environment-1:/tmp/project-a": "#123456",
+  },
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
@@ -34,6 +37,7 @@ const clientSettings: ClientSettings = {
   sidebarThreadProviderIconVisibility: "always",
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
+  sidebarV2CompactCards: true,
   sidebarV2Enabled: false,
   sidebarV2ConfiguredByUser: false,
   timestampFormat: "24-hour",

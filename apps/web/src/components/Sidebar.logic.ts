@@ -46,6 +46,41 @@ type LogicalSidebarProject = SidebarProject & {
 
 export type SidebarProjectScope = ReadonlySet<string> | null;
 
+export function resolveSidebarProjectAccentColor(
+  members: readonly { physicalProjectKey: string }[],
+  accentColors: Readonly<Record<string, string>>,
+  preferredPhysicalProjectKey?: string,
+): string | null {
+  if (preferredPhysicalProjectKey !== undefined) {
+    const preferredColor = accentColors[preferredPhysicalProjectKey];
+    if (preferredColor !== undefined) return preferredColor;
+  }
+
+  for (const member of members.toSorted((left, right) =>
+    left.physicalProjectKey.localeCompare(right.physicalProjectKey),
+  )) {
+    const color = accentColors[member.physicalProjectKey];
+    if (color !== undefined) return color;
+  }
+  return null;
+}
+
+export function updateSidebarProjectAccentColors(
+  accentColors: Readonly<Record<string, string>>,
+  members: readonly { physicalProjectKey: string }[],
+  color: string | null,
+): Record<string, string> {
+  const next = { ...accentColors };
+  for (const member of members) {
+    if (color === null) {
+      delete next[member.physicalProjectKey];
+    } else {
+      next[member.physicalProjectKey] = color;
+    }
+  }
+  return next;
+}
+
 export function toggleSidebarProjectScope(
   scope: SidebarProjectScope,
   projectKey: string,

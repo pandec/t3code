@@ -14,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import type {
   ScopedThreadRef,
+  SidebarProjectAccentColor,
   SidebarProjectGroupingMode,
   SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts";
@@ -39,6 +40,7 @@ import {
   SquarePenIcon,
   Trash2Icon,
   Undo2Icon,
+  XIcon,
 } from "lucide-react";
 import {
   memo,
@@ -75,6 +77,7 @@ import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import {
+  derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
   selectProjectGroupingSettings,
@@ -101,6 +104,7 @@ import { threadEnvironment } from "../state/threads";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { ProviderAccentColorPicker } from "./settings/ProviderAccentColorPicker";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -117,6 +121,7 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
+  resolveSidebarProjectAccentColor,
   resolveSidebarProjectScope,
   resolveSidebarProjectScopePhysicalKeys,
   resolveSettledTimestamp,
@@ -128,6 +133,7 @@ import {
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
   toggleSidebarProjectScope,
+  updateSidebarProjectAccentColors,
 } from "./Sidebar.logic";
 import type { SidebarProjectScope } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -410,6 +416,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  projectAccentColor: SidebarProjectAccentColor | null;
+  compactCards: boolean;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
   providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -704,6 +712,14 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       !isSelected &&
       "opacity-70 transition-opacity hover:opacity-100",
   );
+  // A flat gradient rather than backgroundColor: the tint has to sit *over*
+  // the row's hover/active/selected background classes, not replace them.
+  const rowAccentStyle =
+    props.projectAccentColor === null
+      ? undefined
+      : {
+          backgroundImage: `linear-gradient(color-mix(in srgb, ${props.projectAccentColor} 12%, transparent), color-mix(in srgb, ${props.projectAccentColor} 12%, transparent))`,
+        };
 
   const title = isRenaming ? (
     <input
@@ -766,6 +782,35 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         #{pr.number}
       </button>
     ) : null;
+  const diff = latestTurnDiff(thread);
+  const cardTrailingMetadata = !isRenaming ? (
+    <>
+      {prBadge}
+      {diff ? (
+        <span className="shrink-0 font-mono text-xs">
+          <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}
+          <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
+        </span>
+      ) : null}
+      <span
+        aria-hidden
+        className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground/75"
+      >
+        {isRemote ? (
+          <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+            <ServerIcon aria-hidden className="size-3.5" />
+          </span>
+        ) : null}
+        {driverKind ? (
+          <SidebarV2ProviderIcon
+            driverKind={driverKind}
+            displayName={thread.session?.providerName ?? modelInstanceId}
+            visibility={props.providerIconVisibility}
+          />
+        ) : null}
+      </span>
+    </>
+  ) : null;
 
   if (variant === "slim") {
     return (
@@ -781,6 +826,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                style={rowAccentStyle}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -882,12 +928,15 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     );
   }
 
-  const diff = latestTurnDiff(thread);
-
   return (
     <li
       data-thread-item
-      className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]"
+      className={cn(
+        "list-none py-0.5 [content-visibility:auto]",
+        props.compactCards
+          ? "[contain-intrinsic-size:auto_62px]"
+          : "[contain-intrinsic-size:auto_96px]",
+      )}
     >
       <Tooltip>
         <TooltipTrigger
@@ -896,7 +945,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               role="button"
               tabIndex={0}
               data-testid="sidebar-v2-row-card"
+              data-compact={props.compactCards}
               className={rowSurfaceClassName}
+              style={rowAccentStyle}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
@@ -904,7 +955,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             />
           }
         >
-          <div className="relative z-10 h-[4.875rem] px-2.5 py-2">
+          <div
+            className={cn(
+              // Height is an exact fit for the rows inside: 20px header +
+              // 4px gap + 20px title (+ 2px gap + 16px branch line when the
+              // second line is shown), so the vertical padding must shrink
+              // with it or the compact card sits 4px off-centre.
+              "relative z-10 px-2.5",
+              props.compactCards ? "h-[3.5rem] py-1.5" : "h-[4.875rem] py-2",
+            )}
+          >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               <ProjectFavicon
                 environmentId={thread.environmentId}
@@ -991,38 +1051,22 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 ) : null}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0">{title}</div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-              {thread.branch ? (
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {prBadge}
-              {diff ? (
-                <span className="shrink-0 font-mono">
-                  <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}
-                  <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
-                </span>
-              ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
-                {isRemote ? (
-                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <ServerIcon aria-hidden className="size-3.5" />
-                  </span>
-                ) : null}
-                {driverKind ? (
-                  <SidebarV2ProviderIcon
-                    driverKind={driverKind}
-                    displayName={thread.session?.providerName ?? modelInstanceId}
-                    visibility={props.providerIconVisibility}
-                  />
-                ) : null}
-              </span>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              {title}
+              {props.compactCards ? cardTrailingMetadata : null}
             </div>
+            {!props.compactCards ? (
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
+                {thread.branch ? (
+                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
+                ) : (
+                  <span className="flex-1" />
+                )}
+                <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
+                  {cardTrailingMetadata}
+                </span>
+              </div>
+            ) : null}
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
@@ -1052,6 +1096,8 @@ export default function SidebarV2() {
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const projectAccentColors = useClientSettings((s) => s.sidebarProjectAccentColors);
+  const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -1231,6 +1277,25 @@ export default function SidebarV2() {
         ),
       ),
     [projectGroups],
+  );
+  const projectAccentColorByKey = useMemo(
+    () =>
+      new Map(
+        projectGroups.flatMap((group) => {
+          const color = resolveSidebarProjectAccentColor(
+            group.memberProjects,
+            projectAccentColors,
+            derivePhysicalProjectKey(group),
+          );
+          return color === null
+            ? []
+            : group.memberProjectRefs.map(
+                (projectRef) =>
+                  [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
+              );
+        }),
+      ),
+    [projectAccentColors, projectGroups],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1489,8 +1554,30 @@ export default function SidebarV2() {
         nextOverrides[overrideKey] = selection;
       }
       updateSettings({ sidebarProjectGroupingOverrides: nextOverrides });
+      setProjectActionsTarget(null);
     },
     [projectGroupingSettings.sidebarProjectGroupingOverrides, updateSettings],
+  );
+  const projectActionsAccentColor =
+    projectActionsTarget === null
+      ? null
+      : resolveSidebarProjectAccentColor(
+          projectActionsTarget.memberProjects,
+          projectAccentColors,
+          derivePhysicalProjectKey(projectActionsTarget),
+        );
+  const updateProjectAccentColor = useCallback(
+    (color: SidebarProjectAccentColor | null) => {
+      if (projectActionsTarget === null) return;
+      updateSettings({
+        sidebarProjectAccentColors: updateSidebarProjectAccentColors(
+          projectAccentColors,
+          projectActionsTarget.memberProjects,
+          color,
+        ),
+      });
+    },
+    [projectAccentColors, projectActionsTarget, updateSettings],
   );
 
   const handleProjectActions = useCallback(
@@ -2468,87 +2555,124 @@ export default function SidebarV2() {
             </div>
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
-                <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
-                  <MenuTrigger
-                    render={
-                      <SidebarMenuButton
-                        aria-label={`Filter threads by project — ${projectScopeDetail}`}
-                        title={projectScopeDetail}
-                        className="min-w-0 flex-1 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      />
-                    }
-                  >
-                    {singleScopedProjectGroup ? (
-                      <ProjectFavicon
-                        environmentId={singleScopedProjectGroup.environmentId}
-                        cwd={singleScopedProjectGroup.workspaceRoot}
-                        className="size-4 shrink-0"
-                      />
-                    ) : (
-                      <FolderIcon className="size-4 shrink-0" />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
-                    <ChevronDownIcon className="-mr-px size-4 shrink-0" />
-                  </MenuTrigger>
-                  <MenuPopup align="start" className="w-(--anchor-width)">
-                    <MenuCheckboxItem
-                      checked={resolvedProjectScopeKeys === null}
-                      closeOnClick
-                      onCheckedChange={() => setProjectScopeKeys(null)}
-                      className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                <div className="relative min-w-0 flex-1">
+                  <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          aria-label={`Filter threads by project — ${projectScopeDetail}`}
+                          title={projectScopeDetail}
+                          className="min-w-0 flex-1 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        />
+                      }
                     >
-                      <FolderIcon className="size-4 shrink-0" />
-                      <span className="min-w-0 truncate text-sm">All projects</span>
-                    </MenuCheckboxItem>
-                    {menuProjectGroups.map((project) => {
-                      const scopeKey = project.projectKey;
-                      return (
-                        <MenuCheckboxItem
-                          key={scopeKey}
-                          checked={resolvedProjectScopeKeys?.has(scopeKey) ?? false}
-                          // Toggling edits the resolved scope, not the stored
-                          // intent: a project the user cannot currently see
-                          // must not reappear in the filter later. Resolving
-                          // inside the updater keeps two toggles in one batch
-                          // from dropping the first.
-                          onCheckedChange={() =>
-                            setProjectScopeKeys((current) =>
-                              toggleSidebarProjectScope(
-                                resolveSidebarProjectScope(projectGroups, current),
-                                scopeKey,
-                              ),
-                            )
-                          }
-                          className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                        >
-                          <ProjectFavicon
-                            environmentId={project.environmentId}
-                            cwd={project.workspaceRoot}
-                            className="size-4 shrink-0"
-                          />
-                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                          <button
-                            type="button"
-                            aria-label={`Project actions for ${project.displayName}`}
-                            title={`Project actions for ${project.displayName}`}
-                            className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                            onPointerDown={(event) => event.stopPropagation()}
-                            // Menu items synthesize a click on mouseup once the
-                            // trigger's press-drag-release window opens, so a
-                            // drag onto this button would toggle the scope
-                            // instead of opening project actions.
-                            onMouseUp={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              void handleProjectActions(event, project);
-                            }}
+                      {singleScopedProjectGroup ? (
+                        <ProjectFavicon
+                          environmentId={singleScopedProjectGroup.environmentId}
+                          cwd={singleScopedProjectGroup.workspaceRoot}
+                          className="size-4 shrink-0"
+                        />
+                      ) : (
+                        <FolderIcon className="size-4 shrink-0" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
+                      {projectScopeKeys !== null ? (
+                        <span aria-hidden className="size-6 shrink-0" />
+                      ) : null}
+                      <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                    </MenuTrigger>
+                    <MenuPopup align="start" className="w-(--anchor-width)">
+                      <MenuCheckboxItem
+                        checked={resolvedProjectScopeKeys === null}
+                        closeOnClick
+                        onCheckedChange={() => setProjectScopeKeys(null)}
+                        className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                      >
+                        <FolderIcon className="size-4 shrink-0" />
+                        <span className="min-w-0 truncate text-sm">All projects</span>
+                      </MenuCheckboxItem>
+                      {menuProjectGroups.map((project) => {
+                        const scopeKey = project.projectKey;
+                        const accentColor = resolveSidebarProjectAccentColor(
+                          project.memberProjects,
+                          projectAccentColors,
+                          derivePhysicalProjectKey(project),
+                        );
+                        return (
+                          <MenuCheckboxItem
+                            key={scopeKey}
+                            checked={resolvedProjectScopeKeys?.has(scopeKey) ?? false}
+                            // Toggling edits the resolved scope, not the stored
+                            // intent: a project the user cannot currently see
+                            // must not reappear in the filter later. Resolving
+                            // inside the updater keeps two toggles in one batch
+                            // from dropping the first.
+                            onCheckedChange={() =>
+                              setProjectScopeKeys((current) =>
+                                toggleSidebarProjectScope(
+                                  resolveSidebarProjectScope(projectGroups, current),
+                                  scopeKey,
+                                ),
+                              )
+                            }
+                            className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                           >
-                            <EllipsisIcon className="size-3.5" />
-                          </button>
-                        </MenuCheckboxItem>
-                      );
-                    })}
-                  </MenuPopup>
-                </Menu>
+                            <ProjectFavicon
+                              environmentId={project.environmentId}
+                              cwd={project.workspaceRoot}
+                              className="size-4 shrink-0"
+                            />
+                            {/* flex-1 rather than a second ml-auto: two auto
+                                margins split the free space between them and
+                                would leave the accent dot floating mid-row. */}
+                            <span className="min-w-0 flex-1 truncate text-sm">
+                              {project.displayName}
+                            </span>
+                            {accentColor ? (
+                              <>
+                                <span
+                                  aria-hidden
+                                  className="size-2.5 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/10"
+                                  style={{ backgroundColor: accentColor }}
+                                />
+                                <span className="sr-only">Accent {accentColor}</span>
+                              </>
+                            ) : null}
+                            <button
+                              type="button"
+                              aria-label={`Project actions for ${project.displayName}`}
+                              title={`Project actions for ${project.displayName}`}
+                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              // Menu items synthesize a click on mouseup once the
+                              // trigger's press-drag-release window opens, so a
+                              // drag onto this button would toggle the scope
+                              // instead of opening project actions.
+                              onMouseUp={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                void handleProjectActions(event, project);
+                              }}
+                            >
+                              <EllipsisIcon className="size-3.5" />
+                            </button>
+                          </MenuCheckboxItem>
+                        );
+                      })}
+                    </MenuPopup>
+                  </Menu>
+                  {projectScopeKeys !== null ? (
+                    <button
+                      type="button"
+                      data-testid="sidebar-v2-project-filter-clear"
+                      aria-label="Clear project filter"
+                      title="Clear project filter"
+                      className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      onClick={() => setProjectScopeKeys(null)}
+                    >
+                      <XIcon className="size-3.5" />
+                    </button>
+                  ) : null}
+                </div>
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2647,6 +2771,12 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
+                      projectAccentColor={
+                        projectAccentColorByKey.get(
+                          `${thread.environmentId}:${thread.projectId}`,
+                        ) ?? null
+                      }
+                      compactCards={compactCards}
                       providerIconVisibility={providerIconVisibility}
                       providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}
                       onThreadClick={handleThreadClick}
@@ -2781,7 +2911,7 @@ export default function SidebarV2() {
           <DialogHeader className="gap-3 pb-1!">
             <DialogTitle className="text-balance">Project settings</DialogTitle>
             <DialogDescription className="sr-only">
-              Manage project names, grouping rules, and environments.
+              Manage the project accent, names, grouping rules, and environments.
             </DialogDescription>
             <div className="grid gap-1.5 text-base text-muted-foreground">
               {projectActionsTarget?.memberProjects.map((member) => (
@@ -2813,6 +2943,26 @@ export default function SidebarV2() {
             </div>
           </DialogHeader>
           <DialogPanel className="p-0">
+            {projectActionsTarget ? (
+              <section className="flex flex-col gap-3 border-b border-border/60 px-6 pb-4 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-medium text-foreground">Thread accent</p>
+                  <p className="text-sm text-muted-foreground">
+                    Adds a subtle transparent tint to this project's sidebar threads.
+                  </p>
+                </div>
+                <ProviderAccentColorPicker
+                  displayName={projectActionsTarget.displayName}
+                  value={projectActionsAccentColor ?? undefined}
+                  commitDelayMs={120}
+                  onCommit={(color) =>
+                    updateProjectAccentColor(
+                      color === "" ? null : (color as SidebarProjectAccentColor),
+                    )
+                  }
+                />
+              </section>
+            ) : null}
             <div className="divide-y divide-border/60">
               {projectActionsTarget?.memberProjects.map((member) => (
                 <section
