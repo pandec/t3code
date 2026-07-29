@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { ProviderInstanceHealthLive } from "../../provider/Layers/ProviderInstanceHealthLive.ts";
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -91,7 +93,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | ProviderInstanceHealth,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -141,6 +146,10 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  // Unix seconds in 2096: a reset time safely ahead of the harness's real
+  // clock without reading Date.now(), which the effect lint bans.
+  const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
+
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
@@ -150,6 +159,8 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    /** Envelope failover targets surfaced by the fake getInstanceInfo. */
+    readonly failoverInstanceIds?: Record<string, string>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -327,6 +338,7 @@ describe("ProviderCommandReactor", () => {
         const driverKind = ProviderDriverKind.make(
           raw.startsWith("claude") ? "claudeAgent" : raw.startsWith("codex") ? "codex" : raw,
         );
+        const failoverTarget = input?.failoverInstanceIds?.[raw];
         return Effect.succeed({
           instanceId,
           driverKind,
@@ -339,6 +351,9 @@ describe("ProviderCommandReactor", () => {
                 ? "codex:home:/shared-codex"
                 : `${driverKind}:instance:${instanceId}`,
           },
+          ...(failoverTarget !== undefined
+            ? { failoverInstanceId: ProviderInstanceId.make(failoverTarget) }
+            : {}),
         });
       },
       rollbackConversation: () => unsupported(),
@@ -386,43 +401,47 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(ProviderInstanceHealthLive),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
+    // Promise-facing helpers so new tests do not add manual Effect runners
+    // (see oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts).
+    const dispatch = (command: Parameters<(typeof engine)["dispatch"]>[0]) =>
+      Effect.runPromise(engine.dispatch(command));
+    const reportRateLimit = (targetInstanceId: ProviderInstanceId, payload: unknown) =>
+      Effect.runPromise(providerInstanceHealth.reportRateLimitPayload(targetInstanceId, payload));
 
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-project-create"),
-        projectId: asProjectId("project-1"),
-        title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
-        defaultModelSelection: modelSelection,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("cmd-thread-create"),
-        threadId: ThreadId.make("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Thread",
-        modelSelection: modelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await dispatch({
+      type: "project.create",
+      commandId: CommandId.make("cmd-project-create"),
+      projectId: asProjectId("project-1"),
+      title: "Provider Project",
+      workspaceRoot: "/tmp/provider-project",
+      defaultModelSelection: modelSelection,
+      createdAt: now,
+    });
+    await dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("cmd-thread-create"),
+      threadId: ThreadId.make("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Thread",
+      modelSelection: modelSelection,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    });
 
     return {
       engine,
@@ -441,6 +460,8 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions,
       stateDir,
       drain,
+      dispatch,
+      reportRateLimit,
     };
   }
 
@@ -1520,6 +1541,131 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+  });
+
+  it("reroutes a turn to the failover instance while the desired instance is rate limited", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    });
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-1"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-1"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex_work"),
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.instance.failover"),
+    ).toBe(true);
+
+    // The limit clearing routes the next turn back to the preferred instance,
+    // resuming the same session.
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "allowed" },
+    });
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-2"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-2"),
+        role: "user",
+        text: "second",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      resumeCursor: { opaque: "resume-1" },
+    });
+  });
+
+  it("keeps the turn on the desired instance when the failover target is also rate limited", async () => {
+    const harness = await createHarness({
+      failoverInstanceIds: { codex: "codex_work" },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedPayload = {
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+      },
+    };
+
+    await harness.reportRateLimit(ProviderInstanceId.make("codex"), limitedPayload);
+    await harness.reportRateLimit(ProviderInstanceId.make("codex_work"), limitedPayload);
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failover-both-limited"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failover-both-limited"),
+        role: "user",
+        text: "first",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
   });
 
   it("restarts the provider session when the thread workspace changes", async () => {

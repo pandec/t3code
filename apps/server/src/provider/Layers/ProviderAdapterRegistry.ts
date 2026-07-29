@@ -47,8 +47,8 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
     );
 
   const getInstanceInfo: ProviderAdapterRegistryShape["getInstanceInfo"] = (instanceId) =>
-    registry.getInstance(instanceId).pipe(
-      Effect.flatMap((instance) =>
+    Effect.all([registry.getInstance(instanceId), registry.getInstanceConfig(instanceId)]).pipe(
+      Effect.flatMap(([instance, config]) =>
         instance === undefined
           ? Effect.fail(
               new ProviderUnsupportedError({
@@ -62,6 +62,7 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
               accentColor: instance.accentColor,
               enabled: instance.enabled,
               continuationIdentity: instance.continuationIdentity,
+              failoverInstanceId: config?.failoverInstanceId,
             }),
       ),
     );

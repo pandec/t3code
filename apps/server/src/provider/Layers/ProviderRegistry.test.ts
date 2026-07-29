@@ -829,6 +829,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             {
               getInstance: (instanceId) =>
                 Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+              getInstanceConfig: () => Effect.succeed(undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
@@ -982,6 +983,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             {
               getInstance: (instanceId) =>
                 Effect.succeed(instanceId === cursorInstanceId ? instance : undefined),
+              getInstanceConfig: () => Effect.succeed(undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
@@ -1110,6 +1112,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               {
                 getInstance: (instanceId) =>
                   Effect.succeed(instanceId === openCodeInstanceId ? instance : undefined),
+                getInstanceConfig: () => Effect.succeed(undefined),
                 listInstances: Effect.succeed([instance]),
                 listUnavailable: Effect.succeed([]),
                 streamChanges: Stream.empty,
@@ -1217,6 +1220,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             {
               getInstance: (instanceId) =>
                 Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+              getInstanceConfig: () => Effect.succeed(undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
@@ -1319,6 +1323,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                     instances.find((instance) => instance.instanceId === instanceId),
                   ),
                 ),
+              getInstanceConfig: () => Effect.succeed(undefined),
               listInstances: Effect.gen(function* () {
                 const shouldFail = yield* Ref.get(failNextList);
                 if (shouldFail) {

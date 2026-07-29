@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { ProviderInstanceHealthLive } from "../src/provider/Layers/ProviderInstanceHealthLive.ts";
 import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -381,6 +382,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(ProviderInstanceHealthLive),
       Layer.provideMerge(NodeServices.layer),
     );
 

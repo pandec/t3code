@@ -371,6 +371,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
 
     const registry: ProviderInstanceRegistryShape = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
+      getInstanceConfig: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.entry)),
       listInstances: Ref.get(entries).pipe(
         Effect.map(
           (map) =>

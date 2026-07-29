@@ -138,6 +138,7 @@ const fakeInstances: ReadonlyArray<ProviderInstance> = [
 const fakeInstanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
   getInstance: (instanceId) =>
     Effect.succeed(fakeInstances.find((instance) => instance.instanceId === instanceId)),
+  getInstanceConfig: () => Effect.succeed(undefined),
   listInstances: Effect.succeed(fakeInstances),
   listUnavailable: Effect.succeed([]),
   streamChanges: Stream.empty,

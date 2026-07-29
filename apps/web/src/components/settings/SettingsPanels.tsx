@@ -1783,6 +1783,17 @@ export function ProviderSettingsPanel() {
           const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
             favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
           );
+          const failoverOptions = rows
+            .filter(
+              (candidate) =>
+                candidate.driver === row.driver && candidate.instanceId !== row.instanceId,
+            )
+            .map((candidate) => ({
+              id: candidate.instanceId,
+              label:
+                candidate.instance.displayName?.trim() ||
+                `${getDriverOption(candidate.driver)?.label ?? String(candidate.driver)} (${candidate.instanceId})`,
+            }));
           const resetLabel = driverOption?.label ?? String(row.driver);
           const headerAction =
             row.isDefault && row.isDirty ? (
@@ -1798,6 +1809,7 @@ export function ProviderSettingsPanel() {
               instance={row.instance}
               driverOption={driverOption}
               liveProvider={liveProvider}
+              failoverOptions={failoverOptions}
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type ProviderInstanceId,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -34,6 +35,8 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
+import type { ProviderInstanceRoutingInfo } from "../../provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -217,6 +220,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerInstanceHealth = yield* ProviderInstanceHealth;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
@@ -274,6 +278,102 @@ const make = Effect.gen(function* () {
               ...(input.requestId ? { requestId: input.requestId } : {}),
             },
             turnId: input.turnId,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
+  /**
+   * Resolve a rate-limit failover target for a turn about to start on
+   * `desiredInstanceId`. Returns undefined (no reroute) unless every
+   * condition holds: the desired instance is currently rate-limited, it
+   * names a failover sibling, and the sibling is a configured, enabled
+   * instance of the same driver in the same continuation group that is not
+   * itself rate-limited. Failing any check leaves the turn on the desired
+   * instance — the failure it hits there is more diagnosable than a
+   * surprising reroute.
+   */
+  const resolveRateLimitFailoverTarget = Effect.fn("resolveRateLimitFailoverTarget")(function* (
+    desiredInstanceId: ProviderInstanceId,
+    desiredInfo: ProviderInstanceRoutingInfo,
+  ) {
+    const failoverInstanceId = desiredInfo.failoverInstanceId;
+    if (failoverInstanceId === undefined || failoverInstanceId === desiredInstanceId) {
+      return undefined;
+    }
+    const limitState = yield* providerInstanceHealth.getRateLimitState(desiredInstanceId);
+    if (limitState === undefined) {
+      return undefined;
+    }
+    const targetInfo = yield* providerService
+      .getInstanceInfo(failoverInstanceId)
+      .pipe(Effect.option);
+    if (Option.isNone(targetInfo)) {
+      yield* Effect.logWarning("Rate-limit failover target is not configured; staying put.", {
+        desiredInstanceId,
+        failoverInstanceId,
+      });
+      return undefined;
+    }
+    const info = targetInfo.value;
+    if (
+      !info.enabled ||
+      info.driverKind !== desiredInfo.driverKind ||
+      info.continuationIdentity.continuationKey !== desiredInfo.continuationIdentity.continuationKey
+    ) {
+      yield* Effect.logWarning(
+        "Rate-limit failover target is not continuation-compatible; staying put.",
+        {
+          desiredInstanceId,
+          failoverInstanceId,
+          targetEnabled: info.enabled,
+          targetDriverKind: info.driverKind,
+        },
+      );
+      return undefined;
+    }
+    if ((yield* providerInstanceHealth.getRateLimitState(failoverInstanceId)) !== undefined) {
+      yield* Effect.logInfo("Rate-limit failover target is also rate-limited; staying put.", {
+        desiredInstanceId,
+        failoverInstanceId,
+      });
+      return undefined;
+    }
+    return { info, limitState };
+  });
+
+  const appendFailoverActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly fromInstanceId: ProviderInstanceId;
+    readonly toInstanceId: ProviderInstanceId;
+    readonly toDisplayName: string | undefined;
+    readonly reason: string;
+    readonly until: number | null;
+    readonly createdAt: string;
+  }) =>
+    Effect.all({
+      commandId: serverCommandId("provider-failover-activity"),
+      eventId: serverEventId(),
+    }).pipe(
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.threadId,
+          activity: {
+            id: eventId,
+            tone: "info",
+            kind: "provider.instance.failover",
+            summary: `Rate limited — failing over to ${input.toDisplayName ?? input.toInstanceId}`,
+            payload: {
+              fromInstanceId: input.fromInstanceId,
+              toInstanceId: input.toInstanceId,
+              reason: input.reason,
+              ...(input.until !== null ? { limitedUntil: input.until } : {}),
+            },
+            turnId: null,
             createdAt: input.createdAt,
           },
           createdAt: input.createdAt,
@@ -428,8 +528,8 @@ const make = Effect.gen(function* () {
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
         : thread.modelSelection.instanceId;
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const desiredInstanceId = desiredModelSelection.instanceId;
+    let desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    let desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -444,7 +544,7 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    const desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
+    let desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
       Effect.mapError(
         () =>
           new ProviderAdapterRequestError({
@@ -463,6 +563,41 @@ const make = Effect.gen(function* () {
         method: "thread.turn.start",
         detail: `Requested provider instance '${desiredInstanceId}' uses unknown provider driver '${desiredDriverKind}'. The driver is not installed in this build.`,
       });
+    }
+    // Rate-limit failover: reroute the turn to the configured sibling when
+    // the desired instance is limited. From here on the rerouted selection
+    // *is* the requested selection — restart detection and continuation
+    // guards below must compare the instance the turn will actually use.
+    let effectiveRequestedModelSelection = requestedModelSelection;
+    const failoverTarget = yield* resolveRateLimitFailoverTarget(desiredInstanceId, desiredInfo);
+    if (failoverTarget !== undefined) {
+      const rerouteFromInstanceId = desiredInstanceId;
+      desiredModelSelection = {
+        ...desiredModelSelection,
+        instanceId: failoverTarget.info.instanceId,
+      };
+      desiredInstanceId = failoverTarget.info.instanceId;
+      desiredInfo = failoverTarget.info;
+      effectiveRequestedModelSelection = desiredModelSelection;
+      yield* Effect.logInfo("Rerouting turn to rate-limit failover instance.", {
+        threadId,
+        fromInstanceId: rerouteFromInstanceId,
+        toInstanceId: desiredInstanceId,
+        reason: failoverTarget.limitState.reason,
+      });
+      // Announce only actual switches: while the thread already runs on the
+      // failover sibling, repeating the notice every turn is noise.
+      if (activeSession?.providerInstanceId !== desiredInstanceId) {
+        yield* appendFailoverActivity({
+          threadId,
+          fromInstanceId: rerouteFromInstanceId,
+          toInstanceId: desiredInstanceId,
+          toDisplayName: failoverTarget.info.displayName,
+          reason: failoverTarget.limitState.reason,
+          until: failoverTarget.limitState.until,
+          createdAt,
+        });
+      }
     }
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
     if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
@@ -492,13 +627,13 @@ const make = Effect.gen(function* () {
                 model: activeSession.model,
               }
             : thread.modelSelection,
-        requestedModelSelection,
+        requestedModelSelection: effectiveRequestedModelSelection,
       });
     }
     if (
       thread.session !== null &&
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.instanceId !== currentInstanceId
+      effectiveRequestedModelSelection !== undefined &&
+      effectiveRequestedModelSelection.instanceId !== currentInstanceId
     ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
@@ -575,17 +710,17 @@ const make = Effect.gen(function* () {
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.model !== activeSession?.model;
+        effectiveRequestedModelSelection !== undefined &&
+        effectiveRequestedModelSelection.model !== activeSession?.model;
       const instanceChanged =
-        requestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
+        effectiveRequestedModelSelection !== undefined &&
+        activeSession?.providerInstanceId !== effectiveRequestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
         preferredProvider === "claudeAgent" &&
-        requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
+        effectiveRequestedModelSelection !== undefined &&
+        !Equal.equals(previousModelSelection, effectiveRequestedModelSelection);
 
       if (
         !runtimeModeChanged &&
@@ -594,7 +729,10 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
-        return existingSessionThreadId;
+        return {
+          sessionThreadId: existingSessionThreadId,
+          effectiveModelSelection: desiredModelSelection,
+        };
       }
 
       const resumeCursor = shouldRestartForModelChange
@@ -631,12 +769,18 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
-      return restartedSession.threadId;
+      return {
+        sessionThreadId: restartedSession.threadId,
+        effectiveModelSelection: desiredModelSelection,
+      };
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
-    return startedSession.threadId;
+    return {
+      sessionThreadId: startedSession.threadId,
+      effectiveModelSelection: desiredModelSelection,
+    };
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
@@ -654,12 +798,17 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
-    yield* ensureSessionForThread(input.threadId, input.createdAt, {
+    const ensuredSession = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
     });
-    if (input.modelSelection !== undefined) {
-      threadModelSelections.set(input.threadId, input.modelSelection);
+    // Cache the selection the session actually uses: under rate-limit
+    // failover it may name a different instance than the client requested,
+    // and caching the original would flag a selection change on every turn.
+    const effectiveInputModelSelection =
+      input.modelSelection !== undefined ? ensuredSession.effectiveModelSelection : undefined;
+    if (effectiveInputModelSelection !== undefined) {
+      threadModelSelections.set(input.threadId, effectiveInputModelSelection);
     }
     const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
     const normalizedAttachments = input.attachments ?? [];
@@ -680,16 +829,18 @@ const make = Effect.gen(function* () {
           : (yield* providerService.getCapabilities(activeSession.providerInstanceId))
               .sessionModelSwitch;
     const requestedModelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+      effectiveInputModelSelection ??
+      threadModelSelections.get(input.threadId) ??
+      thread.modelSelection;
     const modelForTurn =
-      sessionModelSwitch === "unsupported" && input.modelSelection === undefined
+      sessionModelSwitch === "unsupported" && effectiveInputModelSelection === undefined
         ? activeSession?.model !== undefined
           ? {
               ...requestedModelSelection,
               model: activeSession.model,
             }
           : requestedModelSelection
-        : input.modelSelection;
+        : effectiveInputModelSelection;
 
     return {
       threadId: input.threadId,

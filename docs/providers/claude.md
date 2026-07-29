@@ -114,6 +114,20 @@ If you add a Claude provider with a completely different `CLAUDE_CONFIG_DIR path
 T3 Code treats it as a separate Claude environment. It will not be offered for existing threads.
 Use that full-isolation setup when you do not want any shared state between the accounts.
 
+## Can T3 Code Switch Accounts Automatically When I Hit A Limit?
+
+Yes. In each provider's settings card, set `Failover instance` to the other account's provider.
+
+```text
+Claude Work      Failover instance: Claude Personal
+Claude Personal  Failover instance: Claude Work
+```
+
+When an instance reports its usage limit (or a turn fails with a rate-limit error), new turns —
+including the next turn of a live thread, when the two providers share session state as above —
+route to the failover instance until the limit lifts, then return to the preferred instance. Each
+switch appears in the thread's work log.
+
 ## I Want To Use OpenRouter
 
 Use this when you want Claude Code to talk to OpenRouter directly, without running a local router.

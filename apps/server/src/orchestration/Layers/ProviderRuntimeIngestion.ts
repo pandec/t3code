@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -713,6 +714,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerInstanceHealth = yield* ProviderInstanceHealth;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
@@ -1312,8 +1314,35 @@ const make = Effect.gen(function* () {
     },
   );
 
+  // Health reporting is keyed by provider instance, not thread, so it runs
+  // before the thread-existence bail: a rate limit observed on any session
+  // still applies to every other thread routed at that instance.
+  const reportInstanceHealth = Effect.fn("reportInstanceHealth")(function* (
+    event: ProviderRuntimeEvent,
+  ) {
+    const instanceId = event.providerInstanceId;
+    if (instanceId === undefined) return;
+    if (event.type === "account.rate-limits.updated") {
+      yield* providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits);
+      return;
+    }
+    if (event.type === "turn.completed") {
+      const state = normalizeRuntimeTurnState(event.payload.state);
+      if (state === "completed") {
+        yield* providerInstanceHealth.reportTurnOutcome(instanceId, "success");
+      } else if (state === "failed") {
+        yield* providerInstanceHealth.reportTurnOutcome(
+          instanceId,
+          "failed",
+          event.payload.errorMessage,
+        );
+      }
+    }
+  });
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      yield* reportInstanceHealth(event);
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
 

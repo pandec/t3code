@@ -37,6 +37,8 @@ export interface ProviderInstanceRoutingInfo {
   readonly accentColor?: string | undefined;
   readonly enabled: boolean;
   readonly continuationIdentity: ProviderContinuationIdentity;
+  /** Envelope-level failover target; validated at routing time, not here. */
+  readonly failoverInstanceId?: ProviderInstanceId | undefined;
 }
 
 /**

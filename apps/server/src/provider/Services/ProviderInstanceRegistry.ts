@@ -17,7 +17,11 @@
  *
  * @module provider/Services/ProviderInstanceRegistry
  */
-import type { ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import type {
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+  ServerProvider,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
@@ -35,6 +39,14 @@ export interface ProviderInstanceRegistryShape {
   readonly getInstance: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstance | undefined>;
+  /**
+   * The raw settings envelope the instance was built from. Exposes
+   * envelope-level routing hints (e.g. `failoverInstanceId`) that are not
+   * part of the driver-created `ProviderInstance`.
+   */
+  readonly getInstanceConfig: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ProviderInstanceConfig | undefined>;
   /**
    * Every available (driver-registered, successfully created) instance,
    * in stable settings-author order.
