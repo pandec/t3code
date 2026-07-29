@@ -421,7 +421,6 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       });
       const invalidId = ProviderInstanceId.make("claude_invalid_shadow");
       const validId = ProviderInstanceId.make("claude_valid_shadow");
-      const invalidShared = path.join(root, "invalid-shared");
       const validShared = path.join(root, "valid-shared");
       const validShadow = path.join(root, "valid-shadow");
 
@@ -429,9 +428,16 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         [invalidId]: {
           driver: ProviderDriverKind.make("claudeAgent"),
           enabled: false,
+          environment: [
+            {
+              name: "CLAUDE_CONFIG_DIR",
+              value: ".claude-relative",
+              sensitive: false,
+            },
+          ],
           config: makeClaudeConfig({
-            homePath: invalidShared,
-            shadowHomePath: invalidShared,
+            homePath: "",
+            shadowHomePath: path.join(root, "invalid-shadow"),
           }),
         },
         [validId]: {
@@ -454,7 +460,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       const unavailable = yield* registry.listUnavailable;
       expect(unavailable.map(({ instanceId }) => instanceId)).toEqual([invalidId]);
       expect(unavailable[0]?.unavailableReason).toContain(
-        "must be separate from and not nested within",
+        "requires an absolute shared config location",
       );
       expect(yield* fileSystem.readLink(path.join(validShadow, "projects"))).toBe(
         path.join(validShared, "projects"),

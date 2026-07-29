@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import {
   ClaudeShadowHomeEntryConflictError,
   ClaudeShadowHomePathConflictError,
+  ClaudeShadowHomeRelativeConfigPathError,
   materializeClaudeShadowHome,
   resolveClaudeHomeLayout,
   type ClaudeHomeLayout,
@@ -91,19 +92,34 @@ it.layer(NodeServices.layer)("ClaudeHomeLayout", (it) => {
       }),
     );
 
-    it.effect("resolves a relative inherited config dir from the server cwd", () =>
+    it.effect("rejects a relative inherited config dir for a static shadow overlay", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const root = yield* makeTempDir("t3code-claude-layout-cwd-");
         const shadow = path.join(root, "shadow");
 
-        const layout = yield* resolveClaudeHomeLayout(
+        const result = yield* resolveClaudeHomeLayout(
           { homePath: "", shadowHomePath: shadow },
           { CLAUDE_CONFIG_DIR: ".claude-work" },
           root,
-        );
+        ).pipe(Effect.flip);
 
-        expect(layout.sharedConfigDirPath).toBe(path.join(root, ".claude-work"));
+        expect(result).toBeInstanceOf(ClaudeShadowHomeRelativeConfigPathError);
+        expect(result).toMatchObject({
+          shadowConfigDirPath: shadow,
+          environmentVariable: "CLAUDE_CONFIG_DIR",
+          relativePath: ".claude-work",
+        });
+
+        const relativeHomeResult = yield* resolveClaudeHomeLayout(
+          { homePath: "", shadowHomePath: shadow },
+          { HOME: "relative-home" },
+          root,
+        ).pipe(Effect.flip);
+        expect(relativeHomeResult).toMatchObject({
+          environmentVariable: "HOME",
+          relativePath: "relative-home",
+        });
       }),
     );
   });

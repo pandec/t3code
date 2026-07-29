@@ -103,10 +103,24 @@ export class ClaudeShadowHomeEntryConflictError extends Schema.TaggedErrorClass<
   }
 }
 
+export class ClaudeShadowHomeRelativeConfigPathError extends Schema.TaggedErrorClass<ClaudeShadowHomeRelativeConfigPathError>()(
+  "ClaudeShadowHomeRelativeConfigPathError",
+  {
+    shadowConfigDirPath: Schema.String,
+    environmentVariable: Schema.Literals(["CLAUDE_CONFIG_DIR", "HOME"]),
+    relativePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Claude shadow config dir '${this.shadowConfigDirPath}' requires an absolute shared config location, but inherited ${this.environmentVariable} '${this.relativePath}' is relative to each project cwd. Set an explicit homePath or make ${this.environmentVariable} absolute.`;
+  }
+}
+
 export const ClaudeShadowHomeError = Schema.Union([
   ClaudeShadowHomeFileSystemError,
   ClaudeShadowHomePathConflictError,
   ClaudeShadowHomeEntryConflictError,
+  ClaudeShadowHomeRelativeConfigPathError,
 ]);
 export type ClaudeShadowHomeError = typeof ClaudeShadowHomeError.Type;
 
@@ -114,9 +128,28 @@ export const resolveClaudeHomeLayout = Effect.fn("resolveClaudeHomeLayout")(func
   config: Pick<ClaudeSettings, "homePath" | "shadowHomePath">,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
-): Effect.fn.Return<ClaudeHomeLayout, never, Path.Path> {
-  const sharedConfigDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
+): Effect.fn.Return<ClaudeHomeLayout, ClaudeShadowHomeRelativeConfigPathError, Path.Path> {
   const shadowConfigDirPath = yield* resolveClaudeShadowConfigDirPath(config);
+  if (shadowConfigDirPath !== undefined && config.homePath.trim().length === 0) {
+    const path = yield* Path.Path;
+    const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+    const environmentHome = environment.HOME?.trim() ?? "";
+    const relativeInheritedPath =
+      environmentConfigDir.length > 0 && !path.isAbsolute(environmentConfigDir)
+        ? { environmentVariable: "CLAUDE_CONFIG_DIR" as const, relativePath: environmentConfigDir }
+        : environmentConfigDir.length === 0 &&
+            environmentHome.length > 0 &&
+            !path.isAbsolute(environmentHome)
+          ? { environmentVariable: "HOME" as const, relativePath: environmentHome }
+          : undefined;
+    if (relativeInheritedPath !== undefined) {
+      return yield* new ClaudeShadowHomeRelativeConfigPathError({
+        shadowConfigDirPath,
+        ...relativeInheritedPath,
+      });
+    }
+  }
+  const sharedConfigDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
   if (shadowConfigDirPath === undefined) {
     return { mode: "direct", sharedConfigDirPath, shadowConfigDirPath: undefined };
   }
