@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { ProviderInstanceNotFoundError } from "./Errors.ts";
 import {
   makeFailoverActivity,
   resolveTurnRouting,
@@ -65,6 +66,7 @@ const limited = (until: number | null = 4_000_000_000_000): ProviderInstanceRate
 const makeDeps = (input: {
   readonly limits?: ReadonlyMap<ProviderInstanceId, ProviderInstanceRateLimitState>;
   readonly instances?: ReadonlyMap<ProviderInstanceId, ProviderInstanceRoutingInfo>;
+  readonly missingInstances?: ReadonlySet<ProviderInstanceId>;
 }): FailoverRoutingDeps => {
   const limits = input.limits ?? new Map();
   const instances = input.instances ?? new Map();
@@ -77,9 +79,12 @@ const makeDeps = (input: {
     health,
     getInstanceInfo: (instanceId) => {
       const found = instances.get(instanceId);
-      return found === undefined
-        ? Effect.die(new Error(`unexpected getInstanceInfo(${instanceId}) in test`))
-        : Effect.succeed(found);
+      if (found !== undefined) {
+        return Effect.succeed(found);
+      }
+      return input.missingInstances?.has(instanceId) === true
+        ? Effect.fail(new ProviderInstanceNotFoundError({ instanceId }))
+        : Effect.die(new Error(`unexpected getInstanceInfo(${instanceId}) in test`));
     },
   };
 };
@@ -104,6 +109,21 @@ describe("resolveTurnRouting — staying on the picked instance", () => {
     }),
   );
 
+  it.effect("keeps an explicit request as the restart comparison and records it", () =>
+    Effect.gen(function* () {
+      const requested = selection(MAIN, "sonnet");
+      const routing = yield* resolveTurnRouting(makeDeps({}), {
+        ...baseInput,
+        preferred: requested,
+        requested,
+      });
+      expect(routing.bound).toEqual(requested);
+      expect(routing.restartComparisonSelection).toEqual(requested);
+      expect(routing.recordSelectionState).toBe(true);
+      expect(routing.notice).toBeUndefined();
+    }),
+  );
+
   it.effect("does not reroute when no failover sibling is configured", () =>
     Effect.gen(function* () {
       const deps = makeDeps({ limits: new Map([[MAIN, limited()]]) });
@@ -112,6 +132,20 @@ describe("resolveTurnRouting — staying on the picked instance", () => {
         preferredInfo: info({ instanceId: MAIN }),
       });
       expect(routing.bound.instanceId).toBe(MAIN);
+    }),
+  );
+
+  it.effect("stays put when the configured failover instance is missing", () =>
+    Effect.gen(function* () {
+      const routing = yield* resolveTurnRouting(
+        makeDeps({
+          limits: new Map([[MAIN, limited()]]),
+          missingInstances: new Set([SECOND]),
+        }),
+        baseInput,
+      );
+      expect(routing.bound.instanceId).toBe(MAIN);
+      expect(routing.notice).toBeUndefined();
     }),
   );
 
@@ -267,6 +301,26 @@ describe("resolveTurnRouting — routing back", () => {
         activeInstanceId: MAIN,
       });
       expect(routing.notice).toBeUndefined();
+      expect(routing.restartComparisonSelection).toBeUndefined();
+      expect(routing.recordSelectionState).toBe(false);
+    }),
+  );
+
+  it.effect("announces an instance return without restarting for a different preferred model", () =>
+    Effect.gen(function* () {
+      const routing = yield* resolveTurnRouting(makeDeps({}), {
+        ...baseInput,
+        preferred: selection(MAIN, "sonnet"),
+        previousSelectionState: routedAway,
+        activeInstanceId: SECOND,
+      });
+      // The old notice block matched instance ids, while the old implicit
+      // restart branch required the full preferred selection to match.
+      expect(routing.notice).toMatchObject({
+        direction: "return",
+        fromInstanceId: SECOND,
+        toInstanceId: MAIN,
+      });
       expect(routing.restartComparisonSelection).toBeUndefined();
       expect(routing.recordSelectionState).toBe(false);
     }),
