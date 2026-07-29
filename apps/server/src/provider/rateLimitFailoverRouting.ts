@@ -28,10 +28,10 @@ import * as Option from "effect/Option";
 
 import type { ProviderServiceError } from "./Errors.ts";
 import type { ProviderInstanceRoutingInfo } from "./Services/ProviderAdapterRegistry.ts";
-import type { ProviderInstanceHealthShape } from "./Services/ProviderInstanceHealth.ts";
+import type { ProviderInstanceRateLimitState } from "./Services/ProviderInstanceHealth.ts";
 
 /** Activity kind appended to a thread whenever routing moves between instances. */
-export const FAILOVER_ACTIVITY_KIND = "provider.instance.failover";
+const FAILOVER_ACTIVITY_KIND = "provider.instance.failover";
 
 /**
  * What the caller last routed for this thread: the instance the user picked
@@ -44,18 +44,30 @@ export interface ThreadSelectionState {
   readonly effective: ModelSelection;
 }
 
-/** A pending work-log notice describing a routing move. */
-export interface FailoverNotice {
+interface FailoverNoticeBase {
   readonly threadId: ThreadId;
-  readonly direction: "failover" | "return";
-  readonly returnCause?: "limit-lifted" | "failover-unavailable";
   readonly fromInstanceId: ProviderInstanceId;
   readonly toInstanceId: ProviderInstanceId;
   readonly toDisplayName: string | undefined;
-  readonly reason: string | undefined;
-  readonly until: number | null;
   readonly createdAt: string;
 }
+
+/**
+ * A pending work-log notice describing a routing move. Discriminated on
+ * `direction` so a limit reason can only ride along with a failover and a
+ * return cause only with a return — the two carry disjoint evidence.
+ */
+export type FailoverNotice =
+  | (FailoverNoticeBase & {
+      readonly direction: "failover";
+      readonly reason: string;
+      /** Unix ms the limit is expected to lift, or null when unreported. */
+      readonly until: number | null;
+    })
+  | (FailoverNoticeBase & {
+      readonly direction: "return";
+      readonly returnCause: "limit-lifted" | "failover-unavailable";
+    });
 
 export interface TurnRouting {
   /** The selection the turn actually runs on, after any reroute. */
@@ -68,14 +80,21 @@ export interface TurnRouting {
    * when the caller supplied no selection, because the session must move.
    */
   readonly restartComparisonSelection: ModelSelection | undefined;
-  /** Whether the caller should persist `{preferred, effective}` for this thread. */
-  readonly recordSelectionState: boolean;
+  /**
+   * Selection state to persist for this thread, or undefined to leave the
+   * stored state alone. Returned whole rather than as a "should record" flag
+   * so the `{preferred, effective}` pairing — which route-back detection
+   * depends on — stays owned by this module.
+   */
+  readonly selectionState: ThreadSelectionState | undefined;
   /** Work-log notice to append once the session settles on `bound`. */
   readonly notice: FailoverNotice | undefined;
 }
 
 export interface FailoverRoutingDeps {
-  readonly health: ProviderInstanceHealthShape;
+  readonly getRateLimitState: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ProviderInstanceRateLimitState | undefined>;
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
@@ -112,7 +131,7 @@ const resolveFailoverTarget = Effect.fn("rateLimitFailover.resolveTarget")(funct
   if (failoverInstanceId === undefined || failoverInstanceId === preferredInstanceId) {
     return undefined;
   }
-  const limitState = yield* deps.health.getRateLimitState(preferredInstanceId);
+  const limitState = yield* deps.getRateLimitState(preferredInstanceId);
   if (limitState === undefined) {
     return undefined;
   }
@@ -141,7 +160,7 @@ const resolveFailoverTarget = Effect.fn("rateLimitFailover.resolveTarget")(funct
     );
     return undefined;
   }
-  if ((yield* deps.health.getRateLimitState(failoverInstanceId)) !== undefined) {
+  if ((yield* deps.getRateLimitState(failoverInstanceId)) !== undefined) {
     yield* Effect.logInfo("Rate-limit failover target is also rate-limited; staying put.", {
       preferredInstanceId,
       failoverInstanceId,
@@ -156,6 +175,22 @@ function wasRoutedAway(state: ThreadSelectionState | undefined): state is Thread
   return state !== undefined && !Equal.equals(state.preferred, state.effective);
 }
 
+/**
+ * Decide where a turn runs. Exactly one of three outcomes:
+ *
+ *  - **stay** — `bound` is the picked instance and there is no notice. The
+ *    common case: the instance is fine, or no usable sibling exists.
+ *  - **reroute** — the pick is rate-limited and a compatible, healthy sibling
+ *    is configured. `bound` is the sibling and `restartComparisonSelection` is
+ *    set so the session moves; a notice is produced unless the thread already
+ *    sits there and the user did not ask for the limited instance again.
+ *  - **route back** — a previous turn was rerouted away from this same pick
+ *    and the limit (or the failover setting) is gone. `bound` is the pick
+ *    again, with a notice naming why.
+ *
+ * Never fails: every dependency error is absorbed into "stay", because a
+ * diagnosable failure on the picked instance beats a surprising reroute.
+ */
 export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRouting")(function* (
   deps: FailoverRoutingDeps,
   input: ResolveTurnRoutingInput,
@@ -188,7 +223,7 @@ export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRoutin
       bound,
       boundInfo: failoverTarget.info,
       restartComparisonSelection: bound,
-      recordSelectionState: true,
+      selectionState: { preferred: input.preferred, effective: bound },
       notice: announce
         ? {
             threadId: input.threadId,
@@ -231,7 +266,7 @@ export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRoutin
   // lifting and the failover setting going away both land here).
   let notice: FailoverNotice | undefined;
   if (routingBack && previous !== undefined) {
-    const preferredLimitState = yield* deps.health.getRateLimitState(preferredInstanceId);
+    const preferredLimitState = yield* deps.getRateLimitState(preferredInstanceId);
     notice = {
       threadId: input.threadId,
       direction: "return",
@@ -239,8 +274,6 @@ export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRoutin
       fromInstanceId: previous.effective.instanceId,
       toInstanceId: preferredInstanceId,
       toDisplayName: input.preferredInfo.displayName,
-      reason: undefined,
-      until: null,
       createdAt: input.createdAt,
     };
   }
@@ -249,7 +282,10 @@ export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRoutin
     bound: input.preferred,
     boundInfo: input.preferredInfo,
     restartComparisonSelection,
-    recordSelectionState: input.requested !== undefined || restartComparisonSelection !== undefined,
+    selectionState:
+      input.requested !== undefined || restartComparisonSelection !== undefined
+        ? { preferred: input.preferred, effective: input.preferred }
+        : undefined,
     notice,
   };
 });
@@ -267,33 +303,42 @@ export function makeFailoverActivity(
   activityId: OrchestrationThreadActivity["id"],
 ): OrchestrationThreadActivity {
   const target = notice.toDisplayName ?? notice.toInstanceId;
-  const limitLifted = notice.returnCause !== "failover-unavailable";
-  const detail =
-    notice.direction === "failover"
-      ? notice.until !== null
-        ? `${notice.reason ?? "usage limit reached"}; resets ${DateTime.formatIso(DateTime.makeUnsafe(notice.until))}`
-        : (notice.reason ?? "usage limit reached")
-      : limitLifted
-        ? `Usage limit on ${notice.fromInstanceId} lifted.`
-        : `Failover to ${notice.fromInstanceId} is no longer available.`;
+  if (notice.direction === "failover") {
+    const detail =
+      notice.until !== null
+        ? `${notice.reason}; resets ${DateTime.formatIso(DateTime.makeUnsafe(notice.until))}`
+        : notice.reason;
+    return {
+      id: activityId,
+      tone: "info",
+      kind: FAILOVER_ACTIVITY_KIND,
+      summary: `Rate limited — failing over to ${target}`,
+      payload: {
+        direction: notice.direction,
+        fromInstanceId: notice.fromInstanceId,
+        toInstanceId: notice.toInstanceId,
+        detail,
+        reason: notice.reason,
+        ...(notice.until !== null ? { limitedUntil: notice.until } : {}),
+      },
+      turnId: null,
+      createdAt: notice.createdAt,
+    };
+  }
+  const limitLifted = notice.returnCause === "limit-lifted";
   return {
     id: activityId,
     tone: "info",
     kind: FAILOVER_ACTIVITY_KIND,
-    summary:
-      notice.direction === "failover"
-        ? `Rate limited — failing over to ${target}`
-        : limitLifted
-          ? `Usage limit lifted — back on ${target}`
-          : `Back on ${target}`,
+    summary: limitLifted ? `Usage limit lifted — back on ${target}` : `Back on ${target}`,
     payload: {
       direction: notice.direction,
-      ...(notice.returnCause !== undefined ? { returnCause: notice.returnCause } : {}),
+      returnCause: notice.returnCause,
       fromInstanceId: notice.fromInstanceId,
       toInstanceId: notice.toInstanceId,
-      detail,
-      ...(notice.reason !== undefined ? { reason: notice.reason } : {}),
-      ...(notice.until !== null ? { limitedUntil: notice.until } : {}),
+      detail: limitLifted
+        ? `Usage limit on ${notice.fromInstanceId} lifted.`
+        : `Failover to ${notice.fromInstanceId} is no longer available.`,
     },
     turnId: null,
     createdAt: notice.createdAt,

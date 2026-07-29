@@ -41,6 +41,7 @@ import {
   resolveTurnRouting,
   type FailoverNotice,
   type FailoverRoutingDeps,
+  type ThreadSelectionState,
 } from "../../provider/rateLimitFailoverRouting.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -246,13 +247,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const threadModelSelections = new Map<
-    string,
-    {
-      readonly preferred: ModelSelection;
-      readonly effective: ModelSelection;
-    }
-  >();
+  const threadModelSelections = new Map<string, ThreadSelectionState>();
   const pendingTurnStartThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
@@ -296,7 +291,7 @@ const make = Effect.gen(function* () {
     );
 
   const failoverRoutingDeps = {
-    health: providerInstanceHealth,
+    getRateLimitState: providerInstanceHealth.getRateLimitState,
     getInstanceInfo: providerService.getInstanceInfo,
   } satisfies FailoverRoutingDeps;
 
@@ -517,13 +512,10 @@ const make = Effect.gen(function* () {
     const desiredModelSelection = routing.bound;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const desiredInfo = routing.boundInfo;
-    const effectiveRequestedModelSelection = routing.restartComparisonSelection;
+    const restartComparisonSelection = routing.restartComparisonSelection;
     const recordSelectionState = () => {
-      if (!routing.recordSelectionState) return;
-      threadModelSelections.set(threadId, {
-        preferred: preferredModelSelection,
-        effective: desiredModelSelection,
-      });
+      if (routing.selectionState === undefined) return;
+      threadModelSelections.set(threadId, routing.selectionState);
     };
     // Announce a routing move only once the session actually settles on the
     // instance the notice names; a failed switch must not claim it happened.
@@ -574,13 +566,13 @@ const make = Effect.gen(function* () {
                 model: activeSession.model,
               }
             : thread.modelSelection,
-        requestedModelSelection: effectiveRequestedModelSelection,
+        requestedModelSelection: restartComparisonSelection,
       });
     }
     if (
       thread.session !== null &&
-      effectiveRequestedModelSelection !== undefined &&
-      effectiveRequestedModelSelection.instanceId !== currentInstanceId
+      restartComparisonSelection !== undefined &&
+      restartComparisonSelection.instanceId !== currentInstanceId
     ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
@@ -657,17 +649,17 @@ const make = Effect.gen(function* () {
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
-        effectiveRequestedModelSelection !== undefined &&
-        effectiveRequestedModelSelection.model !== activeSession?.model;
+        restartComparisonSelection !== undefined &&
+        restartComparisonSelection.model !== activeSession?.model;
       const instanceChanged =
-        effectiveRequestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== effectiveRequestedModelSelection.instanceId;
+        restartComparisonSelection !== undefined &&
+        activeSession?.providerInstanceId !== restartComparisonSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = previousSelectionState?.effective;
       const shouldRestartForModelSelectionChange =
         preferredProvider === "claudeAgent" &&
-        effectiveRequestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, effectiveRequestedModelSelection);
+        restartComparisonSelection !== undefined &&
+        !Equal.equals(previousModelSelection, restartComparisonSelection);
 
       if (
         !runtimeModeChanged &&

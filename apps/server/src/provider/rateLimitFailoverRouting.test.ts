@@ -16,10 +16,7 @@ import {
   type ThreadSelectionState,
 } from "./rateLimitFailoverRouting.ts";
 import type { ProviderInstanceRoutingInfo } from "./Services/ProviderAdapterRegistry.ts";
-import type {
-  ProviderInstanceHealthShape,
-  ProviderInstanceRateLimitState,
-} from "./Services/ProviderInstanceHealth.ts";
+import type { ProviderInstanceRateLimitState } from "./Services/ProviderInstanceHealth.ts";
 
 const THREAD_ID = ThreadId.make("thread-1");
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
@@ -70,13 +67,8 @@ const makeDeps = (input: {
 }): FailoverRoutingDeps => {
   const limits = input.limits ?? new Map();
   const instances = input.instances ?? new Map();
-  const health: ProviderInstanceHealthShape = {
-    reportRateLimitPayload: () => Effect.void,
-    reportTurnOutcome: () => Effect.void,
-    getRateLimitState: (instanceId) => Effect.succeed(limits.get(instanceId)),
-  };
   return {
-    health,
+    getRateLimitState: (instanceId) => Effect.succeed(limits.get(instanceId)),
     getInstanceInfo: (instanceId) => {
       const found = instances.get(instanceId);
       if (found !== undefined) {
@@ -119,7 +111,7 @@ describe("resolveTurnRouting — staying on the picked instance", () => {
       });
       expect(routing.bound).toEqual(requested);
       expect(routing.restartComparisonSelection).toEqual(requested);
-      expect(routing.recordSelectionState).toBe(true);
+      expect(routing.selectionState).toBeDefined();
       expect(routing.notice).toBeUndefined();
     }),
   );
@@ -212,7 +204,7 @@ describe("resolveTurnRouting — rerouting", () => {
       // The session must move, so restart detection needs a comparison even
       // though the turn supplied no selection.
       expect(routing.restartComparisonSelection).toEqual(routing.bound);
-      expect(routing.recordSelectionState).toBe(true);
+      expect(routing.selectionState).toBeDefined();
       expect(routing.notice).toMatchObject({
         direction: "failover",
         fromInstanceId: MAIN,
@@ -262,7 +254,7 @@ describe("resolveTurnRouting — routing back", () => {
       expect(routing.bound.instanceId).toBe(MAIN);
       // Without a comparison selection the session would stay on the sibling.
       expect(routing.restartComparisonSelection).toEqual(selection(MAIN));
-      expect(routing.recordSelectionState).toBe(true);
+      expect(routing.selectionState).toBeDefined();
       expect(routing.notice).toMatchObject({
         direction: "return",
         returnCause: "limit-lifted",
@@ -302,11 +294,11 @@ describe("resolveTurnRouting — routing back", () => {
       });
       expect(routing.notice).toBeUndefined();
       expect(routing.restartComparisonSelection).toBeUndefined();
-      expect(routing.recordSelectionState).toBe(false);
+      expect(routing.selectionState).toBeUndefined();
     }),
   );
 
-  it.effect("announces an instance return without restarting for a different preferred model", () =>
+  it.effect("produces a return notice the caller will suppress when the model also changed", () =>
     Effect.gen(function* () {
       const routing = yield* resolveTurnRouting(makeDeps({}), {
         ...baseInput,
@@ -314,15 +306,21 @@ describe("resolveTurnRouting — routing back", () => {
         previousSelectionState: routedAway,
         activeInstanceId: SECOND,
       });
-      // The old notice block matched instance ids, while the old implicit
-      // restart branch required the full preferred selection to match.
+      // Deliberate asymmetry: the notice keys on the instance alone, while
+      // moving the session without an explicit request needs the whole
+      // selection to match. So a route-back whose model also changed leaves
+      // the session on the sibling — and because the caller only appends a
+      // notice once the session settles on `toInstanceId`, this notice never
+      // reaches the work log. Behavior inherited from the original
+      // implementation; nothing user-visible happens on this path until an
+      // explicit selection arrives.
       expect(routing.notice).toMatchObject({
         direction: "return",
         fromInstanceId: SECOND,
         toInstanceId: MAIN,
       });
       expect(routing.restartComparisonSelection).toBeUndefined();
-      expect(routing.recordSelectionState).toBe(false);
+      expect(routing.selectionState).toBeUndefined();
     }),
   );
 });
@@ -361,8 +359,6 @@ describe("makeFailoverActivity", () => {
         fromInstanceId: SECOND,
         toInstanceId: MAIN,
         toDisplayName: undefined,
-        reason: undefined,
-        until: null,
         createdAt: CREATED_AT,
       },
       activityId,
