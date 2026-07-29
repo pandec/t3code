@@ -174,11 +174,21 @@ export function useThreadOutboxDrain(): void {
   useEffect(() => {
     for (const [threadKey, batchIds] of flushBatchRef.current) {
       const remaining = queuedMessagesByThreadKey[threadKey] ?? [];
-      if (!remaining.some((message) => batchIds.has(message.messageId))) {
+      const batched = remaining.filter((message) => batchIds.has(message.messageId));
+      if (batched.length === 0) {
+        flushBatchRef.current.delete(threadKey);
+        continue;
+      }
+      // A batch means "the turn our leader started is still the one running".
+      // Losing the environment ends that guarantee: another client may start a
+      // turn while we are away, and these messages were queued to follow ours,
+      // not to steer into someone else's.
+      const environmentId = batched[0]?.environmentId;
+      if (environmentId !== undefined && environmentConnectivity.get(environmentId) !== true) {
         flushBatchRef.current.delete(threadKey);
       }
     }
-  }, [dispatchingQueuedMessage, queuedMessagesByThreadKey]);
+  }, [dispatchingQueuedMessage, environmentConnectivity, queuedMessagesByThreadKey]);
 
   // Keep expedite state only while its row is queued or owned by an in-flight
   // edit/removal. The ownership checks avoid pruning during the manager's
