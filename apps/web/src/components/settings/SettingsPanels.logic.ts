@@ -155,10 +155,11 @@ export function buildProviderInstanceUpdatePatch(input: {
 
 /**
  * Whether the server would actually route to this failover target. Mirrors the
- * turn-start preconditions in `ProviderCommandReactor.resolveRateLimitFailoverTarget`
- * (enabled, same continuation group) so the settings card can warn while the
- * user configures rather than leaving a silent no-op at runtime. The driver
- * check lives in the caller, which only offers same-driver candidates.
+ * turn-start preconditions in `resolveFailoverTarget`
+ * (`apps/server/src/provider/rateLimitFailoverRouting.ts`) — enabled, same
+ * continuation group — so the settings card can warn while the user configures
+ * rather than leaving a silent no-op at runtime. The driver check lives in the
+ * caller, which only offers same-driver candidates.
  *
  * A group key is only known once an instance has been probed; an unknown key
  * on either side reports compatible, so a cold start does not flash a warning

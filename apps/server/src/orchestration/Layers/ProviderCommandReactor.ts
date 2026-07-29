@@ -8,7 +8,6 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
-  type ProviderInstanceId,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -19,7 +18,6 @@ import { THREAD_FORK_FAILURE_PREFIX } from "@t3tools/shared/conversationFork";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -37,8 +35,14 @@ import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
-import type { ProviderInstanceRoutingInfo } from "../../provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import {
+  makeFailoverActivity,
+  resolveTurnRouting,
+  type FailoverNotice,
+  type FailoverRoutingDeps,
+  type ThreadSelectionState,
+} from "../../provider/rateLimitFailoverRouting.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -243,13 +247,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const threadModelSelections = new Map<
-    string,
-    {
-      readonly preferred: ModelSelection;
-      readonly effective: ModelSelection;
-    }
-  >();
+  const threadModelSelections = new Map<string, ThreadSelectionState>();
   const pendingTurnStartThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
@@ -292,123 +290,26 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /**
-   * Resolve a rate-limit failover target for a turn about to start on
-   * `desiredInstanceId`. Returns undefined (no reroute) unless every
-   * condition holds: the desired instance is currently rate-limited, it
-   * names a failover sibling, and the sibling is a configured, enabled
-   * instance of the same driver in the same continuation group that is not
-   * itself rate-limited. Failing any check leaves the turn on the desired
-   * instance — the failure it hits there is more diagnosable than a
-   * surprising reroute.
-   */
-  const resolveRateLimitFailoverTarget = Effect.fn("resolveRateLimitFailoverTarget")(function* (
-    desiredInstanceId: ProviderInstanceId,
-    desiredInfo: ProviderInstanceRoutingInfo,
-  ) {
-    const failoverInstanceId = desiredInfo.failoverInstanceId;
-    if (failoverInstanceId === undefined || failoverInstanceId === desiredInstanceId) {
-      return undefined;
-    }
-    const limitState = yield* providerInstanceHealth.getRateLimitState(desiredInstanceId);
-    if (limitState === undefined) {
-      return undefined;
-    }
-    const targetInfo = yield* providerService
-      .getInstanceInfo(failoverInstanceId)
-      .pipe(Effect.option);
-    if (Option.isNone(targetInfo)) {
-      yield* Effect.logWarning("Rate-limit failover target is not configured; staying put.", {
-        desiredInstanceId,
-        failoverInstanceId,
-      });
-      return undefined;
-    }
-    const info = targetInfo.value;
-    if (
-      !info.enabled ||
-      info.driverKind !== desiredInfo.driverKind ||
-      info.continuationIdentity.continuationKey !== desiredInfo.continuationIdentity.continuationKey
-    ) {
-      yield* Effect.logWarning(
-        "Rate-limit failover target is not continuation-compatible; staying put.",
-        {
-          desiredInstanceId,
-          failoverInstanceId,
-          targetEnabled: info.enabled,
-          targetDriverKind: info.driverKind,
-        },
-      );
-      return undefined;
-    }
-    if ((yield* providerInstanceHealth.getRateLimitState(failoverInstanceId)) !== undefined) {
-      yield* Effect.logInfo("Rate-limit failover target is also rate-limited; staying put.", {
-        desiredInstanceId,
-        failoverInstanceId,
-      });
-      return undefined;
-    }
-    return { info, limitState };
-  });
+  const failoverRoutingDeps = {
+    getRateLimitState: providerInstanceHealth.getRateLimitState,
+    getInstanceInfo: providerService.getInstanceInfo,
+  } satisfies FailoverRoutingDeps;
 
-  const appendFailoverActivity = (input: {
-    readonly threadId: ThreadId;
-    readonly direction: "failover" | "return";
-    readonly returnCause?: "limit-lifted" | "failover-unavailable";
-    readonly fromInstanceId: ProviderInstanceId;
-    readonly toInstanceId: ProviderInstanceId;
-    readonly toDisplayName: string | undefined;
-    readonly reason: string | undefined;
-    readonly until: number | null;
-    readonly createdAt: string;
-  }) =>
+  /** Append the work-log notice a routing move produced (fork). */
+  const appendFailoverNotice = (notice: FailoverNotice) =>
     Effect.all({
       commandId: serverCommandId("provider-failover-activity"),
       eventId: serverEventId(),
     }).pipe(
-      Effect.flatMap(({ commandId, eventId }) => {
-        const target = input.toDisplayName ?? input.toInstanceId;
-        // The work log renders `summary` plus `payload.detail`; the structured
-        // fields below are for programmatic consumers, so the reset time has
-        // to be spelled out here to reach the reader.
-        const limitLifted = input.returnCause !== "failover-unavailable";
-        const detail =
-          input.direction === "failover"
-            ? input.until !== null
-              ? `${input.reason ?? "usage limit reached"}; resets ${DateTime.formatIso(DateTime.makeUnsafe(input.until))}`
-              : (input.reason ?? "usage limit reached")
-            : limitLifted
-              ? `Usage limit on ${input.fromInstanceId} lifted.`
-              : `Failover to ${input.fromInstanceId} is no longer available.`;
-        return orchestrationEngine.dispatch({
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
           type: "thread.activity.append",
           commandId,
-          threadId: input.threadId,
-          activity: {
-            id: eventId,
-            tone: "info",
-            kind: "provider.instance.failover",
-            summary:
-              input.direction === "failover"
-                ? `Rate limited — failing over to ${target}`
-                : limitLifted
-                  ? `Usage limit lifted — back on ${target}`
-                  : `Back on ${target}`,
-            payload: {
-              direction: input.direction,
-              ...(input.returnCause !== undefined ? { returnCause: input.returnCause } : {}),
-              fromInstanceId: input.fromInstanceId,
-              toInstanceId: input.toInstanceId,
-              detail,
-              ...(input.reason !== undefined ? { reason: input.reason } : {}),
-              ...(input.until !== null ? { limitedUntil: input.until } : {}),
-            },
-            turnId: null,
-            createdAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-        });
-      }),
+          threadId: notice.threadId,
+          activity: makeFailoverActivity(notice, eventId),
+          createdAt: notice.createdAt,
+        }),
+      ),
     );
 
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
@@ -559,8 +460,7 @@ const make = Effect.gen(function* () {
         ? activeSession.providerInstanceId
         : thread.modelSelection.instanceId;
     const preferredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    let desiredModelSelection = preferredModelSelection;
-    let desiredInstanceId = desiredModelSelection.instanceId;
+    const preferredInstanceId = preferredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -575,143 +475,64 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    let desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
+    const preferredInfo = yield* providerService.getInstanceInfo(preferredInstanceId).pipe(
       Effect.mapError(
         () =>
           new ProviderAdapterRequestError({
             provider: providerErrorLabelFromInstanceHint({
-              instanceId: String(desiredModelSelection.instanceId),
+              instanceId: String(preferredInstanceId),
             }),
             method: "thread.turn.start",
-            detail: `Requested provider instance '${desiredInstanceId}' is not configured in this build.`,
+            detail: `Requested provider instance '${preferredInstanceId}' is not configured in this build.`,
           }),
       ),
     );
-    const desiredDriverKind = desiredInfo.driverKind;
+    const desiredDriverKind = preferredInfo.driverKind;
     if (!isProviderDriverKind(desiredDriverKind)) {
       return yield* new ProviderAdapterRequestError({
         provider: providerErrorLabel(String(desiredDriverKind)),
         method: "thread.turn.start",
-        detail: `Requested provider instance '${desiredInstanceId}' uses unknown provider driver '${desiredDriverKind}'. The driver is not installed in this build.`,
+        detail: `Requested provider instance '${preferredInstanceId}' uses unknown provider driver '${desiredDriverKind}'. The driver is not installed in this build.`,
       });
     }
-    // Rate-limit failover: reroute the turn to the configured sibling when
-    // the desired instance is limited. From here on the rerouted selection
-    // *is* the requested selection — restart detection and continuation
-    // guards below must compare the instance the turn will actually use.
-    let effectiveRequestedModelSelection = requestedModelSelection;
-    let pendingFailoverActivity:
-      | {
-          readonly threadId: ThreadId;
-          readonly direction: "failover" | "return";
-          readonly returnCause?: "limit-lifted" | "failover-unavailable";
-          readonly fromInstanceId: ProviderInstanceId;
-          readonly toInstanceId: ProviderInstanceId;
-          readonly toDisplayName: string | undefined;
-          readonly reason: string | undefined;
-          readonly until: number | null;
-          readonly createdAt: string;
-        }
-      | undefined;
-    const failoverTarget = yield* resolveRateLimitFailoverTarget(desiredInstanceId, desiredInfo);
+    // Rate-limit failover (fork): the turn may be rerouted to a configured
+    // sibling when the picked instance is out of usage. `bound` is where the
+    // turn actually runs; `restartComparisonSelection` is what the restart and
+    // continuation guards below compare against.
     const previousSelectionState = threadModelSelections.get(threadId);
-    let shouldRecordSelectionState = requestedModelSelection !== undefined;
-    if (failoverTarget !== undefined) {
-      shouldRecordSelectionState = true;
-      const rerouteFromInstanceId = desiredInstanceId;
-      desiredModelSelection = {
-        ...desiredModelSelection,
-        instanceId: failoverTarget.info.instanceId,
-      };
-      desiredInstanceId = failoverTarget.info.instanceId;
-      desiredInfo = failoverTarget.info;
-      effectiveRequestedModelSelection = desiredModelSelection;
-      yield* Effect.logInfo("Rerouting turn to rate-limit failover instance.", {
-        threadId,
-        fromInstanceId: rerouteFromInstanceId,
-        toInstanceId: desiredInstanceId,
-        reason: failoverTarget.limitState.reason,
-      });
-      // Record the notice only after the session successfully switches. While
-      // the thread already runs on the failover sibling, repeating it is noise
-      // — except when the user explicitly re-picked the limited instance, where
-      // silently overriding their choice would leave them no feedback at all.
-      const userRequestedLimitedInstance =
-        requestedModelSelection?.instanceId === rerouteFromInstanceId;
-      if (activeSession?.providerInstanceId !== desiredInstanceId || userRequestedLimitedInstance) {
-        pendingFailoverActivity = {
-          threadId,
-          direction: "failover",
-          fromInstanceId: rerouteFromInstanceId,
-          toInstanceId: desiredInstanceId,
-          toDisplayName: failoverTarget.info.displayName,
-          reason: failoverTarget.limitState.reason,
-          until: failoverTarget.limitState.until,
-          createdAt,
-        };
-      }
-    } else if (
-      effectiveRequestedModelSelection === undefined &&
-      previousSelectionState !== undefined &&
-      !Equal.equals(previousSelectionState.preferred, previousSelectionState.effective) &&
-      Equal.equals(previousSelectionState.preferred, preferredModelSelection) &&
-      activeSession?.providerInstanceId === previousSelectionState.effective.instanceId
-    ) {
-      // A prior turn was routed away from this preferred selection. Re-resolve
-      // from that preferred selection on every turn even if its failover
-      // setting was cleared or changed after the session moved.
-      effectiveRequestedModelSelection = desiredModelSelection;
-      shouldRecordSelectionState = true;
-    }
-    // Close the loop the failover notice opened: without this the log ends on
-    // "failing over" forever and the reader cannot tell which account later
-    // turns actually ran on. Keyed on the outcome rather than on which branch
-    // above produced it, so an explicitly-supplied selection returns the
-    // thread just as visibly as an omitted one. The routing decision is
-    // already made; the health read only picks accurate wording (the limit
-    // lifting and the failover setting going away both land here).
-    if (
-      failoverTarget === undefined &&
-      previousSelectionState !== undefined &&
-      !Equal.equals(previousSelectionState.preferred, previousSelectionState.effective) &&
-      desiredInstanceId === previousSelectionState.preferred.instanceId &&
-      activeSession?.providerInstanceId === previousSelectionState.effective.instanceId
-    ) {
-      const preferredLimitState =
-        yield* providerInstanceHealth.getRateLimitState(desiredInstanceId);
-      pendingFailoverActivity = {
-        threadId,
-        direction: "return",
-        returnCause: preferredLimitState === undefined ? "limit-lifted" : "failover-unavailable",
-        fromInstanceId: previousSelectionState.effective.instanceId,
-        toInstanceId: desiredInstanceId,
-        toDisplayName: desiredInfo.displayName,
-        reason: undefined,
-        until: null,
-        createdAt,
-      };
-    }
+    const routing = yield* resolveTurnRouting(failoverRoutingDeps, {
+      threadId,
+      createdAt,
+      preferred: preferredModelSelection,
+      requested: requestedModelSelection,
+      preferredInfo,
+      previousSelectionState,
+      activeInstanceId: activeSession?.providerInstanceId,
+    });
+    const desiredModelSelection = routing.bound;
+    const desiredInstanceId = desiredModelSelection.instanceId;
+    const desiredInfo = routing.boundInfo;
+    const restartComparisonSelection = routing.restartComparisonSelection;
     const recordSelectionState = () => {
-      if (!shouldRecordSelectionState) return;
-      threadModelSelections.set(threadId, {
-        preferred: preferredModelSelection,
-        effective: desiredModelSelection,
-      });
+      if (routing.selectionState === undefined) return;
+      threadModelSelections.set(threadId, routing.selectionState);
     };
+    // Announce a routing move only once the session actually settles on the
+    // instance the notice names; a failed switch must not claim it happened.
     const appendPendingFailoverActivity = (session: ProviderSession) => {
-      const activity = pendingFailoverActivity;
-      if (activity === undefined || session.providerInstanceId !== activity.toInstanceId) {
+      const notice = routing.notice;
+      if (notice === undefined || session.providerInstanceId !== notice.toInstanceId) {
         return Effect.void;
       }
-      return appendFailoverActivity(activity).pipe(
+      return appendFailoverNotice(notice).pipe(
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.failCause(cause);
           }
           return Effect.logWarning("Failed to append rate-limit failover activity.", {
             threadId,
-            fromInstanceId: activity.fromInstanceId,
-            toInstanceId: activity.toInstanceId,
+            fromInstanceId: notice.fromInstanceId,
+            toInstanceId: notice.toInstanceId,
             cause: Cause.pretty(cause),
           });
         }),
@@ -745,13 +566,13 @@ const make = Effect.gen(function* () {
                 model: activeSession.model,
               }
             : thread.modelSelection,
-        requestedModelSelection: effectiveRequestedModelSelection,
+        requestedModelSelection: restartComparisonSelection,
       });
     }
     if (
       thread.session !== null &&
-      effectiveRequestedModelSelection !== undefined &&
-      effectiveRequestedModelSelection.instanceId !== currentInstanceId
+      restartComparisonSelection !== undefined &&
+      restartComparisonSelection.instanceId !== currentInstanceId
     ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
@@ -828,17 +649,17 @@ const make = Effect.gen(function* () {
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
-        effectiveRequestedModelSelection !== undefined &&
-        effectiveRequestedModelSelection.model !== activeSession?.model;
+        restartComparisonSelection !== undefined &&
+        restartComparisonSelection.model !== activeSession?.model;
       const instanceChanged =
-        effectiveRequestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== effectiveRequestedModelSelection.instanceId;
+        restartComparisonSelection !== undefined &&
+        activeSession?.providerInstanceId !== restartComparisonSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = previousSelectionState?.effective;
       const shouldRestartForModelSelectionChange =
         preferredProvider === "claudeAgent" &&
-        effectiveRequestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, effectiveRequestedModelSelection);
+        restartComparisonSelection !== undefined &&
+        !Equal.equals(previousModelSelection, restartComparisonSelection);
 
       if (
         !runtimeModeChanged &&
