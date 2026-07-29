@@ -29,15 +29,11 @@ Self-cleaning rules (apply during every sync's ledger update):
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
-| Path                                                           | Question                                                                                                                 | Untouched streak |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `apps/mobile/src/features/home/HomeScreen.tsx`                 | Do upstream v2 pending-row changes retain the fork's model predicate and shared provider-driver resolution?              | 1                |
-| `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` | Does the fork's model-filter wiring still supply every upstream `serverConfigs` consumer and pending-task filter?        | 1                |
-| `apps/web/src/components/SidebarStageBackdrop.tsx`             | Do the upstream appearance gate and fork packaged-build gate remain separate options with Nightly still eligible?        | 1                |
-| `apps/server/src/ws.ts`                                        | Does thread-detail catch-up still pass aggregate filters to `readEvents` without restoring the dead replay RPC?          | 0                |
-| `apps/server/src/auth/RpcAuthorization.ts`                     | Does the exhaustive typed map still include the fork's provider-skill and session-import RPC scopes?                     | 0                |
-| `apps/server/src/provider/makeManagedServerProvider.ts`        | Does the fork's Hermes driver still supply new runtime dependencies and inherit shared refresh scheduling?               | 0                |
-| `.agents/skills/test-t3-mobile/SKILL.md`                       | Does an upstream skill revision duplicate or conflict with the fork's identity-resolution and troubleshooting additions? | 1                |
+| Path                                                    | Question                                                                                                        | Untouched streak |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `apps/server/src/ws.ts`                                 | Does thread-detail catch-up still pass aggregate filters to `readEvents` without restoring the dead replay RPC? | 1                |
+| `apps/server/src/auth/RpcAuthorization.ts`              | Does the exhaustive typed map still include the fork's provider-skill and session-import RPC scopes?            | 1                |
+| `apps/server/src/provider/makeManagedServerProvider.ts` | Does the fork's Hermes driver still supply new runtime dependencies and inherit shared refresh scheduling?      | 1                |
 
 ## Full audit
 
