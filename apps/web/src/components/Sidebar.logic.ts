@@ -44,6 +44,58 @@ type LogicalSidebarProject = SidebarProject & {
   }[];
 };
 
+export type SidebarProjectScope = ReadonlySet<string> | null;
+
+export function toggleSidebarProjectScope(
+  scope: SidebarProjectScope,
+  projectKey: string,
+): SidebarProjectScope {
+  if (scope === null) {
+    return new Set([projectKey]);
+  }
+
+  const next = new Set(scope);
+  if (next.has(projectKey)) {
+    next.delete(projectKey);
+  } else {
+    next.add(projectKey);
+  }
+  return next.size === 0 ? null : next;
+}
+
+export function pruneSidebarProjectScope(
+  scope: SidebarProjectScope,
+  availableProjectKeys: ReadonlySet<string>,
+): SidebarProjectScope {
+  if (scope === null) return null;
+
+  const next = new Set([...scope].filter((projectKey) => availableProjectKeys.has(projectKey)));
+  if (next.size === 0) return null;
+  if (next.size === scope.size) return scope;
+  return next;
+}
+
+export function sidebarProjectScopeSignature(scope: SidebarProjectScope): string {
+  return scope === null ? "all" : `projects:${JSON.stringify([...scope].toSorted())}`;
+}
+
+export function resolveSidebarProjectScopePhysicalKeys(
+  projects: readonly Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs">[],
+  scope: SidebarProjectScope,
+): ReadonlySet<string> | null {
+  if (scope === null) return null;
+
+  return new Set(
+    projects.flatMap((project) =>
+      scope.has(project.projectKey)
+        ? project.memberProjectRefs.map(
+            (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+          )
+        : [],
+    ),
+  );
+}
+
 export type ThreadTraversalDirection = "previous" | "next";
 
 export function canForkConversation(
