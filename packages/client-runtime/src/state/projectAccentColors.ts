@@ -73,12 +73,14 @@ export function toProjectAccentMembers(
   });
 }
 
+// .sort() on copies, not .toSorted(): this module is bundled into the mobile
+// app, and Hermes doesn't ship the ES2023 change-by-copy array methods.
 function orderEnvironmentIds(environmentIds: Iterable<EnvironmentId>): EnvironmentId[] {
-  return [...new Set(environmentIds)].toSorted((left, right) => left.localeCompare(right));
+  return [...new Set(environmentIds)].sort((left, right) => left.localeCompare(right));
 }
 
 function orderMembers(members: ReadonlyArray<ProjectAccentMember>): ProjectAccentMember[] {
-  return [...members].toSorted(
+  return [...members].sort(
     (left, right) =>
       left.environmentId.localeCompare(right.environmentId) ||
       left.accentKey.localeCompare(right.accentKey),
@@ -106,7 +108,7 @@ export function resolveProjectAccentColor(
     if (color !== undefined) return color;
   }
 
-  const accentKeys = [...new Set(input.members.map((member) => member.accentKey))].toSorted(
+  const accentKeys = [...new Set(input.members.map((member) => member.accentKey))].sort(
     (left, right) => left.localeCompare(right),
   );
   if (accentKeys.length === 0) return null;
