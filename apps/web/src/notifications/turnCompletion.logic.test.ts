@@ -303,6 +303,19 @@ describe("turn completion minimum duration", () => {
     expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
   });
 
+  it.each([
+    ["equal", "2026-07-24T10:00:01.000Z"],
+    ["reversed", "2026-07-24T09:59:59.000Z"],
+  ])("reports no duration when completion timestamps are %s", (_label, completedAt) => {
+    const before = running("a");
+    const after = makeShell({
+      id: "a",
+      latestTurn: makeTurn({ turnId: "a-turn", state: "completed", completedAt }),
+    });
+
+    expect(collectTurnCompletionCandidates([before], [after])[0]?.durationMs).toBeNull();
+  });
+
   it("announces everything when the threshold is zero or invalid", () => {
     expect(shouldAnnounceTurnCompletion(candidate(10), 0)).toBe(true);
     expect(shouldAnnounceTurnCompletion(candidate(10), Number.NaN)).toBe(true);

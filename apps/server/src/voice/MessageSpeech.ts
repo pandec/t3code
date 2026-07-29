@@ -101,10 +101,15 @@ export function getElevenLabsTtsCharacterLimit(model: string): number {
  */
 export function resolveMessageSpeechVoiceSetting(
   settingValue: string | null | undefined,
-  environmentValue: string,
+  environmentValue: string | null | undefined,
+  defaultValue: string,
 ): string {
-  const trimmed = settingValue?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : environmentValue;
+  const setting = settingValue?.trim();
+  if (setting && setting.length > 0) {
+    return setting;
+  }
+  const environment = environmentValue?.trim();
+  return environment && environment.length > 0 ? environment : defaultValue;
 }
 
 export function isMessageSpeechCacheReusable(input: {
@@ -238,8 +243,16 @@ export const layer = Layer.effect(
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })),
       );
-      const ttsModel = resolveMessageSpeechVoiceSetting(settings.voice.ttsModelId, envTtsModel);
-      const voiceId = resolveMessageSpeechVoiceSetting(settings.voice.ttsVoiceId, envVoiceId);
+      const ttsModel = resolveMessageSpeechVoiceSetting(
+        settings.voice.ttsModelId,
+        envTtsModel,
+        DEFAULT_ELEVENLABS_TTS_MODEL,
+      );
+      const voiceId = resolveMessageSpeechVoiceSetting(
+        settings.voice.ttsVoiceId,
+        envVoiceId,
+        DEFAULT_ELEVENLABS_TTS_VOICE_ID,
+      );
 
       const sourceText = message.text.trim();
       const ttsCharacterLimit = getElevenLabsTtsCharacterLimit(ttsModel);

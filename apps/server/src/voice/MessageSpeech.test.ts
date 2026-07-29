@@ -113,19 +113,28 @@ describe("ElevenLabs TTS character limits", () => {
 
 describe("TTS model and voice resolution", () => {
   it("prefers the server setting, then the environment, then the default", () => {
-    expect(resolveMessageSpeechVoiceSetting("eleven_v3", "eleven_turbo_v2")).toBe("eleven_v3");
-    expect(resolveMessageSpeechVoiceSetting("", "eleven_turbo_v2")).toBe("eleven_turbo_v2");
-    expect(resolveMessageSpeechVoiceSetting(undefined, DEFAULT_ELEVENLABS_TTS_MODEL)).toBe(
+    expect(resolveMessageSpeechVoiceSetting("eleven_v3", "eleven_turbo_v2", "fallback-model")).toBe(
+      "eleven_v3",
+    );
+    expect(resolveMessageSpeechVoiceSetting("", "eleven_turbo_v2", "fallback-model")).toBe(
+      "eleven_turbo_v2",
+    );
+    expect(resolveMessageSpeechVoiceSetting(undefined, "", DEFAULT_ELEVENLABS_TTS_MODEL)).toBe(
       DEFAULT_ELEVENLABS_TTS_MODEL,
     );
-    expect(resolveMessageSpeechVoiceSetting(null, DEFAULT_ELEVENLABS_TTS_VOICE_ID)).toBe(
+    expect(resolveMessageSpeechVoiceSetting(null, "   ", DEFAULT_ELEVENLABS_TTS_VOICE_ID)).toBe(
       DEFAULT_ELEVENLABS_TTS_VOICE_ID,
     );
   });
 
-  it("treats a whitespace-only setting as unset and trims the rest", () => {
-    expect(resolveMessageSpeechVoiceSetting("   ", "env-voice")).toBe("env-voice");
-    expect(resolveMessageSpeechVoiceSetting("  voice-a  ", "env-voice")).toBe("voice-a");
+  it("treats whitespace-only values as unset and trims the rest", () => {
+    expect(resolveMessageSpeechVoiceSetting("   ", "env-voice", "default-voice")).toBe("env-voice");
+    expect(resolveMessageSpeechVoiceSetting("  voice-a  ", "env-voice", "default-voice")).toBe(
+      "voice-a",
+    );
+    expect(resolveMessageSpeechVoiceSetting("", "  env-voice  ", "default-voice")).toBe(
+      "env-voice",
+    );
   });
 });
 

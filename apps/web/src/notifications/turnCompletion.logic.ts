@@ -74,7 +74,8 @@ function completedTurnDurationMs(shell: EnvironmentThreadShell): number | null {
   if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)) {
     return null;
   }
-  return Math.max(0, completedAtMs - startedAtMs);
+  const durationMs = completedAtMs - startedAtMs;
+  return durationMs > 0 ? durationMs : null;
 }
 
 /**

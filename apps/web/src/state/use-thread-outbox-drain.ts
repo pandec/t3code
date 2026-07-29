@@ -24,7 +24,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
-import { useSteerGraceWindowMs } from "../hooks/useSettings";
+import { useClientSettingsHydrated, useSteerGraceWindowMs } from "../hooks/useSettings";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
 import { environmentShell } from "./shell";
@@ -116,6 +116,7 @@ export function useThreadOutboxDrain(): void {
   // Read live: a changed grace window applies to steers that are still waiting,
   // and to every subsequent send, without a reload.
   const steerGraceWindowMs = useSteerGraceWindowMs();
+  const clientSettingsHydrated = useClientSettingsHydrated();
   const shellStatuses = useAtomValue(threadOutboxShellStatusesAtom);
   const environmentConnectivity = useAtomValue(threadOutboxEnvironmentConnectivityAtom);
   const threads = useThreadShells();
@@ -141,6 +142,9 @@ export function useThreadOutboxDrain(): void {
   // Nothing else re-renders when a steer's grace window runs out, so wake the
   // drain as the soonest one comes due.
   useEffect(() => {
+    if (!clientSettingsHydrated) {
+      return;
+    }
     const now = Date.now();
     const soonestGraceMs = soonestSteerGraceRemainingMs(
       flattenQueuedThreadMessages(queuedMessagesByThreadKey),
@@ -154,7 +158,7 @@ export function useThreadOutboxDrain(): void {
       setRetryTick((current) => current + 1);
     }, soonestGraceMs);
     return () => clearTimeout(graceTimer);
-  }, [queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
+  }, [clientSettingsHydrated, queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
 
   const delivery = useMemo(
     () =>
@@ -223,7 +227,9 @@ export function useThreadOutboxDrain(): void {
   ]);
 
   useEffect(() => {
-    if (dispatchingQueuedMessage !== null) {
+    // A restored steer must not dispatch against the schema default before a
+    // longer persisted grace window finishes hydrating.
+    if (!clientSettingsHydrated || dispatchingQueuedMessage !== null) {
       return;
     }
 
@@ -330,6 +336,7 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     delivery,
+    clientSettingsHydrated,
     dispatchingQueuedMessage,
     editingQueuedMessageIds,
     environmentConnectivity,

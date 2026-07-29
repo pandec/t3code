@@ -465,6 +465,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
         ? ["Thread provider icon"]
         : []),
+      ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
+        ? ["Compact thread cards"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -570,6 +573,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
+      settings.sidebarV2CompactCards,
       settings.timestampFormat,
       settings.wordWrap,
       theme,
@@ -599,6 +603,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectAccentColors: {},
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
+      sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,

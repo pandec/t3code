@@ -298,9 +298,13 @@ function NotificationsExtrasSection() {
             <SettingResetButton
               label="warning threshold"
               onClick={() =>
-                updateSettings({
-                  providerUsageWarningPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
-                })
+                updateSettings(
+                  resolveProviderUsageThresholdCommit({
+                    field: "warning",
+                    value: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
+                    current: thresholds,
+                  }),
+                )
               }
             />
           ) : null
