@@ -569,6 +569,18 @@ const make = Effect.gen(function* () {
     // *is* the requested selection — restart detection and continuation
     // guards below must compare the instance the turn will actually use.
     let effectiveRequestedModelSelection = requestedModelSelection;
+    let pendingFailoverActivity:
+      | {
+          readonly threadId: ThreadId;
+          readonly fromInstanceId: ProviderInstanceId;
+          readonly toInstanceId: ProviderInstanceId;
+          readonly toDisplayName: string | undefined;
+          readonly reason: string;
+          readonly until: number | null;
+          readonly createdAt: string;
+        }
+      | undefined;
+    const configuredFailoverInstanceId = desiredInfo.failoverInstanceId;
     const failoverTarget = yield* resolveRateLimitFailoverTarget(desiredInstanceId, desiredInfo);
     if (failoverTarget !== undefined) {
       const rerouteFromInstanceId = desiredInstanceId;
@@ -585,10 +597,10 @@ const make = Effect.gen(function* () {
         toInstanceId: desiredInstanceId,
         reason: failoverTarget.limitState.reason,
       });
-      // Announce only actual switches: while the thread already runs on the
-      // failover sibling, repeating the notice every turn is noise.
+      // Record the notice only after the session successfully switches. While
+      // the thread already runs on the failover sibling, repeating it is noise.
       if (activeSession?.providerInstanceId !== desiredInstanceId) {
-        yield* appendFailoverActivity({
+        pendingFailoverActivity = {
           threadId,
           fromInstanceId: rerouteFromInstanceId,
           toInstanceId: desiredInstanceId,
@@ -596,9 +608,37 @@ const make = Effect.gen(function* () {
           reason: failoverTarget.limitState.reason,
           until: failoverTarget.limitState.until,
           createdAt,
-        });
+        };
       }
+    } else if (
+      effectiveRequestedModelSelection === undefined &&
+      configuredFailoverInstanceId !== undefined &&
+      activeSession?.providerInstanceId === configuredFailoverInstanceId
+    ) {
+      // A prior turn was routed to the configured sibling. Once the preferred
+      // instance is routable again, an omitted unchanged selection must still
+      // restart the session back on the preferred instance.
+      effectiveRequestedModelSelection = desiredModelSelection;
     }
+    const appendPendingFailoverActivity = (session: ProviderSession) => {
+      const activity = pendingFailoverActivity;
+      if (activity === undefined || session.providerInstanceId !== activity.toInstanceId) {
+        return Effect.void;
+      }
+      return appendFailoverActivity(activity).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(cause);
+          }
+          return Effect.logWarning("Failed to append rate-limit failover activity.", {
+            threadId,
+            fromInstanceId: activity.fromInstanceId,
+            toInstanceId: activity.toInstanceId,
+            cause: Cause.pretty(cause),
+          });
+        }),
+      );
+    };
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
     if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
       yield* setThreadSession({
@@ -769,6 +809,7 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
+      yield* appendPendingFailoverActivity(restartedSession);
       return {
         sessionThreadId: restartedSession.threadId,
         effectiveModelSelection: desiredModelSelection,
@@ -777,6 +818,7 @@ const make = Effect.gen(function* () {
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    yield* appendPendingFailoverActivity(startedSession);
     return {
       sessionThreadId: startedSession.threadId,
       effectiveModelSelection: desiredModelSelection,
@@ -805,11 +847,11 @@ const make = Effect.gen(function* () {
     // Cache the selection the session actually uses: under rate-limit
     // failover it may name a different instance than the client requested,
     // and caching the original would flag a selection change on every turn.
+    if (input.modelSelection !== undefined || threadModelSelections.has(input.threadId)) {
+      threadModelSelections.set(input.threadId, ensuredSession.effectiveModelSelection);
+    }
     const effectiveInputModelSelection =
       input.modelSelection !== undefined ? ensuredSession.effectiveModelSelection : undefined;
-    if (effectiveInputModelSelection !== undefined) {
-      threadModelSelections.set(input.threadId, effectiveInputModelSelection);
-    }
     const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService

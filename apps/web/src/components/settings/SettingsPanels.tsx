@@ -112,6 +112,7 @@ import {
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
   readLastEnabledProjectGroupingMode,
+  removeProviderInstanceAndInboundFailovers,
   rememberEnabledProjectGroupingMode,
 } from "./SettingsPanels.logic";
 import {
@@ -1634,7 +1635,7 @@ export function ProviderSettingsPanel() {
 
   const deleteProviderInstance = (id: ProviderInstanceId) => {
     updateSettings({
-      providerInstances: withoutProviderInstanceKey(settings.providerInstances, id),
+      providerInstances: removeProviderInstanceAndInboundFailovers(settings.providerInstances, id),
       providerModelPreferences: withoutProviderInstanceKey(settings.providerModelPreferences, id),
       favorites: withoutProviderInstanceFavorites(settings.favorites ?? [], id),
     });

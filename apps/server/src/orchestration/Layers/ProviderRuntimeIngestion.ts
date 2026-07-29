@@ -1314,35 +1314,57 @@ const make = Effect.gen(function* () {
     },
   );
 
-  // Health reporting is keyed by provider instance, not thread, so it runs
-  // before the thread-existence bail: a rate limit observed on any session
-  // still applies to every other thread routed at that instance.
-  const reportInstanceHealth = Effect.fn("reportInstanceHealth")(function* (
+  const reportHealthSafely = (event: ProviderRuntimeEvent, report: Effect.Effect<void>) =>
+    report.pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning("provider runtime ingestion failed to report instance health", {
+          eventId: event.eventId,
+          eventType: event.type,
+          providerInstanceId: event.providerInstanceId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
+  // Account-level reports are keyed by provider instance, not thread, so they
+  // run before the thread-existence bail. The auxiliary health observer is
+  // best-effort and must never suppress ingestion of the runtime event.
+  const reportRateLimitHealth = Effect.fn("reportRateLimitHealth")(function* (
     event: ProviderRuntimeEvent,
   ) {
     const instanceId = event.providerInstanceId;
+    if (instanceId === undefined || event.type !== "account.rate-limits.updated") return;
+    yield* reportHealthSafely(
+      event,
+      providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits),
+    );
+  });
+
+  const reportTurnOutcomeHealth = Effect.fn("reportTurnOutcomeHealth")(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+  ) {
+    const instanceId = event.providerInstanceId;
     if (instanceId === undefined) return;
-    if (event.type === "account.rate-limits.updated") {
-      yield* providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits);
-      return;
-    }
-    if (event.type === "turn.completed") {
-      const state = normalizeRuntimeTurnState(event.payload.state);
-      if (state === "completed") {
-        yield* providerInstanceHealth.reportTurnOutcome(instanceId, "success");
-      } else if (state === "failed") {
-        yield* providerInstanceHealth.reportTurnOutcome(
-          instanceId,
-          "failed",
-          event.payload.errorMessage,
-        );
-      }
+    const state = normalizeRuntimeTurnState(event.payload.state);
+    if (state === "completed") {
+      yield* reportHealthSafely(
+        event,
+        providerInstanceHealth.reportTurnOutcome(instanceId, "success"),
+      );
+    } else if (state === "failed") {
+      yield* reportHealthSafely(
+        event,
+        providerInstanceHealth.reportTurnOutcome(instanceId, "failed", event.payload.errorMessage),
+      );
     }
   });
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      yield* reportInstanceHealth(event);
+      yield* reportRateLimitHealth(event);
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
 
@@ -1411,6 +1433,9 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
+      if (event.type === "turn.completed" && shouldApplyThreadLifecycle) {
+        yield* reportTurnOutcomeHealth(event);
+      }
 
       if (
         event.type === "session.started" ||

@@ -11,6 +11,7 @@ import {
   formatDiagnosticsDescription,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
+  removeProviderInstanceAndInboundFailovers,
 } from "./SettingsPanels.logic";
 
 describe("archivedThreadMatchesSearch", () => {
@@ -142,5 +143,47 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+});
+
+describe("removeProviderInstanceAndInboundFailovers", () => {
+  it("removes the target and clears inbound failovers without touching other fields", () => {
+    const primaryId = ProviderInstanceId.make("claudeAgent");
+    const targetId = ProviderInstanceId.make("claude_work");
+    const unrelatedId = ProviderInstanceId.make("claude_other");
+    const primary = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Primary",
+      enabled: true,
+      failoverInstanceId: targetId,
+      config: { binaryPath: "/opt/claude", customModels: ["opus"] },
+    } satisfies ProviderInstanceConfig;
+    const unrelated = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Other",
+      failoverInstanceId: primaryId,
+      config: { homePath: "/Users/example/.claude-other" },
+    } satisfies ProviderInstanceConfig;
+
+    const next = removeProviderInstanceAndInboundFailovers(
+      {
+        [primaryId]: primary,
+        [targetId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          displayName: "Work",
+        },
+        [unrelatedId]: unrelated,
+      },
+      targetId,
+    );
+
+    expect(next[targetId]).toBeUndefined();
+    expect(next[primaryId]).toEqual({
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Primary",
+      enabled: true,
+      config: { binaryPath: "/opt/claude", customModels: ["opus"] },
+    });
+    expect(next[unrelatedId]).toBe(unrelated);
   });
 });

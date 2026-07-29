@@ -152,3 +152,23 @@ export function buildProviderInstanceUpdatePatch(input: {
       : {}),
   };
 }
+
+export function removeProviderInstanceAndInboundFailovers(
+  providerInstances: Readonly<Record<ProviderInstanceId, ProviderInstanceConfig>> | undefined,
+  deletedInstanceId: ProviderInstanceId,
+): Record<ProviderInstanceId, ProviderInstanceConfig> {
+  const next = {} as Record<ProviderInstanceId, ProviderInstanceConfig>;
+  for (const [rawInstanceId, instance] of Object.entries(providerInstances ?? {})) {
+    const instanceId = rawInstanceId as ProviderInstanceId;
+    if (instanceId === deletedInstanceId) {
+      continue;
+    }
+    if (instance.failoverInstanceId === deletedInstanceId) {
+      const { failoverInstanceId: _omit, ...rest } = instance;
+      next[instanceId] = rest as ProviderInstanceConfig;
+    } else {
+      next[instanceId] = instance;
+    }
+  }
+  return next;
+}

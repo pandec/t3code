@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { ProviderInstanceHealthLive } from "../../provider/Layers/ProviderInstanceHealthLive.ts";
-import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
+import {
+  ProviderInstanceHealth,
+  type ProviderInstanceHealthShape,
+} from "../../provider/Services/ProviderInstanceHealth.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -229,7 +232,10 @@ describe("ProviderRuntimeIngestion", () => {
   // clock without reading Date.now(), which the effect lint bans.
   const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    providerInstanceHealth?: ProviderInstanceHealthShape;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -252,7 +258,11 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
-      Layer.provideMerge(ProviderInstanceHealthLive),
+      Layer.provideMerge(
+        options?.providerInstanceHealth === undefined
+          ? ProviderInstanceHealthLive
+          : Layer.succeed(ProviderInstanceHealth, options.providerInstanceHealth),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -3050,6 +3060,111 @@ describe("ProviderRuntimeIngestion", () => {
       payload: { state: "failed", errorMessage: "API error 429: rate limit reached" },
     });
     await harness.drain();
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+  });
+
+  it("keeps health unchanged for a stale conflicting turn completion", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const limitedInstanceId = ProviderInstanceId.make("codex-work");
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-stale-completion-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-active-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-active"),
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-stale-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-stale"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
+  });
+
+  it("isolates health-reporting defects from runtime event ingestion", async () => {
+    const harness = await createHarness({
+      providerInstanceHealth: {
+        reportRateLimitPayload: () => Effect.die(new Error("simulated health reporting defect")),
+        reportTurnOutcome: () => Effect.void,
+        getRateLimitState: () => Effect.succeed(undefined),
+      },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-health-defect-rate-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex-work"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    ).toBe(true);
+  });
+
+  it("learns account rate limits even when the source thread is absent", async () => {
+    const harness = await createHarness();
+    const limitedInstanceId = ProviderInstanceId.make("claude-work");
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-missing-thread-rate-limit"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: limitedInstanceId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("missing-thread"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", resetsAt: FAR_FUTURE_RESETS_AT_SECONDS },
+        },
+      },
+    });
+    await harness.drain();
+
     expect(await harness.getRateLimitState(limitedInstanceId)).toBeDefined();
   });
 

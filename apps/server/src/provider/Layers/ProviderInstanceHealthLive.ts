@@ -25,7 +25,7 @@ export const UNKNOWN_RESET_LIMIT_TTL_MS = 15 * 60 * 1_000;
  * failures that merely mention limits.
  */
 const RATE_LIMIT_ERROR_PATTERN =
-  /rate.?limit|usage limit|limit reached|out of (?:usage|quota|credits)|\b429\b/i;
+  /rate.?limit|usage limit|(?:quota|credits?) (?:limit )?reached|out of (?:usage|quota|credits)|\b429\b/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -38,8 +38,13 @@ function normalizeResetsAt(value: unknown): number | null {
 }
 
 type RateLimitVerdict =
-  | { readonly kind: "limited"; readonly until: number | null; readonly reason: string }
-  | { readonly kind: "clear" }
+  | {
+      readonly kind: "limited";
+      readonly until: number | null;
+      readonly reason: string;
+      readonly windowType?: string;
+    }
+  | { readonly kind: "clear"; readonly windowType?: string }
   | { readonly kind: "unknown" };
 
 /**
@@ -54,17 +59,18 @@ export function classifyRateLimitPayload(payload: unknown): RateLimitVerdict {
   const info = asRecord(record.rate_limit_info);
   if (!info) return { kind: "unknown" };
   const status = info.status;
+  const windowType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
   if (status === "rejected") {
     const until = normalizeResetsAt(info.resetsAt);
-    const windowType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
     return {
       kind: "limited",
       until,
       reason: windowType ? `usage limit reached (${windowType})` : "usage limit reached",
+      ...(windowType ? { windowType } : {}),
     };
   }
   if (status === "allowed" || status === "allowed_warning") {
-    return { kind: "clear" };
+    return { kind: "clear", ...(windowType ? { windowType } : {}) };
   }
   return { kind: "unknown" };
 }
@@ -75,18 +81,44 @@ export function isRateLimitErrorMessage(errorMessage: string | undefined): boole
 }
 
 const makeProviderInstanceHealth = Effect.gen(function* () {
-  const states = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstanceRateLimitState>>(
-    new Map(),
-  );
+  const states = yield* Ref.make<
+    ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, ProviderInstanceRateLimitState>>
+  >(new Map());
 
-  const setState = (instanceId: ProviderInstanceId, state: ProviderInstanceRateLimitState) =>
-    Ref.update(states, (map) => new Map(map).set(instanceId, state));
+  const windowStateKey = (windowType: string | undefined) =>
+    `provider-window:${windowType ?? "unknown"}`;
 
-  const clearState = (instanceId: ProviderInstanceId) =>
+  const setState = (
+    instanceId: ProviderInstanceId,
+    key: string,
+    state: ProviderInstanceRateLimitState,
+  ) =>
+    Ref.update(states, (map) => {
+      const instanceStates = new Map(map.get(instanceId) ?? []);
+      instanceStates.set(key, state);
+      return new Map(map).set(instanceId, instanceStates);
+    });
+
+  const clearAllStates = (instanceId: ProviderInstanceId) =>
     Ref.update(states, (map) => {
       if (!map.has(instanceId)) return map;
       const next = new Map(map);
       next.delete(instanceId);
+      return next;
+    });
+
+  const clearState = (instanceId: ProviderInstanceId, key: string) =>
+    Ref.update(states, (map) => {
+      const current = map.get(instanceId);
+      if (!current?.has(key)) return map;
+      const instanceStates = new Map(current);
+      instanceStates.delete(key);
+      const next = new Map(map);
+      if (instanceStates.size === 0) {
+        next.delete(instanceId);
+      } else {
+        next.set(instanceId, instanceStates);
+      }
       return next;
     });
 
@@ -96,7 +128,7 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     const verdict = classifyRateLimitPayload(payload);
     if (verdict.kind === "limited") {
       const now = yield* Clock.currentTimeMillis;
-      yield* setState(instanceId, {
+      yield* setState(instanceId, windowStateKey(verdict.windowType), {
         until: verdict.until,
         reason: verdict.reason,
         reportedAt: now,
@@ -109,7 +141,11 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
       return;
     }
     if (verdict.kind === "clear") {
-      yield* clearState(instanceId);
+      if (verdict.windowType === undefined) {
+        yield* clearAllStates(instanceId);
+      } else {
+        yield* clearState(instanceId, windowStateKey(verdict.windowType));
+      }
     }
   });
 
@@ -117,23 +153,34 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     "ProviderInstanceHealth.reportTurnOutcome",
   )(function* (instanceId, outcome, errorMessage) {
     if (outcome === "success") {
-      yield* clearState(instanceId);
+      yield* clearAllStates(instanceId);
       return;
     }
     if (!isRateLimitErrorMessage(errorMessage)) {
       return;
     }
     const now = yield* Clock.currentTimeMillis;
-    const existing = (yield* Ref.get(states)).get(instanceId);
-    yield* setState(instanceId, {
-      // A previously reported reset time is better information than a
-      // failure message without one; keep it when it is still ahead.
-      until:
-        existing?.until !== undefined && existing.until !== null && existing.until > now
-          ? existing.until
-          : null,
-      reason: errorMessage ?? "turn failed with a rate limit error",
-      reportedAt: now,
+    yield* Ref.update(states, (map) => {
+      const current = map.get(instanceId);
+      const activeStates = new Map(
+        [...(current ?? [])].filter(([, state]) => {
+          const expiresAt = state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
+          return now < expiresAt;
+        }),
+      );
+      // A provider-window rejection carries more precise reset information
+      // than the unstructured turn failure, so keep it as the routing signal.
+      if ([...activeStates.keys()].some((key) => key.startsWith("provider-window:"))) {
+        return activeStates.size === current?.size
+          ? map
+          : new Map(map).set(instanceId, activeStates);
+      }
+      activeStates.set("turn-failure", {
+        until: null,
+        reason: errorMessage ?? "turn failed with a rate limit error",
+        reportedAt: now,
+      });
+      return new Map(map).set(instanceId, activeStates);
     });
     yield* Effect.logInfo("Provider instance marked rate-limited by turn failure.", {
       instanceId,
@@ -144,15 +191,27 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
   const getRateLimitState: ProviderInstanceHealthShape["getRateLimitState"] = Effect.fn(
     "ProviderInstanceHealth.getRateLimitState",
   )(function* (instanceId) {
-    const state = (yield* Ref.get(states)).get(instanceId);
-    if (state === undefined) return undefined;
     const now = yield* Clock.currentTimeMillis;
-    const expiresAt = state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
-    if (now >= expiresAt) {
-      yield* clearState(instanceId);
-      return undefined;
-    }
-    return state;
+    return yield* Ref.modify(states, (map) => {
+      const current = map.get(instanceId);
+      if (current === undefined) return [undefined, map];
+      const activeStates = new Map(
+        [...current].filter(([, state]) => {
+          const expiresAt = state.until ?? state.reportedAt + UNKNOWN_RESET_LIMIT_TTL_MS;
+          return now < expiresAt;
+        }),
+      );
+      if (activeStates.size === 0) {
+        const next = new Map(map);
+        next.delete(instanceId);
+        return [undefined, next];
+      }
+      const state = activeStates.values().next().value;
+      return [
+        state,
+        activeStates.size === current.size ? map : new Map(map).set(instanceId, activeStates),
+      ];
+    });
   });
 
   return {

@@ -30,6 +30,7 @@ describe("classifyRateLimitPayload", () => {
       kind: "limited",
       until: RESETS_AT_SECONDS * 1_000,
       reason: "usage limit reached (five_hour)",
+      windowType: "five_hour",
     });
   });
 
@@ -57,6 +58,10 @@ describe("isRateLimitErrorMessage", () => {
     expect(isRateLimitErrorMessage("API error 429: rate_limit_error")).toBe(true);
     expect(isRateLimitErrorMessage(undefined)).toBe(false);
     expect(isRateLimitErrorMessage("Tool execution failed: file not found")).toBe(false);
+    expect(isRateLimitErrorMessage("Tool execution failed: output size limit reached")).toBe(false);
+    expect(isRateLimitErrorMessage("Recursion limit reached while evaluating tool output")).toBe(
+      false,
+    );
   });
 });
 
@@ -74,6 +79,29 @@ describe("ProviderInstanceHealth", () => {
 
       yield* health.reportRateLimitPayload(instanceId, {
         rate_limit_info: { status: "allowed" },
+      });
+      expect(yield* health.getRateLimitState(instanceId)).toBeUndefined();
+    }),
+  );
+
+  it.effect("clears only the matching provider window", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: RESETS_AT_SECONDS,
+        },
+      });
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: { status: "allowed", rateLimitType: "seven_day" },
+      });
+      expect(yield* health.getRateLimitState(instanceId)).toBeDefined();
+
+      yield* health.reportRateLimitPayload(instanceId, {
+        rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
       });
       expect(yield* health.getRateLimitState(instanceId)).toBeUndefined();
     }),
