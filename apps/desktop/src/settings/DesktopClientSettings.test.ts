@@ -21,6 +21,7 @@ const clientSettings: ClientSettings = {
   enableTurnCompletionToasts: true,
   enableTurnCompletionSystemNotifications: true,
   enableRateLimitAlerts: false,
+  environmentIdentificationMode: "artwork",
   favorites: [],
   glassOpacity: 80,
   providerModelPreferences: {},
