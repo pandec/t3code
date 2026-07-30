@@ -503,6 +503,88 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
   return "ready";
 }
 
+function hasPlanReadyPrompt(thread: ThreadStatusInput): boolean {
+  return (
+    !thread.hasPendingUserInput &&
+    thread.interactionMode === "plan" &&
+    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    thread.hasActionableProposedPlan
+  );
+}
+
+export function hasUnseenWake(input: {
+  wokeAt: string | null;
+  lastVisitedAt?: string | undefined;
+}): boolean {
+  if (input.wokeAt === null) return false;
+  const wokeAt = Date.parse(input.wokeAt);
+  if (Number.isNaN(wokeAt)) return false;
+  if (input.lastVisitedAt === undefined) return true;
+
+  const lastVisitedAt = Date.parse(input.lastVisitedAt);
+  return Number.isNaN(lastVisitedAt) || wokeAt > lastVisitedAt;
+}
+
+export function isSidebarV2AttentionThread(
+  thread: ThreadStatusInput & { wokeAt?: string | null | undefined },
+): boolean {
+  return (
+    resolveSidebarV2Status(thread) !== "ready" ||
+    hasPlanReadyPrompt(thread) ||
+    hasUnseenCompletion(thread) ||
+    hasUnseenWake({
+      wokeAt: thread.wokeAt ?? null,
+      ...(thread.lastVisitedAt === undefined ? {} : { lastVisitedAt: thread.lastVisitedAt }),
+    })
+  );
+}
+
+export interface SidebarV2AttentionFilterThread {
+  readonly threadKey: string;
+}
+
+export interface SidebarV2AttentionFilterState {
+  readonly memberThreadKeys: ReadonlySet<string>;
+  readonly knownThreadKeys: ReadonlySet<string>;
+}
+
+export function createSidebarV2AttentionFilter(input: {
+  initialMemberThreadKeys: readonly string[];
+  threads: readonly SidebarV2AttentionFilterThread[];
+}): SidebarV2AttentionFilterState {
+  return {
+    memberThreadKeys: new Set(input.initialMemberThreadKeys),
+    knownThreadKeys: new Set(input.threads.map((thread) => thread.threadKey)),
+  };
+}
+
+export function admitNewSidebarV2AttentionThreads(
+  state: SidebarV2AttentionFilterState,
+  threads: readonly SidebarV2AttentionFilterThread[],
+): SidebarV2AttentionFilterState {
+  let knownThreadKeys: Set<string> | null = null;
+  let memberThreadKeys: Set<string> | null = null;
+
+  for (const thread of threads) {
+    if (state.knownThreadKeys.has(thread.threadKey)) continue;
+
+    knownThreadKeys ??= new Set(state.knownThreadKeys);
+    memberThreadKeys ??= new Set(state.memberThreadKeys);
+    knownThreadKeys.add(thread.threadKey);
+    // Admission is based on first appearance after the captured baseline, not
+    // createdAt: connected environments have independent clocks, so comparing
+    // their timestamps with the browser clock can reject a genuine new thread.
+    memberThreadKeys.add(thread.threadKey);
+  }
+
+  if (knownThreadKeys === null || memberThreadKeys === null) return state;
+  return {
+    ...state,
+    knownThreadKeys,
+    memberThreadKeys,
+  };
+}
+
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 export function parseTimestampMs(isoDate: string): number {
@@ -658,12 +740,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+  if (hasPlanReadyPrompt(thread)) {
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
