@@ -198,6 +198,10 @@ consequences. A change to native dependencies, `patches/`, or a config plugin ch
 fingerprint, so it needs a new binary rather than an update. And the fingerprint differs between
 macOS and Linux, so publish from the same OS that built the binary: `eas update` on macOS for
 `vp run ios:testflight` builds, and the `Mobile EAS Production` workflow for the builds it produced.
+Fork TestFlight builds embed the fingerprint of the clean post-prebuild state (via
+`EXPO_UPDATES_FINGERPRINT_OVERRIDE`) rather than letting the Xcode build phase compute it
+mid-archive, when build-phase mutations under `ios/Pods` have already shifted the hash away from
+what a later `eas update` computes.
 
 iOS build numbers come from two counters that do not talk to each other: `vp run ios:testflight`
 derives one from the clock (minutes since 2026), while EAS builds use the project's remote counter

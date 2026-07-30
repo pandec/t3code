@@ -314,6 +314,54 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
     env: buildEnv,
   });
 
+  // Xcode build phases mutate ios/Pods (prebuilt-core probe markers, regenerated
+  // ExpoModulesProvider files), so the fingerprint expo-updates would embed
+  // mid-archive never matches the one `eas update` computes from a clean
+  // prebuild. Pin the embedded value to the clean post-prebuild state — the same
+  // state every later `eas update` run reproduces — via the override EAS Build
+  // itself uses. Only fork EAS builds have updates enabled, so skip otherwise.
+  let fingerprintEnv: Readonly<Record<string, string>> = {};
+  if (repoEnv.T3CODE_EAS_PROJECT_ID?.trim()) {
+    yield* Effect.log("[ios-testflight] Computing the update fingerprint...");
+    // Strip the build number: it flows into the resolved expo config, which the
+    // fingerprint hashes, so leaving it set would mint a unique runtime version
+    // per build that no later `eas update` run (which has no build number) can
+    // ever reproduce. The native Info.plist copy is already in the
+    // fingerprinter's default ignores.
+    const fingerprintGenerateEnv = { ...buildEnv, T3CODE_IOS_BUILD_NUMBER: undefined };
+    const fingerprintJson = yield* spawner
+      .string(
+        ChildProcess.make(
+          "vp",
+          ["exec", "expo-updates", "fingerprint:generate", "--platform", "ios"],
+          {
+            cwd: mobileDir,
+            env: fingerprintGenerateEnv,
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "inherit",
+          },
+        ),
+      )
+      .pipe(
+        Effect.mapError((cause) => asIosTestFlightError("Fingerprint generation failed", cause)),
+      );
+    const fingerprint: unknown = JSON.parse(fingerprintJson);
+    if (
+      typeof fingerprint !== "object" ||
+      fingerprint === null ||
+      typeof (fingerprint as { hash?: unknown }).hash !== "string"
+    ) {
+      return yield* new IosTestFlightError({
+        message: "expo-updates fingerprint:generate did not return a hash.",
+        cause: fingerprintJson,
+      });
+    }
+    const hash = (fingerprint as { hash: string }).hash;
+    yield* Effect.log(`[ios-testflight] Embedding runtime fingerprint ${hash}.`);
+    fingerprintEnv = { EXPO_UPDATES_FINGERPRINT_OVERRIDE: hash };
+  }
+
   const authenticationArgs = [
     "-allowProvisioningUpdates",
     "-authenticationKeyPath",
@@ -346,7 +394,7 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       // unsigned target if the plugin is reordered or removed.
       `DEVELOPMENT_TEAM=${settings.teamId}`,
     ],
-    { cwd: mobileDir, env: buildEnv },
+    { cwd: mobileDir, env: { ...buildEnv, ...fingerprintEnv } },
   );
 
   yield* Effect.log("[ios-testflight] Exporting the signed .ipa...");
