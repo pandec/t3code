@@ -29,6 +29,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
 import { environmentShell } from "./shell";
 import {
+  confirmThreadOutboxMessageQueued,
   dispatchingQueuedMessageAtom,
   editingQueuedMessageIdsAtom,
   expeditedQueuedMessageIdsAtom,
@@ -38,7 +39,7 @@ import {
   threadOutboxManager,
   useThreadOutboxMessages,
 } from "./threadOutbox";
-import { threadEnvironment } from "./threads";
+import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
 const threadOutboxShellStatusesAtom = Atom.make(
@@ -275,8 +276,27 @@ export function useThreadOutboxDrain(): void {
       const thread = findThread(threads, nextQueuedMessage);
 
       beginDispatchingQueuedMessage(nextQueuedMessage);
-      const dispatch =
-        candidate.action === "remove"
+      const dispatch = confirmThreadOutboxMessageQueued(nextQueuedMessage).then((queued) => {
+        if (!queued) {
+          return true;
+        }
+        if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
+          return true;
+        }
+        const freshThread = findThread(
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+          nextQueuedMessage,
+        );
+        const freshThreadBusy =
+          freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
+        if (
+          candidate.action === "send" &&
+          queuedThreadMessageIntent(nextQueuedMessage) !== "steer" &&
+          freshThreadBusy
+        ) {
+          return true;
+        }
+        return candidate.action === "remove"
           ? removeThreadOutboxMessage(nextQueuedMessage).then(
               () => true,
               (error) => {
@@ -289,9 +309,10 @@ export function useThreadOutboxDrain(): void {
                 return false;
               },
             )
-          : thread !== undefined
-            ? delivery.sendQueuedMessage(nextQueuedMessage, thread)
+          : freshThread !== undefined
+            ? delivery.sendQueuedMessage(nextQueuedMessage, freshThread)
             : Promise.resolve(false);
+      });
       void dispatch
         .then((sent) => {
           if (!flushBatchRef.current.has(threadKey)) {

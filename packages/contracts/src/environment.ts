@@ -63,10 +63,16 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server atomically fills absent project accent keys during legacy
       migration. Absent on servers that only support whole-map replacement. */
   projectAccentColorsFill: Schema.optionalKey(Schema.Boolean),
+  /** Server understands regenerateTitle on thread.meta.update. Absent on
+      older servers, so clients hide the action instead of sending it. */
+  threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
+  /** Server can stream self-update progress before acknowledging the
+      restart. Clients fall back to server.updateServer when absent. */
+  serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
