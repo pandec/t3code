@@ -24,6 +24,20 @@ export interface ProviderInstanceRateLimitState {
   readonly reportedAt: number;
 }
 
+export interface ProviderInstanceUsageSnapshot {
+  readonly instanceId: ProviderInstanceId;
+  readonly payload: unknown;
+  /** Unix ms when the payload was observed. */
+  readonly observedAt: number;
+}
+
+declare const UsageObservationTokenTypeId: unique symbol;
+
+/** Server-local total-order token allocated when a usage observation begins. */
+export type UsageObservationToken = number & {
+  readonly [UsageObservationTokenTypeId]: typeof UsageObservationTokenTypeId;
+};
+
 export interface ProviderInstanceHealthShape {
   /**
    * Ingest a raw `account.rate-limits.updated` payload for an instance.
@@ -35,6 +49,20 @@ export interface ProviderInstanceHealthShape {
     instanceId: ProviderInstanceId,
     payload: unknown,
   ) => Effect.Effect<void>;
+
+  /** Allocate a total-order token immediately before observing provider usage. */
+  readonly beginUsageObservation: () => Effect.Effect<UsageObservationToken>;
+
+  /** Store the latest opaque provider usage payload for one instance. */
+  readonly reportUsageSnapshot: (
+    instanceId: ProviderInstanceId,
+    payload: unknown,
+    /** Unix ms used only for client freshness rendering. */
+    observedAt: number,
+    observationToken: UsageObservationToken,
+  ) => Effect.Effect<void>;
+
+  readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 
   /**
    * Ingest a turn outcome. A successful turn proves the instance healthy

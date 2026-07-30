@@ -78,7 +78,10 @@ import * as ServerConfig from "./config.ts";
 import * as HttpResponseCompression from "./httpCompression/HttpResponseCompression.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { SessionImportService } from "./sessionImport/SessionImportService.ts";
-import { resolveAvailableEditorsForConfig } from "./ws.ts";
+import {
+  filterProviderUsageSnapshotsToEnabledInstances,
+  resolveAvailableEditorsForConfig,
+} from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -89,6 +92,9 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import { ProviderInstanceHealthLive } from "./provider/Layers/ProviderInstanceHealthLive.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -335,6 +341,7 @@ const buildAppUnderTest = (options?: {
   layers?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    providerUsageRefresh?: Partial<ProviderUsageRefresh.ProviderUsageRefresh["Service"]>;
     serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
     vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
@@ -575,6 +582,18 @@ const buildAppUnderTest = (options?: {
             }),
             streamChanges: Stream.empty,
             ...options?.layers?.keybindings,
+          }),
+          ProviderInstanceHealthLive,
+          Layer.mock(ProviderUsageRefresh.ProviderUsageRefresh)({
+            refresh: () => Effect.void,
+            ...options?.layers?.providerUsageRefresh,
+          }),
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            getInstance: () => Effect.succeed(undefined),
+            listInstances: Effect.succeed([]),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.die("unused provider instance registry subscription"),
           }),
         ),
       ),
@@ -1338,6 +1357,28 @@ const getWsServerUrl = (
   });
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  it("filters provider usage snapshots to currently enabled instances", () => {
+    const enabledId = ProviderInstanceId.make("claude-enabled");
+    const disabledId = ProviderInstanceId.make("claude-disabled");
+    const removedId = ProviderInstanceId.make("claude-removed");
+    const snapshot = (instanceId: ProviderInstanceId) => ({
+      instanceId,
+      payload: { source: instanceId },
+      observedAt: 1,
+    });
+
+    assert.deepEqual(
+      filterProviderUsageSnapshotsToEnabledInstances(
+        [snapshot(enabledId), snapshot(disabledId), snapshot(removedId)],
+        [
+          { instanceId: enabledId, enabled: true },
+          { instanceId: disabledId, enabled: false },
+        ],
+      ),
+      [snapshot(enabledId)],
+    );
+  });
+
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -3301,6 +3342,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (rpcError._tag === "EnvironmentAuthorizationError") {
         assert.equal(rpcError.requiredScope, "orchestration:read");
       }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not let an orchestration-read token trigger provider usage probes", () =>
+    Effect.gen(function* () {
+      let refreshCalls = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          providerUsageRefresh: {
+            refresh: () =>
+              Effect.sync(() => {
+                refreshCalls += 1;
+              }),
+          },
+        },
+      });
+
+      const { body: tokenBody } = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+        scope: "orchestration:read",
+      });
+      assert.isDefined(tokenBody.access_token);
+      const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
+        },
+      });
+      const wsTicketBody = (yield* wsTicketResponse.json) as { readonly ticket: string };
+      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+
+      const snapshots = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.providerUsageRead]({})),
+      );
+      const refreshError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) => client[WS_METHODS.providerUsageRefresh]({})),
+        ),
+      );
+
+      assert.deepEqual(snapshots.snapshots, []);
+      assert.equal(refreshError._tag, "EnvironmentAuthorizationError");
+      if (refreshError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(refreshError.requiredScope, "orchestration:operate");
+      }
+      assert.equal(refreshCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

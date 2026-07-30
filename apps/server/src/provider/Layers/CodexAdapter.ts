@@ -1754,6 +1754,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       { concurrency: 1 },
     );
 
+  const readAccountUsage: NonNullable<CodexAdapterShape["readAccountUsage"]> = Effect.fn(
+    "CodexAdapter.readAccountUsage",
+  )(function* () {
+    const session = Array.from(sessions.values()).find((candidate) => !candidate.stopped);
+    if (session === undefined) {
+      return undefined;
+    }
+    return yield* session.runtime.readAccountUsage.pipe(
+      Effect.mapError((cause) =>
+        mapCodexRuntimeError(session.threadId, "account/rateLimits/read", cause),
+      ),
+    );
+  });
+
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
@@ -1883,6 +1897,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
     },
+    readAccountUsage,
     startSession,
     forkSession,
     listSkills,

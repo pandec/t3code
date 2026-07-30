@@ -104,6 +104,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly readAccountUsageImpl = vi.fn(() =>
+    Promise.resolve({
+      rateLimits: {
+        primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+      },
+    }),
+  );
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -141,6 +149,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
   }
+
+  readAccountUsage = Effect.promise(() => this.readAccountUsageImpl());
 
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
     return Effect.promise(() => this.respondToRequestImpl(requestId, decision));
@@ -241,6 +251,15 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("does not spawn an app server just to read account usage", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("forks with an unregistered short-lived Codex runtime", () =>
     Effect.gen(function* () {
       let forkRuntime: FakeCodexRuntime | undefined;
@@ -347,6 +366,26 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("reads account usage through an existing session runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("usage-session"),
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      NodeAssert.deepStrictEqual(yield* adapter.readAccountUsage!(), {
+        rateLimits: {
+          primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        },
+      });
+      NodeAssert.equal(runtime.readAccountUsageImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

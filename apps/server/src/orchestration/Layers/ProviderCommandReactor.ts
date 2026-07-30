@@ -348,6 +348,16 @@ const make = Effect.gen(function* () {
   const failoverRoutingDeps = {
     getRateLimitState: providerInstanceHealth.getRateLimitState,
     getInstanceInfo: providerService.getInstanceInfo,
+    isDisplayNameUnique: (instanceId, displayName) =>
+      providerRegistry.getProviders.pipe(
+        Effect.map(
+          (providers) =>
+            providers.filter(
+              (provider) =>
+                provider.instanceId !== instanceId && provider.displayName === displayName,
+            ).length === 0,
+        ),
+      ),
   } satisfies FailoverRoutingDeps;
 
   /** Append the work-log notice a routing move produced (fork). */
