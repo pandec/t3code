@@ -17,6 +17,7 @@ import type {
   SidebarProjectAccentColor,
   SidebarProjectGroupingMode,
   SidebarThreadProviderIconVisibility,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   AlarmClockIcon,
@@ -1219,6 +1220,27 @@ export default function SidebarV2() {
     reportFailure: false,
   });
   const updateSettings = useUpdateClientSettings();
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
+    threadId: ThreadId;
+  }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2480,6 +2502,7 @@ export default function SidebarV2() {
                   thread.session?.status === "running" && thread.session.activeTurnId != null,
               },
               { id: "copy-path", label: "Copy path", icon: "copy" },
+              { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
@@ -2564,6 +2587,9 @@ export default function SidebarV2() {
             }
             copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
             return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+            return;
           case "copy-branch":
             if (thread.branch) {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
@@ -2609,6 +2635,7 @@ export default function SidebarV2() {
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadIdToClipboard,
       deleteThread,
       forkThread,
       handleMultiSelectContextMenu,
