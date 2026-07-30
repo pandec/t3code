@@ -251,6 +251,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     Effect.fn("CursorTextGeneration.generateThreadTitle")(function* (input) {
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
+        previousTitle: input.previousTitle,
         attachments: input.attachments,
       });
 

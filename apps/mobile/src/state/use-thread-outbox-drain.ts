@@ -19,6 +19,7 @@ import { randomHex } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import {
+  confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
   isThreadOutboxMessageWaitingForPreferences,
   removeThreadOutboxMessage,
@@ -37,7 +38,7 @@ import {
   type QueuedThreadCreation,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import { threadEnvironment } from "./threads";
+import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
@@ -344,16 +345,46 @@ export function useThreadOutboxDrain(): void {
           },
         );
       const thread = findThread(threads, nextQueuedMessage);
-      const dispatch =
-        candidate.action === "remove"
+      // Enqueues publish optimistically before their durable write settles.
+      // Confirm the write landed (and the message wasn't rolled back) before
+      // sending, so a failed write can never chase an already-delivered turn.
+      const dispatch = confirmThreadOutboxMessageQueued(nextQueuedMessage).then((queued) => {
+        if (!queued) {
+          // Rolled back by a failed write; nothing to deliver or retry.
+          return true;
+        }
+        // The guards evaluated before the confirmation await are stale by now:
+        // the thread may have gone busy, or the user may have opened this
+        // message in the editor. Re-read both and defer to the next drain pass
+        // (returning true skips the failure/backoff path) rather than sending
+        // a payload the user is editing or racing an active turn.
+        if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
+          return true;
+        }
+        const freshThread = findThread(
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+          nextQueuedMessage,
+        );
+        const freshThreadBusy =
+          freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
+        if (
+          candidate.action === "send" &&
+          creation === undefined &&
+          queuedThreadMessageIntent(nextQueuedMessage) !== "steer" &&
+          freshThreadBusy
+        ) {
+          return true;
+        }
+        return candidate.action === "remove"
           ? removeQueuedMessage("[thread-outbox] failed to remove message for a missing thread")
           : creation !== undefined
             ? creationProjectCwd !== null
               ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd)
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
-            : thread !== undefined
-              ? delivery.sendQueuedMessage(nextQueuedMessage, thread)
+            : freshThread !== undefined
+              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThread)
               : Promise.resolve(false);
+      });
       void dispatch
         .then((sent) => {
           if (!flushBatchRef.current.has(threadKey)) {

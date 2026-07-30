@@ -7,6 +7,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -24,6 +25,12 @@ const ARTIFACT_DIRECTORY = "local/ios-testflight";
 // stamp. That is monotonic, needs no checked-in counter, and only collides if two
 // uploads start within the same minute.
 const BUILD_NUMBER_EPOCH_MS = Date.UTC(2026, 0, 1);
+const ExpoUpdatesFingerprint = Schema.fromJsonString(
+  Schema.Struct({
+    hash: Schema.String,
+  }),
+);
+const decodeExpoUpdatesFingerprint = Schema.decodeUnknownEffect(ExpoUpdatesFingerprint);
 
 export class IosTestFlightError extends Data.TaggedError("IosTestFlightError")<{
   readonly message: string;
@@ -346,18 +353,15 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       .pipe(
         Effect.mapError((cause) => asIosTestFlightError("Fingerprint generation failed", cause)),
       );
-    const fingerprint: unknown = JSON.parse(fingerprintJson);
-    if (
-      typeof fingerprint !== "object" ||
-      fingerprint === null ||
-      typeof (fingerprint as { hash?: unknown }).hash !== "string"
-    ) {
-      return yield* new IosTestFlightError({
-        message: "expo-updates fingerprint:generate did not return a hash.",
-        cause: fingerprintJson,
-      });
-    }
-    const hash = (fingerprint as { hash: string }).hash;
+    const { hash } = yield* decodeExpoUpdatesFingerprint(fingerprintJson).pipe(
+      Effect.mapError(
+        () =>
+          new IosTestFlightError({
+            message: "expo-updates fingerprint:generate did not return a hash.",
+            cause: fingerprintJson,
+          }),
+      ),
+    );
     yield* Effect.log(`[ios-testflight] Embedding runtime fingerprint ${hash}.`);
     fingerprintEnv = { EXPO_UPDATES_FINGERPRINT_OVERRIDE: hash };
   }

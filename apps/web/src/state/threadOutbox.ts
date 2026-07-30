@@ -40,6 +40,11 @@ export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promis
   return threadOutboxManager.enqueue(message);
 }
 
+/** Waits for pending writes to settle; false if this enqueue was rolled back. */
+export function confirmThreadOutboxMessageQueued(message: QueuedThreadMessage): Promise<boolean> {
+  return threadOutboxManager.confirmQueued(message);
+}
+
 /**
  * Browsers signal a full localStorage as a DOMException, but not consistently:
  * Firefox reports `NS_ERROR_DOM_QUOTA_REACHED`, and older engines set only the

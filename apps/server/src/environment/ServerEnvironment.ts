@@ -148,7 +148,11 @@ export const make = Effect.gen(function* () {
       threadSnooze: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
+      threadTitleRegeneration: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+      ...(serverSelfUpdate === "boot-service" || serverSelfUpdate === "respawn"
+        ? { serverSelfUpdateProgress: true }
+        : {}),
     },
   };
 

@@ -132,7 +132,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: (onWillEnqueueAgentMessage?: () => void) => Promise<MessageId | null>;
+  readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -585,14 +585,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
     try {
-      await onSendMessage(() => {
+      const messageId = await onSendMessage();
+      if (messageId !== null) {
         // Classification happens in the state hook first, so local composer
-        // commands never arm while real sends keep the foreground timing window.
+        // commands never arm. Waiting for the optimistic enqueue keeps native
+        // activity work off the initiating tap frame.
         armAgentAwarenessLiveActivityForLocalWork({
           threadTitle: props.selectedThread.title,
           projectTitle: props.environmentLabel ?? "T3 Code",
         });
-      });
+      }
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);
     }

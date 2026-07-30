@@ -35,7 +35,7 @@ export interface ThreadOutboxManagerOptions {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly storage: ThreadOutboxStorage;
   readonly atomLabel?: string;
-  readonly warn: (message: string, error: unknown) => void;
+  readonly warn?: (message: string, error: unknown) => void;
 }
 
 export type ThreadOutboxManager = ReturnType<typeof createThreadOutboxManager>;
@@ -44,7 +44,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
   >({}).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-outbox:queued-messages"));
-  const warn = options.warn;
+  const warn = options.warn ?? (() => undefined);
   let loadPromise: Promise<void> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
 
@@ -87,11 +87,19 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     return loadPromise;
   };
 
-  const enqueue = (message: QueuedThreadMessage): Promise<void> =>
-    serialize(async () => {
+  // Publish the queued row synchronously so composers can respond on the
+  // initiating frame. The durable write follows through the serialized queue;
+  // if it fails, roll back only this exact enqueue attempt.
+  const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    setMessages([
+      ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+      message,
+    ]);
+    return serialize(async () => {
       try {
         await options.storage.write(message);
       } catch (cause) {
+        setMessages(currentMessages().filter((candidate) => candidate !== message));
         throw new ThreadOutboxManagerError({
           operation: "enqueue",
           environmentId: message.environmentId,
@@ -100,11 +108,13 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
-      setMessages([
-        ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
-        message,
-      ]);
     });
+  };
+
+  // Wait for pending mutations, then confirm that this exact enqueue attempt
+  // survived. Drains use this to avoid delivering a row whose write failed.
+  const confirmQueued = (message: QueuedThreadMessage): Promise<boolean> =>
+    serialize(async () => currentMessages().some((candidate) => candidate === message));
 
   // Rewrites an already-queued message. A no-op when the message has been
   // removed in the meantime (e.g. deleted or delivered), so a trailing editor
@@ -216,6 +226,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     serialize,
     load,
     enqueue,
+    confirmQueued,
     update,
     remove,
     clearEnvironment,

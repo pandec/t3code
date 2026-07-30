@@ -41,6 +41,7 @@ import {
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
+  mergeComposerDraftContent,
   removeComposerDraftAttachment,
   setComposerDraftText,
   updateComposerDraftSettings,
@@ -147,106 +148,105 @@ export function useThreadComposerState() {
     );
   }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const onSendMessage = useCallback(
-    async (onWillEnqueueAgentMessage?: () => void) => {
-      if (!selectedThreadShell) {
+  const onSendMessage = useCallback(async () => {
+    if (!selectedThreadShell) {
+      return null;
+    }
+
+    const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+    if (isQueuedMessageEditTransferring(threadKey)) {
+      Alert.alert(
+        "Queued message is still opening",
+        "Wait for it to finish moving into the composer, then send.",
+      );
+      return null;
+    }
+    const draft = getComposerDraftSnapshot(threadKey);
+    const thread = selectedThreadDetail ?? selectedThreadShell;
+    const text = draft.text.trim();
+    const attachments = draft.attachments;
+    if (text.length === 0 && attachments.length === 0) {
+      return null;
+    }
+
+    // Unlike web, no isServerThread guard is needed: this composer only
+    // renders for an existing server-backed thread (new drafts use
+    // NewTaskDraftScreen, which has no slash commands).
+    const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
+    const statusCommand =
+      attachments.length === 0 && !renameCommand ? parseComposerStatusCommand(text) : null;
+    if (renameCommand || statusCommand) {
+      if (renameCommand && renameCommand.title === null) {
+        Alert.alert("Unable to rename thread", "Usage: /t3-name <title> or /t3-rename <title>");
+        return null;
+      }
+      if (statusCommand && statusCommand.emoji === null) {
+        Alert.alert("Unable to set thread status", "Usage: /t3-status <emoji>");
         return null;
       }
 
-      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
-      if (isQueuedMessageEditTransferring(threadKey)) {
-        Alert.alert(
-          "Queued message is still opening",
-          "Wait for it to finish moving into the composer, then send.",
-        );
-        return null;
-      }
-      const draft = getComposerDraftSnapshot(threadKey);
-      const thread = selectedThreadDetail ?? selectedThreadShell;
-      const text = draft.text.trim();
-      const attachments = draft.attachments;
-      if (text.length === 0 && attachments.length === 0) {
-        return null;
-      }
-
-      // Unlike web, no isServerThread guard is needed: this composer only
-      // renders for an existing server-backed thread (new drafts use
-      // NewTaskDraftScreen, which has no slash commands).
-      const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
-      const statusCommand =
-        attachments.length === 0 && !renameCommand ? parseComposerStatusCommand(text) : null;
-      if (renameCommand || statusCommand) {
-        if (renameCommand && renameCommand.title === null) {
-          Alert.alert("Unable to rename thread", "Usage: /t3-name <title> or /t3-rename <title>");
-          return null;
-        }
-        if (statusCommand && statusCommand.emoji === null) {
-          Alert.alert("Unable to set thread status", "Usage: /t3-status <emoji>");
-          return null;
-        }
-
-        const nextTitle = statusCommand?.emoji
-          ? applyThreadStatusEmoji(selectedThreadShell.title, statusCommand.emoji)
-          : (renameCommand?.title ?? selectedThreadShell.title);
-        if (nextTitle !== selectedThreadShell.title) {
-          const result = await updateThreadMetadata({
-            environmentId: selectedThreadShell.environmentId,
-            input: {
-              threadId: selectedThreadShell.id,
-              title: nextTitle,
-            },
-          });
-          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            const fallbackMessage = statusCommand
-              ? "The thread status could not be updated."
-              : "The thread could not be renamed.";
-            Alert.alert(
-              statusCommand ? "Unable to set thread status" : "Unable to rename thread",
-              error instanceof Error ? error.message : fallbackMessage,
-            );
-          }
-        }
-
-        clearComposerDraftContentIfUnchanged(threadKey, draft);
-        return null;
-      }
-
-      const metadata = makeQueuedMessageMetadata();
-      const messageId = MessageId.make(metadata.messageId);
-      // Shell metadata is authoritative. Detail and shell subscriptions are
-      // independent, so a cached detail can briefly retain an older status.
-      const sessionStatus = selectedThreadShell.session?.status ?? null;
-      const threadIsBusy = sessionStatus === "running" || sessionStatus === "starting";
-      try {
-        onWillEnqueueAgentMessage?.();
-        await enqueueThreadOutboxMessage({
+      const nextTitle = statusCommand?.emoji
+        ? applyThreadStatusEmoji(selectedThreadShell.title, statusCommand.emoji)
+        : (renameCommand?.title ?? selectedThreadShell.title);
+      if (nextTitle !== selectedThreadShell.title) {
+        const result = await updateThreadMetadata({
           environmentId: selectedThreadShell.environmentId,
-          threadId: selectedThreadShell.id,
-          messageId,
-          commandId: CommandId.make(metadata.commandId),
-          text,
-          ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
-          attachments,
-          modelSelection: draft.modelSelection ?? thread.modelSelection,
-          runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-          interactionMode: draft.interactionMode ?? thread.interactionMode,
-          // A running turn is steered into, matching the CLIs and the web
-          // composer; with no turn to steer, the message simply queues.
-          deliveryIntent: threadIsBusy ? "steer" : "queue",
-          createdAt: metadata.createdAt,
+          input: {
+            threadId: selectedThreadShell.id,
+            title: nextTitle,
+          },
         });
-        clearComposerDraftContentIfUnchanged(threadKey, draft);
-        return messageId;
-      } catch (error) {
-        setPendingConnectionError(
-          error instanceof Error ? error.message : "Failed to save the queued message.",
-        );
-        return null;
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          const fallbackMessage = statusCommand
+            ? "The thread status could not be updated."
+            : "The thread could not be renamed.";
+          Alert.alert(
+            statusCommand ? "Unable to set thread status" : "Unable to rename thread",
+            error instanceof Error ? error.message : fallbackMessage,
+          );
+        }
       }
-    },
-    [selectedThreadDetail, selectedThreadShell, updateThreadMetadata],
-  );
+
+      clearComposerDraftContentIfUnchanged(threadKey, draft);
+      return null;
+    }
+
+    const metadata = makeQueuedMessageMetadata();
+    const messageId = MessageId.make(metadata.messageId);
+    // Shell metadata is authoritative. Detail and shell subscriptions are
+    // independent, so a cached detail can briefly retain an older status.
+    const sessionStatus = selectedThreadShell.session?.status ?? null;
+    const threadIsBusy = sessionStatus === "running" || sessionStatus === "starting";
+    // Enqueue publishes synchronously; clear immediately so the tap frame
+    // reflects the queued send while durability settles in the background.
+    const enqueuePromise = enqueueThreadOutboxMessage({
+      environmentId: selectedThreadShell.environmentId,
+      threadId: selectedThreadShell.id,
+      messageId,
+      commandId: CommandId.make(metadata.commandId),
+      text,
+      ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
+      attachments,
+      modelSelection: draft.modelSelection ?? thread.modelSelection,
+      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      deliveryIntent: threadIsBusy ? "steer" : "queue",
+      createdAt: metadata.createdAt,
+    });
+    clearComposerDraftContentIfUnchanged(threadKey, draft);
+    enqueuePromise.catch((error: unknown) => {
+      // Preserve anything typed since this send while restoring content from
+      // the failed write. Attachments use the uncapped append path so newer
+      // attachments cannot evict the restored ones.
+      void mergeComposerDraftContent(threadKey, { text, attachments: [] });
+      appendComposerDraftAttachments(threadKey, attachments);
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to save the queued message.",
+      );
+    });
+    return messageId;
+  }, [selectedThreadDetail, selectedThreadShell, updateThreadMetadata]);
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
