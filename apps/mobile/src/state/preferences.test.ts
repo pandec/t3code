@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { vi } from "vite-plus/test";
 
@@ -25,6 +27,8 @@ vi.mock("../lib/runtime", async () => {
 import type { Preferences } from "../persistence/mobile-preferences";
 import {
   createMobilePreferencesState,
+  loadMobilePreferencesWithFallback,
+  MOBILE_PREFERENCES_LOAD_TIMEOUT_MS,
   MobilePreferencesLoadError,
   MobilePreferencesSaveError,
   MobilePreferencesStore,
@@ -62,6 +66,18 @@ function makePreferencesState(
 }
 
 describe("mobile preferences state", () => {
+  it.effect("falls back to defaults when preference hydration never settles", () =>
+    Effect.gen(function* () {
+      const hydration = yield* loadMobilePreferencesWithFallback(
+        Effect.never as Effect.Effect<Preferences, MobilePreferencesLoadError>,
+      ).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust(MOBILE_PREFERENCES_LOAD_TIMEOUT_MS);
+
+      expect(yield* Fiber.join(hydration)).toEqual({});
+    }),
+  );
+
   it.effect("shares one preference load across consumers", () =>
     Effect.gen(function* () {
       const load = vi.fn(() => Promise.resolve<Preferences>({ baseFontSize: 17 }));

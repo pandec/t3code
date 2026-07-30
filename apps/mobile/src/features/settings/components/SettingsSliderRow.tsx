@@ -138,6 +138,9 @@ export function SettingsSliderRow(props: {
   }));
 
   const handleAccessibilityAction = (event: AccessibilityActionEvent) => {
+    if (disabled) {
+      return;
+    }
     if (event.nativeEvent.actionName === "increment") {
       commit(Math.min(max, value + step));
     } else if (event.nativeEvent.actionName === "decrement") {
@@ -174,12 +177,17 @@ export function SettingsSliderRow(props: {
         <GestureDetector gesture={gesture}>
           <View
             accessible
-            accessibilityActions={[
-              { name: "increment", label: `Increase ${props.label}` },
-              { name: "decrement", label: `Decrease ${props.label}` },
-            ]}
+            accessibilityActions={
+              disabled
+                ? []
+                : [
+                    { name: "increment", label: `Increase ${props.label}` },
+                    { name: "decrement", label: `Decrease ${props.label}` },
+                  ]
+            }
             accessibilityLabel={props.label}
             accessibilityRole="adjustable"
+            accessibilityState={{ disabled }}
             accessibilityValue={{ min, max, now: value, text: props.valueLabel }}
             className="h-11 flex-1 justify-center"
             onAccessibilityAction={handleAccessibilityAction}

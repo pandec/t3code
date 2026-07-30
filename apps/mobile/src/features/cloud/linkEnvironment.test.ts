@@ -96,8 +96,6 @@ function cloudClientLayer() {
         clearAgentAwarenessRegistrationRecord: Effect.void,
         loadRecentThreadShortcuts: Effect.succeed([]),
         saveRecentThreadShortcuts: () => Effect.void,
-        loadProjectAccentColors: Effect.succeed({}),
-        saveProjectAccentColors: () => Effect.void,
       }),
     ),
     ManagedRelay.layer({

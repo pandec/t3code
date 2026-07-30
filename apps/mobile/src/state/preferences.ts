@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
-import { MobilePreferencesStore, type Preferences } from "../persistence/mobile-preferences";
+import {
+  MobilePreferencesStore,
+  type MobilePreferencesLoadError,
+  type Preferences,
+} from "../persistence/mobile-preferences";
 import * as Runtime from "../lib/runtime";
 
 export {
@@ -15,6 +19,32 @@ interface OptimisticPreferences {
   readonly versions: Partial<Record<keyof Preferences, number>>;
 }
 
+export const MOBILE_PREFERENCES_LOAD_TIMEOUT_MS = 5_000;
+
+/**
+ * Preference hydration must fail open: steering waits for the device's saved
+ * grace window, but a storage call that never settles must not block that
+ * thread's outbox for the lifetime of the app.
+ */
+export function loadMobilePreferencesWithFallback(
+  load: Effect.Effect<Preferences, MobilePreferencesLoadError>,
+): Effect.Effect<Preferences> {
+  return load.pipe(
+    Effect.timeoutOrElse({
+      duration: MOBILE_PREFERENCES_LOAD_TIMEOUT_MS,
+      orElse: () =>
+        Effect.logWarning("Timed out loading mobile preferences; using defaults.").pipe(
+          Effect.as<Preferences>({}),
+        ),
+    }),
+    Effect.catch((error) =>
+      Effect.logWarning("Could not load mobile preferences.", error).pipe(
+        Effect.as<Preferences>({}),
+      ),
+    ),
+  );
+}
+
 /**
  * Owns the device preference blob for the lifetime of the app registry.
  * Optimistic patches are kept separately so writes made while persistence is
@@ -24,12 +54,7 @@ export function createMobilePreferencesState(runtime: Atom.AtomRuntime<MobilePre
   const storedPreferencesAtom = runtime
     .atom(
       MobilePreferencesStore.pipe(
-        Effect.flatMap((store) => store.load),
-        Effect.catch((error) =>
-          Effect.logWarning("Could not load mobile preferences.", error).pipe(
-            Effect.as<Preferences>({}),
-          ),
-        ),
+        Effect.flatMap((store) => loadMobilePreferencesWithFallback(store.load)),
       ),
     )
     .pipe(Atom.keepAlive, Atom.withLabel("mobile:preferences:stored"));
