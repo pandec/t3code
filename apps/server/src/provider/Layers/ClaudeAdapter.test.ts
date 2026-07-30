@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -725,6 +726,97 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(payload.rateLimits.source, "claude.usage-api");
       assert.equal(payload.rateLimits.subscriptionType, "max");
       assert.isTrue(harness.query.usageCalls >= 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("reads usage through a minimal ephemeral query without creating a session", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: "max",
+        rate_limits_available: true,
+        rate_limits: {
+          limits: [{ kind: "session", percent: 27, severity: "normal", is_active: true }],
+        },
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const usage = yield* adapter.readAccountUsage!();
+      assert.deepEqual(usage, {
+        source: "claude.usage-api",
+        subscriptionType: "max",
+        rateLimits: {
+          limits: [{ kind: "session", percent: 27, severity: "normal", is_active: true }],
+        },
+      });
+      assert.deepEqual(yield* adapter.listSessions(), []);
+      assert.equal(harness.query.closeCalls, 1);
+      assert.equal(harness.query.usageCalls, 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("returns undefined when ephemeral Claude usage is unavailable", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: null,
+        rate_limits_available: false,
+        rate_limits: null,
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      assert.equal(yield* adapter.readAccountUsage!(), undefined);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("closes a pending ephemeral usage query when interrupted", () => {
+    const harness = makeHarness();
+    let markInitializationStarted: () => void = () => {};
+    const initializationStarted = new Promise<void>((resolve) => {
+      markInitializationStarted = resolve;
+    });
+    harness.query.initializationResultOverride = () => {
+      markInitializationStarted();
+      return new Promise<SDKControlInitializeResponse>(() => undefined);
+    };
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const fiber = yield* Effect.forkChild(adapter.readAccountUsage!());
+      yield* Effect.promise(() => initializationStarted);
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.await(fiber);
+
+      assert.equal(exit._tag, "Failure");
+      if (exit._tag === "Failure") {
+        assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
+      }
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("closes a stalled ephemeral usage query at the 15 second bound", () => {
+    const harness = makeHarness();
+    let markInitializationStarted: () => void = () => {};
+    const initializationStarted = new Promise<void>((resolve) => {
+      markInitializationStarted = resolve;
+    });
+    harness.query.initializationResultOverride = () => {
+      markInitializationStarted();
+      return new Promise<SDKControlInitializeResponse>(() => undefined);
+    };
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const fiber = yield* Effect.forkChild(adapter.readAccountUsage!());
+      yield* Effect.promise(() => initializationStarted);
+      yield* TestClock.adjust("15 seconds");
+
+      assert.equal(yield* Fiber.join(fiber), undefined);
+      assert.equal(harness.query.closeCalls, 1);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 

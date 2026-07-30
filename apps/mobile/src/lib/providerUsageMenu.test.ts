@@ -1,7 +1,7 @@
 import type { ProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
 import { describe, expect, it } from "vite-plus/test";
 
-import { providerUsageMenuActions, providerUsageTriggerLabel } from "./providerUsageMenu";
+import { providerUsageAccountMenuActions, providerUsageTriggerLabel } from "./providerUsageMenu";
 
 const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
 
@@ -59,60 +59,98 @@ describe("providerUsageTriggerLabel", () => {
   });
 });
 
-describe("providerUsageMenuActions", () => {
-  it("builds one row per window with usage and reset in the subtitle", () => {
+describe("providerUsageAccountMenuActions", () => {
+  it("builds one row per account with email, windows, and freshness", () => {
     const resetsAt = Math.floor(Date.parse("2026-07-25T09:00:00.000Z") / 1_000);
-    const actions = providerUsageMenuActions(
-      makeSnapshot({
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: 42,
-            resetsAt,
-            status: "ok",
-          },
-          {
-            id: "seven_day",
-            group: "weekly",
-            label: "Weekly (all models)",
-            shortLabel: "Wk",
-            usedPercent: null,
-            resetsAt: null,
-            status: "warning",
-          },
-        ],
-      }),
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-work",
+          displayName: "Claude Work",
+          email: "work@example.com",
+          isCurrent: true,
+          snapshot: makeSnapshot({
+            windows: [
+              {
+                id: "five_hour",
+                group: "session",
+                label: "Session (5h)",
+                shortLabel: "5h",
+                usedPercent: 42,
+                resetsAt,
+                status: "ok",
+              },
+              {
+                id: "seven_day",
+                group: "weekly",
+                label: "Weekly (all models)",
+                shortLabel: "Wk",
+                usedPercent: null,
+                resetsAt: null,
+                status: "warning",
+              },
+            ],
+          }),
+          observedAt: NOW_MS - 4 * 60_000,
+        },
+        {
+          instanceId: "claude-personal",
+          displayName: "Claude Personal",
+          email: "personal@example.com",
+          isCurrent: false,
+          snapshot: null,
+          observedAt: null,
+        },
+      ],
       NOW_MS,
     );
 
     expect(actions).toHaveLength(2);
-    expect(actions[0]?.title).toBe("Session (5h)");
-    expect(actions[0]?.subtitle).toMatch(/^42% used · resets /);
-    expect(actions[1]?.subtitle).toBe("Limit warning");
+    // The session's live account is marked when a sibling exists to tell apart.
+    expect(actions[0]).toMatchObject({
+      title: "Claude Work (current)",
+      subtitle: expect.stringContaining("work@example.com"),
+    });
+    expect(actions[1]?.title).toBe("Claude Personal");
+    expect(actions[0]?.subtitle).toContain("Session (5h):");
+    expect(actions[0]?.subtitle).toContain("Weekly (all models):");
+    expect(actions[0]?.subtitle).toMatch(/42% used · resets /);
+    expect(actions[0]?.subtitle).toContain("Limit warning");
+    expect(actions[0]?.subtitle).toContain("updated 4m ago");
+    expect(actions[1]?.subtitle).toContain("No usage data");
   });
 
   it("describes exhausted numberless windows as limit reached", () => {
-    const actions = providerUsageMenuActions(
-      makeSnapshot({
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: null,
-            resetsAt: Math.floor(NOW_MS / 1_000) - 60,
-            status: "critical",
-          },
-        ],
-      }),
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-work",
+          displayName: "Claude Work",
+          email: undefined,
+          isCurrent: true,
+          snapshot: makeSnapshot({
+            windows: [
+              {
+                id: "five_hour",
+                group: "session",
+                label: "Session (5h)",
+                shortLabel: "5h",
+                usedPercent: null,
+                resetsAt: Math.floor(NOW_MS / 1_000) - 60,
+                status: "critical",
+              },
+            ],
+          }),
+          observedAt: NOW_MS,
+        },
+      ],
       NOW_MS,
     );
 
     // A reset time in the past is stale information; only the state remains.
-    expect(actions[0]?.subtitle).toBe("Limit reached");
+    expect(actions[0]?.subtitle).toContain("Limit reached");
+    expect(actions[0]?.subtitle).not.toContain("resets");
+    // A lone account needs no "current" marker — there is nothing to tell apart.
+    expect(actions[0]?.title).toBe("Claude Work");
   });
 });

@@ -1,4 +1,8 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type {
+  OrchestrationThreadActivity,
+  ProviderInstanceUsageSnapshot,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 /**
  * Subscription rate-limit usage derived from `account.rate-limits.updated`
@@ -645,6 +649,41 @@ export type DeriveProviderUsageOptions = {
   readonly thresholds?: Partial<ProviderUsageThresholds> | undefined;
 };
 
+export function resolveProviderUsageInstanceId<TInstanceId extends string>(input: {
+  readonly liveSessionInstanceId?: TInstanceId | null | undefined;
+  readonly modelSelectionInstanceId?: TInstanceId | null | undefined;
+}): TInstanceId | null {
+  return input.liveSessionInstanceId ?? input.modelSelectionInstanceId ?? null;
+}
+
+type ProviderUsagePayloadSource = {
+  readonly payload: unknown;
+  readonly createdAt: string;
+};
+
+/**
+ * Normalize one server-owned per-instance usage snapshot. The caller supplies
+ * the instance's driver via `options.provider` (it already has it from the
+ * provider list).
+ */
+export function deriveProviderUsageSnapshotFromServerSnapshot(
+  snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> = {},
+): ProviderUsageSnapshot | null {
+  return deriveProviderUsageSnapshotFromSources(
+    [
+      {
+        payload: snapshot.payload,
+        createdAt: DateTime.formatIso(DateTime.makeUnsafe(snapshot.observedAt)),
+      },
+    ],
+    {
+      ...options,
+      providerInstanceId: snapshot.instanceId,
+    },
+  );
+}
+
 /**
  * Derives the latest usage snapshot from a thread's activity stream.
  *
@@ -656,6 +695,20 @@ export type DeriveProviderUsageOptions = {
 export function deriveLatestProviderUsageSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   options: DeriveProviderUsageOptions = {},
+): ProviderUsageSnapshot | null {
+  return deriveProviderUsageSnapshotFromSources(
+    activities.flatMap((activity) =>
+      activity?.kind === "account.rate-limits.updated"
+        ? [{ payload: activity.payload, createdAt: activity.createdAt }]
+        : [],
+    ),
+    options,
+  );
+}
+
+function deriveProviderUsageSnapshotFromSources(
+  sources: ReadonlyArray<ProviderUsagePayloadSource>,
+  options: DeriveProviderUsageOptions,
 ): ProviderUsageSnapshot | null {
   const requestedLabel =
     options.provider !== undefined ? providerUsageLabelForDriver(options.provider) : undefined;
@@ -686,10 +739,8 @@ export function deriveLatestProviderUsageSnapshot(
 
   // Oldest first: Map#set gives newest-wins semantics per semantic window id
   // while retaining Codex identity across sparse rolling updates.
-  for (const activity of activities) {
-    if (!activity || activity.kind !== "account.rate-limits.updated") continue;
-
-    const payloadRecord = asRecord(activity.payload);
+  for (const source of sources) {
+    const payloadRecord = asRecord(source.payload);
     const sourceInstanceId = asString(payloadRecord?.providerInstanceId);
     if (
       requestedInstanceId !== null &&
@@ -704,7 +755,7 @@ export function deriveLatestProviderUsageSnapshot(
       sourceInstanceId !== null &&
       providerInstanceId !== sourceInstanceId;
     const result = normalizeRateLimitPayload(
-      activity.payload,
+      source.payload,
       instanceChanged ? null : inheritedCodexIdentity,
     );
     if (!result) continue;
@@ -744,14 +795,14 @@ export function deriveLatestProviderUsageSnapshot(
           previous.window.resetsAt === window.resetsAt);
       const forcedCriticalAt =
         result.providerLabel === "Codex" && result.forceCritical
-          ? activity.createdAt
+          ? source.createdAt
           : sameResetPeriod
             ? (previous?.forcedCriticalAt ?? null)
             : null;
       windowsById.delete(window.id);
       windowsById.set(window.id, {
         window,
-        sourceAt: activity.createdAt,
+        sourceAt: source.createdAt,
         forcedCriticalAt,
       });
     }
@@ -760,8 +811,8 @@ export function deriveLatestProviderUsageSnapshot(
       for (const [id, merged] of windowsById) {
         windowsById.set(id, {
           window: merged.window,
-          sourceAt: activity.createdAt,
-          forcedCriticalAt: activity.createdAt,
+          sourceAt: source.createdAt,
+          forcedCriticalAt: source.createdAt,
         });
       }
     }

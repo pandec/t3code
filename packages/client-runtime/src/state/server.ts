@@ -660,6 +660,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverListProviderSkills,
       staleTimeMs: 60_000,
     }),
+    providerUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:provider-usage",
+      tag: WS_METHODS.providerUsageRead,
+      staleTimeMs: 30_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -682,6 +687,14 @@ export function createServerEnvironmentAtoms<R, E>(
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
+    }),
+    refreshProviderUsage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:refresh-provider-usage",
+      tag: WS_METHODS.providerUsageRefresh,
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,

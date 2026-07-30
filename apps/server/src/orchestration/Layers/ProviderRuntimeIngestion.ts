@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -1337,9 +1338,25 @@ const make = Effect.gen(function* () {
   ) {
     const instanceId = event.providerInstanceId;
     if (instanceId === undefined || event.type !== "account.rate-limits.updated") return;
+    const parsedObservedAt = Date.parse(event.createdAt);
+    const observedAt = Number.isFinite(parsedObservedAt)
+      ? parsedObservedAt
+      : yield* Clock.currentTimeMillis;
     yield* reportHealthSafely(
       event,
       providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits),
+    );
+    yield* reportHealthSafely(
+      event,
+      Effect.gen(function* () {
+        const observationToken = yield* providerInstanceHealth.beginUsageObservation();
+        yield* providerInstanceHealth.reportUsageSnapshot(
+          instanceId,
+          event.payload.rateLimits,
+          observedAt,
+          observationToken,
+        );
+      }),
     );
   });
 

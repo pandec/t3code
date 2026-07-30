@@ -5,9 +5,9 @@ import type {
 
 /**
  * Presentation helpers for the mobile provider usage pill: the composer
- * toolbar trigger label and the native-menu rows (one per rate-limit window).
- * Hover popovers don't exist on mobile, so the detail view is a tap-opened
- * `ControlPillMenu` with the window facts in each row's subtitle.
+ * toolbar trigger label and the native-menu rows (one per configured
+ * account). Hover popovers don't exist on mobile, so the detail view is a
+ * tap-opened `ControlPillMenu` with the account facts in each row's subtitle.
  */
 
 export function providerUsageTriggerLabel(snapshot: ProviderUsageSnapshot): string {
@@ -40,16 +40,48 @@ function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
         ? "Limit reached"
         : "Limit warning";
   const resetTime = formatResetTime(window.resetsAt, nowMs);
-  return resetTime ? `${usage} · resets ${resetTime}` : usage;
+  const detail = resetTime ? `${usage} · resets ${resetTime}` : usage;
+  return `${window.label}: ${detail}`;
 }
 
-export function providerUsageMenuActions(
-  snapshot: ProviderUsageSnapshot,
+export interface ProviderUsageMenuAccount {
+  readonly instanceId: string;
+  readonly displayName: string;
+  readonly email: string | undefined;
+  /** Whether the thread's live session is currently spending this account. */
+  readonly isCurrent: boolean;
+  readonly snapshot: ProviderUsageSnapshot | null;
+  readonly observedAt: number | null;
+}
+
+function formatRelativeAge(observedAt: number | null, nowMs: number): string {
+  if (observedAt === null) return "not updated";
+  const minutes = Math.floor(Math.max(0, nowMs - observedAt) / 60_000);
+  if (minutes < 1) return "updated just now";
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  return `updated ${Math.floor(minutes / 60)}h ago`;
+}
+
+/** One native-menu row per configured account. */
+export function providerUsageAccountMenuActions(
+  accounts: ReadonlyArray<ProviderUsageMenuAccount>,
   nowMs: number,
 ): Array<{ id: string; title: string; subtitle: string }> {
-  return snapshot.windows.map((window) => ({
-    id: `usage:${window.id}`,
-    title: window.label,
-    subtitle: describeWindow(window, nowMs),
-  }));
+  return accounts.map((account) => {
+    const windows =
+      account.snapshot?.windows.map((window) => describeWindow(window, nowMs)).join(", ") ??
+      "No usage data";
+    return {
+      id: `usage-account:${account.instanceId}`,
+      // Mark the account the session is spending, but only when there is a
+      // sibling to distinguish it from.
+      title:
+        account.isCurrent && accounts.length > 1
+          ? `${account.displayName} (current)`
+          : account.displayName,
+      subtitle: [account.email, windows, formatRelativeAge(account.observedAt, nowMs)]
+        .filter((value): value is string => Boolean(value))
+        .join(" · "),
+    };
+  });
 }
