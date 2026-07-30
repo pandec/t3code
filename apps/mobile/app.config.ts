@@ -3,6 +3,8 @@ import type { ExpoConfig } from "expo/config";
 import {
   isAppleTeamId,
   isAppVersion,
+  isEasAccountName,
+  isEasProjectId,
   isIosBuildNumber,
   isIosBundleIdentifier,
 } from "../../scripts/lib/apple-mobile-config.ts";
@@ -19,6 +21,12 @@ const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 const personalIosAppleTeamId = repoEnv.T3CODE_IOS_PERSONAL_TEAM_ID?.trim();
 const customIosAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase();
 const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
+// EAS project behind OTA updates, cloud builds, and submissions. Upstream builds use
+// pingdotgg's project; a fork that ships its own builds points both variables at its
+// own Expo account to get the same pipeline. Set them together — the project id alone
+// does not tell the EAS CLI which account to authenticate against.
+const forkEasProjectId = repoEnv.T3CODE_EAS_PROJECT_ID?.trim();
+const forkEasOwner = repoEnv.T3CODE_EAS_OWNER?.trim();
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 // Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
@@ -61,6 +69,16 @@ if (
 ) {
   throw new Error(
     "T3CODE_APPLE_TEAM_ID and T3CODE_IOS_BUNDLE_ID must be provided together with a valid Apple Team ID and reverse-DNS bundle identifier.",
+  );
+}
+
+if (
+  (forkEasProjectId === undefined) !== (forkEasOwner === undefined) ||
+  (forkEasProjectId !== undefined && !isEasProjectId(forkEasProjectId)) ||
+  (forkEasOwner !== undefined && !isEasAccountName(forkEasOwner))
+) {
+  throw new Error(
+    "T3CODE_EAS_PROJECT_ID and T3CODE_EAS_OWNER must be provided together with the project UUID from `eas project:info` and the Expo account slug that owns it.",
   );
 }
 
@@ -141,6 +159,20 @@ const iosBundleIdentifier = isIosPersonalTeamBuild
   : (customIosBundleIdentifier ?? variant.iosBundleIdentifier);
 const isCustomIosTeamBuild = !isIosPersonalTeamBuild && customIosAppleTeamId !== undefined;
 
+const UPSTREAM_EAS_PROJECT = {
+  projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+  owner: "pingdotgg",
+} as const;
+// A build can only use an EAS project whose credentials and channels match the app it
+// signs, so upstream's project is off-limits once another Apple team or bundle
+// identifier is in play. A fork's own project covers every signing configuration.
+const easProject =
+  forkEasProjectId !== undefined && forkEasOwner !== undefined
+    ? { projectId: forkEasProjectId, owner: forkEasOwner }
+    : isIosPersonalTeamBuild || isCustomIosTeamBuild
+      ? undefined
+      : UPSTREAM_EAS_PROJECT;
+
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
   medium: "@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
@@ -212,10 +244,17 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: !isIosPersonalTeamBuild && !isCustomIosTeamBuild,
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    enabled: easProject !== undefined,
+    url: `https://u.expo.dev/${(easProject ?? UPSTREAM_EAS_PROJECT).projectId}`,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
+    // EAS Build stamps the channel from the eas.json profile it builds. A fork's
+    // locally archived build has no profile, so it must embed the channel itself or
+    // `eas update --channel` publishes where that binary never looks. Upstream builds
+    // all come from EAS, so leave their native output untouched.
+    ...(forkEasProjectId !== undefined && process.env.EAS_BUILD !== "true"
+      ? { requestHeaders: { "expo-channel-name": APP_VARIANT } }
+      : {}),
   },
   ios: {
     icon: variant.assets.iosIcon,
@@ -416,15 +455,9 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    ...(isIosPersonalTeamBuild
-      ? {}
-      : {
-          eas: {
-            projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-          },
-        }),
+    ...(easProject !== undefined ? { eas: { projectId: easProject.projectId } } : {}),
   },
-  ...(isIosPersonalTeamBuild ? {} : { owner: "pingdotgg" }),
+  ...(easProject !== undefined ? { owner: easProject.owner } : {}),
 };
 
 export default config;

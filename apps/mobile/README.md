@@ -86,9 +86,9 @@ number is derived from the clock in one-minute steps — App Store Connect rejec
 number, so wait for the next minute before retrying a successful upload.
 
 > [!NOTE]
-> `updates.enabled` is false whenever a custom Apple team signs the build, so this route has no OTA
-> updates: every change, JavaScript or native, needs a new TestFlight build. The "check for update"
-> row in Settings stays inert.
+> Without a fork EAS project (see below), `updates.enabled` is false whenever a custom Apple team
+> signs the build, so this route has no OTA updates: every change, JavaScript or native, needs a new
+> TestFlight build, and the "check for update" row in Settings stays inert.
 
 Because the TestFlight build shares `com.pandec.tools.t3code` with the cable-installed app, the two
 cannot coexist. Delete the side-loaded app before installing from TestFlight. The local SQLite cache
@@ -133,7 +133,7 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
-CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
+CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Every build uses the `fingerprint` runtime policy unless `MOBILE_VERSION_POLICY` overrides it, so an OTA update only lands on binaries whose native project — native dependencies, config plugins, and `patches/` — matches it.
 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
@@ -164,3 +164,60 @@ vp run eas:android:dev
 vp run eas:android:preview:dev
 vp run eas:android:preview
 ```
+
+### Fork EAS project
+
+Upstream's EAS project serves upstream's app record, so a fork signed by its own Apple team cannot
+use it: `app.config.ts` attaches no EAS project and disables updates for those builds. Pointing the
+fork at its own Expo account restores the whole pipeline:
+
+```dotenv
+# repository root .env.local
+T3CODE_EAS_PROJECT_ID=00000000-0000-0000-0000-000000000000
+T3CODE_EAS_OWNER=your-expo-account
+```
+
+Create the project with `eas init` from `apps/mobile`, then read the id from `eas project:info` and
+the account slug from `eas whoami`. With both set, `expo-updates` is enabled and pointed at
+`https://u.expo.dev/<project id>`, the variant's channel name (`development`, `preview`, or
+`production`) is embedded so locally archived builds look in the right place, and `eas build`,
+`eas submit`, and `eas update` all resolve the fork's project.
+
+Publishing a JavaScript-only change to an installed build:
+
+```bash
+APP_VARIANT=production eas update --channel production --platform ios --auto
+```
+
+The app checks on launch and downloads in the background, so the update applies on the _next_ cold
+launch — two launches, no tapping. The "check for update" row in Settings checks, fetches, and
+reloads in one tap when that wait is too long.
+
+An update only reaches binaries whose `runtimeVersion` fingerprint matches, which has two
+consequences. A change to native dependencies, `patches/`, or a config plugin changes the
+fingerprint, so it needs a new binary rather than an update. And the fingerprint differs between
+macOS and Linux, so publish from the same OS that built the binary: `eas update` on macOS for
+`vp run ios:testflight` builds, and the `Mobile EAS Production` workflow for the builds it produced.
+
+iOS build numbers come from two counters that do not talk to each other: `vp run ios:testflight`
+derives one from the clock (minutes since 2026), while EAS builds use the project's remote counter
+(`appVersionSource: "remote"`), which only increments by one per build. App Store Connect rejects a
+build number at or below an already-uploaded one, so after any local TestFlight upload, re-sync the
+remote counter to the clock before the next EAS production build:
+
+```bash
+node -e 'console.log(Math.floor((Date.now()-Date.UTC(2026,0,1))/60000))' # value for the prompt
+APP_VARIANT=production eas build:version:set -p ios
+```
+
+That workflow and `Mobile EAS Preview` skip themselves unless an `EXPO_TOKEN` secret is present.
+Adding one from the fork's Expo account (Personal access tokens in the Expo dashboard) turns both on:
+`workflow_dispatch` for a production build with `--auto-submit` to TestFlight or a production OTA,
+and per-PR fingerprint-aware deploys on pull requests labelled `🚀 Mobile Continuous Deployment`.
+Cloud iOS builds need the fork's signing credentials in EAS (`eas credentials -p ios`, which signs in
+to the Apple account interactively), and `submit.production.ios.ascAppId` in
+[`eas.json`](./eas.json) must be the fork's App Store Connect app id, not upstream's.
+
+Android builds through EAS work with the same project and an EAS-generated keystore. Native Google
+sign-in stays unavailable there: its client IDs are keyed to upstream's package name and signing
+certificate.
