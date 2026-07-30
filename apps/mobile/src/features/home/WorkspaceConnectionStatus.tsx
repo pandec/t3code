@@ -4,7 +4,10 @@ import { ActivityIndicator, Pressable } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { WorkspaceState } from "../../state/workspaceModel";
-import { workspaceConnectionStatusLabel } from "./workspace-connection-status";
+import {
+  isWorkspaceConnectionSynchronizing,
+  workspaceConnectionStatusLabel,
+} from "./workspace-connection-status";
 
 export function WorkspaceConnectionStatus(props: {
   readonly state: WorkspaceState;
@@ -12,10 +15,7 @@ export function WorkspaceConnectionStatus(props: {
   readonly variant?: "floating" | "sidebar";
 }) {
   const iconColor = useThemeColor("--color-icon-muted");
-  const isSynchronizing =
-    props.state.networkStatus !== "offline" &&
-    props.state.connectionError === null &&
-    (props.state.connectingEnvironments.length > 0 || props.state.hasPendingShellSnapshot);
+  const isSynchronizing = isWorkspaceConnectionSynchronizing(props.state);
   const variant = props.variant ?? "floating";
 
   return (

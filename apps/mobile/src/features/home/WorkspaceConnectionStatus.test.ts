@@ -2,8 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkspaceState } from "../../state/workspaceModel";
 import {
+  isWorkspaceConnectionSynchronizing,
   shouldShowWorkspaceConnectionStatus,
   workspaceConnectionStatusLabel,
+  workspaceConnectionStatusShortLabel,
 } from "./workspace-connection-status";
 
 function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
@@ -34,6 +36,8 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("You are offline");
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Offline");
+    expect(isWorkspaceConnectionSynchronizing(state)).toBe(false);
   });
 
   it("names the environment while reconnecting", () => {
@@ -55,6 +59,8 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Reconnecting to Julius’s Mac mini");
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Reconnecting…");
+    expect(isWorkspaceConnectionSynchronizing(state)).toBe(true);
   });
 
   it("surfaces connection errors before the generic disconnected fallback", () => {
@@ -66,6 +72,8 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Could not reach Julius’s Mac mini");
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Connection issue");
+    expect(isWorkspaceConnectionSynchronizing(state)).toBe(false);
   });
 
   it("shows shell catch-up while cached threads remain visible", () => {
@@ -73,6 +81,8 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Syncing threads...");
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Syncing…");
+    expect(isWorkspaceConnectionSynchronizing(state)).toBe(true);
   });
 
   it("distinguishes initial shell loading from cached catch-up", () => {
@@ -83,5 +93,17 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Loading threads...");
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Loading…");
+  });
+
+  it("uses a compact disconnected fallback without exposing raw errors", () => {
+    const connectionError = "Authentication failed with private account details";
+    const state = workspaceState({
+      connectionError,
+      hasReadyEnvironment: false,
+    });
+
+    expect(workspaceConnectionStatusShortLabel(state)).toBe("Connection issue");
+    expect(workspaceConnectionStatusShortLabel(state)).not.toContain(connectionError);
   });
 });

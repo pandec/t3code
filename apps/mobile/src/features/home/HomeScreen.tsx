@@ -888,21 +888,10 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
-  const listHeader = (
-    <>
-      {Platform.OS === "ios" ? null : <HomeTopContentSpacer />}
-
-      {shouldShowConnectionStatus && Platform.OS === "ios" ? (
-        <View className="pb-4">
-          <WorkspaceConnectionStatus
-            state={props.catalogState}
-            onPress={props.onOpenEnvironments}
-            variant="sidebar"
-          />
-        </View>
-      ) : null}
-    </>
-  );
+  // Compact iOS shows connection status in the fixed-height native title
+  // while rows exist, so transient connection work never shifts the list.
+  // Empty states retain their in-content status card above.
+  const listHeader = Platform.OS === "ios" ? null : <HomeTopContentSpacer />;
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).

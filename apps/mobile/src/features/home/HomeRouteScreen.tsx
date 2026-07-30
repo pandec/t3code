@@ -19,6 +19,7 @@ import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
+import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -33,6 +34,10 @@ export function HomeRouteScreen() {
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
   const pendingTasks = usePendingNewTasks();
+  const hasAnyThreads =
+    threads.some((thread) => thread.archivedAt === null) || pendingTasks.length > 0;
+  const compactHeaderConnectionStatusState =
+    hasAnyThreads && shouldShowWorkspaceConnectionStatus(catalogState) ? catalogState : null;
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
     () =>
@@ -112,9 +117,8 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Restore the compact title in case the split branch blanked it. */}
-        <NativeStackScreenOptions options={{ title: "Threads", headerTitle: "Threads" }} />
         <HomeHeader
+          connectionStatusState={compactHeaderConnectionStatusState}
           environments={environments}
           projects={projectFilterOptions}
           models={modelFilterOptions}
@@ -127,6 +131,9 @@ export function HomeRouteScreen() {
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onModelChange={setSelectedModel}
+          onOpenEnvironments={() =>
+            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}

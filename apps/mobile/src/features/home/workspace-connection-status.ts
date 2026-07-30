@@ -1,5 +1,13 @@
 import type { WorkspaceState } from "../../state/workspaceModel";
 
+export function isWorkspaceConnectionSynchronizing(state: WorkspaceState): boolean {
+  return (
+    state.networkStatus !== "offline" &&
+    state.connectionError === null &&
+    (state.connectingEnvironments.length > 0 || state.hasPendingShellSnapshot)
+  );
+}
+
 export function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
   return (
     state.networkStatus === "offline" ||
@@ -21,6 +29,16 @@ export function workspaceConnectionStatusLabel(state: WorkspaceState): string {
   if (state.connectionError !== null) return state.connectionError;
   if (state.hasPendingShellSnapshot) {
     return state.hasLoadedShellSnapshot ? "Syncing threads..." : "Loading threads...";
+  }
+  return "Not connected";
+}
+
+export function workspaceConnectionStatusShortLabel(state: WorkspaceState): string {
+  if (state.networkStatus === "offline") return "Offline";
+  if (state.connectingEnvironments.length > 0) return "Reconnecting…";
+  if (state.connectionError !== null) return "Connection issue";
+  if (state.hasPendingShellSnapshot) {
+    return state.hasLoadedShellSnapshot ? "Syncing…" : "Loading…";
   }
   return "Not connected";
 }
