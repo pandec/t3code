@@ -1,6 +1,9 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
-import { threadSnapshotLoaderLayer } from "@t3tools/client-runtime/state/threads";
+import {
+  threadPrewarmTriggersLayer,
+  threadSnapshotLoaderLayer,
+} from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -20,12 +23,17 @@ const snapshotLoaderLayer = Layer.merge(threadSnapshotLoaderLayer, shellSnapshot
 type ConnectionLayerSource =
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
+  | typeof threadPrewarmTriggersLayer
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
   | typeof mobileBackgroundActivityReporterLayer;
 
-const providedClientConnectionLayer = Layer.merge(Connection.layer, snapshotLoaderLayer).pipe(
+const providedClientConnectionLayer = Layer.mergeAll(
+  Connection.layer,
+  snapshotLoaderLayer,
+  threadPrewarmTriggersLayer,
+).pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       runtimeContextLayer,

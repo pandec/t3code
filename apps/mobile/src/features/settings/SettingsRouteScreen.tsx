@@ -46,6 +46,8 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { threadPrewarmTriggerCommand, useThreadPrewarmSummary } from "../../state/prewarm";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
@@ -548,7 +550,72 @@ function GeneralSettingsSection() {
         value={projectGroupingEnabled}
         onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
       />
+      <ThreadSyncRow />
     </SettingsSection>
+  );
+}
+
+function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
+  if (lastRunAt === null) return "Not synced yet";
+  const elapsedMs = Math.max(0, now - lastRunAt);
+  if (elapsedMs < 60_000) return "Synced just now";
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 60) return `Synced ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Synced ${hours}h ago`;
+  return `Synced ${new Date(lastRunAt).toLocaleDateString()}`;
+}
+
+/**
+ * Manual counterpart of the automatic thread prewarming: fires the same
+ * engine on demand (bypassing its cooldown) and shows when any environment
+ * last completed a warm run. The engine debounces briefly before running, so
+ * the row stays in "Syncing…" until a fresher run timestamp arrives.
+ */
+const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
+
+function ThreadSyncRow() {
+  const icon = useThemeColor("--color-icon");
+  const summary = useThreadPrewarmSummary();
+  const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
+  const [requestedAt, setRequestedAt] = useState<number | null>(null);
+
+  const syncing =
+    requestedAt !== null && (summary.lastRunAt === null || summary.lastRunAt < requestedAt);
+
+  useEffect(() => {
+    if (!syncing) return;
+    const timer = setTimeout(() => setRequestedAt(null), THREAD_SYNC_PENDING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [syncing, requestedAt]);
+
+  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, Date.now());
+
+  return (
+    <Pressable
+      accessibilityLabel="Sync threads now"
+      accessibilityRole="button"
+      disabled={syncing}
+      onPress={() => {
+        setRequestedAt(Date.now());
+        void fireTrigger({ reason: "manual" });
+      }}
+    >
+      <View className="flex-row items-center gap-4 p-4">
+        <SymbolView
+          name="arrow.triangle.2.circlepath"
+          size={22}
+          tintColor={icon}
+          type="monochrome"
+          weight="regular"
+        />
+        <Text className="flex-1 text-lg text-foreground">Sync Threads</Text>
+        <Text className="text-base text-foreground-muted">{statusLabel}</Text>
+        <View className="w-[22px] items-center">
+          {syncing ? <ActivityIndicator color={icon} size="small" /> : null}
+        </View>
+      </View>
+    </Pressable>
   );
 }
 

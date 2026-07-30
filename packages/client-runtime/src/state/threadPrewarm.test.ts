@@ -27,11 +27,15 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import {
+  advanceThreadStreamingSnapshot,
   commitPrewarmedThreadSnapshot,
   makeEnvironmentThreadPrewarm,
+  seedThreadStreamingSnapshot,
   selectPrewarmCandidates,
+  ThreadPrewarmTriggers,
   ThreadSnapshotLoader,
   type EnvironmentThreadPrewarmStatus,
+  type ThreadPrewarmTriggerRequest,
 } from "./threads.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -238,6 +242,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       retryNow: Effect.void,
     } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
     const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
+    const triggerRequests = yield* Queue.unbounded<ThreadPrewarmTriggerRequest>();
     const statuses = yield* Queue.unbounded<EnvironmentThreadPrewarmStatus>();
 
     const stream = yield* makeEnvironmentThreadPrewarm().pipe(
@@ -248,10 +253,19 @@ describe("makeEnvironmentThreadPrewarm", () => {
         ConnectionWakeups.ConnectionWakeups,
         ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
       ),
+      Effect.provideService(
+        ThreadPrewarmTriggers,
+        ThreadPrewarmTriggers.of({
+          changes: Stream.fromQueue(triggerRequests),
+          fire: (request) => Queue.offer(triggerRequests, request).pipe(Effect.asVoid),
+        }),
+      ),
     );
     yield* Effect.forkScoped(Stream.runForEach(stream, (status) => Queue.offer(statuses, status)));
 
-    return { supervisorState, prepared, wakeups, statuses, stored, loaderCalls };
+    const fire = (request: ThreadPrewarmTriggerRequest) => Queue.offer(triggerRequests, request);
+
+    return { supervisorState, prepared, wakeups, statuses, stored, loaderCalls, fire };
   });
 
   it.effect("warms stale recent threads once the environment connects", () =>
@@ -260,6 +274,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const harness = yield* makeHarness();
 
         yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
 
         const status = yield* Queue.take(harness.statuses);
@@ -278,11 +293,13 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const harness = yield* makeHarness({ initialPrepared: Option.none() });
 
         yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
 
         yield* SubscriptionRef.set(harness.prepared, Option.some(PREPARED));
         yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
 
         const status = yield* Queue.take(harness.statuses);
@@ -309,6 +326,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         });
 
         yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
 
         const status = yield* Queue.take(harness.statuses);
@@ -325,21 +343,135 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const harness = yield* makeHarness();
 
         yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         yield* Queue.take(harness.statuses);
 
         // A foreground wakeup right after the first run stays within the
         // cooldown and must not trigger another warm pass.
         yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
 
         yield* TestClock.adjust("60 seconds");
         yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         const status = yield* Queue.take(harness.statuses);
         expect(status.skipped).toBe(2);
       }),
     ),
   );
+
+  it.effect("warms only a settled thread despite the cooldown", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        // The turn that just settled produced events the cached detail does
+        // not have yet.
+        yield* Ref.update(harness.stored, (map) =>
+          new Map(map).set("stale", detailSnapshot("stale", 3)),
+        );
+        yield* harness.fire({
+          reason: "thread-settled",
+          environmentId: ENVIRONMENT_ID,
+          threadId: ThreadId.make("stale"),
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.skipped).toBe(0);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+        expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(10);
+      }),
+    ),
+  );
+
+  it.effect("ignores settle triggers for other environments", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        yield* harness.fire({
+          reason: "thread-settled",
+          environmentId: EnvironmentId.make("environment-2"),
+          threadId: ThreadId.make("stale"),
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("runs a full warm on manual sync despite the cooldown", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        yield* Ref.update(harness.stored, (map) =>
+          new Map(map).set("stale", detailSnapshot("stale", 3)),
+        );
+        yield* harness.fire({ reason: "manual" });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.skipped).toBe(1);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+      }),
+    ),
+  );
+});
+
+describe("thread streaming snapshots", () => {
+  const streamingShell = (id: string, overrides: Partial<OrchestrationThreadShell> = {}) => ({
+    environmentId: ENVIRONMENT_ID,
+    ...threadShell(id, overrides),
+  });
+
+  it("emits a settled thread once when its session leaves the streaming states", () => {
+    const streaming = [streamingShell("thread-1", { session: runningSession("thread-1") })];
+    const idle = [streamingShell("thread-1")];
+
+    const seeded = seedThreadStreamingSnapshot(streaming);
+    const first = advanceThreadStreamingSnapshot(seeded, idle);
+    expect(first.settled).toEqual([{ environmentId: ENVIRONMENT_ID, threadId: "thread-1" }]);
+
+    const second = advanceThreadStreamingSnapshot(first.snapshot, idle);
+    expect(second.settled).toEqual([]);
+  });
+
+  it("stays silent for new, still-streaming, and archived threads", () => {
+    const seeded = seedThreadStreamingSnapshot([
+      streamingShell("streaming", { session: runningSession("streaming") }),
+      streamingShell("archived", { session: runningSession("archived") }),
+    ]);
+    const { settled } = advanceThreadStreamingSnapshot(seeded, [
+      streamingShell("streaming", { session: runningSession("streaming") }),
+      streamingShell("archived", { archivedAt: "2026-04-06T00:00:00.000Z" }),
+      streamingShell("new-idle"),
+    ]);
+    expect(settled).toEqual([]);
+  });
 });
