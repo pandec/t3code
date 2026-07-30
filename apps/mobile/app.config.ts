@@ -224,7 +224,9 @@ const config: ExpoConfig = {
     ...(iosBuildNumber ? { buildNumber: iosBuildNumber } : {}),
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
-    // Sign in with Apple, or push notification entitlements).
+    // Sign in with Apple, or push notification entitlements). Prebuild does
+    // not copy this into the pbxproj on its own; withIosDevelopmentTeam.cjs
+    // stamps it onto every target's DEVELOPMENT_TEAM.
     ...(isIosPersonalTeamBuild
       ? personalIosAppleTeamId
         ? { appleTeamId: personalIosAppleTeamId }
@@ -262,6 +264,9 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    // Must stay first: it runs after every later plugin's Xcode mods and
+    // stamps DEVELOPMENT_TEAM on the targets they create.
+    "./plugins/withIosDevelopmentTeam.cjs",
     "expo-asset",
     [
       "expo-audio",
