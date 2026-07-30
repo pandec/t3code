@@ -35,6 +35,7 @@ import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderInstanceHealthLive } from "./provider/Layers/ProviderInstanceHealthLive.ts";
+import { ProviderUsageRefreshLive } from "./provider/Layers/ProviderUsageRefreshLive.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -254,6 +255,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   // start) so rate-limit verdicts observed on one thread reroute every
   // thread on the limited instance.
   Layer.provideMerge(ProviderInstanceHealthLive),
+  Layer.provideMerge(ProviderUsageRefreshLive.pipe(Layer.provide(ProviderInstanceHealthLive))),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(

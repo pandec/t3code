@@ -333,6 +333,7 @@ describe("ProviderRuntimeIngestion", () => {
     const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
     const getRateLimitState = (targetInstanceId: ProviderInstanceId) =>
       Effect.runPromise(providerInstanceHealth.getRateLimitState(targetInstanceId));
+    const listUsageSnapshots = () => Effect.runPromise(providerInstanceHealth.listUsageSnapshots());
 
     return {
       engine,
@@ -341,6 +342,7 @@ describe("ProviderRuntimeIngestion", () => {
       setProviderSession: provider.setSession,
       drain,
       getRateLimitState,
+      listUsageSnapshots,
     };
   }
 
@@ -3010,6 +3012,19 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
     });
+    expect(await harness.listUsageSnapshots()).toEqual([
+      {
+        instanceId: ProviderInstanceId.make("codex-work"),
+        payload: {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 28, windowDurationMins: 10_080, resetsAt: 1_785_475_320 },
+            secondary: null,
+          },
+        },
+        observedAt: Date.parse(now),
+      },
+    ]);
   });
 
   it("feeds instance rate-limit health from runtime events", async () => {

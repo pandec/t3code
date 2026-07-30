@@ -170,15 +170,18 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
 
   const reportUsageSnapshot: ProviderInstanceHealthShape["reportUsageSnapshot"] = Effect.fn(
     "ProviderInstanceHealth.reportUsageSnapshot",
-  )(function* (instanceId, payload) {
-    const observedAt = yield* Clock.currentTimeMillis;
-    yield* Ref.update(usageSnapshots, (snapshots) =>
-      new Map(snapshots).set(instanceId, {
+  )(function* (instanceId, payload, observedAt) {
+    yield* Ref.update(usageSnapshots, (snapshots) => {
+      const current = snapshots.get(instanceId);
+      if (current !== undefined && current.observedAt > observedAt) {
+        return snapshots;
+      }
+      return new Map(snapshots).set(instanceId, {
         instanceId,
         payload,
         observedAt,
-      }),
-    );
+      });
+    });
   });
 
   const listUsageSnapshots: ProviderInstanceHealthShape["listUsageSnapshots"] = () =>

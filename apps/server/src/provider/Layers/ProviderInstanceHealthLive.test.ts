@@ -79,10 +79,9 @@ describe("ProviderInstanceHealth", () => {
       const firstPayload = { source: "claude.usage-api", rateLimits: { limits: [] } };
       const replacementPayload = { primary: { usedPercent: 42 } };
 
-      yield* health.reportUsageSnapshot(instanceId, firstPayload);
-      yield* TestClock.adjust(Duration.seconds(2));
-      yield* health.reportUsageSnapshot(instanceId, replacementPayload);
-      yield* health.reportUsageSnapshot(secondInstanceId, { secondary: { usedPercent: 7 } });
+      yield* health.reportUsageSnapshot(instanceId, firstPayload, 0);
+      yield* health.reportUsageSnapshot(instanceId, replacementPayload, 2_000);
+      yield* health.reportUsageSnapshot(secondInstanceId, { secondary: { usedPercent: 7 } }, 2_000);
 
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: replacementPayload, observedAt: 2_000 },
@@ -93,6 +92,26 @@ describe("ProviderInstanceHealth", () => {
         },
       ]);
       expect(yield* health.getRateLimitState(instanceId)).toBeUndefined();
+    }),
+  );
+
+  it.effect("does not let an older observation overwrite a newer usage snapshot", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+      const newerPayload = { source: "newer" };
+      const olderPayload = { source: "older" };
+      const equalTimestampPayload = { source: "equal-timestamp" };
+
+      yield* health.reportUsageSnapshot(instanceId, newerPayload, 2_000);
+      yield* health.reportUsageSnapshot(instanceId, olderPayload, 1_000);
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        { instanceId, payload: newerPayload, observedAt: 2_000 },
+      ]);
+
+      yield* health.reportUsageSnapshot(instanceId, equalTimestampPayload, 2_000);
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        { instanceId, payload: equalTimestampPayload, observedAt: 2_000 },
+      ]);
     }),
   );
 

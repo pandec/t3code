@@ -47,6 +47,8 @@ export interface ProviderInstanceHealthShape {
   readonly reportUsageSnapshot: (
     instanceId: ProviderInstanceId,
     payload: unknown,
+    /** Unix ms when reading this provider payload began. */
+    observedAt: number,
   ) => Effect.Effect<void>;
 
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;

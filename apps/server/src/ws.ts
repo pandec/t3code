@@ -34,6 +34,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  type ProviderInstanceUsageSnapshot,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchEntriesError,
@@ -77,8 +78,9 @@ import {
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHealth.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
+import type { ProviderInstance } from "./provider/ProviderDriver.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
-import { refreshProviderUsageSnapshots } from "./provider/refreshProviderUsage.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -132,6 +134,16 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
     Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
     Effect.map(Option.getOrElse(() => [])),
   );
+
+export function filterProviderUsageSnapshotsToEnabledInstances(
+  snapshots: ReadonlyArray<ProviderInstanceUsageSnapshot>,
+  instances: ReadonlyArray<Pick<ProviderInstance, "instanceId" | "enabled">>,
+): ReadonlyArray<ProviderInstanceUsageSnapshot> {
+  const enabledInstanceIds = new Set(
+    instances.filter((instance) => instance.enabled).map((instance) => instance.instanceId),
+  );
+  return snapshots.filter((snapshot) => enabledInstanceIds.has(snapshot.instanceId));
+}
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -363,6 +375,7 @@ const makeWsRpcLayer = (
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerInstanceHealth = yield* ProviderInstanceHealth.ProviderInstanceHealth;
       const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+      const providerUsageRefresh = yield* ProviderUsageRefresh.ProviderUsageRefresh;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1021,9 +1034,15 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      const readProviderUsageSnapshots = providerInstanceHealth
-        .listUsageSnapshots()
-        .pipe(Effect.map((snapshots) => ({ snapshots })));
+      const readProviderUsageSnapshots = Effect.gen(function* () {
+        const [snapshots, instances] = yield* Effect.all([
+          providerInstanceHealth.listUsageSnapshots(),
+          providerInstanceRegistry.listInstances,
+        ]);
+        return {
+          snapshots: filterProviderUsageSnapshotsToEnabledInstances(snapshots, instances),
+        };
+      });
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -1381,13 +1400,9 @@ const makeWsRpcLayer = (
         [WS_METHODS.providerUsageRefresh]: (input) =>
           observeRpcEffect(
             WS_METHODS.providerUsageRefresh,
-            refreshProviderUsageSnapshots(
-              {
-                listInstances: providerInstanceRegistry.listInstances,
-                health: providerInstanceHealth,
-              },
-              input.instanceIds,
-            ).pipe(Effect.andThen(readProviderUsageSnapshots)),
+            providerUsageRefresh
+              .refresh(input.instanceIds)
+              .pipe(Effect.andThen(readProviderUsageSnapshots)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverListProviderSkills]: (input) =>

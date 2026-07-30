@@ -4504,7 +4504,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       try: async (signal) => {
         const abortController = new AbortController();
         let usageQuery: ClaudeQueryRuntime | undefined;
-        const abortQuery = () => abortController.abort();
+        let cleanedUp = false;
+        const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
+          signal.removeEventListener("abort", abortQuery);
+          abortController.abort();
+          usageQuery?.close();
+        };
+        const abortQuery = () => cleanup();
         signal.addEventListener("abort", abortQuery, { once: true });
         try {
           const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
@@ -4547,9 +4555,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             rateLimits: usage.rate_limits,
           };
         } finally {
-          signal.removeEventListener("abort", abortQuery);
-          abortController.abort();
-          usageQuery?.close();
+          cleanup();
         }
       },
       catch: (cause) =>
@@ -4561,7 +4567,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }),
     }).pipe(
       Effect.timeoutOption("15 seconds"),
-      Effect.catchCause(() => Effect.succeed(Option.none())),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(Option.none()),
+      ),
     );
     return Option.getOrUndefined(result);
   });

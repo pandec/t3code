@@ -40,7 +40,8 @@ function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
         ? "Limit reached"
         : "Limit warning";
   const resetTime = formatResetTime(window.resetsAt, nowMs);
-  return resetTime ? `${usage} · resets ${resetTime}` : usage;
+  const detail = resetTime ? `${usage} · resets ${resetTime}` : usage;
+  return `${window.label}: ${detail}`;
 }
 
 export interface ProviderUsageMenuAccount {

@@ -108,6 +108,8 @@ describe("providerUsageAccountMenuActions", () => {
       title: "Claude Work",
       subtitle: expect.stringContaining("work@example.com"),
     });
+    expect(actions[0]?.subtitle).toContain("Session (5h):");
+    expect(actions[0]?.subtitle).toContain("Weekly (all models):");
     expect(actions[0]?.subtitle).toMatch(/42% used · resets /);
     expect(actions[0]?.subtitle).toContain("Limit warning");
     expect(actions[0]?.subtitle).toContain("updated 4m ago");
