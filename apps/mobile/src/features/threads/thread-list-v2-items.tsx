@@ -22,7 +22,12 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { resolveThreadListV2Status, type ThreadListV2Status } from "./threadListV2";
+import {
+  resolveThreadListV2MenuActionIds,
+  resolveThreadListV2Status,
+  type ThreadListV2MenuActionId,
+  type ThreadListV2Status,
+} from "./threadListV2";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -53,25 +58,28 @@ function threadTimeLabel(thread: EnvironmentThreadShell): string {
   return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
 }
 
-// Long-press keeps both lifecycle choices available: settling recedes a
-// thread in the live list, while archiving removes it from the list.
-const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+const MENU_ACTION_BY_ID: Readonly<Record<ThreadListV2MenuActionId, MenuAction>> = {
+  settle: { id: "settle", title: "Settle", image: "checkmark" },
+  unsettle: { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+  archive: { id: "archive", title: "Archive", image: "archivebox" },
+  delete: {
+    id: "delete",
+    title: "Delete",
+    image: "trash",
+    attributes: { destructive: true },
+  },
+};
 
-const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+function menuActionsForRow(input: {
+  readonly settlementSupported: boolean;
+  readonly variant: "card" | "slim";
+}): MenuAction[] {
+  return resolveThreadListV2MenuActionIds(input).map((id) => MENU_ACTION_BY_ID[id]);
+}
 
-// Pre-settlement servers: no lifecycle items, archive fills the gap.
-const LEGACY_MENU_ACTIONS: MenuAction[] = [
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
+const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
+const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
 
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;

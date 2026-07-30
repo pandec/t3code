@@ -28,6 +28,13 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
 export type HomeProjectSortOrder = Exclude<SidebarProjectSortOrder, "manual">;
 
+export function hasHomeThreadListContent(input: {
+  readonly threads: ReadonlyArray<Pick<EnvironmentThreadShell, "archivedAt">>;
+  readonly pendingTaskCount: number;
+}): boolean {
+  return input.threads.some((thread) => thread.archivedAt === null) || input.pendingTaskCount > 0;
+}
+
 export interface HomeProjectScope {
   readonly key: string;
   readonly title: string;

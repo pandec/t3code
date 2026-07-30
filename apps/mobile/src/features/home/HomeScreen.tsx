@@ -59,6 +59,7 @@ import {
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
+  hasHomeThreadListContent,
   sortHomeProjectScopes,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
@@ -828,8 +829,10 @@ export function HomeScreen(props: HomeScreenProps) {
   // that matches nothing needs the in-list "No results" state, not the
   // full-page "No threads yet". Settled threads are unarchived live shells,
   // so the v1 check already covers v2.
-  const hasAnyThreads =
-    props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
+  const hasAnyThreads = hasHomeThreadListContent({
+    threads: props.threads,
+    pendingTaskCount: props.pendingTasks.length,
+  });
   const hasResults = projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null

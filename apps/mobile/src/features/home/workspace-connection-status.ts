@@ -20,13 +20,13 @@ export function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): bool
 
 export function workspaceConnectionStatusLabel(state: WorkspaceState): string {
   if (state.networkStatus === "offline") return "You are offline";
+  if (state.connectionError !== null) return state.connectionError;
   if (state.connectingEnvironments.length === 1) {
     return `Reconnecting to ${state.connectingEnvironments[0]!.environmentLabel}`;
   }
   if (state.connectingEnvironments.length > 1) {
     return `Reconnecting ${state.connectingEnvironments.length} environments`;
   }
-  if (state.connectionError !== null) return state.connectionError;
   if (state.hasPendingShellSnapshot) {
     return state.hasLoadedShellSnapshot ? "Syncing threads..." : "Loading threads...";
   }
@@ -35,10 +35,26 @@ export function workspaceConnectionStatusLabel(state: WorkspaceState): string {
 
 export function workspaceConnectionStatusShortLabel(state: WorkspaceState): string {
   if (state.networkStatus === "offline") return "Offline";
-  if (state.connectingEnvironments.length > 0) return "Reconnecting…";
   if (state.connectionError !== null) return "Connection issue";
+  if (state.connectingEnvironments.length > 0) return "Reconnecting…";
   if (state.hasPendingShellSnapshot) {
     return state.hasLoadedShellSnapshot ? "Syncing…" : "Loading…";
   }
   return "Not connected";
+}
+
+export interface WorkspaceConnectionStatusPresentation {
+  readonly fullLabel: string;
+  readonly shortLabel: string;
+  readonly synchronizing: boolean;
+}
+
+export function workspaceConnectionStatusPresentation(
+  state: WorkspaceState,
+): WorkspaceConnectionStatusPresentation {
+  return {
+    fullLabel: workspaceConnectionStatusLabel(state),
+    shortLabel: workspaceConnectionStatusShortLabel(state),
+    synchronizing: isWorkspaceConnectionSynchronizing(state),
+  };
 }

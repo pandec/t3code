@@ -30,7 +30,7 @@ import {
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
 import { HomeHeaderConnectionStatus } from "./HomeHeaderConnectionStatus";
-import { workspaceConnectionStatusLabel } from "./workspace-connection-status";
+import { workspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -374,14 +374,16 @@ function IosHomeHeader(props: HomeHeaderProps) {
     listOrganization: !threadListV2Enabled,
   });
   const connectionStatusState = props.connectionStatusState;
-  const connectionStatusVersion =
-    connectionStatusState === null ? null : workspaceConnectionStatusLabel(connectionStatusState);
-  const headerTitle =
+  const connectionStatusPresentation =
     connectionStatusState === null
+      ? null
+      : workspaceConnectionStatusPresentation(connectionStatusState);
+  const headerTitle =
+    connectionStatusPresentation === null
       ? "Threads"
       : () => (
           <HomeHeaderConnectionStatus
-            state={connectionStatusState}
+            presentation={connectionStatusPresentation}
             onPress={props.onOpenEnvironments}
           />
         );
@@ -389,7 +391,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, connectionStatusVersion]}
+        optionsVersion={[filterMenu.items, connectionStatusPresentation]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.

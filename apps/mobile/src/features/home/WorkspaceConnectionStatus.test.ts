@@ -5,6 +5,7 @@ import {
   isWorkspaceConnectionSynchronizing,
   shouldShowWorkspaceConnectionStatus,
   workspaceConnectionStatusLabel,
+  workspaceConnectionStatusPresentation,
   workspaceConnectionStatusShortLabel,
 } from "./workspace-connection-status";
 
@@ -105,5 +106,31 @@ describe("workspace connection status", () => {
 
     expect(workspaceConnectionStatusShortLabel(state)).toBe("Connection issue");
     expect(workspaceConnectionStatusShortLabel(state)).not.toContain(connectionError);
+  });
+
+  it("prioritizes an error consistently when another environment is reconnecting", () => {
+    const connectionError = "Could not reach Space Mac";
+    const state = workspaceState({
+      connectionError,
+      hasConnectingEnvironment: true,
+      hasReadyEnvironment: false,
+      connectingEnvironments: [
+        {
+          environmentId: "environment-1" as never,
+          environmentLabel: "Grey Mac",
+          displayUrl: "",
+          isRelayManaged: false,
+          connectionState: "reconnecting",
+          connectionError: null,
+          connectionErrorTraceId: null,
+        },
+      ],
+    });
+
+    expect(workspaceConnectionStatusPresentation(state)).toEqual({
+      fullLabel: connectionError,
+      shortLabel: "Connection issue",
+      synchronizing: false,
+    });
   });
 });

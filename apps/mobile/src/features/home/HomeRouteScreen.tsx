@@ -16,7 +16,7 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
-import { buildHomeProjectScopes } from "./homeThreadList";
+import { buildHomeProjectScopes, hasHomeThreadListContent } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
@@ -34,8 +34,10 @@ export function HomeRouteScreen() {
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
   const pendingTasks = usePendingNewTasks();
-  const hasAnyThreads =
-    threads.some((thread) => thread.archivedAt === null) || pendingTasks.length > 0;
+  const hasAnyThreads = hasHomeThreadListContent({
+    threads,
+    pendingTaskCount: pendingTasks.length,
+  });
   const compactHeaderConnectionStatusState =
     hasAnyThreads && shouldShowWorkspaceConnectionStatus(catalogState) ? catalogState : null;
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
