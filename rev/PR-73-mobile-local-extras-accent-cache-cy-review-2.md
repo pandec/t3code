@@ -9,6 +9,8 @@
 - Round: 2
 - Frozen diff: `/tmp/t3-pr73-cy-review-round2.diff`
 - Frozen diff SHA-256: `b9a3f3bb57517de5cf81e1581594dc1bac5d766209c220ff74cad41fa76ae036`
+- Post-review base sync: merged `origin/dev` at `6a6310443`; its only branch-relative
+  change was the unrelated web `SidebarV2` archive-button fix from PR #74.
 
 ## Fleet
 
