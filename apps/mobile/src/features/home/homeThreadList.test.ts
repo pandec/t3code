@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
+  hasHomeThreadListContent,
   sortHomeProjectScopes,
 } from "./homeThreadList";
 
@@ -69,6 +70,26 @@ function buildGroups(
     ...overrides,
   });
 }
+
+describe("hasHomeThreadListContent", () => {
+  it("counts live threads and pending tasks but not archived-only history", () => {
+    expect(hasHomeThreadListContent({ threads: [{ archivedAt: null }], pendingTaskCount: 0 })).toBe(
+      true,
+    );
+    expect(
+      hasHomeThreadListContent({
+        threads: [{ archivedAt: "2026-06-29T00:00:00.000Z" }],
+        pendingTaskCount: 1,
+      }),
+    ).toBe(true);
+    expect(
+      hasHomeThreadListContent({
+        threads: [{ archivedAt: "2026-06-29T00:00:00.000Z" }],
+        pendingTaskCount: 0,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("buildHomeThreadGroups", () => {
   it("builds one v2 scope for the same repository across environments", () => {

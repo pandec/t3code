@@ -13,6 +13,27 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
  * unlabeled resting state.
  */
 export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2MenuActionId = "archive" | "delete" | "settle" | "unsettle";
+
+const CARD_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = [
+  "settle",
+  "archive",
+  "delete",
+];
+const SLIM_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = [
+  "unsettle",
+  "archive",
+  "delete",
+];
+const LEGACY_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = ["archive", "delete"];
+
+export function resolveThreadListV2MenuActionIds(input: {
+  readonly settlementSupported: boolean;
+  readonly variant: "card" | "slim";
+}): ReadonlyArray<ThreadListV2MenuActionId> {
+  if (!input.settlementSupported) return LEGACY_MENU_ACTION_IDS;
+  return input.variant === "slim" ? SLIM_MENU_ACTION_IDS : CARD_MENU_ACTION_IDS;
+}
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more. Shared by the compact Home list and

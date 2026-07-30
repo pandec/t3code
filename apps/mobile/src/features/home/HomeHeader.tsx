@@ -10,6 +10,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { useThemeColor } from "../../lib/useThemeColor";
+import type { WorkspaceState } from "../../state/workspaceModel";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { createNativeFilterMenuHeaderItem } from "../layout/native-filter-menu-items";
@@ -28,6 +29,8 @@ import {
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
+import { HomeHeaderConnectionStatus } from "./HomeHeaderConnectionStatus";
+import { workspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -41,6 +44,7 @@ export function HomeHeader(props: {
   readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
+  readonly connectionStatusState: WorkspaceState | null;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -48,6 +52,7 @@ export function HomeHeader(props: {
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
+  readonly onOpenEnvironments: () => void;
   readonly onStartNewTask: () => void;
 }) {
   if (Platform.OS === "android") {
@@ -368,14 +373,30 @@ function IosHomeHeader(props: HomeHeaderProps) {
     },
     listOrganization: !threadListV2Enabled,
   });
+  const connectionStatusState = props.connectionStatusState;
+  const connectionStatusPresentation =
+    connectionStatusState === null
+      ? null
+      : workspaceConnectionStatusPresentation(connectionStatusState);
+  const headerTitle =
+    connectionStatusPresentation === null
+      ? "Threads"
+      : () => (
+          <HomeHeaderConnectionStatus
+            presentation={connectionStatusPresentation}
+            onPress={props.onOpenEnvironments}
+          />
+        );
 
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, connectionStatusPresentation]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
+          title: "Threads",
+          headerTitle,
           headerTintColor: iconColor,
           unstable_headerRightItems:
             Platform.OS === "ios"

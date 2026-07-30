@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { WorkspaceState } from "../../state/workspaceModel";
-import { workspaceConnectionStatusLabel } from "./workspace-connection-status";
+import { workspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export function WorkspaceConnectionStatus(props: {
   readonly state: WorkspaceState;
@@ -12,16 +12,13 @@ export function WorkspaceConnectionStatus(props: {
   readonly variant?: "floating" | "sidebar";
 }) {
   const iconColor = useThemeColor("--color-icon-muted");
-  const isSynchronizing =
-    props.state.networkStatus !== "offline" &&
-    props.state.connectionError === null &&
-    (props.state.connectingEnvironments.length > 0 || props.state.hasPendingShellSnapshot);
+  const presentation = workspaceConnectionStatusPresentation(props.state);
   const variant = props.variant ?? "floating";
 
   return (
     <Pressable
       accessibilityHint="Opens environment settings"
-      accessibilityLabel={workspaceConnectionStatusLabel(props.state)}
+      accessibilityLabel={presentation.fullLabel}
       accessibilityRole="button"
       onPress={props.onPress}
       className={
@@ -40,13 +37,13 @@ export function WorkspaceConnectionStatus(props: {
           : undefined
       }
     >
-      {isSynchronizing ? (
+      {presentation.synchronizing ? (
         <ActivityIndicator color={iconColor} size="small" />
       ) : (
         <SymbolView name="wifi.slash" size={15} tintColor={iconColor} type="monochrome" />
       )}
       <Text className="min-w-0 flex-1 text-sm font-t3-bold text-foreground" numberOfLines={1}>
-        {workspaceConnectionStatusLabel(props.state)}
+        {presentation.fullLabel}
       </Text>
       {variant === "sidebar" ? (
         <SymbolView name="chevron.right" size={11} tintColor={iconColor} type="monochrome" />
