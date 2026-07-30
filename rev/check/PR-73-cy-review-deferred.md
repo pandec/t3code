@@ -10,3 +10,5 @@ contract must distinguish “cache read completed with no config” from “stil
 catalog and server-config state; approximating it with another storage cache or an unbounded splash
 wait would make startup less reliable. I recommend a focused follow-up only if an integrated
 cold-start trace shows a visible flash; otherwise drop it as theoretical.
+
+> cy-review complete — 2026-07-30T05:51:04Z — rounds: 1
