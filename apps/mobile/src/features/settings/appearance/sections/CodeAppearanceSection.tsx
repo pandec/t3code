@@ -6,13 +6,13 @@ import {
   MIN_CODE_FONT_SIZE,
 } from "../../../../lib/appearancePreferences";
 import { SettingsSection } from "../../components/SettingsSection";
+import { SettingsSliderRow } from "../../components/SettingsSliderRow";
 import { SettingsSwitchRow } from "../../components/SettingsSwitchRow";
 import { useAppearancePreferences } from "../AppearancePreferencesProvider";
 import {
   AppearancePreviewSeparator,
   CodeAppearancePreview,
 } from "../components/AppearancePreviews";
-import { FontSizeSliderRow } from "../components/FontSizeSliderRow";
 
 export function CodeAppearanceSection() {
   const { isReady, appearance, setCodeFontSize, setCodeWordBreak } = useAppearancePreferences();
@@ -40,12 +40,14 @@ export function CodeAppearanceSection() {
         value={custom}
       />
       {custom ? (
-        <FontSizeSliderRow
+        <SettingsSliderRow
           disabled={!isReady}
           icon="textformat.size"
           label="Font size"
           max={MAX_CODE_FONT_SIZE}
+          maxIcon="textformat.size.larger"
           min={MIN_CODE_FONT_SIZE}
+          minIcon="textformat.size.smaller"
           onChange={setCodeFontSize}
           step={CODE_FONT_SIZE_STEP}
           value={appearance.codeFontSize}

@@ -21,9 +21,10 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
-import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
@@ -120,8 +121,10 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
   function* () {
     const supervisor = yield* EnvironmentSupervisor;
+    const registry = yield* EnvironmentRegistry;
     const cache = yield* EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
+    const catalogEntry = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
     const cachedConfig = yield* cache.loadServerConfig(environmentId).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not load cached server configuration.").pipe(
@@ -146,15 +149,24 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, config).pipe(
-        Effect.as(true),
-        Effect.catch((error) =>
-          Effect.logWarning("Could not persist cached server configuration.").pipe(
-            Effect.annotateLogs({
-              environmentId,
-              ...safeErrorLogAttributes(error),
-            }),
-            Effect.as(false),
+      return yield* withEnvironmentCacheMutationLock(
+        cache,
+        environmentId,
+        SubscriptionRef.get(registry.entries).pipe(
+          Effect.flatMap((entries) =>
+            entries.get(environmentId) === catalogEntry
+              ? cache.saveServerConfig(environmentId, config)
+              : Effect.void,
+          ),
+          Effect.as(true),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not persist cached server configuration.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                ...safeErrorLogAttributes(error),
+              }),
+              Effect.as(false),
+            ),
           ),
         ),
       );

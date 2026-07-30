@@ -20,6 +20,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MAX_STEER_GRACE_WINDOW_MS, MIN_STEER_GRACE_WINDOW_MS } from "@t3tools/contracts/settings";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -46,11 +47,18 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { useSteerGraceWindowMs } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
+import { SettingsSliderRow } from "./components/SettingsSliderRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import {
+  formatSteerGraceWindowSeconds,
+  STEER_GRACE_WINDOW_STEP_MS,
+  toStoredSteerGraceWindowMs,
+} from "./lib/extras-settings";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -536,9 +544,11 @@ function ConfiguredSettingsRouteScreen() {
 function GeneralSettingsSection() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const projectGroupingEnabled = AsyncResult.isSuccess(preferencesResult)
+  const hydrated = AsyncResult.isSuccess(preferencesResult);
+  const projectGroupingEnabled = hydrated
     ? preferencesResult.value.projectGroupingEnabled !== false
     : true;
+  const steerGraceWindowMs = useSteerGraceWindowMs();
 
   return (
     <SettingsSection title="General">
@@ -547,6 +557,20 @@ function GeneralSettingsSection() {
         label="Project Grouping"
         value={projectGroupingEnabled}
         onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
+      />
+      <SettingsSliderRow
+        description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
+        disabled={!hydrated}
+        icon="bolt.circle"
+        label="Steer grace window"
+        max={MAX_STEER_GRACE_WINDOW_MS}
+        min={MIN_STEER_GRACE_WINDOW_MS}
+        onChange={(value) =>
+          savePreferences({ steerGraceWindowMs: toStoredSteerGraceWindowMs(value) })
+        }
+        step={STEER_GRACE_WINDOW_STEP_MS}
+        value={steerGraceWindowMs}
+        valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
       />
     </SettingsSection>
   );
