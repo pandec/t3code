@@ -84,11 +84,6 @@ describe("ProviderInstanceHealth", () => {
       yield* health.reportUsageSnapshot(instanceId, replacementPayload);
       yield* health.reportUsageSnapshot(secondInstanceId, { secondary: { usedPercent: 7 } });
 
-      expect(yield* health.getUsageSnapshot(instanceId)).toEqual({
-        instanceId,
-        payload: replacementPayload,
-        observedAt: 2_000,
-      });
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: replacementPayload, observedAt: 2_000 },
         {

@@ -1,15 +1,15 @@
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt } from "./baseSchemas.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
  * Latest opaque subscription-usage payload observed for one provider
- * instance. Providers own the payload shape; clients normalize it.
+ * instance. Providers own the payload shape; clients normalize it and
+ * already know each instance's driver from the provider list.
  */
 export const ProviderInstanceUsageSnapshot = Schema.Struct({
   instanceId: ProviderInstanceId,
-  driver: ProviderDriverKind,
   payload: Schema.Unknown,
   /** Unix milliseconds when the server observed this payload. */
   observedAt: NonNegativeInt,

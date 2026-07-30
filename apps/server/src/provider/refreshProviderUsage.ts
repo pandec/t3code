@@ -16,31 +16,12 @@ export interface UsageRefreshProviderInstance {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly enabled: boolean;
-  readonly adapter: Pick<
-    ProviderAdapterShape<ProviderAdapterError>,
-    "readAccountUsage" | "listSessions"
-  >;
+  readonly adapter: Pick<ProviderAdapterShape<ProviderAdapterError>, "readAccountUsage">;
 }
 
 export interface RefreshProviderUsageDependencies {
   readonly listInstances: Effect.Effect<ReadonlyArray<UsageRefreshProviderInstance>>;
   readonly health: Pick<ProviderInstanceHealthShape, "reportUsageSnapshot">;
-}
-
-function hasLiveSession(instance: UsageRefreshProviderInstance) {
-  return instance.adapter
-    .listSessions()
-    .pipe(
-      Effect.map((sessions) =>
-        sessions.some(
-          (session) =>
-            session.providerInstanceId === instance.instanceId &&
-            (session.status === "connecting" ||
-              session.status === "ready" ||
-              session.status === "running"),
-        ),
-      ),
-    );
 }
 
 export const refreshProviderUsageSnapshots = Effect.fn("refreshProviderUsageSnapshots")(function* (
@@ -62,9 +43,6 @@ export const refreshProviderUsageSnapshots = Effect.fn("refreshProviderUsageSnap
     instances,
     (instance) =>
       Effect.gen(function* () {
-        if (yield* hasLiveSession(instance)) {
-          return;
-        }
         const payload = yield* instance.adapter.readAccountUsage!();
         if (payload !== undefined) {
           yield* dependencies.health.reportUsageSnapshot(instance.instanceId, payload);

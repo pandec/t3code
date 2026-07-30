@@ -143,7 +143,6 @@ export interface ProviderUsageAccountRow {
   readonly email: string | undefined;
   readonly usage: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
-  readonly pending: boolean;
 }
 
 function formatRelativeAge(observedAt: number | null, nowMs: number): string {
@@ -160,6 +159,7 @@ export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot | null;
   providerUsage?: ProviderUsageSnapshot | null;
   providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
+  providerUsageRefreshing?: boolean;
   providerDisplayName?: string | null;
   onRefreshProviderUsage?: () => Promise<void> | void;
 }) {
@@ -317,14 +317,11 @@ export function ContextWindowMeter(props: {
                     type="button"
                     className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() => void props.onRefreshProviderUsage?.()}
-                    disabled={providerUsageAccounts.some((account) => account.pending)}
+                    disabled={props.providerUsageRefreshing}
                     aria-label="Refresh provider usage"
                   >
                     <RefreshCwIcon
-                      className={cn(
-                        "size-3",
-                        providerUsageAccounts.some((account) => account.pending) && "animate-spin",
-                      )}
+                      className={cn("size-3", props.providerUsageRefreshing && "animate-spin")}
                     />
                   </button>
                 ) : null}
@@ -351,7 +348,7 @@ export function ContextWindowMeter(props: {
                         />
                       </div>
                       <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
-                        {account.pending
+                        {props.providerUsageRefreshing
                           ? "updating…"
                           : formatRelativeAge(account.observedAt, nowMs)}
                       </span>

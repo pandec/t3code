@@ -3169,7 +3169,6 @@ describe("ProviderRuntimeIngestion", () => {
       providerInstanceHealth: {
         reportRateLimitPayload: () => Effect.die(new Error("simulated health reporting defect")),
         reportUsageSnapshot: () => Effect.die(new Error("simulated usage reporting defect")),
-        getUsageSnapshot: () => Effect.succeed(undefined),
         listUsageSnapshots: () => Effect.succeed([]),
         reportTurnOutcome: () => Effect.void,
         getRateLimitState: () => Effect.succeed(undefined),

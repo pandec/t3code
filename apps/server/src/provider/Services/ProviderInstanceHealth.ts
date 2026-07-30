@@ -49,10 +49,6 @@ export interface ProviderInstanceHealthShape {
     payload: unknown,
   ) => Effect.Effect<void>;
 
-  readonly getUsageSnapshot: (
-    instanceId: ProviderInstanceId,
-  ) => Effect.Effect<ProviderInstanceUsageSnapshot | undefined>;
-
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 
   /**

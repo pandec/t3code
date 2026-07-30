@@ -5,9 +5,9 @@ import type {
 
 /**
  * Presentation helpers for the mobile provider usage pill: the composer
- * toolbar trigger label and the native-menu rows (one per rate-limit window).
- * Hover popovers don't exist on mobile, so the detail view is a tap-opened
- * `ControlPillMenu` with the window facts in each row's subtitle.
+ * toolbar trigger label and the native-menu rows (one per configured
+ * account). Hover popovers don't exist on mobile, so the detail view is a
+ * tap-opened `ControlPillMenu` with the account facts in each row's subtitle.
  */
 
 export function providerUsageTriggerLabel(snapshot: ProviderUsageSnapshot): string {
@@ -41,17 +41,6 @@ function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
         : "Limit warning";
   const resetTime = formatResetTime(window.resetsAt, nowMs);
   return resetTime ? `${usage} · resets ${resetTime}` : usage;
-}
-
-export function providerUsageMenuActions(
-  snapshot: ProviderUsageSnapshot,
-  nowMs: number,
-): Array<{ id: string; title: string; subtitle: string }> {
-  return snapshot.windows.map((window) => ({
-    id: `usage:${window.id}`,
-    title: window.label,
-    subtitle: describeWindow(window, nowMs),
-  }));
 }
 
 export interface ProviderUsageMenuAccount {

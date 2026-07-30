@@ -661,10 +661,14 @@ type ProviderUsagePayloadSource = {
   readonly createdAt: string;
 };
 
-/** Normalize one server-owned per-instance usage snapshot. */
+/**
+ * Normalize one server-owned per-instance usage snapshot. The caller supplies
+ * the instance's driver via `options.provider` (it already has it from the
+ * provider list).
+ */
 export function deriveProviderUsageSnapshotFromServerSnapshot(
-  snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "driver" | "payload" | "observedAt">,
-  options: Omit<DeriveProviderUsageOptions, "provider" | "providerInstanceId"> = {},
+  snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> = {},
 ): ProviderUsageSnapshot | null {
   return deriveProviderUsageSnapshotFromSources(
     [
@@ -675,7 +679,6 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
     ],
     {
       ...options,
-      provider: snapshot.driver,
       providerInstanceId: snapshot.instanceId,
     },
   );

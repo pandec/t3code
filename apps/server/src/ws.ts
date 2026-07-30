@@ -1021,28 +1021,9 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      const readProviderUsageSnapshots = Effect.gen(function* () {
-        const [instances, snapshots] = yield* Effect.all([
-          providerInstanceRegistry.listInstances,
-          providerInstanceHealth.listUsageSnapshots(),
-        ]);
-        const instanceById = new Map(instances.map((instance) => [instance.instanceId, instance]));
-        return {
-          snapshots: snapshots.flatMap((snapshot) => {
-            const instance = instanceById.get(snapshot.instanceId);
-            return instance === undefined
-              ? []
-              : [
-                  {
-                    instanceId: snapshot.instanceId,
-                    driver: instance.driverKind,
-                    payload: snapshot.payload,
-                    observedAt: snapshot.observedAt,
-                  },
-                ];
-          }),
-        };
-      });
+      const readProviderUsageSnapshots = providerInstanceHealth
+        .listUsageSnapshots()
+        .pipe(Effect.map((snapshots) => ({ snapshots })));
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>

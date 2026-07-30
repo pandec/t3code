@@ -390,9 +390,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (providerUsageInstanceId === null) return null;
     const snapshot = providerUsageSnapshotByInstance.get(providerUsageInstanceId);
     return snapshot
-      ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, { now: providerUsageNowMs })
+      ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+          provider: selectedProviderStatus?.driver ?? null,
+          now: providerUsageNowMs,
+        })
       : null;
-  }, [providerUsageInstanceId, providerUsageNowMs, providerUsageSnapshotByInstance]);
+  }, [
+    providerUsageInstanceId,
+    providerUsageNowMs,
+    providerUsageSnapshotByInstance,
+    selectedProviderStatus?.driver,
+  ]);
   const activityProviderUsage = useMemo(
     () =>
       deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
@@ -431,6 +439,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             email: provider.auth.email,
             snapshot: snapshot
               ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+                  provider: provider.driver,
                   now: providerUsageNowMs,
                 })
               : null,

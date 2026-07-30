@@ -1,11 +1,7 @@
 import type { ProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  providerUsageAccountMenuActions,
-  providerUsageMenuActions,
-  providerUsageTriggerLabel,
-} from "./providerUsageMenu";
+import { providerUsageAccountMenuActions, providerUsageTriggerLabel } from "./providerUsageMenu";
 
 const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
 
@@ -63,66 +59,9 @@ describe("providerUsageTriggerLabel", () => {
   });
 });
 
-describe("providerUsageMenuActions", () => {
-  it("builds one row per window with usage and reset in the subtitle", () => {
-    const resetsAt = Math.floor(Date.parse("2026-07-25T09:00:00.000Z") / 1_000);
-    const actions = providerUsageMenuActions(
-      makeSnapshot({
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: 42,
-            resetsAt,
-            status: "ok",
-          },
-          {
-            id: "seven_day",
-            group: "weekly",
-            label: "Weekly (all models)",
-            shortLabel: "Wk",
-            usedPercent: null,
-            resetsAt: null,
-            status: "warning",
-          },
-        ],
-      }),
-      NOW_MS,
-    );
-
-    expect(actions).toHaveLength(2);
-    expect(actions[0]?.title).toBe("Session (5h)");
-    expect(actions[0]?.subtitle).toMatch(/^42% used · resets /);
-    expect(actions[1]?.subtitle).toBe("Limit warning");
-  });
-
-  it("describes exhausted numberless windows as limit reached", () => {
-    const actions = providerUsageMenuActions(
-      makeSnapshot({
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: null,
-            resetsAt: Math.floor(NOW_MS / 1_000) - 60,
-            status: "critical",
-          },
-        ],
-      }),
-      NOW_MS,
-    );
-
-    // A reset time in the past is stale information; only the state remains.
-    expect(actions[0]?.subtitle).toBe("Limit reached");
-  });
-});
-
 describe("providerUsageAccountMenuActions", () => {
   it("builds one row per account with email, windows, and freshness", () => {
+    const resetsAt = Math.floor(Date.parse("2026-07-25T09:00:00.000Z") / 1_000);
     const actions = providerUsageAccountMenuActions(
       [
         {
@@ -137,8 +76,17 @@ describe("providerUsageAccountMenuActions", () => {
                 label: "Session (5h)",
                 shortLabel: "5h",
                 usedPercent: 42,
-                resetsAt: null,
+                resetsAt,
                 status: "ok",
+              },
+              {
+                id: "seven_day",
+                group: "weekly",
+                label: "Weekly (all models)",
+                shortLabel: "Wk",
+                usedPercent: null,
+                resetsAt: null,
+                status: "warning",
               },
             ],
           }),
@@ -160,8 +108,40 @@ describe("providerUsageAccountMenuActions", () => {
       title: "Claude Work",
       subtitle: expect.stringContaining("work@example.com"),
     });
-    expect(actions[0]?.subtitle).toContain("42% used");
+    expect(actions[0]?.subtitle).toMatch(/42% used · resets /);
+    expect(actions[0]?.subtitle).toContain("Limit warning");
     expect(actions[0]?.subtitle).toContain("updated 4m ago");
     expect(actions[1]?.subtitle).toContain("No usage data");
+  });
+
+  it("describes exhausted numberless windows as limit reached", () => {
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-work",
+          displayName: "Claude Work",
+          email: undefined,
+          snapshot: makeSnapshot({
+            windows: [
+              {
+                id: "five_hour",
+                group: "session",
+                label: "Session (5h)",
+                shortLabel: "5h",
+                usedPercent: null,
+                resetsAt: Math.floor(NOW_MS / 1_000) - 60,
+                status: "critical",
+              },
+            ],
+          }),
+          observedAt: NOW_MS,
+        },
+      ],
+      NOW_MS,
+    );
+
+    // A reset time in the past is stale information; only the state remains.
+    expect(actions[0]?.subtitle).toContain("Limit reached");
+    expect(actions[0]?.subtitle).not.toContain("resets");
   });
 });

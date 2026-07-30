@@ -181,9 +181,6 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     );
   });
 
-  const getUsageSnapshot: ProviderInstanceHealthShape["getUsageSnapshot"] = (instanceId) =>
-    Ref.get(usageSnapshots).pipe(Effect.map((snapshots) => snapshots.get(instanceId)));
-
   const listUsageSnapshots: ProviderInstanceHealthShape["listUsageSnapshots"] = () =>
     Ref.get(usageSnapshots).pipe(Effect.map((snapshots) => Array.from(snapshots.values())));
 
@@ -256,7 +253,6 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
   return {
     reportRateLimitPayload,
     reportUsageSnapshot,
-    getUsageSnapshot,
     listUsageSnapshots,
     reportTurnOutcome,
     getRateLimitState,

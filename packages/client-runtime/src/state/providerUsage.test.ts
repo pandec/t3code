@@ -1020,12 +1020,14 @@ describe("server-owned provider usage snapshots", () => {
         ],
       },
     };
-    const fromServer = deriveProviderUsageSnapshotFromServerSnapshot({
-      instanceId: ProviderInstanceId.make("claude-work"),
-      driver: ProviderDriverKind.make("claudeAgent"),
-      payload,
-      observedAt: Date.parse("2026-07-25T00:00:00.000Z"),
-    });
+    const fromServer = deriveProviderUsageSnapshotFromServerSnapshot(
+      {
+        instanceId: ProviderInstanceId.make("claude-work"),
+        payload,
+        observedAt: Date.parse("2026-07-25T00:00:00.000Z"),
+      },
+      { provider: ProviderDriverKind.make("claudeAgent") },
+    );
     const fromActivity = deriveLatestProviderUsageSnapshot(
       [makeActivity("server-parity", payload)],
       {
