@@ -251,11 +251,10 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
-  // Shared by ingestion (writes) and the command reactor (reads at turn
-  // start) so rate-limit verdicts observed on one thread reroute every
-  // thread on the limited instance.
+  Layer.provideMerge(ProviderUsageRefreshLive),
+  // Structurally shared by ingestion, refresh, RPC reads, and the command
+  // reactor so every consumer observes the same in-memory health state.
   Layer.provideMerge(ProviderInstanceHealthLive),
-  Layer.provideMerge(ProviderUsageRefreshLive.pipe(Layer.provide(ProviderInstanceHealthLive))),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(

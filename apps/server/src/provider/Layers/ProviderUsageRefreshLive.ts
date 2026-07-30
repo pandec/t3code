@@ -36,7 +36,15 @@ export interface UsageRefreshProviderInstance {
 
 export interface ProviderUsageRefreshDependencies {
   readonly listInstances: Effect.Effect<ReadonlyArray<UsageRefreshProviderInstance>>;
-  readonly health: Pick<ProviderInstanceHealthShape, "reportUsageSnapshot">;
+  readonly health: Pick<
+    ProviderInstanceHealthShape,
+    "beginUsageObservation" | "reportUsageSnapshot"
+  >;
+}
+
+interface InFlightUsageProbe {
+  readonly adapter: UsageRefreshProviderInstance["adapter"];
+  readonly completion: Deferred.Deferred<void>;
 }
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
@@ -47,16 +55,13 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
 ) {
   const serverScope = yield* Scope.Scope;
   const probeGate = yield* Semaphore.make(MAX_CONCURRENT_USAGE_PROBES);
-  const inFlight = yield* Ref.make<ReadonlyMap<ProviderInstanceId, Deferred.Deferred<void>>>(
-    new Map(),
-  );
+  const inFlight = yield* Ref.make<ReadonlyMap<ProviderInstanceId, InFlightUsageProbe>>(new Map());
 
   const runProbe = (instance: UsageRefreshProviderInstance, completion: Deferred.Deferred<void>) =>
     probeGate
       .withPermits(1)(
         Effect.gen(function* () {
-          // The ordering token belongs to the start of the provider observation,
-          // not its eventual arrival at the shared snapshot Ref.
+          const observationToken = yield* dependencies.health.beginUsageObservation();
           const observedAt = yield* Clock.currentTimeMillis;
           const payload = yield* instance.adapter.readAccountUsage!();
           if (payload !== undefined) {
@@ -64,6 +69,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               instance.instanceId,
               payload,
               observedAt,
+              observationToken,
             );
           }
         }).pipe(Effect.timeout(USAGE_PROBE_TIMEOUT)),
@@ -82,7 +88,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         Effect.ensuring(
           Effect.gen(function* () {
             yield* Ref.update(inFlight, (current) => {
-              if (current.get(instance.instanceId) !== completion) return current;
+              if (current.get(instance.instanceId)?.completion !== completion) return current;
               const next = new Map(current);
               next.delete(instance.instanceId);
               return next;
@@ -98,18 +104,24 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         const candidate = yield* Deferred.make<void>();
         const registration = yield* Ref.modify(inFlight, (current) => {
           const existing = current.get(instance.instanceId);
-          if (existing !== undefined) {
+          if (existing !== undefined && existing.adapter === instance.adapter) {
             const joined: {
               readonly completion: Deferred.Deferred<void>;
               readonly owner: boolean;
-            } = { completion: existing, owner: false };
+            } = { completion: existing.completion, owner: false };
             return [joined, current] as const;
           }
           const owned: {
             readonly completion: Deferred.Deferred<void>;
             readonly owner: boolean;
           } = { completion: candidate, owner: true };
-          return [owned, new Map(current).set(instance.instanceId, candidate)] as const;
+          return [
+            owned,
+            new Map(current).set(instance.instanceId, {
+              adapter: instance.adapter,
+              completion: candidate,
+            }),
+          ] as const;
         });
 
         if (registration.owner) {

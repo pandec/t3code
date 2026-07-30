@@ -1348,7 +1348,15 @@ const make = Effect.gen(function* () {
     );
     yield* reportHealthSafely(
       event,
-      providerInstanceHealth.reportUsageSnapshot(instanceId, event.payload.rateLimits, observedAt),
+      Effect.gen(function* () {
+        const observationToken = yield* providerInstanceHealth.beginUsageObservation();
+        yield* providerInstanceHealth.reportUsageSnapshot(
+          instanceId,
+          event.payload.rateLimits,
+          observedAt,
+          observationToken,
+        );
+      }),
     );
   });
 

@@ -6,8 +6,11 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import type { ProviderAdapterError } from "../Errors.ts";
+import type { UsageObservationToken } from "../Services/ProviderInstanceHealth.ts";
+import { makeProviderInstanceHealth } from "./ProviderInstanceHealthLive.ts";
 import {
   makeProviderUsageRefresh,
+  type ProviderUsageRefreshDependencies,
   type UsageRefreshProviderInstance,
 } from "./ProviderUsageRefreshLive.ts";
 
@@ -35,6 +38,21 @@ function instance(input: {
   };
 }
 
+function usageHealth(
+  reportUsageSnapshot: ProviderUsageRefreshDependencies["health"]["reportUsageSnapshot"] = () =>
+    Effect.void,
+): ProviderUsageRefreshDependencies["health"] {
+  let nextToken = 0;
+  return {
+    beginUsageObservation: () =>
+      Effect.sync(() => {
+        nextToken += 1;
+        return nextToken as UsageObservationToken;
+      }),
+    reportUsageSnapshot,
+  };
+}
+
 it.effect("skips disabled and unsupported instances", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -47,10 +65,9 @@ it.effect("skips disabled and unsupported instances", () =>
       const reports = yield* Ref.make<ReadonlyArray<string>>([]);
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed(instances),
-        health: {
-          reportUsageSnapshot: (instanceId) =>
-            Ref.update(reports, (current) => [...current, instanceId]),
-        },
+        health: usageHealth((instanceId) =>
+          Ref.update(reports, (current) => [...current, instanceId]),
+        ),
       });
 
       yield* coordinator.refresh();
@@ -67,10 +84,9 @@ it.effect("skips reporting when the adapter has no usage payload", () =>
       const reports = yield* Ref.make<ReadonlyArray<string>>([]);
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed([instance({ id: "claude_empty", read: Effect.void })]),
-        health: {
-          reportUsageSnapshot: (instanceId) =>
-            Ref.update(reports, (current) => [...current, instanceId]),
-        },
+        health: usageHealth((instanceId) =>
+          Ref.update(reports, (current) => [...current, instanceId]),
+        ),
       });
 
       yield* coordinator.refresh();
@@ -94,15 +110,47 @@ it.effect("isolates one instance failure and continues refreshing siblings", () 
       ];
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed(instances),
-        health: {
-          reportUsageSnapshot: (instanceId) =>
-            Ref.update(reports, (current) => [...current, instanceId]),
-        },
+        health: usageHealth((instanceId) =>
+          Ref.update(reports, (current) => [...current, instanceId]),
+        ),
       });
 
       yield* coordinator.refresh();
 
       expect(yield* Ref.get(reports)).toEqual(["claude_healthy"]);
+    }),
+  ),
+);
+
+it.effect("clears a failed probe so a later refresh can retry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const reports = yield* Ref.make(0);
+      const target = ProviderInstanceId.make("claude_retry");
+      const failure = {
+        _tag: "ProviderAdapterError",
+        message: "simulated first-attempt failure",
+      } as unknown as ProviderAdapterError;
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Effect.succeed([
+          instance({
+            id: target,
+            read: Ref.updateAndGet(attempts, (count) => count + 1).pipe(
+              Effect.flatMap((attempt) =>
+                attempt === 1 ? Effect.fail(failure) : Effect.succeed({ used: 12 }),
+              ),
+            ),
+          }),
+        ]),
+        health: usageHealth(() => Ref.update(reports, (count) => count + 1)),
+      });
+
+      yield* coordinator.refresh([target]);
+      yield* coordinator.refresh([target]);
+
+      expect(yield* Ref.get(attempts)).toBe(2);
+      expect(yield* Ref.get(reports)).toBe(1);
     }),
   ),
 );
@@ -117,7 +165,7 @@ it.effect("honors an explicit instance-id subset", () =>
           instance({ id: target, onRead: () => reads.push("target") }),
           instance({ id: "claude_other", onRead: () => reads.push("other") }),
         ]),
-        health: { reportUsageSnapshot: () => Effect.void },
+        health: usageHealth(),
       });
 
       yield* coordinator.refresh([target]);
@@ -149,7 +197,7 @@ it.effect("caps concurrent provider reads at three across refresh calls", () =>
       );
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed(instances),
-        health: { reportUsageSnapshot: () => Effect.void },
+        health: usageHealth(),
       });
 
       const first = yield* coordinator
@@ -185,7 +233,7 @@ it.effect("shares one in-flight probe between callers", () =>
             ),
           }),
         ]),
-        health: { reportUsageSnapshot: () => Effect.void },
+        health: usageHealth(),
       });
 
       const first = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
@@ -218,7 +266,7 @@ it.effect("keeps a shared probe alive when its first caller is interrupted", () 
             ),
           }),
         ]),
-        health: { reportUsageSnapshot: () => Effect.void },
+        health: usageHealth(),
       });
 
       const first = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
@@ -230,6 +278,102 @@ it.effect("keeps a shared probe alive when its first caller is interrupted", () 
       yield* Deferred.succeed(releaseRead, undefined);
       yield* Fiber.join(second);
       expect(yield* Ref.get(readCount)).toBe(1);
+    }),
+  ),
+);
+
+it.effect("does not let a late probe overwrite a newer usage observation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const releaseRead = yield* Deferred.make<void>();
+      const readStarted = yield* Deferred.make<void>();
+      const target = ProviderInstanceId.make("claude_ordered");
+      const health = yield* makeProviderInstanceHealth;
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Effect.succeed([
+          instance({
+            id: target,
+            read: Deferred.succeed(readStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseRead)),
+              Effect.as({ source: "manual-probe" }),
+            ),
+          }),
+        ]),
+        health,
+      });
+
+      const probe = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Deferred.await(readStarted);
+      yield* health.reportUsageSnapshot(
+        target,
+        { source: "turn-boundary" },
+        1_000,
+        yield* health.beginUsageObservation(),
+      );
+      yield* Deferred.succeed(releaseRead, undefined);
+      yield* Fiber.join(probe);
+
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        {
+          instanceId: target,
+          payload: { source: "turn-boundary" },
+          observedAt: 1_000,
+        },
+      ]);
+    }),
+  ),
+);
+
+it.effect("starts a new probe when an instance is replaced under the same id", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const releaseOldRead = yield* Deferred.make<void>();
+      const oldReadStarted = yield* Deferred.make<void>();
+      const replacementReads = yield* Ref.make(0);
+      const target = ProviderInstanceId.make("claude_replaced");
+      const oldInstance = instance({
+        id: target,
+        read: Deferred.succeed(oldReadStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseOldRead)),
+          Effect.as({ source: "old-account" }),
+        ),
+      });
+      const replacementInstance = instance({
+        id: target,
+        read: Ref.update(replacementReads, (count) => count + 1).pipe(
+          Effect.as({ source: "replacement-account" }),
+        ),
+      });
+      const instances = yield* Ref.make<ReadonlyArray<UsageRefreshProviderInstance>>([oldInstance]);
+      const health = yield* makeProviderInstanceHealth;
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Ref.get(instances),
+        health,
+      });
+
+      const oldRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Deferred.await(oldReadStarted);
+      yield* Ref.set(instances, [replacementInstance]);
+      yield* coordinator.refresh([target]);
+
+      expect(yield* Ref.get(replacementReads)).toBe(1);
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        {
+          instanceId: target,
+          payload: { source: "replacement-account" },
+          observedAt: expect.any(Number),
+        },
+      ]);
+
+      yield* Deferred.succeed(releaseOldRead, undefined);
+      yield* Fiber.join(oldRefresh);
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        {
+          instanceId: target,
+          payload: { source: "replacement-account" },
+          observedAt: expect.any(Number),
+        },
+      ]);
     }),
   ),
 );

@@ -79,9 +79,24 @@ describe("ProviderInstanceHealth", () => {
       const firstPayload = { source: "claude.usage-api", rateLimits: { limits: [] } };
       const replacementPayload = { primary: { usedPercent: 42 } };
 
-      yield* health.reportUsageSnapshot(instanceId, firstPayload, 0);
-      yield* health.reportUsageSnapshot(instanceId, replacementPayload, 2_000);
-      yield* health.reportUsageSnapshot(secondInstanceId, { secondary: { usedPercent: 7 } }, 2_000);
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        firstPayload,
+        0,
+        yield* health.beginUsageObservation(),
+      );
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        replacementPayload,
+        2_000,
+        yield* health.beginUsageObservation(),
+      );
+      yield* health.reportUsageSnapshot(
+        secondInstanceId,
+        { secondary: { usedPercent: 7 } },
+        2_000,
+        yield* health.beginUsageObservation(),
+      );
 
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: replacementPayload, observedAt: 2_000 },
@@ -95,22 +110,36 @@ describe("ProviderInstanceHealth", () => {
     }),
   );
 
-  it.effect("does not let an older observation overwrite a newer usage snapshot", () =>
+  it.effect("orders usage writes by monotonic observation token instead of wall time", () =>
     Effect.gen(function* () {
       const health = yield* makeProviderInstanceHealth;
       const newerPayload = { source: "newer" };
       const olderPayload = { source: "older" };
       const equalTimestampPayload = { source: "equal-timestamp" };
+      const backwardClockPayload = { source: "backward-clock" };
+      const replayPayload = { source: "replayed-token" };
+      const firstToken = yield* health.beginUsageObservation();
+      const secondToken = yield* health.beginUsageObservation();
 
-      yield* health.reportUsageSnapshot(instanceId, newerPayload, 2_000);
-      yield* health.reportUsageSnapshot(instanceId, olderPayload, 1_000);
+      expect(secondToken).toBeGreaterThan(firstToken);
+
+      yield* health.reportUsageSnapshot(instanceId, newerPayload, 1_000, secondToken);
+      yield* health.reportUsageSnapshot(instanceId, olderPayload, 3_000, firstToken);
       expect(yield* health.listUsageSnapshots()).toEqual([
-        { instanceId, payload: newerPayload, observedAt: 2_000 },
+        { instanceId, payload: newerPayload, observedAt: 1_000 },
       ]);
 
-      yield* health.reportUsageSnapshot(instanceId, equalTimestampPayload, 2_000);
+      const thirdToken = yield* health.beginUsageObservation();
+      yield* health.reportUsageSnapshot(instanceId, equalTimestampPayload, 1_000, thirdToken);
       expect(yield* health.listUsageSnapshots()).toEqual([
-        { instanceId, payload: equalTimestampPayload, observedAt: 2_000 },
+        { instanceId, payload: equalTimestampPayload, observedAt: 1_000 },
+      ]);
+
+      const fourthToken = yield* health.beginUsageObservation();
+      yield* health.reportUsageSnapshot(instanceId, backwardClockPayload, 500, fourthToken);
+      yield* health.reportUsageSnapshot(instanceId, replayPayload, 4_000, fourthToken);
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        { instanceId, payload: backwardClockPayload, observedAt: 500 },
       ]);
     }),
   );

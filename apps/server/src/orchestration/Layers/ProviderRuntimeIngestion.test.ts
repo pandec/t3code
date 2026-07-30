@@ -3183,6 +3183,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness({
       providerInstanceHealth: {
         reportRateLimitPayload: () => Effect.die(new Error("simulated health reporting defect")),
+        beginUsageObservation: () => Effect.die(new Error("simulated usage observation defect")),
         reportUsageSnapshot: () => Effect.die(new Error("simulated usage reporting defect")),
         listUsageSnapshots: () => Effect.succeed([]),
         reportTurnOutcome: () => Effect.void,

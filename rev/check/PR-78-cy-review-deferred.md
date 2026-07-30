@@ -10,4 +10,9 @@ between masking, omission, or a dedicated detail surface is a product decision. 
 the desired mobile privacy behavior in a focused follow-up before expanding provider-account PII to
 more mobile surfaces.
 
-> cy-review complete — 2026-07-30T12:53:15Z — rounds: 1
+## Round 2
+
+No new items were deferred. The same-ID replacement, snapshot ordering, and shared-layer ownership
+findings were fixed in this pass; the mobile disclosure decision above remains the only deferred item.
+
+> cy-review complete — 2026-07-30T13:15:38Z — rounds: 2
