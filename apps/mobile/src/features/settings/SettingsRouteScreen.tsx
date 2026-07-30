@@ -46,7 +46,12 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { threadPrewarmTriggerCommand, useThreadPrewarmSummary } from "../../state/prewarm";
+import {
+  didEnvironmentPrewarmRunsAdvance,
+  threadPrewarmTriggerCommand,
+  type ThreadPrewarmSummary,
+  useThreadPrewarmSummary,
+} from "../../state/prewarm";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -566,6 +571,15 @@ function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
   return `Synced ${new Date(lastRunAt).toLocaleDateString()}`;
 }
 
+function useMinuteClockMs(): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return nowMs;
+}
+
 /**
  * Manual counterpart of the automatic thread prewarming: fires the same
  * engine on demand (bypassing its cooldown) and shows when any environment
@@ -578,26 +592,43 @@ function ThreadSyncRow() {
   const icon = useThemeColor("--color-icon");
   const summary = useThreadPrewarmSummary();
   const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
-  const [requestedAt, setRequestedAt] = useState<number | null>(null);
+  const nowMs = useMinuteClockMs();
+  const syncInFlight = useRef(false);
+  const [requestedFrom, setRequestedFrom] = useState<
+    ThreadPrewarmSummary["environmentLastRunAt"] | null
+  >(null);
 
   const syncing =
-    requestedAt !== null && (summary.lastRunAt === null || summary.lastRunAt < requestedAt);
+    requestedFrom !== null &&
+    !didEnvironmentPrewarmRunsAdvance(summary.environmentLastRunAt, requestedFrom);
 
   useEffect(() => {
-    if (!syncing) return;
-    const timer = setTimeout(() => setRequestedAt(null), THREAD_SYNC_PENDING_TIMEOUT_MS);
+    if (requestedFrom === null) return;
+    if (!syncing) {
+      syncInFlight.current = false;
+      setRequestedFrom(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      syncInFlight.current = false;
+      setRequestedFrom(null);
+    }, THREAD_SYNC_PENDING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [syncing, requestedAt]);
+  }, [requestedFrom, syncing]);
 
-  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, Date.now());
+  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, nowMs);
 
   return (
     <Pressable
       accessibilityLabel="Sync threads now"
       accessibilityRole="button"
+      accessibilityState={{ busy: syncing, disabled: syncing }}
+      accessibilityValue={{ text: statusLabel }}
       disabled={syncing}
       onPress={() => {
-        setRequestedAt(Date.now());
+        if (syncInFlight.current) return;
+        syncInFlight.current = true;
+        setRequestedFrom(new Map(summary.environmentLastRunAt));
         void fireTrigger({ reason: "manual" });
       }}
     >

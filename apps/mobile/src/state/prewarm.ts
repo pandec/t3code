@@ -3,6 +3,7 @@ import {
   advanceThreadStreamingSnapshot,
   createEnvironmentThreadPrewarmAtoms,
   createThreadPrewarmSummaryAtom,
+  didEnvironmentPrewarmRunsAdvance,
   seedThreadStreamingSnapshot,
   ThreadPrewarmTriggers,
   type ThreadPrewarmSummary,
@@ -34,6 +35,9 @@ export const threadPrewarmTriggerCommand = createRuntimeCommand(connectionAtomRu
 export function useThreadPrewarmSummary(): ThreadPrewarmSummary {
   return useAtomValue(threadPrewarmSummaryAtom);
 }
+
+export { didEnvironmentPrewarmRunsAdvance };
+export type { ThreadPrewarmSummary };
 
 /**
  * Keeps the per-environment thread prewarm streams mounted for as long as the

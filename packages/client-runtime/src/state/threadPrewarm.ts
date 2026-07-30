@@ -361,7 +361,8 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
           const now = yield* Clock.currentTimeMillis;
           const lastFull = yield* Ref.get(lastFullRunAt);
           const cooldownElapsed = lastFull === null || now - lastFull >= PREWARM_COOLDOWN_MS;
-          const runFull = batch.manual || (batch.lifecycle && cooldownElapsed);
+          const consumeCooldown = batch.lifecycle && cooldownElapsed;
+          const runFull = batch.manual || consumeCooldown;
           if (!runFull && batch.settled.size === 0) {
             return Option.none<EnvironmentThreadPrewarmStatus>();
           }
@@ -383,7 +384,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
               ),
             ),
           );
-          if (runFull && Option.isSome(result)) {
+          if (consumeCooldown && Option.isSome(result)) {
             yield* Ref.set(lastFullRunAt, result.value.lastRunAt);
           }
           return result;
@@ -422,12 +423,41 @@ export interface ThreadPrewarmSummary {
   /** Latest completed run across environments, or null before the first. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
+  /** Per-environment completion cursors used to track a manual all-environment run. */
+  readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
 }
 
 const EMPTY_THREAD_PREWARM_SUMMARY: ThreadPrewarmSummary = Object.freeze({
   lastRunAt: null,
   refreshed: 0,
+  environmentLastRunAt: new Map<EnvironmentIdType, number | null>(),
 });
+
+function environmentRunTimesEqual(
+  left: ReadonlyMap<EnvironmentIdType, number | null>,
+  right: ReadonlyMap<EnvironmentIdType, number | null>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [environmentId, lastRunAt] of left) {
+    if (!right.has(environmentId) || right.get(environmentId) !== lastRunAt) return false;
+  }
+  return true;
+}
+
+/**
+ * Returns true after every environment present when a manual sync was
+ * requested has completed another run. Removed environments stop blocking;
+ * environments added after the request join the next manual sync instead.
+ */
+export function didEnvironmentPrewarmRunsAdvance(
+  current: ReadonlyMap<EnvironmentIdType, number | null>,
+  requestedFrom: ReadonlyMap<EnvironmentIdType, number | null>,
+): boolean {
+  for (const [environmentId, lastRunAt] of requestedFrom) {
+    if (current.has(environmentId) && current.get(environmentId) === lastRunAt) return false;
+  }
+  return true;
+}
 
 /**
  * Keeps a prewarm stream mounted for every catalog environment and exposes a
@@ -444,20 +474,26 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
   return Atom.make((get) => {
     let lastRunAt: number | null = null;
     let refreshed = 0;
+    const environmentLastRunAt = new Map<EnvironmentIdType, number | null>();
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
       const status = Option.getOrElse(
         AsyncResult.value(get(input.statusAtom(environmentId))),
         () => EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
       );
       refreshed += status.refreshed;
+      environmentLastRunAt.set(environmentId, status.lastRunAt);
       if (status.lastRunAt !== null && (lastRunAt === null || status.lastRunAt > lastRunAt)) {
         lastRunAt = status.lastRunAt;
       }
     }
-    if (previous.lastRunAt === lastRunAt && previous.refreshed === refreshed) {
+    if (
+      previous.lastRunAt === lastRunAt &&
+      previous.refreshed === refreshed &&
+      environmentRunTimesEqual(previous.environmentLastRunAt, environmentLastRunAt)
+    ) {
       return previous;
     }
-    previous = { lastRunAt, refreshed };
+    previous = { lastRunAt, refreshed, environmentLastRunAt };
     return previous;
   }).pipe(Atom.withLabel("environment-thread-prewarm-summary"));
 }

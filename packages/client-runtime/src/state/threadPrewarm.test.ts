@@ -29,6 +29,7 @@ import * as Persistence from "../platform/persistence.ts";
 import {
   advanceThreadStreamingSnapshot,
   commitPrewarmedThreadSnapshot,
+  didEnvironmentPrewarmRunsAdvance,
   makeEnvironmentThreadPrewarm,
   seedThreadStreamingSnapshot,
   selectPrewarmCandidates,
@@ -418,7 +419,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
-  it.effect("runs a full warm on manual sync despite the cooldown", () =>
+  it.effect("runs a full manual warm without extending the lifecycle cooldown", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
@@ -439,9 +440,94 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.refreshed).toBe(1);
         expect(status.skipped).toBe(1);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+
+        // The manual run completed three seconds after the lifecycle run. A
+        // lifecycle trigger that drains exactly 60 seconds after the original
+        // run must still proceed; if manual sync consumed the cooldown it
+        // would remain suppressed for another three seconds.
+        yield* TestClock.adjust("54 seconds");
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect((yield* Queue.take(harness.statuses)).skipped).toBe(2);
       }),
     ),
   );
+
+  it.effect("keeps a settled target when a cooling lifecycle trigger joins its batch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        yield* Ref.update(harness.stored, (map) =>
+          new Map(map)
+            .set("stale", detailSnapshot("stale", 3))
+            .set("current", detailSnapshot("current", 3)),
+        );
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* harness.fire({
+          reason: "thread-settled",
+          environmentId: ENVIRONMENT_ID,
+          threadId: ThreadId.make("stale"),
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.skipped).toBe(0);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+        expect((yield* Ref.get(harness.stored)).get("current")?.snapshotSequence).toBe(3);
+      }),
+    ),
+  );
+});
+
+describe("manual prewarm completion", () => {
+  const OTHER_ENVIRONMENT_ID = EnvironmentId.make("environment-2");
+
+  it("waits for every requested environment without comparing wall clocks", () => {
+    const requestedFrom = new Map([
+      [ENVIRONMENT_ID, 100],
+      [OTHER_ENVIRONMENT_ID, null],
+    ]);
+
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        new Map([
+          [ENVIRONMENT_ID, 90],
+          [OTHER_ENVIRONMENT_ID, null],
+        ]),
+        requestedFrom,
+      ),
+    ).toBe(false);
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        new Map([
+          [ENVIRONMENT_ID, 90],
+          [OTHER_ENVIRONMENT_ID, 50],
+        ]),
+        requestedFrom,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not wait for an environment removed after the request", () => {
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        new Map([[ENVIRONMENT_ID, 200]]),
+        new Map([
+          [ENVIRONMENT_ID, 100],
+          [OTHER_ENVIRONMENT_ID, null],
+        ]),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("thread streaming snapshots", () => {
