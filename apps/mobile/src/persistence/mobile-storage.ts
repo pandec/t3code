@@ -17,6 +17,7 @@ const CONNECTIONS_KEY = "t3code.connections";
 const AGENT_AWARENESS_DEVICE_ID_KEY = "t3code.agent-awareness.device-id";
 const AGENT_AWARENESS_REGISTRATION_KEY = "t3code.agent-awareness.registration";
 const RECENT_THREAD_SHORTCUTS_KEY = "t3code.recent-thread-shortcuts";
+const PROJECT_ACCENT_COLORS_KEY = "t3code.projectAccentColors";
 
 export class MobileStorageDecodeError extends Schema.TaggedErrorClass<MobileStorageDecodeError>()(
   "MobileStorageDecodeError",
@@ -62,6 +63,9 @@ export interface RecentThreadShortcut {
   readonly threadId: string;
   readonly title: string;
 }
+
+/** Accent maps as written, keyed by environment id then by accent key. */
+export type StoredProjectAccentColors = Readonly<Record<string, Readonly<Record<string, string>>>>;
 
 export class MobileStorage extends Context.Service<
   MobileStorage,
@@ -110,6 +114,21 @@ export class MobileStorage extends Context.Service<
     >;
     readonly saveRecentThreadShortcuts: (
       threads: ReadonlyArray<RecentThreadShortcut>,
+    ) => Effect.Effect<
+      void,
+      MobileSecureStorage.MobileSecureStorageError | MobileStorageEncodeError
+    >;
+    /**
+     * Raw stored accent maps. Sanitizing them is the reader's job (see
+     * `state/project-accent-color-cache`): which colors are renderable is a UI
+     * concern, and keeping it there keeps it testable without storage mocks.
+     */
+    readonly loadProjectAccentColors: Effect.Effect<
+      unknown,
+      MobileSecureStorage.MobileSecureStorageError
+    >;
+    readonly saveProjectAccentColors: (
+      environments: StoredProjectAccentColors,
     ) => Effect.Effect<
       void,
       MobileSecureStorage.MobileSecureStorageError | MobileStorageEncodeError
@@ -245,6 +264,12 @@ export const make = Effect.fn("MobileStorage.make")(function* () {
     ),
   );
 
+  // Last-known project accent colors per environment: the thread list serves
+  // them on launch so rows are not colorless until environments connect.
+  const loadProjectAccentColors = readJson<{ readonly environments?: unknown }>(
+    PROJECT_ACCENT_COLORS_KEY,
+  ).pipe(Effect.map((parsed) => parsed?.environments));
+
   return MobileStorage.of({
     loadSavedConnections,
     saveConnection,
@@ -260,6 +285,9 @@ export const make = Effect.fn("MobileStorage.make")(function* () {
     ),
     loadRecentThreadShortcuts,
     saveRecentThreadShortcuts: (threads) => writeJson(RECENT_THREAD_SHORTCUTS_KEY, { threads }),
+    loadProjectAccentColors,
+    saveProjectAccentColors: (environments) =>
+      writeJson(PROJECT_ACCENT_COLORS_KEY, { environments }),
   });
 });
 

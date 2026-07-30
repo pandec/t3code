@@ -113,7 +113,7 @@ export function queuedThreadMessageIntent(
  *
  * The default for every caller that does not pass a window. Web overrides it
  * per call from the `steerGraceWindowMs` client setting; mobile does not sync
- * client settings, so it keeps this value.
+ * client settings, so it passes the device preference of the same name.
  */
 export const STEER_GRACE_WINDOW_MS = 5_000;
 

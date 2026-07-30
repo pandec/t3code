@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { SymbolView } from "../../../../components/AppSymbol";
+import { SymbolView } from "../../../components/AppSymbol";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { View, type AccessibilityActionEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -11,8 +11,8 @@ import Animated, {
 } from "react-native-reanimated";
 import type { ComponentProps } from "react";
 
-import { AppText as Text } from "../../../../components/AppText";
-import { useThemeColor } from "../../../../lib/useThemeColor";
+import { AppText as Text } from "../../../components/AppText";
+import { useThemeColor } from "../../../lib/useThemeColor";
 
 type SymbolName = ComponentProps<typeof SymbolView>["name"];
 
@@ -25,11 +25,21 @@ function clampFraction(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-export function FontSizeSliderRow(props: {
+/**
+ * The settings screens' numeric control: a labelled row with a live value
+ * readout and a snapping track. Font sizes were its first users, hence the
+ * optional glyphs flanking the track — a slider whose ends do not have an
+ * obvious icon (a percentage, a duration) simply omits them and spans the row.
+ */
+export function SettingsSliderRow(props: {
   readonly disabled?: boolean;
   readonly icon: SymbolName;
   readonly label: string;
   readonly valueLabel: string;
+  /** Optional caption under the track, for a value that needs explaining. */
+  readonly description?: string;
+  readonly minIcon?: SymbolName;
+  readonly maxIcon?: SymbolName;
   readonly min: number;
   readonly max: number;
   readonly step: number;
@@ -135,6 +145,9 @@ export function FontSizeSliderRow(props: {
     }
   };
 
+  const minIcon = props.minIcon;
+  const maxIcon = props.maxIcon;
+
   return (
     <View className={disabled ? "gap-1 p-4 opacity-[0.45]" : "gap-1 p-4"}>
       <View className="flex-row items-center gap-4">
@@ -149,13 +162,15 @@ export function FontSizeSliderRow(props: {
         <Text className="text-base font-t3-medium text-foreground-muted">{props.valueLabel}</Text>
       </View>
       <View className="flex-row items-center gap-3">
-        <SymbolView
-          name="textformat.size.smaller"
-          size={15}
-          tintColor={iconMuted}
-          type="monochrome"
-          weight="regular"
-        />
+        {minIcon === undefined ? null : (
+          <SymbolView
+            name={minIcon}
+            size={15}
+            tintColor={iconMuted}
+            type="monochrome"
+            weight="regular"
+          />
+        )}
         <GestureDetector gesture={gesture}>
           <View
             accessible
@@ -201,14 +216,19 @@ export function FontSizeSliderRow(props: {
             />
           </View>
         </GestureDetector>
-        <SymbolView
-          name="textformat.size.larger"
-          size={22}
-          tintColor={iconMuted}
-          type="monochrome"
-          weight="regular"
-        />
+        {maxIcon === undefined ? null : (
+          <SymbolView
+            name={maxIcon}
+            size={22}
+            tintColor={iconMuted}
+            type="monochrome"
+            weight="regular"
+          />
+        )}
       </View>
+      {props.description === undefined ? null : (
+        <Text className="text-sm text-foreground-muted">{props.description}</Text>
+      )}
     </View>
   );
 }

@@ -11,14 +11,11 @@ import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon } from "../../components/ProviderIcon";
-import {
-  ACCENT_TINT_ALPHA,
-  ACCENT_TINT_ALPHA_RECEDED,
-  withAccentAlpha,
-} from "../../lib/accentTint";
+import { resolveRowAccentTintAlpha, withAccentAlpha } from "../../lib/accentTint";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useAccentTintSettings } from "../../state/use-mobile-preferences";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
@@ -79,20 +76,27 @@ const SIDEBAR_V2_ROW_RADIUS = 12;
  * mirroring web's `color-mix` overlay. Null accent renders nothing, and a
  * selected row keeps its solid selection fill — the accent identifies the
  * project, selection identifies the open thread, and the second must win.
+ *
+ * The device's tint settings are read here rather than threaded through every
+ * row: this is the one place a tint is painted, so it is also where the tint
+ * opt-out is enforced. Accent resolution stays ungated on purpose — with tints
+ * off the group-header dot still carries the project's color.
  */
 function AccentTintOverlay(props: {
   readonly accentColor: string | null;
-  readonly alpha?: number;
+  readonly receded?: boolean;
   readonly borderRadius?: number;
 }) {
-  if (props.accentColor === null) return null;
+  const { enabled, alphas } = useAccentTintSettings();
+  const alpha = resolveRowAccentTintAlpha({ enabled, alphas, receded: props.receded === true });
+  if (props.accentColor === null || alpha === null) return null;
   return (
     <View
       pointerEvents="none"
       style={[
         StyleSheet.absoluteFill,
         {
-          backgroundColor: withAccentAlpha(props.accentColor, props.alpha ?? ACCENT_TINT_ALPHA),
+          backgroundColor: withAccentAlpha(props.accentColor, alpha),
           borderRadius: props.borderRadius,
         },
       ]}
@@ -567,7 +571,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {selected ? null : (
             <AccentTintOverlay
               accentColor={accentColor}
-              alpha={ACCENT_TINT_ALPHA_RECEDED}
+              receded
               borderRadius={sidebarPane ? SIDEBAR_V2_ROW_RADIUS : undefined}
             />
           )}

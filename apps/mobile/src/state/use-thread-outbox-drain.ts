@@ -18,7 +18,11 @@ import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn"
 import { randomHex } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
-import { ensureThreadOutboxLoaded, removeThreadOutboxMessage } from "./thread-outbox";
+import {
+  ensureThreadOutboxLoaded,
+  isThreadOutboxMessageWaitingForPreferences,
+  removeThreadOutboxMessage,
+} from "./thread-outbox";
 import {
   flattenQueuedThreadMessages,
   isQueuedThreadCreationSendable,
@@ -35,6 +39,7 @@ import {
 } from "./thread-outbox-model";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
+import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
   editingQueuedMessageIdsAtom,
   expeditedQueuedMessageIdsAtom,
@@ -93,6 +98,10 @@ export function useThreadOutboxDrain(): void {
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const expeditedMessageIds = useAtomValue(expeditedQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  // Read live: a changed grace window applies to steers that are still waiting,
+  // and to every subsequent send, without a relaunch.
+  const steerGraceWindowMs = useSteerGraceWindowMs();
+  const preferencesHydrated = useMobilePreferencesHydrated();
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
   const projects = useProjects();
@@ -161,9 +170,13 @@ export function useThreadOutboxDrain(): void {
   // Nothing else re-renders when a steer's grace window runs out, so wake the
   // drain as the soonest one comes due.
   useEffect(() => {
+    if (!preferencesHydrated) {
+      return;
+    }
     const soonestGraceMs = soonestSteerGraceRemainingMs(
       flattenQueuedThreadMessages(queuedMessagesByThreadKey),
       Date.now(),
+      steerGraceWindowMs,
     );
     if (soonestGraceMs === null) {
       return;
@@ -172,7 +185,7 @@ export function useThreadOutboxDrain(): void {
       setRetryTick((current) => current + 1);
     }, soonestGraceMs);
     return () => clearTimeout(graceTimer);
-  }, [queuedMessagesByThreadKey, retryTick]);
+  }, [preferencesHydrated, queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
 
   useEffect(() => {
     ensureThreadOutboxLoaded();
@@ -249,10 +262,12 @@ export function useThreadOutboxDrain(): void {
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
+          isThreadOutboxMessageWaitingForPreferences(message, preferencesHydrated) ||
           Boolean(editingQueuedMessageIds[message.messageId]) ||
           isSteerWaitingOutGraceWindow(message, {
             nowMs: Date.now(),
             expedited: expeditedMessageIds,
+            graceWindowMs: steerGraceWindowMs,
           }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
@@ -383,11 +398,13 @@ export function useThreadOutboxDrain(): void {
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     expeditedMessageIds,
+    preferencesHydrated,
     projects,
     queuedMessagesByThreadKey,
     retryTick,
     sendQueuedCreation,
     shellStatuses,
+    steerGraceWindowMs,
     threads,
   ]);
 }
