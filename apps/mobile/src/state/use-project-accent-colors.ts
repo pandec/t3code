@@ -7,8 +7,8 @@ import {
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
 import { useCallback, useMemo } from "react";
 
-import { projectAccentColorsFromPresentations } from "./project-accent-color-presentations";
-import { environmentPresentations } from "./presentation";
+import { projectAccentColorsFromServerConfigs } from "./project-accent-colors-from-server-configs";
+import { environmentServerConfigsAtom } from "./server";
 
 /**
  * Project accent colors as seen by mobile: read-only.
@@ -29,10 +29,10 @@ import { environmentPresentations } from "./presentation";
 export function useProjectAccentColors(): (
   members: ReadonlyArray<ProjectAccentSource>,
 ) => SidebarProjectAccentColor | null {
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const accentColorsByEnvironment = useMemo(
-    () => projectAccentColorsFromPresentations(presentations),
-    [presentations],
+    () => projectAccentColorsFromServerConfigs(serverConfigs),
+    [serverConfigs],
   );
 
   return useCallback(

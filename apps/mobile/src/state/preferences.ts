@@ -3,6 +3,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import {
   MobilePreferencesStore,
+  MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS,
   type MobilePreferencesLoadError,
   type Preferences,
 } from "../persistence/mobile-preferences";
@@ -19,7 +20,7 @@ interface OptimisticPreferences {
   readonly versions: Partial<Record<keyof Preferences, number>>;
 }
 
-export const MOBILE_PREFERENCES_LOAD_TIMEOUT_MS = 5_000;
+export const MOBILE_PREFERENCES_LOAD_TIMEOUT_MS = MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS;
 
 /**
  * Preference hydration must fail open: steering waits for the device's saved

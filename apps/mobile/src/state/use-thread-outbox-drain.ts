@@ -262,7 +262,11 @@ export function useThreadOutboxDrain(): void {
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
-          isThreadOutboxMessageWaitingForPreferences(message, preferencesHydrated) ||
+          isThreadOutboxMessageWaitingForPreferences(
+            message,
+            preferencesHydrated,
+            Boolean(expeditedMessageIds[message.messageId]),
+          ) ||
           Boolean(editingQueuedMessageIds[message.messageId]) ||
           isSteerWaitingOutGraceWindow(message, {
             nowMs: Date.now(),

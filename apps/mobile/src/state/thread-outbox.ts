@@ -16,8 +16,9 @@ export * from "./thread-outbox-model";
 export function isThreadOutboxMessageWaitingForPreferences(
   message: Pick<QueuedThreadMessage, "deliveryIntent">,
   preferencesHydrated: boolean,
+  expedited: boolean,
 ): boolean {
-  return !preferencesHydrated && queuedThreadMessageIntent(message) === "steer";
+  return !preferencesHydrated && !expedited && queuedThreadMessageIntent(message) === "steer";
 }
 
 export const threadOutboxManager = createThreadOutboxManager({

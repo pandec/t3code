@@ -1,8 +1,7 @@
-import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { projectAccentColorsFromPresentations } from "./project-accent-color-presentations";
+import { projectAccentColorsFromServerConfigs } from "./project-accent-colors-from-server-configs";
 
 const environmentA = "env-a" as EnvironmentId;
 const environmentB = "env-b" as EnvironmentId;
@@ -13,15 +12,16 @@ function serverConfig(
   return { settings: { projectAccentColors } } as ServerConfig;
 }
 
-describe("projectAccentColorsFromPresentations", () => {
-  it("uses cached server configs while an environment is disconnected", () => {
-    const presentations = new Map<EnvironmentId, Pick<EnvironmentPresentation, "serverConfig">>([
-      [environmentA, { serverConfig: serverConfig({ "repo:one": "#0055aa" }) }],
-      [environmentB, { serverConfig: null }],
+describe("projectAccentColorsFromServerConfigs", () => {
+  it("maps every available cached or live server config", () => {
+    const serverConfigs = new Map<EnvironmentId, ServerConfig>([
+      [environmentA, serverConfig({ "repo:one": "#0055aa" })],
+      [environmentB, serverConfig({})],
     ]);
 
-    expect([...projectAccentColorsFromPresentations(presentations)]).toEqual([
+    expect([...projectAccentColorsFromServerConfigs(serverConfigs)]).toEqual([
       [environmentA, { "repo:one": "#0055aa" }],
+      [environmentB, {}],
     ]);
   });
 });

@@ -12,6 +12,7 @@ import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-sto
 
 const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
+export const MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS = 5_000;
 
 export interface Preferences {
   readonly liveActivitiesEnabled?: boolean;
@@ -320,7 +321,17 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
           const payload = yield* encode(PREFERENCES_KEY, next);
           yield* saveJson(payload);
           return next;
-        }),
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS,
+            orElse: () =>
+              Effect.fail(
+                new MobilePreferencesSaveError({
+                  cause: new Error("Timed out updating mobile preferences."),
+                }),
+              ),
+          }),
+        ),
       )
       .pipe(
         Effect.mapError((cause) =>
