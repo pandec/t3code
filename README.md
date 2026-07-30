@@ -12,7 +12,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### Conversations & threads
 
 - **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread, including immediately after importing an external session; forked threads are titled with a 🔱 prefix.
-- **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads, including strict resume/continuation and CLI-assigned session names in the import picker.
+- **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads from Sidebar V2 project settings, including strict resume/continuation and CLI-assigned session names in the import picker.
 - **Archived-thread search, grouping & project filtering** — archive chats from Sidebar V2 thread menus, then search, group, and filter them by project, with direct scoped access from project menus and persisted repository identity so grouping survives project changes.
 - **Sidebar multi-project filtering** — Sidebar V2 can show live threads from any selected combination of projects, while retaining a one-click “All projects” scope.
 - **Sticky attention filter** — Sidebar V2 can snapshot threads that are working, completed, failed, newly woken, or waiting on approval, input, or a plan decision. The focused list stays stable as statuses clear, admits threads created from any connected client or the T3 CLI, and refreshes only when the filter is toggled off and on again.

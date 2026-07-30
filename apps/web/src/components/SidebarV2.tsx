@@ -33,6 +33,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  ImportIcon,
   EllipsisIcon,
   ListFilterIcon,
   MessageSquareIcon,
@@ -186,7 +187,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Kbd } from "./ui/kbd";
-import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -194,6 +195,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { archivedProjectFilterKey } from "../archivedProjectFilter";
+import { SessionImportDialog } from "./SessionImportDialog";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1294,6 +1296,9 @@ export default function SidebarV2() {
     },
   });
   const [projectActionsTarget, setProjectActionsTarget] = useState<SidebarProjectSnapshot | null>(
+    null,
+  );
+  const [sessionImportTarget, setSessionImportTarget] = useState<SidebarProjectGroupMember | null>(
     null,
   );
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
@@ -3269,6 +3274,10 @@ export default function SidebarV2() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <SessionImportDialog
+        member={sessionImportTarget}
+        onClose={() => setSessionImportTarget(null)}
+      />
       <Dialog
         open={projectActionsTarget !== null}
         onOpenChange={(open) => {
@@ -3452,14 +3461,56 @@ export default function SidebarV2() {
           </DialogPanel>
           <DialogFooter variant="bare">
             {projectActionsTarget ? (
-              <Button
-                variant="outline"
-                className="mr-auto"
-                onClick={() => void openArchivedThreads(projectActionsTarget)}
-              >
-                <ArchiveIcon />
-                Archived threads
-              </Button>
+              <div className="mr-auto flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => void openArchivedThreads(projectActionsTarget)}
+                >
+                  <ArchiveIcon />
+                  Archived threads
+                </Button>
+                {projectActionsTarget.memberProjects.length === 1 ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSessionImportTarget(projectActionsTarget.memberProjects[0]!);
+                      setProjectActionsTarget(null);
+                    }}
+                  >
+                    <ImportIcon />
+                    Import CLI session
+                  </Button>
+                ) : (
+                  <Menu>
+                    <MenuTrigger render={<Button variant="outline" />}>
+                      <ImportIcon />
+                      Import CLI session
+                      <ChevronDownIcon className="size-3.5" />
+                    </MenuTrigger>
+                    <MenuPopup align="start" side="top" className="max-w-96">
+                      {projectActionsTarget.memberProjects.map((member) => (
+                        <MenuItem
+                          key={member.physicalProjectKey}
+                          onClick={() => {
+                            setSessionImportTarget(member);
+                            setProjectActionsTarget(null);
+                          }}
+                        >
+                          <ServerIcon />
+                          <span className="min-w-0">
+                            <span className="block truncate">
+                              {member.environmentLabel ?? "Current environment"}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {member.workspaceRoot}
+                            </span>
+                          </span>
+                        </MenuItem>
+                      ))}
+                    </MenuPopup>
+                  </Menu>
+                )}
+              </div>
             ) : null}
             {projectActionsTarget?.memberProjects.length === 1 ? (
               <Button
