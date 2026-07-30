@@ -33,6 +33,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListFilterIcon,
   MessageSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -118,14 +119,18 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatCompactRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
   canForkConversation,
+  admitNewSidebarV2AttentionThreads,
+  createSidebarV2AttentionFilter,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
+  hasUnseenWake,
+  isSidebarV2AttentionThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
@@ -141,7 +146,7 @@ import {
   sortThreadsForSidebarV2,
   toggleSidebarProjectScope,
 } from "./Sidebar.logic";
-import type { SidebarProjectScope } from "./Sidebar.logic";
+import type { SidebarProjectScope, SidebarV2AttentionFilterState } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   prStatusIndicator,
@@ -514,9 +519,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // shows the pill; visiting clears it. An unparseable visit timestamp
   // counts as never-visited — corrupt local data must not eat the wake
   // signal.
-  const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
-  const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
-  const isWoke = wokeAtDate !== null && (lastVisitedDate === null || lastVisitedDate < wokeAtDate);
+  const isWoke = hasUnseenWake({
+    wokeAt: props.wokeAt,
+    ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
+  });
   // In-flight rows (working, or waiting on approval/input) fade as a whole:
   // there is nothing for the user to do yet, so prominence is reserved for
   // rows that need a human — done (unread), read-but-unsettled, failed, and
@@ -1495,11 +1501,73 @@ export default function SidebarV2() {
     singleScopedProjectGroup === null && projectScopeKeys !== null && scopedProjectGroups.length > 0
       ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
       : projectScopeLabel;
-  // Scope flips drop the selection: rows selected under the old scope may be
-  // hidden now, and bulk actions must never count or touch invisible rows.
+  const attentionFilterThreads = useMemo(
+    () =>
+      threads.map((thread) => ({
+        threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        createdAt: thread.createdAt,
+      })),
+    [threads],
+  );
+  const [attentionFilterState, setAttentionFilterState] =
+    useState<SidebarV2AttentionFilterState | null>(null);
+  const effectiveAttentionFilterState = useMemo(
+    () =>
+      attentionFilterState === null
+        ? null
+        : admitNewSidebarV2AttentionThreads(attentionFilterState, attentionFilterThreads),
+    [attentionFilterState, attentionFilterThreads],
+  );
+  // Admission is derived synchronously so a shell created through the CLI or
+  // another client never flashes out of the filtered list for one render. The
+  // effect only commits the grown known/member sets for the next update.
+  useEffect(() => {
+    if (
+      effectiveAttentionFilterState !== null &&
+      effectiveAttentionFilterState !== attentionFilterState
+    ) {
+      setAttentionFilterState(effectiveAttentionFilterState);
+    }
+  }, [attentionFilterState, effectiveAttentionFilterState]);
+  const attentionFilterEnabled = effectiveAttentionFilterState !== null;
+  const toggleAttentionFilter = useCallback(() => {
+    setAttentionFilterState((current) => {
+      if (current !== null) return null;
+
+      const enabledAtMs = Date.now();
+      const now = new Date(enabledAtMs).toISOString();
+      const lastVisitedAtById = useUiStateStore.getState().threadLastVisitedAtById;
+      const initialMemberThreadKeys = threads.flatMap((thread) => {
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        if (
+          thread.archivedAt !== null ||
+          (scopedProjectKeys !== null &&
+            !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
+        ) {
+          return [];
+        }
+        const lastVisitedAt = lastVisitedAtById[threadKey];
+        return isSidebarV2AttentionThread({
+          ...thread,
+          wokeAt: threadWokeAt(thread, { now }),
+          ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
+        })
+          ? [threadKey]
+          : [];
+      });
+      return createSidebarV2AttentionFilter({
+        enabledAtMs,
+        initialMemberThreadKeys,
+        threads: attentionFilterThreads,
+      });
+    });
+  }, [attentionFilterThreads, scopedProjectKeys, threads]);
+  // Scope and attention-filter flips drop the selection: rows selected under
+  // the previous view may now be hidden, and bulk actions must never count or
+  // touch invisible rows. Sticky membership growth does not clear selection.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeSignature]);
+  }, [attentionFilterEnabled, clearSelection, projectScopeSignature]);
 
   const handleRemoveProjectMembers = useCallback(
     async (projectGroup: SidebarProjectSnapshot, members: readonly SidebarProjectGroupMember[]) => {
@@ -1677,12 +1745,19 @@ export default function SidebarV2() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
-      (thread) =>
-        thread.archivedAt === null &&
-        (scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-    );
+    const visible = threads.filter((thread) => {
+      if (
+        thread.archivedAt !== null ||
+        (scopedProjectKeys !== null &&
+          !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
+      ) {
+        return false;
+      }
+      if (effectiveAttentionFilterState === null) return true;
+      return effectiveAttentionFilterState.memberThreadKeys.has(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+    });
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
@@ -1725,6 +1800,7 @@ export default function SidebarV2() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
+    effectiveAttentionFilterState,
     nowMinute,
     scopedProjectKeys,
     serverConfigs,
@@ -1755,7 +1831,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeSignature;
+  const settledResetKey = `${projectScopeSignature}:${attentionFilterEnabled ? "attention" : "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -2776,6 +2852,39 @@ export default function SidebarV2() {
                     render={
                       <SidebarMenuButton
                         size="icon"
+                        type="button"
+                        isActive={attentionFilterEnabled}
+                        aria-pressed={attentionFilterEnabled}
+                        aria-label={
+                          attentionFilterEnabled
+                            ? `Showing ${
+                                activeThreads.length + snoozedThreads.length + settledThreads.length
+                              } threads needing attention — click to show all`
+                            : "Show only threads needing attention"
+                        }
+                        data-testid="sidebar-v2-attention-filter-toggle"
+                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        onClick={toggleAttentionFilter}
+                      />
+                    }
+                  >
+                    <ListFilterIcon />
+                    <span
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                      aria-hidden="true"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">
+                    {attentionFilterEnabled
+                      ? "Show all threads"
+                      : "Show only threads needing attention"}
+                  </TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
                         className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={openAddProjectCommandPalette}
                         type="button"
@@ -2987,6 +3096,17 @@ export default function SidebarV2() {
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
+                  </button>
+                </>
+              ) : attentionFilterEnabled ? (
+                <>
+                  <span>No threads need attention</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttentionFilterState(null)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    Show all threads
                   </button>
                 </>
               ) : singleScopedProjectGroup ? (

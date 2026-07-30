@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   archiveSelectedThreadEntries,
+  admitNewSidebarV2AttentionThreads,
   buildMultiSelectThreadContextMenuItems,
   canForkConversation,
+  createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -11,6 +13,8 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  hasUnseenWake,
+  isSidebarV2AttentionThread,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -414,6 +418,157 @@ describe("hasUnseenCompletion", () => {
         session: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("Sidebar V2 attention filter", () => {
+  const readyThread = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestTurn: null,
+    session: null,
+  };
+  const runningSession = {
+    threadId: ThreadId.make("thread-1"),
+    status: "running" as const,
+    providerName: "Codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    activeTurnId: "turn-1" as never,
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+
+  it("recognizes every status that needs attention", () => {
+    expect(isSidebarV2AttentionThread({ ...readyThread, hasPendingApprovals: true })).toBe(true);
+    expect(isSidebarV2AttentionThread({ ...readyThread, hasPendingUserInput: true })).toBe(true);
+    expect(isSidebarV2AttentionThread({ ...readyThread, session: runningSession })).toBe(true);
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        session: { ...runningSession, status: "starting" },
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        session: { ...runningSession, status: "error", lastError: "boom" },
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        hasActionableProposedPlan: true,
+        interactionMode: "plan",
+        latestTurn: makeLatestTurn(),
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        latestTurn: makeLatestTurn(),
+        lastVisitedAt: "2026-03-09T10:04:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        wokeAt: "2026-03-09T10:05:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not include a ready thread after its completion or wake was visited", () => {
+    expect(
+      isSidebarV2AttentionThread({
+        ...readyThread,
+        latestTurn: makeLatestTurn(),
+        lastVisitedAt: "2026-03-09T10:06:00.000Z",
+        wokeAt: "2026-03-09T10:05:00.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("uses the same unseen-wake semantics as the row indicator", () => {
+    expect(hasUnseenWake({ wokeAt: null })).toBe(false);
+    expect(hasUnseenWake({ wokeAt: "not-a-date" })).toBe(false);
+    expect(hasUnseenWake({ wokeAt: "2026-03-09T10:05:00.000Z" })).toBe(true);
+    expect(
+      hasUnseenWake({
+        wokeAt: "2026-03-09T10:05:00.000Z",
+        lastVisitedAt: "invalid",
+      }),
+    ).toBe(true);
+  });
+
+  it("captures attention members while remembering every known shell", () => {
+    const state = createSidebarV2AttentionFilter({
+      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
+      initialMemberThreadKeys: ["environment-a:working"],
+      threads: [
+        { threadKey: "environment-a:working", createdAt: "2026-03-09T09:00:00.000Z" },
+        { threadKey: "environment-b:out-of-scope", createdAt: "2026-03-08T09:00:00.000Z" },
+      ],
+    });
+
+    expect(state.memberThreadKeys).toEqual(new Set(["environment-a:working"]));
+    expect(state.knownThreadKeys).toEqual(
+      new Set(["environment-a:working", "environment-b:out-of-scope"]),
+    );
+  });
+
+  it("admits a newly created shell regardless of how it appeared", () => {
+    const state = createSidebarV2AttentionFilter({
+      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
+      initialMemberThreadKeys: [],
+      threads: [{ threadKey: "environment-a:known", createdAt: "2026-03-09T09:00:00.000Z" }],
+    });
+    const next = admitNewSidebarV2AttentionThreads(state, [
+      { threadKey: "environment-a:known", createdAt: "2026-03-09T09:00:00.000Z" },
+      { threadKey: "environment-b:cli-created", createdAt: "2026-03-09T10:00:30.000Z" },
+    ]);
+
+    expect(next.memberThreadKeys).toEqual(new Set(["environment-b:cli-created"]));
+    expect(next.knownThreadKeys).toContain("environment-b:cli-created");
+  });
+
+  it("keeps captured membership sticky when statuses and shell availability change", () => {
+    const state = createSidebarV2AttentionFilter({
+      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
+      initialMemberThreadKeys: ["environment-a:done"],
+      threads: [
+        { threadKey: "environment-a:done", createdAt: "2026-03-09T09:00:00.000Z" },
+        { threadKey: "environment-a:ready", createdAt: "2026-03-09T08:00:00.000Z" },
+      ],
+    });
+
+    expect(admitNewSidebarV2AttentionThreads(state, [])).toBe(state);
+    expect(state.memberThreadKeys).toEqual(new Set(["environment-a:done"]));
+  });
+
+  it("remembers late historical shells without admitting them after a reconnect", () => {
+    const state = createSidebarV2AttentionFilter({
+      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
+      initialMemberThreadKeys: [],
+      threads: [],
+    });
+    const next = admitNewSidebarV2AttentionThreads(state, [
+      { threadKey: "environment-a:historical", createdAt: "2026-03-08T10:00:00.000Z" },
+      { threadKey: "environment-a:malformed", createdAt: "not-a-date" },
+    ]);
+
+    expect(next.memberThreadKeys).toEqual(new Set());
+    expect(next.knownThreadKeys).toEqual(
+      new Set(["environment-a:historical", "environment-a:malformed"]),
+    );
+    expect(
+      admitNewSidebarV2AttentionThreads(next, [
+        { threadKey: "environment-a:historical", createdAt: "2026-03-10T10:00:00.000Z" },
+        { threadKey: "environment-a:malformed", createdAt: "2026-03-10T10:00:00.000Z" },
+      ]),
+    ).toBe(next);
   });
 });
 
