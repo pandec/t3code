@@ -454,6 +454,44 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
+  it.effect("stays full when a cooling lifecycle trigger joins a manual batch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        yield* Ref.update(harness.stored, (map) =>
+          new Map(map).set("stale", detailSnapshot("stale", 3)),
+        );
+        // A foreground wakeup lands in the same batch as the manual request
+        // while the cooldown is still active: the run must stay full (manual
+        // wins over the targeted path) without the suppressed lifecycle
+        // trigger consuming the cooldown.
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* harness.fire({ reason: "manual" });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.skipped).toBe(1);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+
+        // Cooldown still dates from the original lifecycle run: a wakeup
+        // draining exactly 60 seconds after it must sweep again.
+        yield* TestClock.adjust("54 seconds");
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect((yield* Queue.take(harness.statuses)).skipped).toBe(2);
+      }),
+    ),
+  );
+
   it.effect("keeps a settled target when a cooling lifecycle trigger joins its batch", () =>
     Effect.scoped(
       Effect.gen(function* () {
