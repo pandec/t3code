@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { MessageId, ProjectId } from "@t3tools/contracts";
+import { CommandId, EnvironmentId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 import {
   isSteerWaitingOutGraceWindow,
+  latestSteerWaitingOutGraceWindow,
   pruneExpeditedQueuedMessageIds,
   queueFlushBatchIds,
   soonestSteerGraceRemainingMs,
@@ -114,6 +115,52 @@ describe("soonestSteerGraceRemainingMs", () => {
         [
           { deliveryIntent: "queue", createdAt },
           { deliveryIntent: "steer", createdAt: "2026-07-27T09:59:00.000Z" },
+        ],
+        createdAtMs,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("latestSteerWaitingOutGraceWindow", () => {
+  const message = (id: string, deliveryIntent: "queue" | "steer", timestamp: string) => ({
+    environmentId: EnvironmentId.make("environment-1"),
+    threadId: ThreadId.make("thread-1"),
+    messageId: MessageId.make(id),
+    commandId: CommandId.make(`command-${id}`),
+    text: id,
+    attachments: [],
+    deliveryIntent,
+    createdAt: timestamp,
+  });
+
+  // Queues reach every caller sorted oldest-first, so the newest row a thread
+  // holds is the last one — and it is often a held message, not the steer.
+  it("selects the newest steer that is still inside its grace window", () => {
+    const olderSteer = message("older-steer", "steer", createdAt);
+    const newestSteer = message("newest-steer", "steer", "2026-07-27T10:00:01.000Z");
+
+    expect(
+      latestSteerWaitingOutGraceWindow(
+        [olderSteer, newestSteer, message("held", "queue", "2026-07-27T10:00:02.000Z")],
+        createdAtMs + 2_000,
+      ),
+    ).toBe(newestSteer);
+  });
+
+  it("honors a caller-supplied grace window", () => {
+    const steer = message("steer", "steer", createdAt);
+
+    expect(latestSteerWaitingOutGraceWindow([steer], createdAtMs + 2_000, 3_000)).toBe(steer);
+    expect(latestSteerWaitingOutGraceWindow([steer], createdAtMs + 2_000, 1_000)).toBeNull();
+  });
+
+  it("ignores queued and elapsed rows", () => {
+    expect(
+      latestSteerWaitingOutGraceWindow(
+        [
+          message("elapsed", "steer", "2026-07-27T09:59:00.000Z"),
+          message("held", "queue", createdAt),
         ],
         createdAtMs,
       ),

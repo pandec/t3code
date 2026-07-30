@@ -179,7 +179,11 @@ import {
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
-import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  useEnvironmentSettings,
+  useSteerGraceWindowMs,
+} from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -215,9 +219,10 @@ import {
   updateThreadOutboxMessage,
   useQueuedThreadMessages,
 } from "../state/threadOutbox";
-import type {
-  QueuedThreadMessage,
-  ThreadOutboxDeliveryIntent,
+import {
+  latestSteerWaitingOutGraceWindow,
+  type QueuedThreadMessage,
+  type ThreadOutboxDeliveryIntent,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
 import { ComposerQueuedMessages } from "./chat/ComposerQueuedMessages";
 import {
@@ -4741,6 +4746,17 @@ function ChatViewContent(props: ChatViewProps) {
             description: toastCopy.description,
           }),
         );
+        return;
+      }
+      // Nothing left to send, so Enter falls through to the outbox: it repeats
+      // the row's Send Now on the steer the user most likely just submitted.
+      const pendingSteer = latestSteerWaitingOutGraceWindow(
+        queuedThreadMessages,
+        Date.now(),
+        steerGraceWindowMs,
+      );
+      if (pendingSteer) {
+        onSteerQueuedMessage(pendingSteer);
       }
       return;
     }
@@ -5175,6 +5191,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  // Same clamped read the outbox rows and the drain use, so an empty submit
+  // agrees with the countdown it is shortening.
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const allQueuedThreadMessages = useQueuedThreadMessages(isServerThread ? activeThreadRef : null);
   const queuedThreadMessages = useMemo(
     () => allQueuedThreadMessages.filter((message) => message.creation === undefined),
