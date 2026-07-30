@@ -57,6 +57,7 @@ export function dispatchHardwareKeyboardCommand(command: HardwareKeyboardCommand
   if (!commandHandlers) return false;
   // .reverse() on a copy, not .toReversed(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.
+  // oxlint-disable-next-line unicorn/no-array-reverse -- mutating a fresh copy is the point; Hermes lacks toReversed
   for (const handler of [...commandHandlers].reverse()) {
     if (handler() !== false) return true;
   }

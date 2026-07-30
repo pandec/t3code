@@ -47,6 +47,13 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import {
+  didEnvironmentPrewarmRunsAdvance,
+  threadPrewarmTriggerCommand,
+  type ThreadPrewarmSummary,
+  useThreadPrewarmSummary,
+} from "../../state/prewarm";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useSteerGraceWindowMs } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -572,7 +579,98 @@ function GeneralSettingsSection() {
         value={steerGraceWindowMs}
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
       />
+      <ThreadSyncRow />
     </SettingsSection>
+  );
+}
+
+function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
+  if (lastRunAt === null) return "Not synced yet";
+  const elapsedMs = Math.max(0, now - lastRunAt);
+  if (elapsedMs < 60_000) return "Synced just now";
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 60) return `Synced ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Synced ${hours}h ago`;
+  return `Synced ${new Date(lastRunAt).toLocaleDateString()}`;
+}
+
+function useMinuteClockMs(): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return nowMs;
+}
+
+/**
+ * Manual counterpart of the automatic thread prewarming: fires the same
+ * engine on demand (bypassing its cooldown) and shows when any environment
+ * last completed a warm run. The engine debounces briefly before running, so
+ * the row stays in "Syncing…" until a fresher run timestamp arrives.
+ */
+const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
+
+function ThreadSyncRow() {
+  const icon = useThemeColor("--color-icon");
+  const summary = useThreadPrewarmSummary();
+  const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
+  const nowMs = useMinuteClockMs();
+  const syncInFlight = useRef(false);
+  const [requestedFrom, setRequestedFrom] = useState<
+    ThreadPrewarmSummary["environmentLastRunAt"] | null
+  >(null);
+
+  const syncing =
+    requestedFrom !== null &&
+    !didEnvironmentPrewarmRunsAdvance(summary.environmentLastRunAt, requestedFrom);
+
+  useEffect(() => {
+    if (requestedFrom === null) return;
+    if (!syncing) {
+      syncInFlight.current = false;
+      setRequestedFrom(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      syncInFlight.current = false;
+      setRequestedFrom(null);
+    }, THREAD_SYNC_PENDING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [requestedFrom, syncing]);
+
+  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, nowMs);
+
+  return (
+    <Pressable
+      accessibilityLabel="Sync threads now"
+      accessibilityRole="button"
+      accessibilityState={{ busy: syncing, disabled: syncing }}
+      accessibilityValue={{ text: statusLabel }}
+      disabled={syncing}
+      onPress={() => {
+        if (syncInFlight.current) return;
+        syncInFlight.current = true;
+        setRequestedFrom(new Map(summary.environmentLastRunAt));
+        void fireTrigger({ reason: "manual" });
+      }}
+    >
+      <View className="flex-row items-center gap-4 p-4">
+        <SymbolView
+          name="arrow.triangle.2.circlepath"
+          size={22}
+          tintColor={icon}
+          type="monochrome"
+          weight="regular"
+        />
+        <Text className="flex-1 text-lg text-foreground">Sync Threads</Text>
+        <Text className="text-base text-foreground-muted">{statusLabel}</Text>
+        <View className="w-[22px] items-center">
+          {syncing ? <ActivityIndicator color={icon} size="small" /> : null}
+        </View>
+      </View>
+    </Pressable>
   );
 }
 

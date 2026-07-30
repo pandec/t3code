@@ -3,11 +3,15 @@ import {
   type OrchestrationShellSnapshot,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadShell,
+  type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -19,6 +23,7 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
+import { threadKey } from "./entities.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 
@@ -57,6 +62,91 @@ export const EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS: EnvironmentThreadPrewarmSt
 function isStreamingSession(thread: Pick<OrchestrationThreadShell, "session">): boolean {
   const status = thread.session?.status;
   return status === "starting" || status === "running";
+}
+
+/**
+ * On-demand prewarm requests fired from outside the engine: a manual
+ * "sync now" action, or a thread whose session just left the streaming
+ * states (the earliest legal moment to warm it — streaming snapshots are
+ * never persisted). Optional service: without it the engine runs on its
+ * lifecycle triggers alone.
+ */
+export interface ThreadPrewarmTriggerRequest {
+  readonly reason: "manual" | "thread-settled";
+  /** Absent on manual requests: they target every environment. */
+  readonly environmentId?: EnvironmentIdType;
+  readonly threadId?: ThreadIdType;
+}
+
+export class ThreadPrewarmTriggers extends Context.Service<
+  ThreadPrewarmTriggers,
+  {
+    readonly changes: Stream.Stream<ThreadPrewarmTriggerRequest>;
+    readonly fire: (request: ThreadPrewarmTriggerRequest) => Effect.Effect<void>;
+  }
+>()("@t3tools/client-runtime/state/threadPrewarm/ThreadPrewarmTriggers") {}
+
+export const threadPrewarmTriggersLayer: Layer.Layer<ThreadPrewarmTriggers> = Layer.effect(
+  ThreadPrewarmTriggers,
+  Effect.gen(function* () {
+    const pubsub = yield* PubSub.unbounded<ThreadPrewarmTriggerRequest>();
+    return ThreadPrewarmTriggers.of({
+      changes: Stream.fromPubSub(pubsub),
+      fire: (request) => PubSub.publish(pubsub, request).pipe(Effect.asVoid),
+    });
+  }),
+);
+
+/**
+ * Streaming-state baseline for settle detection, keyed by scoped thread.
+ * Mirrors the web turn-completion snapshot pattern: the first observation
+ * seeds silently, so initial sync and newly discovered threads never fire.
+ */
+export type ThreadStreamingSnapshot = ReadonlyMap<string, boolean>;
+
+export interface ThreadStreamingShellRef {
+  readonly environmentId: EnvironmentIdType;
+  readonly id: ThreadIdType;
+  readonly session: OrchestrationThreadShell["session"];
+  readonly archivedAt: OrchestrationThreadShell["archivedAt"];
+}
+
+export interface SettledThreadRef {
+  readonly environmentId: EnvironmentIdType;
+  readonly threadId: ThreadIdType;
+}
+
+export function seedThreadStreamingSnapshot(
+  shells: ReadonlyArray<ThreadStreamingShellRef>,
+): ThreadStreamingSnapshot {
+  const snapshot = new Map<string, boolean>();
+  for (const shell of shells) {
+    snapshot.set(
+      threadKey({ environmentId: shell.environmentId, threadId: shell.id }),
+      isStreamingSession(shell),
+    );
+  }
+  return snapshot;
+}
+
+export function advanceThreadStreamingSnapshot(
+  previous: ThreadStreamingSnapshot,
+  shells: ReadonlyArray<ThreadStreamingShellRef>,
+): {
+  readonly snapshot: ThreadStreamingSnapshot;
+  readonly settled: ReadonlyArray<SettledThreadRef>;
+} {
+  const snapshot = new Map<string, boolean>();
+  const settled: Array<SettledThreadRef> = [];
+  for (const shell of shells) {
+    const key = threadKey({ environmentId: shell.environmentId, threadId: shell.id });
+    const streaming = isStreamingSession(shell);
+    snapshot.set(key, streaming);
+    if (previous.get(key) === true && !streaming && shell.archivedAt === null) {
+      settled.push({ environmentId: shell.environmentId, threadId: shell.id });
+    }
+  }
+  return { snapshot, settled };
 }
 
 /**
@@ -103,6 +193,8 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   readonly cache: EnvironmentCacheStore["Service"];
   readonly loader: ThreadSnapshotLoader["Service"];
   readonly environmentId: EnvironmentIdType;
+  /** Restricts a targeted (settle-triggered) run to these threads. */
+  readonly only?: ReadonlySet<ThreadIdType>;
 }) {
   const prepared = yield* SubscriptionRef.get(input.supervisor.prepared);
   if (Option.isNone(prepared)) {
@@ -119,7 +211,12 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   if (Option.isNone(shell)) {
     return null;
   }
-  const candidates = selectPrewarmCandidates(shell.value.threads);
+  const only = input.only;
+  const source =
+    only === undefined
+      ? shell.value.threads
+      : shell.value.threads.filter((thread) => only.has(thread.id));
+  const candidates = selectPrewarmCandidates(source);
   let refreshed = 0;
   let skipped = 0;
   let failed = 0;
@@ -176,14 +273,49 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   return status;
 });
 
+interface PendingPrewarmTriggers {
+  readonly lifecycle: boolean;
+  readonly manual: boolean;
+  readonly settled: ReadonlySet<ThreadIdType>;
+}
+
+const EMPTY_PENDING_TRIGGERS: PendingPrewarmTriggers = {
+  lifecycle: false,
+  manual: false,
+  settled: new Set<ThreadIdType>(),
+};
+
+type PrewarmTrigger =
+  | { readonly kind: "lifecycle" }
+  | { readonly kind: "manual" }
+  | { readonly kind: "settled"; readonly threadId: ThreadIdType };
+
+function accumulateTrigger(
+  pending: PendingPrewarmTriggers,
+  trigger: PrewarmTrigger,
+): PendingPrewarmTriggers {
+  switch (trigger.kind) {
+    case "lifecycle":
+      return { ...pending, lifecycle: true };
+    case "manual":
+      return { ...pending, manual: true };
+    case "settled":
+      return { ...pending, settled: new Set(pending.settled).add(trigger.threadId) };
+  }
+}
+
 export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.make")(
   function* () {
     const supervisor = yield* EnvironmentSupervisor;
     const cache = yield* EnvironmentCacheStore;
     const loader = yield* ThreadSnapshotLoader;
     const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
+    const triggers = yield* Effect.serviceOption(ThreadPrewarmTriggers);
     const environmentId = supervisor.target.environmentId;
-    const lastRunAt = yield* Ref.make<number | null>(null);
+    // The cooldown is consumed by full runs only: targeted settle warms and
+    // manual syncs never suppress the next lifecycle sweep.
+    const lastFullRunAt = yield* Ref.make<number | null>(null);
+    const pending = yield* Ref.make(EMPTY_PENDING_TRIGGERS);
 
     const connectedGenerations = SubscriptionRef.changes(supervisor.state).pipe(
       Stream.filterMap((state) =>
@@ -196,14 +328,42 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
       onSome: (service) =>
         service.changes.pipe(Stream.filter((reason) => reason === "application-active")),
     });
+    const lifecycleTriggers = Stream.merge(connectedGenerations, foregroundWakeups).pipe(
+      Stream.map((): PrewarmTrigger => ({ kind: "lifecycle" })),
+    );
+    const requestTriggers = Option.match(triggers, {
+      onNone: () => Stream.never as Stream.Stream<PrewarmTrigger>,
+      onSome: (service) =>
+        service.changes.pipe(
+          Stream.filterMap((request): Result.Result<PrewarmTrigger, void> => {
+            if (request.reason === "manual") {
+              return request.environmentId === undefined || request.environmentId === environmentId
+                ? Result.succeed({ kind: "manual" })
+                : Result.failVoid;
+            }
+            return request.environmentId === environmentId && request.threadId !== undefined
+              ? Result.succeed({ kind: "settled", threadId: request.threadId })
+              : Result.failVoid;
+          }),
+        ),
+    });
 
-    return Stream.merge(connectedGenerations, foregroundWakeups).pipe(
+    return Stream.merge(lifecycleTriggers, requestTriggers).pipe(
+      // Accumulate before the debounce so a burst collapses into one run
+      // without losing any trigger's intent.
+      Stream.mapEffect((trigger) =>
+        Ref.update(pending, (current) => accumulateTrigger(current, trigger)),
+      ),
       Stream.debounce(PREWARM_SETTLE_DELAY),
       Stream.mapEffect(() =>
         Effect.gen(function* () {
+          const batch = yield* Ref.getAndSet(pending, EMPTY_PENDING_TRIGGERS);
           const now = yield* Clock.currentTimeMillis;
-          const last = yield* Ref.get(lastRunAt);
-          if (last !== null && now - last < PREWARM_COOLDOWN_MS) {
+          const lastFull = yield* Ref.get(lastFullRunAt);
+          const cooldownElapsed = lastFull === null || now - lastFull >= PREWARM_COOLDOWN_MS;
+          const consumeCooldown = batch.lifecycle && cooldownElapsed;
+          const runFull = batch.manual || consumeCooldown;
+          if (!runFull && batch.settled.size === 0) {
             return Option.none<EnvironmentThreadPrewarmStatus>();
           }
           const result = yield* warmEnvironmentOnce({
@@ -211,6 +371,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
             cache,
             loader,
             environmentId,
+            ...(runFull ? {} : { only: batch.settled }),
           }).pipe(
             Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
             Effect.map((result) =>
@@ -223,8 +384,8 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
               ),
             ),
           );
-          if (Option.isSome(result)) {
-            yield* Ref.set(lastRunAt, result.value.lastRunAt);
+          if (consumeCooldown && Option.isSome(result)) {
+            yield* Ref.set(lastFullRunAt, result.value.lastRunAt);
           }
           return result;
         }),
@@ -258,9 +419,50 @@ export function createEnvironmentThreadPrewarmAtoms<R, E>(
   };
 }
 
+export interface ThreadPrewarmSummary {
+  /** Latest completed run across environments, or null before the first. */
+  readonly lastRunAt: number | null;
+  readonly refreshed: number;
+  /** Per-environment completion cursors used to track a manual all-environment run. */
+  readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
+}
+
+const EMPTY_THREAD_PREWARM_SUMMARY: ThreadPrewarmSummary = Object.freeze({
+  lastRunAt: null,
+  refreshed: 0,
+  environmentLastRunAt: new Map<EnvironmentIdType, number | null>(),
+});
+
+function environmentRunTimesEqual(
+  left: ReadonlyMap<EnvironmentIdType, number | null>,
+  right: ReadonlyMap<EnvironmentIdType, number | null>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [environmentId, lastRunAt] of left) {
+    if (!right.has(environmentId) || right.get(environmentId) !== lastRunAt) return false;
+  }
+  return true;
+}
+
+/**
+ * Returns true after every environment present when a manual sync was
+ * requested has completed another run. Removed environments stop blocking;
+ * environments added after the request join the next manual sync instead.
+ */
+export function didEnvironmentPrewarmRunsAdvance(
+  current: ReadonlyMap<EnvironmentIdType, number | null>,
+  requestedFrom: ReadonlyMap<EnvironmentIdType, number | null>,
+): boolean {
+  for (const [environmentId, lastRunAt] of requestedFrom) {
+    if (current.has(environmentId) && current.get(environmentId) === lastRunAt) return false;
+  }
+  return true;
+}
+
 /**
  * Keeps a prewarm stream mounted for every catalog environment and exposes a
- * small aggregate so a single always-mounted subscriber drives all of them.
+ * small aggregate so a single always-mounted subscriber drives all of them
+ * (and a "last synced" surface can display it).
  */
 export function createThreadPrewarmSummaryAtom<E>(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
@@ -268,15 +470,30 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
     environmentId: EnvironmentIdType,
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentThreadPrewarmStatus, E>>;
 }) {
+  let previous = EMPTY_THREAD_PREWARM_SUMMARY;
   return Atom.make((get) => {
+    let lastRunAt: number | null = null;
     let refreshed = 0;
+    const environmentLastRunAt = new Map<EnvironmentIdType, number | null>();
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
       const status = Option.getOrElse(
         AsyncResult.value(get(input.statusAtom(environmentId))),
         () => EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
       );
       refreshed += status.refreshed;
+      environmentLastRunAt.set(environmentId, status.lastRunAt);
+      if (status.lastRunAt !== null && (lastRunAt === null || status.lastRunAt > lastRunAt)) {
+        lastRunAt = status.lastRunAt;
+      }
     }
-    return refreshed;
+    if (
+      previous.lastRunAt === lastRunAt &&
+      previous.refreshed === refreshed &&
+      environmentRunTimesEqual(previous.environmentLastRunAt, environmentLastRunAt)
+    ) {
+      return previous;
+    }
+    previous = { lastRunAt, refreshed, environmentLastRunAt };
+    return previous;
   }).pipe(Atom.withLabel("environment-thread-prewarm-summary"));
 }
