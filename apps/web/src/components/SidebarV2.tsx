@@ -473,6 +473,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   isRenaming: boolean;
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
+  onArchive: (threadRef: ScopedThreadRef) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
@@ -485,6 +486,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     onCancelRename,
     onCommitRename,
     onContextMenu,
+    onArchive,
     onRenameTitleChange,
     onSettle,
     onSnooze,
@@ -702,6 +704,14 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     },
     [onSettle, threadRef],
   );
+  const handleArchiveClick = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onArchive(threadRef);
+    },
+    [onArchive, threadRef],
+  );
   const handleUnsettleClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -731,6 +741,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // on blocked-on-you work or queued turns (the server rejects both).
   const showSnoozeButton =
     props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
+  const showArchiveButton = !(
+    thread.session?.status === "running" && thread.session.activeTurnId != null
+  );
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
   // stale true from permanently hiding the status label / pinning the
@@ -1092,7 +1105,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     threadTimeLabel(thread)
                   )}
                 </span>
-                {props.settlementSupported || showSnoozeButton ? (
+                {props.settlementSupported || showSnoozeButton || showArchiveButton ? (
                   <span
                     className={cn(
                       "absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity focus-within:static focus-within:opacity-100 group-hover/v2-row:static group-hover/v2-row:opacity-100",
@@ -1105,6 +1118,17 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                         onOpenChange={setSnoozeMenuOpen}
                         onSnooze={handleSnoozePreset}
                       />
+                    ) : null}
+                    {showArchiveButton ? (
+                      <button
+                        type="button"
+                        aria-label="Archive thread"
+                        title="Archive"
+                        onClick={handleArchiveClick}
+                        className="inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                      >
+                        <ArchiveIcon className="size-3" />
+                      </button>
                     ) : null}
                     {props.settlementSupported ? (
                       <button
@@ -2037,6 +2061,50 @@ export default function SidebarV2() {
     [navigateToThread, rangeSelectTo, toggleThreadSelection],
   );
 
+  const archivingThreadKeysRef = useRef(new Set<string>());
+  const attemptArchive = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void (async () => {
+        const threadKey = scopedThreadKey(threadRef);
+        if (archivingThreadKeysRef.current.has(threadKey)) return;
+        const thread = threadByKeyRef.current.get(threadKey);
+        if (!thread) return;
+        archivingThreadKeysRef.current.add(threadKey);
+        try {
+          if (confirmThreadArchive) {
+            const api = readLocalApi();
+            if (!api) return;
+            const confirmed = await settlePromise(() =>
+              api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+            );
+            if (confirmed._tag === "Failure" || !confirmed.value) return;
+          }
+          let didArchive = false;
+          const result = await archiveThread(threadRef, {
+            onArchived: () => {
+              didArchive = true;
+            },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: didArchive
+                  ? "Thread archived, but navigation failed"
+                  : "Failed to archive thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+        } finally {
+          archivingThreadKeysRef.current.delete(threadKey);
+        }
+      })();
+    },
+    [archiveThread, confirmThreadArchive],
+  );
+
   // A settle per thread at a time: double clicks and repeated menu picks
   // must not dispatch a second settle that fails and toasts a false error.
   const settlingThreadKeysRef = useRef(new Set<string>());
@@ -2480,30 +2548,7 @@ export default function SidebarV2() {
             return;
           }
           case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: didArchive
-                    ? "Thread archived, but navigation failed"
-                    : "Failed to archive thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
+            attemptArchive(threadRef);
             return;
           }
           case "copy-path":
@@ -2560,8 +2605,7 @@ export default function SidebarV2() {
       attemptSnooze,
       attemptUnsettle,
       attemptUnsnooze,
-      archiveThread,
-      confirmThreadArchive,
+      attemptArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
@@ -2990,6 +3034,7 @@ export default function SidebarV2() {
                       isRenaming={renamingThreadKey === threadKey}
                       renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                       onContextMenu={handleThreadContextMenu}
+                      onArchive={attemptArchive}
                       onSettle={attemptSettle}
                       onUnsettle={attemptUnsettle}
                       onSnooze={attemptSnooze}

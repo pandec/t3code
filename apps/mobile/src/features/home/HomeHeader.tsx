@@ -378,15 +378,14 @@ function IosHomeHeader(props: HomeHeaderProps) {
     connectionStatusState === null
       ? null
       : workspaceConnectionStatusPresentation(connectionStatusState);
-  const headerTitle =
-    connectionStatusPresentation === null
-      ? "Threads"
-      : () => (
-          <HomeHeaderConnectionStatus
-            presentation={connectionStatusPresentation}
-            onPress={props.onOpenEnvironments}
-          />
-        );
+  // Always a custom title so the settled "Threads" label stays tappable and
+  // keeps opening the environments panel, same as the sync indicator.
+  const headerTitle = () => (
+    <HomeHeaderConnectionStatus
+      presentation={connectionStatusPresentation}
+      onPress={props.onOpenEnvironments}
+    />
+  );
 
   return (
     <>

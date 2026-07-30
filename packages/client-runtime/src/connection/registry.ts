@@ -31,6 +31,7 @@ import type {
   SupervisorConnectionState,
 } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
@@ -499,12 +500,16 @@ export const make = Effect.gen(function* () {
           }
           yield* Effect.all(
             [
-              cache.clear(environmentId).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("Could not clear cached environment data after removal.", {
-                    environmentId,
-                    error,
-                  }),
+              withEnvironmentCacheMutationLock(
+                cache,
+                environmentId,
+                cache.clear(environmentId).pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning("Could not clear cached environment data after removal.", {
+                      environmentId,
+                      error,
+                    }),
+                  ),
                 ),
               ),
               ownedDataCleanup.clear(environmentId),
@@ -570,12 +575,16 @@ export const make = Effect.gen(function* () {
         });
         yield* Effect.all(
           [
-            cache.clear(environmentId).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("Could not clear cached environment data after removal.", {
-                  environmentId,
-                  error,
-                }),
+            withEnvironmentCacheMutationLock(
+              cache,
+              environmentId,
+              cache.clear(environmentId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not clear cached environment data after removal.", {
+                    environmentId,
+                    error,
+                  }),
+                ),
               ),
             ),
             ownedDataCleanup.clear(environmentId),

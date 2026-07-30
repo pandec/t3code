@@ -12,6 +12,7 @@ import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-sto
 
 const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
+export const MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS = 5_000;
 
 export interface Preferences {
   readonly liveActivitiesEnabled?: boolean;
@@ -30,6 +31,14 @@ export interface Preferences {
    * see `resolveThreadListV2Enabled`.
    */
   readonly threadListV2Enabled?: boolean;
+  /**
+   * Device-local mirror of the web fork's Extras settings. Numbers are stored
+   * raw and clamped on read (see `state/use-mobile-preferences`), because the
+   * blob is rehydrated by JSON parsing rather than by decoding a schema.
+   */
+  readonly steerGraceWindowMs?: number;
+  readonly accentTintsEnabled?: boolean;
+  readonly accentTintIntensityPercent?: number;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -81,6 +90,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     threadListV2Enabled?: boolean;
+    steerGraceWindowMs?: number;
+    accentTintsEnabled?: boolean;
+    accentTintIntensityPercent?: number;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -112,6 +124,15 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;
+  }
+  if (typeof parsed.steerGraceWindowMs === "number") {
+    preferences.steerGraceWindowMs = parsed.steerGraceWindowMs;
+  }
+  if (typeof parsed.accentTintsEnabled === "boolean") {
+    preferences.accentTintsEnabled = parsed.accentTintsEnabled;
+  }
+  if (typeof parsed.accentTintIntensityPercent === "number") {
+    preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
   }
   return preferences;
 }
@@ -300,7 +321,17 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
           const payload = yield* encode(PREFERENCES_KEY, next);
           yield* saveJson(payload);
           return next;
-        }),
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS,
+            orElse: () =>
+              Effect.fail(
+                new MobilePreferencesSaveError({
+                  cause: new Error("Timed out updating mobile preferences."),
+                }),
+              ),
+          }),
+        ),
       )
       .pipe(
         Effect.mapError((cause) =>

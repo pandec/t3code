@@ -117,6 +117,7 @@ import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
+  updateBearerConnection as updateBearerConnectionAtom,
 } from "~/connection/onboarding";
 import { useEnvironmentQuery } from "~/state/query";
 import {
@@ -1340,6 +1341,7 @@ type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
   onConnect: (environmentId: EnvironmentId) => void;
+  onEdit: (environment: EnvironmentPresentation) => void;
   onRemove: (environmentId: EnvironmentId) => void;
 };
 
@@ -1347,6 +1349,7 @@ function SavedBackendListRow({
   environment,
   removingEnvironmentId,
   onConnect,
+  onEdit,
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
@@ -1405,6 +1408,13 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  // Only saved bearer environments can be edited (the runtime rewrites the
+  // catalog entry and reuses the stored token) — SSH, relay-managed, and the
+  // desktop-local WSL backend cannot.
+  const isEditable =
+    environment.entry.target._tag === "BearerConnectionTarget" &&
+    !environment.relayManaged &&
+    !isWslEnvironment;
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1471,6 +1481,16 @@ function SavedBackendListRow({
             </Tooltip>
           ) : (
             <>
+              {isEditable ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={removingEnvironmentId === environmentId}
+                  onClick={() => onEdit(environment)}
+                >
+                  Edit
+                </Button>
+              ) : null}
               {!isConnected ? (
                 <Button
                   size="xs"
@@ -1502,6 +1522,105 @@ function SavedBackendListRow({
         </div>
       </div>
     </div>
+  );
+}
+
+type EditSavedBackendInput = {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly httpBaseUrl: string;
+};
+
+function EditSavedBackendDialog({
+  environment,
+  onOpenChange,
+  onSave,
+}: {
+  environment: EnvironmentPresentation;
+  onOpenChange: (open: boolean) => void;
+  onSave: (input: EditSavedBackendInput) => Promise<string | null>;
+}) {
+  const [label, setLabel] = useState(environment.label);
+  const [url, setUrl] = useState(environment.displayUrl ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSave = useCallback(async () => {
+    setIsSaving(true);
+    setError(null);
+    const failure = await onSave({
+      environmentId: environment.environmentId,
+      label: label.trim(),
+      httpBaseUrl: url.trim(),
+    });
+    setIsSaving(false);
+    if (failure !== null) {
+      setError(failure);
+      return;
+    }
+    onOpenChange(false);
+  }, [environment.environmentId, label, onOpenChange, onSave, url]);
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (isSaving) return;
+        onOpenChange(open);
+      }}
+    >
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit Environment</DialogTitle>
+          <DialogDescription>
+            Update the label or URL used to reach this environment. The saved pairing token is kept.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="space-y-3">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-foreground">Label</span>
+            <Input
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="My MacBook"
+              disabled={isSaving}
+              spellCheck={false}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-foreground">URL</span>
+            <Input
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              placeholder="192.168.1.100:8080"
+              disabled={isSaving}
+              spellCheck={false}
+            />
+          </label>
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose
+            disabled={isSaving}
+            render={<Button variant="outline" disabled={isSaving} />}
+          >
+            Cancel
+          </DialogClose>
+          <Button
+            disabled={isSaving || label.trim() === "" || url.trim() === ""}
+            onClick={() => void handleSave()}
+          >
+            {isSaving ? (
+              <>
+                <Spinner className="size-3.5" />
+                Saving…
+              </>
+            ) : (
+              "Save"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
@@ -1719,6 +1838,9 @@ export function ConnectionsSettings() {
   });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const updateBearerConnection = useAtomCommand(updateBearerConnectionAtom, {
+    reportFailure: false,
+  });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = desktopBridge
@@ -1796,6 +1918,8 @@ export function ConnectionsSettings() {
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
+  const [editingSavedEnvironment, setEditingSavedEnvironment] =
+    useState<EnvironmentPresentation | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [isDesktopServerExposureDialogOpen, setIsDesktopServerExposureDialogOpen] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
@@ -2226,6 +2350,18 @@ export function ConnectionsSettings() {
       }
     },
     [retryEnvironment],
+  );
+
+  const handleEditSavedBackend = useCallback(
+    async (input: EditSavedBackendInput): Promise<string | null> => {
+      const result = await updateBearerConnection(input);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        return error instanceof Error ? error.message : "Failed to update environment.";
+      }
+      return null;
+    },
+    [updateBearerConnection],
   );
 
   const handleRemoveSavedBackend = useCallback(
@@ -3385,6 +3521,7 @@ export function ConnectionsSettings() {
             environment={environment}
             removingEnvironmentId={removingSavedEnvironmentId}
             onConnect={handleConnectSavedBackend}
+            onEdit={setEditingSavedEnvironment}
             onRemove={handleRemoveSavedBackend}
           />
         ))}
@@ -3393,6 +3530,16 @@ export function ConnectionsSettings() {
           savedEnvironments={savedEnvironments}
         />
       </SettingsSection>
+      {editingSavedEnvironment !== null ? (
+        <EditSavedBackendDialog
+          key={editingSavedEnvironment.environmentId}
+          environment={editingSavedEnvironment}
+          onOpenChange={(open) => {
+            if (!open) setEditingSavedEnvironment(null);
+          }}
+          onSave={handleEditSavedBackend}
+        />
+      ) : null}
     </SettingsPageContainer>
   );
 }

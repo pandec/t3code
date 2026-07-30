@@ -17,6 +17,7 @@ import {
   PrimaryConnectionTarget,
   type PreparedConnection,
 } from "../connection/model.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -59,6 +60,16 @@ function session(client: WsRpcProtocolClient): RpcSession {
     probe: Effect.void,
     closed: Effect.never,
   };
+}
+
+function makeRegistry(
+  entries: SubscriptionRef.SubscriptionRef<
+    ReadonlyMap<EnvironmentId, { readonly target: PrimaryConnectionTarget }>
+  >,
+) {
+  return EnvironmentRegistry.EnvironmentRegistry.of({
+    entries,
+  } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
 }
 
 describe("server state projection", () => {
@@ -141,6 +152,9 @@ describe("server state projection", () => {
         disconnect: Effect.void,
         retryNow: Effect.void,
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, { readonly target: PrimaryConnectionTarget }>
+      >(new Map([[TARGET.environmentId, { target: TARGET }]]));
       const savedConfigs = yield* Queue.unbounded<ServerConfig>();
       const cache = Persistence.EnvironmentCacheStore.of({
         loadShell: () => Effect.succeed(Option.none()),
@@ -161,6 +175,7 @@ describe("server state projection", () => {
         Effect.gen(function* () {
           const state = yield* makeEnvironmentServerConfigState().pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, makeRegistry(entries)),
             Effect.provideService(Persistence.EnvironmentCacheStore, cache),
           );
           expect(Option.getOrThrow(yield* SubscriptionRef.get(state)).config).toBe(CONFIG);
@@ -202,6 +217,9 @@ describe("server state projection", () => {
         disconnect: Effect.void,
         retryNow: Effect.void,
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, { readonly target: PrimaryConnectionTarget }>
+      >(new Map([[TARGET.environmentId, { target: TARGET }]]));
       const savedConfigs = yield* Queue.unbounded<ServerConfig>();
       const cache = Persistence.EnvironmentCacheStore.of({
         loadShell: () => Effect.succeed(Option.none()),
@@ -221,8 +239,75 @@ describe("server state projection", () => {
       yield* Effect.scoped(
         makeEnvironmentServerConfigState().pipe(
           Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, makeRegistry(entries)),
           Effect.provideService(Persistence.EnvironmentCacheStore, cache),
         ),
+      );
+
+      expect(yield* Queue.poll(savedConfigs)).toEqual(Option.none());
+    }),
+  );
+
+  it.effect("does not persist a pending config after its catalog entry is replaced", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
+      const client = {
+        [WS_METHODS.subscribeServerConfig]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, { readonly target: PrimaryConnectionTarget }>
+      >(new Map([[TARGET.environmentId, { target: TARGET }]]));
+      const savedConfigs = yield* Queue.unbounded<ServerConfig>();
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.some(CONFIG)),
+        saveServerConfig: (_environmentId, config) => Queue.offer(savedConfigs, config),
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* makeEnvironmentServerConfigState().pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, makeRegistry(entries)),
+            Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          );
+          yield* Queue.offer(events, {
+            version: 1,
+            type: "providerStatuses",
+            payload: { providers: [] },
+          });
+          yield* SubscriptionRef.changes(state).pipe(
+            Stream.filter((value) =>
+              Option.match(value, {
+                onNone: () => false,
+                onSome: (projection) => projection.latestEvent.type === "providerStatuses",
+              }),
+            ),
+            Stream.runHead,
+          );
+          yield* SubscriptionRef.set(
+            entries,
+            new Map([[TARGET.environmentId, { target: TARGET }]]),
+          );
+        }),
       );
 
       expect(yield* Queue.poll(savedConfigs)).toEqual(Option.none());

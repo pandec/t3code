@@ -24,6 +24,7 @@ import {
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
+import { isThreadOutboxMessageWaitingForPreferences } from "./thread-outbox";
 import { createThreadOutboxManager, ThreadOutboxManagerError } from "./thread-outbox-manager";
 import type { ThreadOutboxStorage } from "./thread-outbox-storage";
 
@@ -45,6 +46,25 @@ function queuedMessage(input: {
 }
 
 describe("thread outbox", () => {
+  it("holds only non-expedited steers while preferences hydrate", () => {
+    const steer = {
+      ...queuedMessage({
+        messageId: "steer",
+        createdAt: "2026-06-08T10:00:01.000Z",
+      }),
+      deliveryIntent: "steer" as const,
+    };
+    const queued = {
+      ...steer,
+      deliveryIntent: "queue" as const,
+    };
+
+    expect(isThreadOutboxMessageWaitingForPreferences(steer, false, false)).toBe(true);
+    expect(isThreadOutboxMessageWaitingForPreferences(steer, false, true)).toBe(false);
+    expect(isThreadOutboxMessageWaitingForPreferences(steer, true, false)).toBe(false);
+    expect(isThreadOutboxMessageWaitingForPreferences(queued, false, false)).toBe(false);
+  });
+
   it("groups messages by scoped thread and preserves creation order", () => {
     const later = queuedMessage({
       messageId: "message-2",

@@ -6,13 +6,13 @@ import {
   TERMINAL_FONT_SIZE_STEP,
 } from "../../../../lib/appearancePreferences";
 import { SettingsSection } from "../../components/SettingsSection";
+import { SettingsSliderRow } from "../../components/SettingsSliderRow";
 import { SettingsSwitchRow } from "../../components/SettingsSwitchRow";
 import { useAppearancePreferences } from "../AppearancePreferencesProvider";
 import {
   AppearancePreviewSeparator,
   TerminalAppearancePreview,
 } from "../components/AppearancePreviews";
-import { FontSizeSliderRow } from "../components/FontSizeSliderRow";
 
 export function TerminalAppearanceSection() {
   const { isReady, appearance, setTerminalFontSize } = useAppearancePreferences();
@@ -37,12 +37,14 @@ export function TerminalAppearanceSection() {
         value={custom}
       />
       {custom ? (
-        <FontSizeSliderRow
+        <SettingsSliderRow
           disabled={!isReady}
           icon="textformat.size"
           label="Font size"
           max={MAX_TERMINAL_FONT_SIZE}
+          maxIcon="textformat.size.larger"
           min={MIN_TERMINAL_FONT_SIZE}
+          minIcon="textformat.size.smaller"
           onChange={setTerminalFontSize}
           step={TERMINAL_FONT_SIZE_STEP}
           value={appearance.terminalFontSize}

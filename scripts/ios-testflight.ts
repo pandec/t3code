@@ -43,7 +43,7 @@ function asIosTestFlightError(message: string, cause: unknown): IosTestFlightErr
   return cause instanceof IosTestFlightError ? cause : new IosTestFlightError({ message, cause });
 }
 
-const runCommand = Effect.fn("iosTestFlight.runCommand")(
+export const runCommand = Effect.fn("iosTestFlight.runCommand")(
   function* (
     spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
     command: string,
@@ -341,9 +341,9 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       archivePath,
       "archive",
       ...authenticationArgs,
-      // expo-sharing's config plugin never writes DEVELOPMENT_TEAM for the
-      // expo-sharing-extension target, so a bare `xcodebuild archive` fails on it.
-      // `expo run:ios` hides this by injecting the team the same way.
+      // withIosDevelopmentTeam.cjs already stamps DEVELOPMENT_TEAM at prebuild;
+      // kept as a belt-and-braces override so the archive cannot regress to an
+      // unsigned target if the plugin is reordered or removed.
       `DEVELOPMENT_TEAM=${settings.teamId}`,
     ],
     { cwd: mobileDir, env: buildEnv },
