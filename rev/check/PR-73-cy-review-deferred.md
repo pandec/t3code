@@ -10,3 +10,5 @@ contract must distinguish “cache read completed with no config” from “stil
 catalog and server-config state; approximating it with another storage cache or an unbounded splash
 wait would make startup less reliable. Keep it deferred only if an integrated cold-start trace
 shows a visible flash; otherwise close it as theoretical.
+
+> cy-review complete — 2026-07-30T06:17:25Z — rounds: 2
