@@ -55,11 +55,21 @@ import {
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
-import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
+import {
+  deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageSnapshotFromServerSnapshot,
+  providerUsageLabelForDriver,
+  resolveProviderUsageInstanceId,
+} from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
-import { providerUsageMenuActions, providerUsageTriggerLabel } from "../../lib/providerUsageMenu";
+import {
+  providerUsageAccountMenuActions,
+  providerUsageTriggerLabel,
+} from "../../lib/providerUsageMenu";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -348,33 +358,96 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
   const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
+  const providerUsageInstanceId = resolveProviderUsageInstanceId({
+    liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
+    modelSelectionInstanceId: props.selectedThread.modelSelection.instanceId,
+  });
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (
-      props.serverConfig.providers.find(
-        (p) => p.instanceId === props.selectedThread.modelSelection.instanceId,
-      ) ?? null
+      props.serverConfig.providers.find((p) => p.instanceId === providerUsageInstanceId) ?? null
     );
-  }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  }, [props.serverConfig, providerUsageInstanceId]);
   const selectedThreadDetail = useSelectedThreadDetail();
+  const providerUsageQuery = useEnvironmentQuery(
+    serverEnvironment.providerUsage({
+      environmentId: props.environmentId,
+      input: {},
+    }),
+  );
   const providerUsageNowMs = useMinuteClockMs();
-  const providerUsage = useMemo(
+  const providerUsageSnapshotByInstance = useMemo(
+    () =>
+      new Map(
+        (providerUsageQuery.data?.snapshots ?? []).map((snapshot) => [
+          snapshot.instanceId,
+          snapshot,
+        ]),
+      ),
+    [providerUsageQuery.data?.snapshots],
+  );
+  const serverProviderUsage = useMemo(() => {
+    if (providerUsageInstanceId === null) return null;
+    const snapshot = providerUsageSnapshotByInstance.get(providerUsageInstanceId);
+    return snapshot
+      ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, { now: providerUsageNowMs })
+      : null;
+  }, [providerUsageInstanceId, providerUsageNowMs, providerUsageSnapshotByInstance]);
+  const activityProviderUsage = useMemo(
     () =>
       deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
         provider: selectedProviderStatus?.driver ?? null,
-        providerInstanceId: props.selectedThread.modelSelection.instanceId,
+        providerInstanceId: providerUsageInstanceId,
         now: providerUsageNowMs,
       }),
     [
-      props.selectedThread.modelSelection.instanceId,
+      providerUsageInstanceId,
       providerUsageNowMs,
       selectedProviderStatus?.driver,
       selectedThreadDetail,
     ],
   );
+  const providerUsage = serverProviderUsage ?? activityProviderUsage;
+  const providerUsageAccounts = useMemo(
+    () =>
+      (props.serverConfig?.providers ?? [])
+        .filter(
+          (provider) =>
+            provider.enabled &&
+            selectedProviderStatus !== null &&
+            providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
+            provider.driver === selectedProviderStatus.driver,
+        )
+        .sort((left, right) => {
+          if (left.instanceId === providerUsageInstanceId) return -1;
+          if (right.instanceId === providerUsageInstanceId) return 1;
+          return 0;
+        })
+        .map((provider) => {
+          const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+          return {
+            instanceId: provider.instanceId,
+            displayName: provider.displayName ?? provider.instanceId,
+            email: provider.auth.email,
+            snapshot: snapshot
+              ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+                  now: providerUsageNowMs,
+                })
+              : null,
+            observedAt: snapshot?.observedAt ?? null,
+          };
+        }),
+    [
+      props.serverConfig?.providers,
+      providerUsageInstanceId,
+      providerUsageNowMs,
+      providerUsageSnapshotByInstance,
+      selectedProviderStatus,
+    ],
+  );
   const providerUsageActions = useMemo(
-    () => (providerUsage ? providerUsageMenuActions(providerUsage, providerUsageNowMs) : []),
-    [providerUsage, providerUsageNowMs],
+    () => providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs),
+    [providerUsageAccounts, providerUsageNowMs],
   );
   const providerSkills = props.providerSkills;
 
@@ -971,28 +1044,28 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     label={configurationLabel}
                   />
                 </ControlPillMenu>
-                {providerUsage ? (
+                {providerUsageAccounts.length > 0 ? (
                   <ControlPillMenu
-                    accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                    accessibilityLabel={`${providerUsage?.providerLabel ?? "Provider"} usage`}
                     actions={providerUsageActions}
-                    title={`${providerUsage.providerLabel} usage`}
+                    title={`${providerUsage?.providerLabel ?? "Provider"} usage`}
                     onPressAction={() => {}}
                   >
                     <ComposerToolbarTrigger
-                      accessibilityLabel={`${providerUsage.providerLabel} usage`}
+                      accessibilityLabel={`${providerUsage?.providerLabel ?? "Provider"} usage`}
                       iconNode={
                         <View
                           className={cn(
                             "h-2 w-2 rounded-full",
-                            providerUsage.status === "critical"
+                            providerUsage?.status === "critical"
                               ? "bg-rose-500"
-                              : providerUsage.status === "warning"
+                              : providerUsage?.status === "warning"
                                 ? "bg-amber-500"
                                 : "bg-neutral-400 dark:bg-neutral-500",
                           )}
                         />
                       }
-                      label={providerUsageTriggerLabel(providerUsage)}
+                      label={providerUsage ? providerUsageTriggerLabel(providerUsage) : "Usage"}
                     />
                   </ControlPillMenu>
                 ) : null}

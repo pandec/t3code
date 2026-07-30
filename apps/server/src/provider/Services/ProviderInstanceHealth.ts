@@ -24,6 +24,13 @@ export interface ProviderInstanceRateLimitState {
   readonly reportedAt: number;
 }
 
+export interface ProviderInstanceUsageSnapshot {
+  readonly instanceId: ProviderInstanceId;
+  readonly payload: unknown;
+  /** Unix ms when the payload was observed. */
+  readonly observedAt: number;
+}
+
 export interface ProviderInstanceHealthShape {
   /**
    * Ingest a raw `account.rate-limits.updated` payload for an instance.
@@ -35,6 +42,18 @@ export interface ProviderInstanceHealthShape {
     instanceId: ProviderInstanceId,
     payload: unknown,
   ) => Effect.Effect<void>;
+
+  /** Store the latest opaque provider usage payload for one instance. */
+  readonly reportUsageSnapshot: (
+    instanceId: ProviderInstanceId,
+    payload: unknown,
+  ) => Effect.Effect<void>;
+
+  readonly getUsageSnapshot: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ProviderInstanceUsageSnapshot | undefined>;
+
+  readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 
   /**
    * Ingest a turn outcome. A successful turn proves the instance healthy

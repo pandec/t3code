@@ -1,13 +1,21 @@
-import { EventId, TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import {
+  EventId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  TurnId,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyProviderUsageThresholds,
   collectProviderUsageAlerts,
   deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageSnapshotFromServerSnapshot,
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
+  resolveProviderUsageInstanceId,
 } from "./providerUsage.ts";
 
 function makeActivity(
@@ -993,6 +1001,59 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
       expect(snapshot?.providerLabel).toBe("Claude");
     });
+  });
+});
+
+describe("server-owned provider usage snapshots", () => {
+  it("reuses the activity normalizer for opaque server payloads", () => {
+    const payload = {
+      source: "claude.usage-api",
+      rateLimits: {
+        limits: [
+          {
+            kind: "session",
+            percent: 42,
+            severity: "normal",
+            resets_at: "2026-07-25T09:00:00.000Z",
+            is_active: true,
+          },
+        ],
+      },
+    };
+    const fromServer = deriveProviderUsageSnapshotFromServerSnapshot({
+      instanceId: ProviderInstanceId.make("claude-work"),
+      driver: ProviderDriverKind.make("claudeAgent"),
+      payload,
+      observedAt: Date.parse("2026-07-25T00:00:00.000Z"),
+    });
+    const fromActivity = deriveLatestProviderUsageSnapshot(
+      [makeActivity("server-parity", payload)],
+      {
+        provider: "claudeAgent",
+        providerInstanceId: "claude-work",
+      },
+    );
+    expect(fromServer).toEqual(fromActivity);
+  });
+});
+
+describe("resolveProviderUsageInstanceId", () => {
+  it("prefers the live session instance after failover", () => {
+    expect(
+      resolveProviderUsageInstanceId({
+        liveSessionInstanceId: "claude-failover",
+        modelSelectionInstanceId: "claude-primary",
+      }),
+    ).toBe("claude-failover");
+  });
+
+  it("falls back to the picked model instance when no session is live", () => {
+    expect(
+      resolveProviderUsageInstanceId({
+        liveSessionInstanceId: null,
+        modelSelectionInstanceId: "codex-work",
+      }),
+    ).toBe("codex-work");
   });
 });
 

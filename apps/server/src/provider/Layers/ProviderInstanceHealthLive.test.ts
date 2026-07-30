@@ -72,6 +72,35 @@ describe("isRateLimitErrorMessage", () => {
 });
 
 describe("ProviderInstanceHealth", () => {
+  it.effect("stores the latest opaque usage snapshot independently per instance", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+      const secondInstanceId = ProviderInstanceId.make("claude_second");
+      const firstPayload = { source: "claude.usage-api", rateLimits: { limits: [] } };
+      const replacementPayload = { primary: { usedPercent: 42 } };
+
+      yield* health.reportUsageSnapshot(instanceId, firstPayload);
+      yield* TestClock.adjust(Duration.seconds(2));
+      yield* health.reportUsageSnapshot(instanceId, replacementPayload);
+      yield* health.reportUsageSnapshot(secondInstanceId, { secondary: { usedPercent: 7 } });
+
+      expect(yield* health.getUsageSnapshot(instanceId)).toEqual({
+        instanceId,
+        payload: replacementPayload,
+        observedAt: 2_000,
+      });
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        { instanceId, payload: replacementPayload, observedAt: 2_000 },
+        {
+          instanceId: secondInstanceId,
+          payload: { secondary: { usedPercent: 7 } },
+          observedAt: 2_000,
+        },
+      ]);
+      expect(yield* health.getRateLimitState(instanceId)).toBeUndefined();
+    }),
+  );
+
   it.effect("marks, reads, and clears rate-limit state", () =>
     Effect.gen(function* () {
       const health = yield* makeProviderInstanceHealth;

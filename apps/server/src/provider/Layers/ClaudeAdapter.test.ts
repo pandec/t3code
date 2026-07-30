@@ -728,6 +728,49 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
+  it.effect("reads usage through a minimal ephemeral query without creating a session", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: "max",
+        rate_limits_available: true,
+        rate_limits: {
+          limits: [{ kind: "session", percent: 27, severity: "normal", is_active: true }],
+        },
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const usage = yield* adapter.readAccountUsage!();
+      assert.deepEqual(usage, {
+        source: "claude.usage-api",
+        subscriptionType: "max",
+        rateLimits: {
+          limits: [{ kind: "session", percent: 27, severity: "normal", is_active: true }],
+        },
+      });
+      assert.deepEqual(yield* adapter.listSessions(), []);
+      assert.equal(harness.query.closeCalls, 1);
+      assert.equal(harness.query.usageCalls, 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("returns undefined when ephemeral Claude usage is unavailable", () => {
+    const harness = makeHarness();
+    harness.query.usageResult = () =>
+      Promise.resolve({
+        subscription_type: null,
+        rate_limits_available: false,
+        rate_limits: null,
+      });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      assert.equal(yield* adapter.readAccountUsage!(), undefined);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
   it.effect("stays silent when the experimental usage API is absent or failing", () => {
     const harness = makeHarness();
     // Models both degradation paths: an SDK that renamed/removed the method

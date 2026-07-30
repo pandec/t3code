@@ -53,3 +53,38 @@ export function providerUsageMenuActions(
     subtitle: describeWindow(window, nowMs),
   }));
 }
+
+export interface ProviderUsageMenuAccount {
+  readonly instanceId: string;
+  readonly displayName: string;
+  readonly email: string | undefined;
+  readonly snapshot: ProviderUsageSnapshot | null;
+  readonly observedAt: number | null;
+}
+
+function formatRelativeAge(observedAt: number | null, nowMs: number): string {
+  if (observedAt === null) return "not updated";
+  const minutes = Math.floor(Math.max(0, nowMs - observedAt) / 60_000);
+  if (minutes < 1) return "updated just now";
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  return `updated ${Math.floor(minutes / 60)}h ago`;
+}
+
+/** One native-menu row per configured account. */
+export function providerUsageAccountMenuActions(
+  accounts: ReadonlyArray<ProviderUsageMenuAccount>,
+  nowMs: number,
+): Array<{ id: string; title: string; subtitle: string }> {
+  return accounts.map((account) => {
+    const windows =
+      account.snapshot?.windows.map((window) => describeWindow(window, nowMs)).join(", ") ??
+      "No usage data";
+    return {
+      id: `usage-account:${account.instanceId}`,
+      title: account.displayName,
+      subtitle: [account.email, windows, formatRelativeAge(account.observedAt, nowMs)]
+        .filter((value): value is string => Boolean(value))
+        .join(" · "),
+    };
+  });
+}

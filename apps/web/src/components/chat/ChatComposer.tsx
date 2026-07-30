@@ -112,7 +112,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import { ContextWindowMeter } from "./ContextWindowMeter";
+import { ContextWindowMeter, type ProviderUsageAccountRow } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -211,7 +211,12 @@ import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
 } from "../../lib/contextWindow";
-import { deriveLatestProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
+import {
+  deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageSnapshotFromServerSnapshot,
+  providerUsageLabelForDriver,
+  resolveProviderUsageInstanceId,
+} from "@t3tools/client-runtime/state/provider-usage";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import {
   formatProviderSkillDisplayName,
@@ -223,6 +228,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -426,7 +432,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
+  providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   activeThreadProviderDisplayName: string | null;
+  onRefreshProviderUsage: () => Promise<void>;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -451,11 +459,15 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeContextWindow || props.activeProviderUsage ? (
+      {props.activeContextWindow ||
+      props.activeProviderUsage ||
+      props.providerUsageAccounts.length > 0 ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
           providerUsage={props.activeProviderUsage}
+          providerUsageAccounts={props.providerUsageAccounts}
           providerDisplayName={props.activeThreadProviderDisplayName}
+          onRefreshProviderUsage={props.onRefreshProviderUsage}
         />
       ) : null}
       {props.isPreparingWorktree ? (
@@ -911,6 +923,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         })
       : null,
   );
+  const providerUsageQuery = useEnvironmentQuery(
+    serverEnvironment.providerUsage({ environmentId, input: {} }),
+  );
+  const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    reportFailure: false,
+  });
   const effectiveProviderSkills = resolveEffectiveProviderSkills(
     providerSkillsQuery.data?.skills,
     selectedProviderStatus?.skills,
@@ -987,38 +1005,132 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [activeThreadActivities],
   );
   const activeThreadProviderDriver = useMemo(() => {
-    if (!activeThreadModelSelection) return null;
-    return (
-      providerStatuses.find((p) => p.instanceId === activeThreadModelSelection.instanceId)
-        ?.driver ?? null
-    );
-  }, [providerStatuses, activeThreadModelSelection]);
+    const instanceId = resolveProviderUsageInstanceId({
+      liveSessionInstanceId: activeThread?.session?.providerInstanceId,
+      modelSelectionInstanceId: activeThreadModelSelection?.instanceId,
+    });
+    if (instanceId === null) return null;
+    return providerStatuses.find((provider) => provider.instanceId === instanceId)?.driver ?? null;
+  }, [
+    activeThread?.session?.providerInstanceId,
+    activeThreadModelSelection?.instanceId,
+    providerStatuses,
+  ]);
+  const activeProviderUsageInstanceId = resolveProviderUsageInstanceId({
+    liveSessionInstanceId: activeThread?.session?.providerInstanceId,
+    modelSelectionInstanceId: activeThreadModelSelection?.instanceId,
+  });
   const providerUsageNowMinute = useNowMinute();
-  const activeProviderUsage = useMemo(
+  const providerUsageNowMs = Date.now();
+  const providerUsageSnapshotByInstance = useMemo(
+    () =>
+      new Map(
+        (providerUsageQuery.data?.snapshots ?? []).map((snapshot) => [
+          snapshot.instanceId,
+          snapshot,
+        ]),
+      ),
+    [providerUsageQuery.data?.snapshots],
+  );
+  const activeServerProviderUsage = useMemo(() => {
+    if (activeProviderUsageInstanceId === null) return null;
+    const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);
+    return snapshot
+      ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, { now: providerUsageNowMs })
+      : null;
+  }, [
+    activeProviderUsageInstanceId,
+    providerUsageNowMinute,
+    providerUsageNowMs,
+    providerUsageSnapshotByInstance,
+  ]);
+  const activityProviderUsage = useMemo(
     () =>
       deriveLatestProviderUsageSnapshot(activeThreadActivities ?? [], {
         provider: activeThreadProviderDriver,
-        providerInstanceId: activeThreadModelSelection?.instanceId ?? null,
-        now: Date.now(),
+        providerInstanceId: activeProviderUsageInstanceId,
+        now: providerUsageNowMs,
       }),
     [
       activeThreadActivities,
-      activeThreadModelSelection?.instanceId,
+      activeProviderUsageInstanceId,
       activeThreadProviderDriver,
       providerUsageNowMinute,
+      providerUsageNowMs,
     ],
   );
+  const activeProviderUsage = activeServerProviderUsage ?? activityProviderUsage;
+  const usageProviders = useMemo(
+    () =>
+      activeThreadProviderDriver === null ||
+      providerUsageLabelForDriver(activeThreadProviderDriver) === null
+        ? []
+        : providerStatuses
+            .filter(
+              (provider) => provider.enabled && provider.driver === activeThreadProviderDriver,
+            )
+            .sort((left, right) => {
+              if (left.instanceId === activeProviderUsageInstanceId) return -1;
+              if (right.instanceId === activeProviderUsageInstanceId) return 1;
+              return 0;
+            }),
+    [activeProviderUsageInstanceId, activeThreadProviderDriver, providerStatuses],
+  );
+  const [pendingProviderUsageInstanceIds, setPendingProviderUsageInstanceIds] = useState<
+    ReadonlySet<ProviderInstanceId>
+  >(() => new Set());
+  const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(
+    () =>
+      usageProviders.map((provider) => {
+        const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+        return {
+          instanceId: provider.instanceId,
+          displayName: provider.displayName ?? formatProviderDisplayName(provider.instanceId),
+          email: provider.auth.email,
+          usage: snapshot
+            ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+                now: providerUsageNowMs,
+              })
+            : null,
+          observedAt: snapshot?.observedAt ?? null,
+          pending: pendingProviderUsageInstanceIds.has(provider.instanceId),
+        };
+      }),
+    [
+      pendingProviderUsageInstanceIds,
+      providerUsageNowMinute,
+      providerUsageNowMs,
+      providerUsageSnapshotByInstance,
+      usageProviders,
+    ],
+  );
+  const lastProviderUsageRefreshAtRef = useRef(0);
+  const refreshProviderUsage = useCallback(async () => {
+    const refreshAt = Date.now();
+    if (refreshAt - lastProviderUsageRefreshAtRef.current < 5_000) return;
+    const instanceIds = usageProviders.map((provider) => provider.instanceId);
+    if (instanceIds.length === 0) return;
+    lastProviderUsageRefreshAtRef.current = refreshAt;
+    setPendingProviderUsageInstanceIds(new Set(instanceIds));
+    try {
+      await refreshProviderUsageCommand({
+        environmentId,
+        input: { instanceIds },
+      });
+      providerUsageQuery.refresh();
+    } finally {
+      setPendingProviderUsageInstanceIds(new Set());
+    }
+  }, [environmentId, providerUsageQuery, refreshProviderUsageCommand, usageProviders]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadProviderDisplayName = useMemo(() => {
-    if (!activeThreadModelSelection) return null;
-    const entry = providerStatuses.find(
-      (p) => p.instanceId === activeThreadModelSelection.instanceId,
-    );
+    if (activeProviderUsageInstanceId === null) return null;
+    const entry = providerStatuses.find((p) => p.instanceId === activeProviderUsageInstanceId);
     if (entry) {
       return getProviderDisplayName(providerStatuses, entry.driver);
     }
-    return formatProviderDisplayName(activeThreadModelSelection.instanceId);
-  }, [providerStatuses, activeThreadModelSelection]);
+    return formatProviderDisplayName(activeProviderUsageInstanceId);
+  }, [activeProviderUsageInstanceId, providerStatuses]);
 
   // ------------------------------------------------------------------
   // Composer-local state
@@ -3345,7 +3457,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
                   activeProviderUsage={activeProviderUsage}
+                  providerUsageAccounts={providerUsageAccounts}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
+                  onRefreshProviderUsage={refreshProviderUsage}
                   pendingAction={pendingPrimaryAction}
                   isRunning={composerHasRunningActions}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}

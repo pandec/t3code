@@ -8,6 +8,7 @@ import {
   ProviderInstanceHealth,
   type ProviderInstanceHealthShape,
   type ProviderInstanceRateLimitState,
+  type ProviderInstanceUsageSnapshot,
 } from "../Services/ProviderInstanceHealth.ts";
 
 /**
@@ -90,6 +91,9 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
   const states = yield* Ref.make<
     ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, ProviderInstanceRateLimitState>>
   >(new Map());
+  const usageSnapshots = yield* Ref.make<
+    ReadonlyMap<ProviderInstanceId, ProviderInstanceUsageSnapshot>
+  >(new Map());
 
   const windowStateKey = (windowType: string | undefined) =>
     `provider-window:${windowType ?? "unknown"}`;
@@ -164,6 +168,25 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     }
   });
 
+  const reportUsageSnapshot: ProviderInstanceHealthShape["reportUsageSnapshot"] = Effect.fn(
+    "ProviderInstanceHealth.reportUsageSnapshot",
+  )(function* (instanceId, payload) {
+    const observedAt = yield* Clock.currentTimeMillis;
+    yield* Ref.update(usageSnapshots, (snapshots) =>
+      new Map(snapshots).set(instanceId, {
+        instanceId,
+        payload,
+        observedAt,
+      }),
+    );
+  });
+
+  const getUsageSnapshot: ProviderInstanceHealthShape["getUsageSnapshot"] = (instanceId) =>
+    Ref.get(usageSnapshots).pipe(Effect.map((snapshots) => snapshots.get(instanceId)));
+
+  const listUsageSnapshots: ProviderInstanceHealthShape["listUsageSnapshots"] = () =>
+    Ref.get(usageSnapshots).pipe(Effect.map((snapshots) => Array.from(snapshots.values())));
+
   const reportTurnOutcome: ProviderInstanceHealthShape["reportTurnOutcome"] = Effect.fn(
     "ProviderInstanceHealth.reportTurnOutcome",
   )(function* (instanceId, outcome, errorMessage) {
@@ -232,6 +255,9 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
 
   return {
     reportRateLimitPayload,
+    reportUsageSnapshot,
+    getUsageSnapshot,
+    listUsageSnapshots,
     reportTurnOutcome,
     getRateLimitState,
   } satisfies ProviderInstanceHealthShape;

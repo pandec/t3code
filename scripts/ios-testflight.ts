@@ -7,6 +7,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -19,6 +20,7 @@ import { loadRepoEnv } from "./lib/public-config.ts";
 
 const SCHEME = "T3Code";
 const ARTIFACT_DIRECTORY = "local/ios-testflight";
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
 // CFBundleVersion must strictly increase per upload and stay well inside a 32-bit
 // integer, so count minutes since a fixed epoch rather than using a wall-clock
 // stamp. That is monotonic, needs no checked-in counter, and only collides if two
@@ -346,7 +348,11 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
       .pipe(
         Effect.mapError((cause) => asIosTestFlightError("Fingerprint generation failed", cause)),
       );
-    const fingerprint: unknown = JSON.parse(fingerprintJson);
+    const fingerprint = yield* decodeUnknownJson(fingerprintJson).pipe(
+      Effect.mapError((cause) =>
+        asIosTestFlightError("Fingerprint generation returned invalid JSON", cause),
+      ),
+    );
     if (
       typeof fingerprint !== "object" ||
       fingerprint === null ||

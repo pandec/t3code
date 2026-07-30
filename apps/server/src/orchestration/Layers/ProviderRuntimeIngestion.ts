@@ -1341,6 +1341,10 @@ const make = Effect.gen(function* () {
       event,
       providerInstanceHealth.reportRateLimitPayload(instanceId, event.payload.rateLimits),
     );
+    yield* reportHealthSafely(
+      event,
+      providerInstanceHealth.reportUsageSnapshot(instanceId, event.payload.rateLimits),
+    );
   });
 
   const reportTurnOutcomeHealth = Effect.fn("reportTurnOutcomeHealth")(function* (

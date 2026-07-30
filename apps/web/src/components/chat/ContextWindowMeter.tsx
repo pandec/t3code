@@ -5,8 +5,11 @@ import {
   type ProviderUsageStatus,
   type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
+import type { ProviderInstanceId } from "@t3tools/contracts";
+import { RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
 
+import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
@@ -134,10 +137,31 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
   );
 }
 
+export interface ProviderUsageAccountRow {
+  readonly instanceId: ProviderInstanceId;
+  readonly displayName: string;
+  readonly email: string | undefined;
+  readonly usage: ProviderUsageSnapshot | null;
+  readonly observedAt: number | null;
+  readonly pending: boolean;
+}
+
+function formatRelativeAge(observedAt: number | null, nowMs: number): string {
+  if (observedAt === null) return "not updated yet";
+  const ageMs = Math.max(0, nowMs - observedAt);
+  if (ageMs < 60_000) return "updated just now";
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `updated ${hours}h ago`;
+}
+
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot | null;
   providerUsage?: ProviderUsageSnapshot | null;
+  providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
   providerDisplayName?: string | null;
+  onRefreshProviderUsage?: () => Promise<void> | void;
 }) {
   const { usage, providerDisplayName } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -147,7 +171,22 @@ export function ContextWindowMeter(props: {
     () => applyProviderUsageThresholds(props.providerUsage ?? null, usageThresholds),
     [props.providerUsage, usageThresholds],
   );
+  const providerUsageAccounts = useMemo(
+    () =>
+      (props.providerUsageAccounts ?? []).map((account) => ({
+        ...account,
+        usage: applyProviderUsageThresholds(account.usage, usageThresholds),
+      })),
+    [props.providerUsageAccounts, usageThresholds],
+  );
   const nowMs = Date.now();
+  const newestObservedAt = providerUsageAccounts.reduce<number | null>(
+    (newest, account) =>
+      account.observedAt !== null && (newest === null || account.observedAt > newest)
+        ? account.observedAt
+        : newest,
+    null,
+  );
 
   const usedPercentage = usage ? formatPercentage(usage.usedPercentage) : null;
   const normalizedPercentage = Math.max(0, Math.min(100, usage?.usedPercentage ?? 0));
@@ -203,7 +242,17 @@ export function ContextWindowMeter(props: {
     .join(", ");
 
   return (
-    <Popover>
+    <Popover
+      onOpenChange={(open) => {
+        if (
+          open &&
+          props.onRefreshProviderUsage !== undefined &&
+          (newestObservedAt === null || nowMs - newestObservedAt > 60_000)
+        ) {
+          void props.onRefreshProviderUsage();
+        }
+      }}
+    >
       <PopoverTrigger
         openOnHover
         delay={150}
@@ -246,7 +295,7 @@ export function ContextWindowMeter(props: {
         className="dropdown-glass w-64 max-w-none border-0! bg-secondary! p-0 shadow-none! before:hidden"
       >
         <div className="flex flex-col gap-3 p-3">
-          {providerUsage ? (
+          {providerUsage && providerUsageAccounts.length === 0 ? (
             <div className="flex flex-col gap-2">
               <div className="font-medium text-muted-foreground text-xs">
                 {providerUsage.providerLabel} Usage
@@ -254,21 +303,77 @@ export function ContextWindowMeter(props: {
               {providerUsage.windows.map((window) => (
                 <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
               ))}
-              {/* Quota is pulled at turn boundaries, so its age is meaningful
-                  in a way the live context-window figure's is not. */}
-              <div className="flex items-center justify-between gap-3 text-[11px] leading-4 text-muted-foreground/60">
-                <span>Last updated</span>
-                <span className="tabular-nums">
-                  {new Intl.DateTimeFormat(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }).format(new Date(providerUsage.updatedAt))}
-                </span>
-              </div>
             </div>
           ) : null}
 
-          {providerUsage && usage ? <div className="h-px w-full bg-border/60" /> : null}
+          {providerUsageAccounts.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-muted-foreground text-xs">
+                  {providerUsage?.providerLabel ?? "Provider"} accounts
+                </div>
+                {props.onRefreshProviderUsage ? (
+                  <button
+                    type="button"
+                    className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void props.onRefreshProviderUsage?.()}
+                    disabled={providerUsageAccounts.some((account) => account.pending)}
+                    aria-label="Refresh provider usage"
+                  >
+                    <RefreshCwIcon
+                      className={cn(
+                        "size-3",
+                        providerUsageAccounts.some((account) => account.pending) && "animate-spin",
+                      )}
+                    />
+                  </button>
+                ) : null}
+              </div>
+              {providerUsageAccounts.map((account) => {
+                const stale =
+                  account.observedAt === null || nowMs - account.observedAt > 5 * 60_000;
+                return (
+                  <div
+                    key={account.instanceId}
+                    className={cn("flex flex-col gap-2", stale && "opacity-55")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <span className="truncate text-[11px] font-medium text-muted-foreground/90">
+                          {account.displayName}
+                        </span>
+                        <RedactedSensitiveText
+                          value={account.email}
+                          ariaLabel="Toggle account email visibility"
+                          revealTooltip="Click to reveal email"
+                          hideTooltip="Click to hide email"
+                          className="max-w-44 truncate text-left"
+                        />
+                      </div>
+                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                        {account.pending
+                          ? "updating…"
+                          : formatRelativeAge(account.observedAt, nowMs)}
+                      </span>
+                    </div>
+                    {account.usage ? (
+                      account.usage.windows.map((window) => (
+                        <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
+                      ))
+                    ) : (
+                      <div className="text-[11px] text-muted-foreground/60">
+                        No usage data available
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {(providerUsage || providerUsageAccounts.length > 0) && usage ? (
+            <div className="h-px w-full bg-border/60" />
+          ) : null}
 
           {usage ? (
             <div className="flex flex-col gap-2">

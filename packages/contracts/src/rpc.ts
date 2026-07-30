@@ -63,6 +63,11 @@ import {
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  ProviderUsageReadInput,
+  ProviderUsageRefreshInput,
+  ProviderUsageSnapshotsResult,
+} from "./providerUsage.ts";
+import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
   RelayClientStatusSchema,
@@ -226,6 +231,8 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  providerUsageRead: "providerUsage.read",
+  providerUsageRefresh: "providerUsage.refresh",
   serverListProviderSkills: "server.listProviderSkills",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -306,6 +313,18 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     instanceId: Schema.optional(ProviderInstanceId),
   }),
   success: ServerProviderUpdatedPayload,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsProviderUsageReadRpc = Rpc.make(WS_METHODS.providerUsageRead, {
+  payload: ProviderUsageReadInput,
+  success: ProviderUsageSnapshotsResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsProviderUsageRefreshRpc = Rpc.make(WS_METHODS.providerUsageRefresh, {
+  payload: ProviderUsageRefreshInput,
+  success: ProviderUsageSnapshotsResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -791,6 +810,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsProviderUsageReadRpc,
+  WsProviderUsageRefreshRpc,
   WsServerListProviderSkillsRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,

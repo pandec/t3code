@@ -78,6 +78,11 @@ const makeDeps = (input: {
         ? Effect.fail(new ProviderInstanceNotFoundError({ instanceId }))
         : Effect.die(new Error(`unexpected getInstanceInfo(${instanceId}) in test`));
     },
+    isDisplayNameUnique: (_instanceId, displayName) =>
+      Effect.succeed(
+        Array.from(instances.values()).filter((instance) => instance.displayName === displayName)
+          .length <= 1,
+      ),
   };
 };
 
@@ -210,6 +215,7 @@ describe("resolveTurnRouting — rerouting", () => {
         fromInstanceId: MAIN,
         toInstanceId: SECOND,
         toDisplayName: "Claude Personal",
+        toDisplayNameIsUnique: true,
       });
     }),
   );
@@ -336,6 +342,7 @@ describe("makeFailoverActivity", () => {
         fromInstanceId: MAIN,
         toInstanceId: SECOND,
         toDisplayName: "Claude Personal",
+        toDisplayNameIsUnique: true,
         reason: "usage limit reached (five_hour)",
         until: 1_800_000_000_000,
         createdAt: CREATED_AT,
@@ -346,8 +353,27 @@ describe("makeFailoverActivity", () => {
     expect(activity.turnId).toBeNull();
     const payload = activity.payload as { detail: string; limitedUntil?: number };
     expect(payload.detail).toContain("five_hour");
-    expect(payload.detail).toContain("2027-01-15T08:00:00.000Z");
+    expect(payload.detail).toContain("resets");
+    expect(payload.detail).not.toContain("2027-01-15T08:00:00.000Z");
     expect(payload.limitedUntil).toBe(1_800_000_000_000);
+  });
+
+  it("appends the instance id when the target display name is not unique", () => {
+    const activity = makeFailoverActivity(
+      {
+        threadId: THREAD_ID,
+        direction: "failover",
+        fromInstanceId: MAIN,
+        toInstanceId: SECOND,
+        toDisplayName: "Claude",
+        toDisplayNameIsUnique: false,
+        reason: "usage limit reached",
+        until: null,
+        createdAt: CREATED_AT,
+      },
+      activityId,
+    );
+    expect(activity.summary).toBe(`Rate limited — failing over to Claude (${SECOND})`);
   });
 
   it("falls back to the instance id when the target has no display name", () => {

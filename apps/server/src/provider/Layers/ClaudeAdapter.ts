@@ -66,6 +66,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
@@ -4496,11 +4497,81 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     };
   });
 
+  const readAccountUsage: NonNullable<ClaudeAdapterShape["readAccountUsage"]> = Effect.fn(
+    "ClaudeAdapter.readAccountUsage",
+  )(function* () {
+    const result = yield* Effect.tryPromise({
+      try: async (signal) => {
+        const abortController = new AbortController();
+        let usageQuery: ClaudeQueryRuntime | undefined;
+        const abortQuery = () => abortController.abort();
+        signal.addEventListener("abort", abortQuery, { once: true });
+        try {
+          const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
+          usageQuery = createQuery({
+            // Keep the SDK transport alive without ever sending a user turn.
+            // oxlint-disable-next-line require-yield
+            prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+              if (!abortController.signal.aborted) {
+                await new Promise<void>((resolve) =>
+                  abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
+                );
+              }
+            })(),
+            options: {
+              cwd: serverConfig.cwd,
+              persistSession: false,
+              pathToClaudeCodeExecutable: claudeSdkExecutablePath,
+              abortController,
+              settingSources: [],
+              allowedTools: [],
+              mcpServers: {},
+              strictMcpConfig: true,
+              env: claudeEnvironment,
+              ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
+              stderr: () => {},
+            },
+          });
+          await usageQuery.initializationResult();
+          const readUsage = usageQuery.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+          if (readUsage === undefined) {
+            return undefined;
+          }
+          const usage = await readUsage.call(usageQuery);
+          if (!usage.rate_limits_available || !usage.rate_limits) {
+            return undefined;
+          }
+          return {
+            source: "claude.usage-api",
+            subscriptionType: usage.subscription_type,
+            rateLimits: usage.rate_limits,
+          };
+        } finally {
+          signal.removeEventListener("abort", abortQuery);
+          abortController.abort();
+          usageQuery?.close();
+        }
+      },
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "account/usage",
+          detail: "Failed to read Claude account usage.",
+          cause,
+        }),
+    }).pipe(
+      Effect.timeoutOption("15 seconds"),
+      Effect.catchCause(() => Effect.succeed(Option.none())),
+    );
+    return Option.getOrUndefined(result);
+  });
+
   return {
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
     },
+    readAccountUsage,
     startSession,
     forkSession,
     listImportableSessions,

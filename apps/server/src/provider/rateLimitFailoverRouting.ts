@@ -61,6 +61,7 @@ export type FailoverNotice =
   | (FailoverNoticeBase & {
       readonly direction: "failover";
       readonly reason: string;
+      readonly toDisplayNameIsUnique: boolean;
       /** Unix ms the limit is expected to lift, or null when unreported. */
       readonly until: number | null;
     })
@@ -98,6 +99,10 @@ export interface FailoverRoutingDeps {
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
+  readonly isDisplayNameUnique: (
+    instanceId: ProviderInstanceId,
+    displayName: string,
+  ) => Effect.Effect<boolean>;
 }
 
 export interface ResolveTurnRoutingInput {
@@ -167,7 +172,11 @@ const resolveFailoverTarget = Effect.fn("rateLimitFailover.resolveTarget")(funct
     });
     return undefined;
   }
-  return { info, limitState };
+  const displayNameIsUnique =
+    info.displayName === undefined
+      ? false
+      : yield* deps.isDisplayNameUnique(info.instanceId, info.displayName);
+  return { info, limitState, displayNameIsUnique };
 });
 
 /** Whether this thread's last turn ran somewhere other than the user's pick. */
@@ -231,6 +240,7 @@ export const resolveTurnRouting = Effect.fn("rateLimitFailover.resolveTurnRoutin
             fromInstanceId: preferredInstanceId,
             toInstanceId: bound.instanceId,
             toDisplayName: failoverTarget.info.displayName,
+            toDisplayNameIsUnique: failoverTarget.displayNameIsUnique,
             reason: failoverTarget.limitState.reason,
             until: failoverTarget.limitState.until,
             createdAt: input.createdAt,
@@ -302,11 +312,16 @@ export function makeFailoverActivity(
   notice: FailoverNotice,
   activityId: OrchestrationThreadActivity["id"],
 ): OrchestrationThreadActivity {
-  const target = notice.toDisplayName ?? notice.toInstanceId;
+  const target =
+    notice.toDisplayName === undefined
+      ? notice.toInstanceId
+      : notice.direction === "failover" && !notice.toDisplayNameIsUnique
+        ? `${notice.toDisplayName} (${notice.toInstanceId})`
+        : notice.toDisplayName;
   if (notice.direction === "failover") {
     const detail =
       notice.until !== null
-        ? `${notice.reason}; resets ${DateTime.formatIso(DateTime.makeUnsafe(notice.until))}`
+        ? `${notice.reason}; resets ${formatResetTime(notice.until, notice.createdAt)}`
         : notice.reason;
     return {
       id: activityId,
@@ -343,4 +358,15 @@ export function makeFailoverActivity(
     turnId: null,
     createdAt: notice.createdAt,
   };
+}
+
+function formatResetTime(resetAtMs: number, observedAt: string): string {
+  const observedAtMs = Date.parse(observedAt);
+  const withinDay =
+    Number.isFinite(observedAtMs) && resetAtMs - observedAtMs < 24 * 60 * 60 * 1_000;
+  return new Intl.DateTimeFormat(undefined, {
+    ...(withinDay ? {} : { weekday: "short" }),
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(DateTime.toDate(DateTime.makeUnsafe(resetAtMs)));
 }

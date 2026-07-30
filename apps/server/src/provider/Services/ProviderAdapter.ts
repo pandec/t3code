@@ -106,6 +106,12 @@ export interface ProviderAdapterShape<TError> {
   readonly capabilities: ProviderAdapterCapabilities;
 
   /**
+   * Best-effort account subscription-usage read that must not run a user
+   * turn. Drivers without a safe read path omit this capability.
+   */
+  readonly readAccountUsage?: () => Effect.Effect<unknown | undefined, TError>;
+
+  /**
    * Start a provider-backed session.
    */
   readonly startSession: (

@@ -75,7 +75,10 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHealth.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { refreshProviderUsageSnapshots } from "./provider/refreshProviderUsage.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -358,6 +361,8 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerInstanceHealth = yield* ProviderInstanceHealth.ProviderInstanceHealth;
+      const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1016,6 +1021,29 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const readProviderUsageSnapshots = Effect.gen(function* () {
+        const [instances, snapshots] = yield* Effect.all([
+          providerInstanceRegistry.listInstances,
+          providerInstanceHealth.listUsageSnapshots(),
+        ]);
+        const instanceById = new Map(instances.map((instance) => [instance.instanceId, instance]));
+        return {
+          snapshots: snapshots.flatMap((snapshot) => {
+            const instance = instanceById.get(snapshot.instanceId);
+            return instance === undefined
+              ? []
+              : [
+                  {
+                    instanceId: snapshot.instanceId,
+                    driver: instance.driverKind,
+                    payload: snapshot.payload,
+                    observedAt: snapshot.observedAt,
+                  },
+                ];
+          }),
+        };
+      });
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -1363,6 +1391,22 @@ const makeWsRpcLayer = (
               ? providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.providerUsageRead]: (_input) =>
+          observeRpcEffect(WS_METHODS.providerUsageRead, readProviderUsageSnapshots, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.providerUsageRefresh]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRefresh,
+            refreshProviderUsageSnapshots(
+              {
+                listInstances: providerInstanceRegistry.listInstances,
+                health: providerInstanceHealth,
+              },
+              input.instanceIds,
+            ).pipe(Effect.andThen(readProviderUsageSnapshots)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverListProviderSkills]: (input) =>

@@ -1,7 +1,11 @@
 import type { ProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
 import { describe, expect, it } from "vite-plus/test";
 
-import { providerUsageMenuActions, providerUsageTriggerLabel } from "./providerUsageMenu";
+import {
+  providerUsageAccountMenuActions,
+  providerUsageMenuActions,
+  providerUsageTriggerLabel,
+} from "./providerUsageMenu";
 
 const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
 
@@ -114,5 +118,50 @@ describe("providerUsageMenuActions", () => {
 
     // A reset time in the past is stale information; only the state remains.
     expect(actions[0]?.subtitle).toBe("Limit reached");
+  });
+});
+
+describe("providerUsageAccountMenuActions", () => {
+  it("builds one row per account with email, windows, and freshness", () => {
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-work",
+          displayName: "Claude Work",
+          email: "work@example.com",
+          snapshot: makeSnapshot({
+            windows: [
+              {
+                id: "five_hour",
+                group: "session",
+                label: "Session (5h)",
+                shortLabel: "5h",
+                usedPercent: 42,
+                resetsAt: null,
+                status: "ok",
+              },
+            ],
+          }),
+          observedAt: NOW_MS - 4 * 60_000,
+        },
+        {
+          instanceId: "claude-personal",
+          displayName: "Claude Personal",
+          email: "personal@example.com",
+          snapshot: null,
+          observedAt: null,
+        },
+      ],
+      NOW_MS,
+    );
+
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toMatchObject({
+      title: "Claude Work",
+      subtitle: expect.stringContaining("work@example.com"),
+    });
+    expect(actions[0]?.subtitle).toContain("42% used");
+    expect(actions[0]?.subtitle).toContain("updated 4m ago");
+    expect(actions[1]?.subtitle).toContain("No usage data");
   });
 });
