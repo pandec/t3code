@@ -355,6 +355,9 @@ describe("makeFailoverActivity", () => {
     expect(payload.detail).toContain("five_hour");
     expect(payload.detail).toContain("resets");
     expect(payload.detail).not.toContain("2027-01-15T08:00:00.000Z");
+    // The detail is persisted and read verbatim by clients in other zones, so
+    // the server-rendered time must name its own zone.
+    expect(payload.detail).toMatch(/(GMT|UTC)/);
     expect(payload.limitedUntil).toBe(1_800_000_000_000);
   });
 

@@ -360,6 +360,15 @@ export function makeFailoverActivity(
   };
 }
 
+/**
+ * Render a reset time for the persisted work-log detail.
+ *
+ * Formatted in the server's locale and zone, because the detail string is
+ * written once and then read verbatim by every client. That makes the zone
+ * ambiguous for a client elsewhere, so the zone name is always included;
+ * `limitedUntil` stays in the payload as the authoritative instant for any
+ * surface that would rather render it locally.
+ */
 function formatResetTime(resetAtMs: number, observedAt: string): string {
   const observedAtMs = Date.parse(observedAt);
   const withinDay =
@@ -368,5 +377,6 @@ function formatResetTime(resetAtMs: number, observedAt: string): string {
     ...(withinDay ? {} : { weekday: "short" }),
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
   }).format(DateTime.toDate(DateTime.makeUnsafe(resetAtMs)));
 }
