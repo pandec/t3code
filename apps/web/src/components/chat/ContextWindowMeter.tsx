@@ -141,6 +141,8 @@ export interface ProviderUsageAccountRow {
   readonly instanceId: ProviderInstanceId;
   readonly displayName: string;
   readonly email: string | undefined;
+  /** Whether the thread's live session is currently spending this account. */
+  readonly isCurrent: boolean;
   readonly usage: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
 }
@@ -160,6 +162,8 @@ export function ContextWindowMeter(props: {
   providerUsage?: ProviderUsageSnapshot | null;
   providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing?: boolean;
+  /** Driver-derived label ("Claude", "Codex") for the accounts header. */
+  providerUsageLabel?: string | null;
   providerDisplayName?: string | null;
   onRefreshProviderUsage?: () => Promise<void> | void;
 }) {
@@ -310,7 +314,7 @@ export function ContextWindowMeter(props: {
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="font-medium text-muted-foreground text-xs">
-                  {providerUsage?.providerLabel ?? "Provider"} accounts
+                  {props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} accounts
                 </div>
                 {props.onRefreshProviderUsage ? (
                   <button
@@ -336,8 +340,15 @@ export function ContextWindowMeter(props: {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 flex-col gap-1">
-                        <span className="truncate text-[11px] font-medium text-muted-foreground/90">
-                          {account.displayName}
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-[11px] font-medium text-muted-foreground/90">
+                            {account.displayName}
+                          </span>
+                          {account.isCurrent && providerUsageAccounts.length > 1 ? (
+                            <span className="shrink-0 rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                              current
+                            </span>
+                          ) : null}
                         </span>
                         <RedactedSensitiveText
                           value={account.email}

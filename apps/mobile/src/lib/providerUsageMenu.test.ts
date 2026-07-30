@@ -68,6 +68,7 @@ describe("providerUsageAccountMenuActions", () => {
           instanceId: "claude-work",
           displayName: "Claude Work",
           email: "work@example.com",
+          isCurrent: true,
           snapshot: makeSnapshot({
             windows: [
               {
@@ -96,6 +97,7 @@ describe("providerUsageAccountMenuActions", () => {
           instanceId: "claude-personal",
           displayName: "Claude Personal",
           email: "personal@example.com",
+          isCurrent: false,
           snapshot: null,
           observedAt: null,
         },
@@ -104,10 +106,12 @@ describe("providerUsageAccountMenuActions", () => {
     );
 
     expect(actions).toHaveLength(2);
+    // The session's live account is marked when a sibling exists to tell apart.
     expect(actions[0]).toMatchObject({
-      title: "Claude Work",
+      title: "Claude Work (current)",
       subtitle: expect.stringContaining("work@example.com"),
     });
+    expect(actions[1]?.title).toBe("Claude Personal");
     expect(actions[0]?.subtitle).toContain("Session (5h):");
     expect(actions[0]?.subtitle).toContain("Weekly (all models):");
     expect(actions[0]?.subtitle).toMatch(/42% used · resets /);
@@ -123,6 +127,7 @@ describe("providerUsageAccountMenuActions", () => {
           instanceId: "claude-work",
           displayName: "Claude Work",
           email: undefined,
+          isCurrent: true,
           snapshot: makeSnapshot({
             windows: [
               {
@@ -145,5 +150,7 @@ describe("providerUsageAccountMenuActions", () => {
     // A reset time in the past is stale information; only the state remains.
     expect(actions[0]?.subtitle).toContain("Limit reached");
     expect(actions[0]?.subtitle).not.toContain("resets");
+    // A lone account needs no "current" marker — there is nothing to tell apart.
+    expect(actions[0]?.title).toBe("Claude Work");
   });
 });

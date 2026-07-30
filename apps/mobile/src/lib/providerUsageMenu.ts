@@ -48,6 +48,8 @@ export interface ProviderUsageMenuAccount {
   readonly instanceId: string;
   readonly displayName: string;
   readonly email: string | undefined;
+  /** Whether the thread's live session is currently spending this account. */
+  readonly isCurrent: boolean;
   readonly snapshot: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
 }
@@ -71,7 +73,12 @@ export function providerUsageAccountMenuActions(
       "No usage data";
     return {
       id: `usage-account:${account.instanceId}`,
-      title: account.displayName,
+      // Mark the account the session is spending, but only when there is a
+      // sibling to distinguish it from.
+      title:
+        account.isCurrent && accounts.length > 1
+          ? `${account.displayName} (current)`
+          : account.displayName,
       subtitle: [account.email, windows, formatRelativeAge(account.observedAt, nowMs)]
         .filter((value): value is string => Boolean(value))
         .join(" · "),

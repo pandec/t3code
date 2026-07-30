@@ -437,6 +437,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             instanceId: provider.instanceId,
             displayName: provider.displayName ?? provider.instanceId,
             email: provider.auth.email,
+            isCurrent: provider.instanceId === providerUsageInstanceId,
             snapshot: snapshot
               ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
                   provider: provider.driver,
@@ -458,6 +459,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs),
     [providerUsageAccounts, providerUsageNowMs],
   );
+  const providerUsageMenuLabel =
+    providerUsage?.providerLabel ??
+    providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
+    "Provider";
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -1057,13 +1062,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 </ControlPillMenu>
                 {providerUsageAccounts.length > 0 ? (
                   <ControlPillMenu
-                    accessibilityLabel={`${providerUsage?.providerLabel ?? "Provider"} usage`}
+                    accessibilityLabel={`${providerUsageMenuLabel} usage`}
                     actions={providerUsageActions}
-                    title={`${providerUsage?.providerLabel ?? "Provider"} usage`}
+                    title={`${providerUsageMenuLabel} usage`}
                     onPressAction={() => {}}
                   >
                     <ComposerToolbarTrigger
-                      accessibilityLabel={`${providerUsage?.providerLabel ?? "Provider"} usage`}
+                      accessibilityLabel={`${providerUsageMenuLabel} usage`}
                       iconNode={
                         <View
                           className={cn(

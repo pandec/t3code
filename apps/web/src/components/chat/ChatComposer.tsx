@@ -432,6 +432,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
   providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing: boolean;
+  providerUsageLabel: string | null;
   activeThreadProviderDisplayName: string | null;
   onRefreshProviderUsage: () => Promise<void>;
   isPreparingWorktree: boolean;
@@ -466,6 +467,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           providerUsage={props.activeProviderUsage}
           providerUsageAccounts={props.providerUsageAccounts}
           providerUsageRefreshing={props.providerUsageRefreshing}
+          providerUsageLabel={props.providerUsageLabel}
           providerDisplayName={props.activeThreadProviderDisplayName}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
         />
@@ -1058,10 +1060,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ],
   );
   const activeProviderUsage = activeServerProviderUsage ?? activityProviderUsage;
+  const providerUsageLabel = providerUsageLabelForDriver(activeThreadProviderDriver);
   const usageProviders = useMemo(
     () =>
-      activeThreadProviderDriver === null ||
-      providerUsageLabelForDriver(activeThreadProviderDriver) === null
+      activeThreadProviderDriver === null || providerUsageLabel === null
         ? []
         : providerStatuses
             .filter(
@@ -1072,7 +1074,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               if (right.instanceId === activeProviderUsageInstanceId) return 1;
               return 0;
             }),
-    [activeProviderUsageInstanceId, activeThreadProviderDriver, providerStatuses],
+    [
+      activeProviderUsageInstanceId,
+      activeThreadProviderDriver,
+      providerStatuses,
+      providerUsageLabel,
+    ],
   );
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(
@@ -1083,6 +1090,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           instanceId: provider.instanceId,
           displayName: provider.displayName ?? formatProviderDisplayName(provider.instanceId),
           email: provider.auth.email,
+          isCurrent: provider.instanceId === activeProviderUsageInstanceId,
           usage: snapshot
             ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
                 provider: provider.driver,
@@ -1092,7 +1100,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           observedAt: snapshot?.observedAt ?? null,
         };
       }),
-    [providerUsageNowMinute, providerUsageSnapshotByInstance, usageProviders],
+    [
+      activeProviderUsageInstanceId,
+      providerUsageNowMinute,
+      providerUsageSnapshotByInstance,
+      usageProviders,
+    ],
   );
   const lastProviderUsageRefreshAtRef = useRef(0);
   const refreshProviderUsage = useCallback(async () => {
@@ -3511,6 +3524,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeProviderUsage={activeProviderUsage}
                   providerUsageAccounts={providerUsageAccounts}
                   providerUsageRefreshing={isRefreshingProviderUsage}
+                  providerUsageLabel={providerUsageLabel}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   onRefreshProviderUsage={refreshProviderUsage}
                   pendingAction={pendingPrimaryAction}
