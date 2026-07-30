@@ -106,7 +106,11 @@ import {
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import {
+  useAllEnvironmentShellsBootstrapped,
+  useProjects,
+  useThreadShells,
+} from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -1155,6 +1159,7 @@ export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const allEnvironmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1505,7 +1510,6 @@ export default function SidebarV2() {
     () =>
       threads.map((thread) => ({
         threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        createdAt: thread.createdAt,
       })),
     [threads],
   );
@@ -1533,19 +1537,13 @@ export default function SidebarV2() {
   const toggleAttentionFilter = useCallback(() => {
     setAttentionFilterState((current) => {
       if (current !== null) return null;
+      if (!allEnvironmentShellsBootstrapped) return null;
 
-      const enabledAtMs = Date.now();
-      const now = new Date(enabledAtMs).toISOString();
+      const now = new Date().toISOString();
       const lastVisitedAtById = useUiStateStore.getState().threadLastVisitedAtById;
       const initialMemberThreadKeys = threads.flatMap((thread) => {
         const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        if (
-          thread.archivedAt !== null ||
-          (scopedProjectKeys !== null &&
-            !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
-        ) {
-          return [];
-        }
+        if (thread.archivedAt !== null) return [];
         const lastVisitedAt = lastVisitedAtById[threadKey];
         return isSidebarV2AttentionThread({
           ...thread,
@@ -1556,12 +1554,11 @@ export default function SidebarV2() {
           : [];
       });
       return createSidebarV2AttentionFilter({
-        enabledAtMs,
         initialMemberThreadKeys,
         threads: attentionFilterThreads,
       });
     });
-  }, [attentionFilterThreads, scopedProjectKeys, threads]);
+  }, [allEnvironmentShellsBootstrapped, attentionFilterThreads, threads]);
   // Scope and attention-filter flips drop the selection: rows selected under
   // the previous view may now be hidden, and bulk actions must never count or
   // touch invisible rows. Sticky membership growth does not clear selection.
@@ -2855,13 +2852,8 @@ export default function SidebarV2() {
                         type="button"
                         isActive={attentionFilterEnabled}
                         aria-pressed={attentionFilterEnabled}
-                        aria-label={
-                          attentionFilterEnabled
-                            ? `Showing ${
-                                activeThreads.length + snoozedThreads.length + settledThreads.length
-                              } threads needing attention — click to show all`
-                            : "Show only threads needing attention"
-                        }
+                        aria-label="Threads needing attention"
+                        disabled={!allEnvironmentShellsBootstrapped && !attentionFilterEnabled}
                         data-testid="sidebar-v2-attention-filter-toggle"
                         className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={toggleAttentionFilter}
@@ -2875,9 +2867,11 @@ export default function SidebarV2() {
                     />
                   </TooltipTrigger>
                   <TooltipPopup side="right">
-                    {attentionFilterEnabled
-                      ? "Show all threads"
-                      : "Show only threads needing attention"}
+                    {!allEnvironmentShellsBootstrapped && !attentionFilterEnabled
+                      ? "Loading threads…"
+                      : attentionFilterEnabled
+                        ? "Clear attention filter"
+                        : "Show only threads needing attention"}
                   </TooltipPopup>
                 </Tooltip>
                 <Tooltip>
@@ -3106,7 +3100,7 @@ export default function SidebarV2() {
                     onClick={() => setAttentionFilterState(null)}
                     className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
-                    Show all threads
+                    Clear attention filter
                   </button>
                 </>
               ) : singleScopedProjectGroup ? (

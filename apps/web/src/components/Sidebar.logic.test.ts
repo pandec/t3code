@@ -505,11 +505,10 @@ describe("Sidebar V2 attention filter", () => {
 
   it("captures attention members while remembering every known shell", () => {
     const state = createSidebarV2AttentionFilter({
-      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
       initialMemberThreadKeys: ["environment-a:working"],
       threads: [
-        { threadKey: "environment-a:working", createdAt: "2026-03-09T09:00:00.000Z" },
-        { threadKey: "environment-b:out-of-scope", createdAt: "2026-03-08T09:00:00.000Z" },
+        { threadKey: "environment-a:working" },
+        { threadKey: "environment-b:out-of-scope" },
       ],
     });
 
@@ -521,13 +520,12 @@ describe("Sidebar V2 attention filter", () => {
 
   it("admits a newly created shell regardless of how it appeared", () => {
     const state = createSidebarV2AttentionFilter({
-      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
       initialMemberThreadKeys: [],
-      threads: [{ threadKey: "environment-a:known", createdAt: "2026-03-09T09:00:00.000Z" }],
+      threads: [{ threadKey: "environment-a:known" }],
     });
     const next = admitNewSidebarV2AttentionThreads(state, [
-      { threadKey: "environment-a:known", createdAt: "2026-03-09T09:00:00.000Z" },
-      { threadKey: "environment-b:cli-created", createdAt: "2026-03-09T10:00:30.000Z" },
+      { threadKey: "environment-a:known" },
+      { threadKey: "environment-b:cli-created" },
     ]);
 
     expect(next.memberThreadKeys).toEqual(new Set(["environment-b:cli-created"]));
@@ -536,37 +534,34 @@ describe("Sidebar V2 attention filter", () => {
 
   it("keeps captured membership sticky when statuses and shell availability change", () => {
     const state = createSidebarV2AttentionFilter({
-      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
       initialMemberThreadKeys: ["environment-a:done"],
-      threads: [
-        { threadKey: "environment-a:done", createdAt: "2026-03-09T09:00:00.000Z" },
-        { threadKey: "environment-a:ready", createdAt: "2026-03-09T08:00:00.000Z" },
-      ],
+      threads: [{ threadKey: "environment-a:done" }, { threadKey: "environment-a:ready" }],
     });
 
     expect(admitNewSidebarV2AttentionThreads(state, [])).toBe(state);
     expect(state.memberThreadKeys).toEqual(new Set(["environment-a:done"]));
   });
 
-  it("remembers late historical shells without admitting them after a reconnect", () => {
+  it("admits every shell key first seen after the captured baseline", () => {
     const state = createSidebarV2AttentionFilter({
-      enabledAtMs: Date.parse("2026-03-09T10:00:00.000Z"),
       initialMemberThreadKeys: [],
       threads: [],
     });
     const next = admitNewSidebarV2AttentionThreads(state, [
-      { threadKey: "environment-a:historical", createdAt: "2026-03-08T10:00:00.000Z" },
-      { threadKey: "environment-a:malformed", createdAt: "not-a-date" },
+      { threadKey: "environment-a:remote-clock-behind" },
+      { threadKey: "environment-a:remote-clock-ahead" },
     ]);
 
-    expect(next.memberThreadKeys).toEqual(new Set());
+    expect(next.memberThreadKeys).toEqual(
+      new Set(["environment-a:remote-clock-behind", "environment-a:remote-clock-ahead"]),
+    );
     expect(next.knownThreadKeys).toEqual(
-      new Set(["environment-a:historical", "environment-a:malformed"]),
+      new Set(["environment-a:remote-clock-behind", "environment-a:remote-clock-ahead"]),
     );
     expect(
       admitNewSidebarV2AttentionThreads(next, [
-        { threadKey: "environment-a:historical", createdAt: "2026-03-10T10:00:00.000Z" },
-        { threadKey: "environment-a:malformed", createdAt: "2026-03-10T10:00:00.000Z" },
+        { threadKey: "environment-a:remote-clock-behind" },
+        { threadKey: "environment-a:remote-clock-ahead" },
       ]),
     ).toBe(next);
   });

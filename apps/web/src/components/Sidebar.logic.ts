@@ -541,28 +541,22 @@ export function isSidebarV2AttentionThread(
 
 export interface SidebarV2AttentionFilterThread {
   readonly threadKey: string;
-  readonly createdAt: string;
 }
 
 export interface SidebarV2AttentionFilterState {
-  readonly enabledAtMs: number;
   readonly memberThreadKeys: ReadonlySet<string>;
   readonly knownThreadKeys: ReadonlySet<string>;
 }
 
 export function createSidebarV2AttentionFilter(input: {
-  enabledAtMs: number;
   initialMemberThreadKeys: readonly string[];
   threads: readonly SidebarV2AttentionFilterThread[];
 }): SidebarV2AttentionFilterState {
   return {
-    enabledAtMs: input.enabledAtMs,
     memberThreadKeys: new Set(input.initialMemberThreadKeys),
     knownThreadKeys: new Set(input.threads.map((thread) => thread.threadKey)),
   };
 }
-
-const ATTENTION_FILTER_NEW_THREAD_CLOCK_SKEW_MS = 2 * 60 * 1_000;
 
 export function admitNewSidebarV2AttentionThreads(
   state: SidebarV2AttentionFilterState,
@@ -577,18 +571,10 @@ export function admitNewSidebarV2AttentionThreads(
     knownThreadKeys ??= new Set(state.knownThreadKeys);
     memberThreadKeys ??= new Set(state.memberThreadKeys);
     knownThreadKeys.add(thread.threadKey);
-
-    const createdAtMs = Date.parse(thread.createdAt);
-    // A key that arrives after activation is admitted only when its creation
-    // stamp is also recent. This keeps a reconnect or late initial hydration
-    // from turning historical shells into "new" threads while allowing small
-    // clock differences between connected environments.
-    if (
-      Number.isFinite(createdAtMs) &&
-      createdAtMs >= state.enabledAtMs - ATTENTION_FILTER_NEW_THREAD_CLOCK_SKEW_MS
-    ) {
-      memberThreadKeys.add(thread.threadKey);
-    }
+    // Admission is based on first appearance after the captured baseline, not
+    // createdAt: connected environments have independent clocks, so comparing
+    // their timestamps with the browser clock can reject a genuine new thread.
+    memberThreadKeys.add(thread.threadKey);
   }
 
   if (knownThreadKeys === null || memberThreadKeys === null) return state;
