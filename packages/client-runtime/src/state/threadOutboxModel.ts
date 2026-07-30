@@ -143,6 +143,24 @@ export function steerGraceRemainingMs(
 }
 
 /**
+ * The newest steer that can still be recalled. An empty composer submit uses
+ * this to confirm the message the user just sent rather than an older row.
+ */
+export function latestSteerWaitingOutGraceWindow(
+  messages: ReadonlyArray<QueuedThreadMessage>,
+  nowMs: number,
+  graceWindowMs?: number,
+): QueuedThreadMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message && steerGraceRemainingMs(message, nowMs, graceWindowMs) > 0) {
+      return message;
+    }
+  }
+  return null;
+}
+
+/**
  * Whether a steer still owes its grace window. Expediting is the user saying
  * they are sure, so it retires the window rather than shortening it.
  */

@@ -14,6 +14,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  resolveThreadListV2MenuActionIds,
   resolveThreadListV2Enabled,
   resolveThreadListV2Status,
   sortThreadsForListV2,
@@ -48,6 +49,20 @@ function makeThread(
 }
 
 const NOW = "2026-06-02T00:00:00.000Z";
+
+describe("resolveThreadListV2MenuActionIds", () => {
+  it("keeps archive available across active, settled, and legacy rows", () => {
+    expect(
+      resolveThreadListV2MenuActionIds({ settlementSupported: true, variant: "card" }),
+    ).toEqual(["settle", "archive", "delete"]);
+    expect(
+      resolveThreadListV2MenuActionIds({ settlementSupported: true, variant: "slim" }),
+    ).toEqual(["unsettle", "archive", "delete"]);
+    expect(
+      resolveThreadListV2MenuActionIds({ settlementSupported: false, variant: "card" }),
+    ).toEqual(["archive", "delete"]);
+  });
+});
 
 describe("resolveThreadListV2Enabled", () => {
   it("defaults on when the device has never chosen", () => {
