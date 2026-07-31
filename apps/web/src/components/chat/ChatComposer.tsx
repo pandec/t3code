@@ -1148,8 +1148,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // `refreshedInstanceIds` names the instances that answered on *this*
       // call; the snapshots alone can't tell us that, because they also carry
       // older cached observations that would mask an all-probes-failed run.
+      // Absent means the server predates the field -- inconclusive, so stay
+      // quiet. Present but disjoint from what we asked for means none of our
+      // own accounts answered.
+      const refreshed = result.value.refreshedInstanceIds;
       providerUsageQuery.refresh();
-      if (result.value.refreshedInstanceIds.length === 0) {
+      if (refreshed !== undefined && !refreshed.some((id) => instanceIds.includes(id))) {
         toastManager.add({
           type: "warning",
           title: "No new usage data",

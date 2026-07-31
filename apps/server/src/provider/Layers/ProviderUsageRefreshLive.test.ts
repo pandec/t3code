@@ -384,6 +384,9 @@ it.effect("reports only the instances that answered on this call", () =>
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed([
           instance({ id: "claude_ok", read: Effect.succeed({ ok: true }) }),
+          // Filtered instances must never appear in the returned array either.
+          instance({ id: "claude_disabled", enabled: false, read: Effect.succeed({ x: 1 }) }),
+          instance({ id: "claude_unsupported" }),
           // A provider that has nothing to report, and one that fails outright:
           // neither may be counted as refreshed, or the client would suppress
           // its "no new usage data" warning on an all-probes-failed refresh.

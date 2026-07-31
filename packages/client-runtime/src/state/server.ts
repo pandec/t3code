@@ -697,7 +697,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerUsageRefresh,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId }) => environmentId,
+        // Keyed by the requested instances too: two callers asking about
+        // different accounts must not be collapsed into one RPC, or the
+        // joiner would read a result that never probed what it asked for.
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${[...(input.instanceIds ?? [])].sort().join(",")}`,
       },
     }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
