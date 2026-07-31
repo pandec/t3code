@@ -1,10 +1,17 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider, ServerProviderSkill } from "./server.ts";
+import {
+  ServerConfig,
+  ServerProvider,
+  ServerProviderSkill,
+  ServerUpsertKeybindingResult,
+} from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviderSkill = Schema.decodeUnknownSync(ServerProviderSkill);
+const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
+const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
 describe("ServerProviderSkill", () => {
   it("accepts provider-native skills without filesystem metadata", () => {
@@ -87,5 +94,27 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
+  });
+});
+
+describe("server config forward compatibility", () => {
+  it("drops config issues with kinds this build does not know", () => {
+    const parsed = decodeUpsertKeybindingResult({
+      keybindings: [],
+      issues: [
+        { kind: "keybindings.invalid-entry", message: "Bad entry", index: 2 },
+        { kind: "keybindings.future-issue", message: "From a newer server" },
+      ],
+    });
+
+    expect(parsed.issues).toEqual([
+      { kind: "keybindings.invalid-entry", message: "Bad entry", index: 2 },
+    ]);
+  });
+
+  it("drops editor ids this build does not know", () => {
+    const parsed = decodeAvailableEditors(["zed", "some-future-editor", "vscode"]);
+
+    expect(parsed).toEqual(["zed", "vscode"]);
   });
 });

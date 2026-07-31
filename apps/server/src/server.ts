@@ -1,4 +1,5 @@
 import { EnvironmentHttpApi, VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -9,6 +10,7 @@ import {
   HttpServer,
   HttpServerRequest,
 } from "effect/unstable/http";
+import * as Schedule from "effect/Schedule";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -588,7 +590,25 @@ export const makeServerLayer = Layer.unwrap(
         yield* Effect.forkScoped(
           Effect.sleep("250 millis").pipe(
             Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
-            Effect.retry({ times: 4 }),
+            // On reboot this races NIC/DNS bring-up, so back off exponentially
+            // (capped at 30s) instead of burning all retries in a second.
+            // Bounded overall so a permanently broken setup still surfaces the
+            // warning below. Bad-request/unauthorized/conflict are
+            // deterministic failures (malformed origin, not linked yet, linked
+            // to a different cloud account) that no amount of retrying
+            // converges.
+            Effect.retry({
+              while: (error) =>
+                error._tag !== "EnvironmentHttpBadRequestError" &&
+                error._tag !== "EnvironmentHttpUnauthorizedError" &&
+                error._tag !== "EnvironmentHttpConflictError",
+              schedule: Schedule.exponential("1 second").pipe(
+                Schedule.modifyDelay(({ duration }) =>
+                  Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+                ),
+                Schedule.upTo({ duration: "10 minutes" }),
+              ),
+            }),
             Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
             Effect.catch((cause) =>
               Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {

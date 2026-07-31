@@ -1444,7 +1444,6 @@ function SavedBackendListRow({
             <div className="max-w-md">
               <ServerUpdateProgress
                 fromVersion={serverUpdateState.fromVersion}
-                serverLabel={`${environment.label} server`}
                 state={serverUpdateState}
               />
             </div>
@@ -3147,7 +3146,6 @@ export function ConnectionsSettings() {
                   primaryServerUpdateState.status !== "idle" ? (
                     <ServerUpdateProgress
                       fromVersion={primaryServerUpdateState.fromVersion}
-                      serverLabel={primaryEnvironment?.label ?? "this server"}
                       state={primaryServerUpdateState}
                     />
                   ) : primaryVersionMismatch ? (
