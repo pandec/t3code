@@ -410,7 +410,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, connectionStatusPresentation]}
+        optionsVersion={[filterMenu.items, connectionStatusPresentation, syncingThreads]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.

@@ -360,7 +360,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
         ),
     });
 
-    return Stream.merge(lifecycleTriggers, requestTriggers).pipe(
+    const runs = Stream.merge(lifecycleTriggers, requestTriggers).pipe(
       // Accumulate before the debounce so a burst collapses into one run
       // without losing any trigger's intent.
       Stream.mapEffect((trigger) =>
@@ -427,6 +427,10 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
         ),
       ),
     );
+    // `followStreamInEnvironment` may replace this stream's supervisor with
+    // `switchMap`. Establish the transient baseline on every execution so an
+    // interrupted run cannot leave the retained atom stuck at `running: true`.
+    return Stream.make(EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS).pipe(Stream.concat(runs));
   },
 );
 

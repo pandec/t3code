@@ -30,6 +30,7 @@ import {
   advanceThreadStreamingSnapshot,
   commitPrewarmedThreadSnapshot,
   didEnvironmentPrewarmRunsAdvance,
+  EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
   makeEnvironmentThreadPrewarm,
   seedThreadStreamingSnapshot,
   selectPrewarmCandidates,
@@ -271,11 +272,35 @@ describe("makeEnvironmentThreadPrewarm", () => {
         Queue.offer(status.running ? started : statuses, status),
       ),
     );
+    const initialStatus = yield* Queue.take(statuses);
 
     const fire = (request: ThreadPrewarmTriggerRequest) => Queue.offer(triggerRequests, request);
 
-    return { supervisorState, prepared, wakeups, statuses, started, stored, loaderCalls, fire };
+    return {
+      supervisorState,
+      prepared,
+      wakeups,
+      statuses,
+      started,
+      stored,
+      loaderCalls,
+      initialStatus,
+      fire,
+    };
   });
+
+  it.effect("establishes a settled baseline whenever the stream starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        // The environment registry can replace a supervisor by interrupting
+        // this stream and executing it again. Its first event must clear a
+        // retained in-flight status even before the replacement runs.
+        expect(harness.initialStatus).toEqual(EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS);
+      }),
+    ),
+  );
 
   it.effect("warms stale recent threads once the environment connects", () =>
     Effect.scoped(
