@@ -39,6 +39,8 @@ export interface Preferences {
   readonly steerGraceWindowMs?: number;
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
+  /** Device-local visit markers used by the sticky attention filter. */
+  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -78,7 +80,7 @@ export class MobilePreferencesStore extends Context.Service<
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
 
-function sanitizePreferences(parsed: Preferences): Preferences {
+export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     liveActivitiesEnabled?: boolean;
     baseFontSize?: number;
@@ -93,6 +95,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
+    threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -133,6 +136,18 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.accentTintIntensityPercent === "number") {
     preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
+  }
+  if (
+    typeof parsed.threadLastVisitedAtById === "object" &&
+    parsed.threadLastVisitedAtById !== null &&
+    !Array.isArray(parsed.threadLastVisitedAtById)
+  ) {
+    preferences.threadLastVisitedAtById = Object.fromEntries(
+      Object.entries(parsed.threadLastVisitedAtById).filter(
+        ([key, value]) =>
+          key.length > 0 && typeof value === "string" && !Number.isNaN(Date.parse(value)),
+      ),
+    );
   }
   return preferences;
 }

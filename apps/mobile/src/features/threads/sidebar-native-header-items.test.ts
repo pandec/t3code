@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 
-const filterMenu = {
+const filterMenu: HomeListFilterMenu = {
   title: "Thread list options",
   items: [],
-} as const;
+};
 
 describe("createSidebarHeaderItems", () => {
   it("puts the attention toggle between settings and the filter menu", () => {

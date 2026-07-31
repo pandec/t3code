@@ -1,36 +1,28 @@
+const MAX_THREAD_VISIT_MARKERS = 1_000;
+
 /**
- * In-memory per-thread last-visited timestamps, feeding the attention
- * filter's unseen-completion / unseen-wake criteria (threadAttention.ts).
- *
- * Deliberately NOT persisted: web keeps threadLastVisitedAtById in
- * localStorage, but mobile does not need a persistent visit-tracking
- * subsystem for the sticky attention snapshot — after an app restart every
- * thread simply reads as never-visited, which is the same semantics web
- * applies to a thread never opened in that browser. Reads happen only at
- * snapshot time (attention toggle-on), so the registry is not reactive.
+ * Records a visit with the thread's environment-issued `updatedAt`, exactly
+ * as web does. Keeping the map device-local preserves unseen completion/wake
+ * behavior across mobile process restarts without introducing server state.
  */
+export function markThreadVisited(
+  current: Readonly<Record<string, string>>,
+  threadKey: string,
+  visitedAt: string,
+): Readonly<Record<string, string>> {
+  const visitedAtMs = Date.parse(visitedAt);
+  if (threadKey.length === 0 || Number.isNaN(visitedAtMs)) return current;
 
-export interface ThreadVisitRegistry {
-  /** Records a visit; keeps the newest valid timestamp per thread. */
-  readonly recordVisit: (threadKey: string, visitedAt: string) => void;
-  readonly lastVisitedAtByThreadKey: () => ReadonlyMap<string, string>;
+  const previous = current[threadKey];
+  if (previous !== undefined) {
+    const previousMs = Date.parse(previous);
+    if (!Number.isNaN(previousMs) && previousMs >= visitedAtMs) return current;
+  }
+
+  const next = { ...current, [threadKey]: visitedAt };
+  const entries = Object.entries(next);
+  if (entries.length <= MAX_THREAD_VISIT_MARKERS) return next;
+
+  entries.sort((left, right) => Date.parse(right[1]) - Date.parse(left[1]));
+  return Object.fromEntries(entries.slice(0, MAX_THREAD_VISIT_MARKERS));
 }
-
-export function createThreadVisitRegistry(): ThreadVisitRegistry {
-  const visits = new Map<string, string>();
-  return {
-    recordVisit: (threadKey, visitedAt) => {
-      const visitedAtMs = Date.parse(visitedAt);
-      if (Number.isNaN(visitedAtMs)) return;
-      const current = visits.get(threadKey);
-      if (current !== undefined) {
-        const currentMs = Date.parse(current);
-        if (!Number.isNaN(currentMs) && currentMs >= visitedAtMs) return;
-      }
-      visits.set(threadKey, visitedAt);
-    },
-    lastVisitedAtByThreadKey: () => visits,
-  };
-}
-
-export const threadVisitRegistry = createThreadVisitRegistry();

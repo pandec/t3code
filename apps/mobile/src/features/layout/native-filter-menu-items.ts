@@ -33,11 +33,6 @@ export function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): Nat
 }
 
 /**
- * UINavigationBar item that opens the thread list filter/sort menu. Shared by
- * the compact Home header and the split-view sidebar so both surfaces expose
- * the same environment/project/sort options.
- */
-/**
  * UINavigationBar toggle for the sticky attention filter. Same semantic icon
  * as desktop's ListFilterIcon (SF line.3.horizontal.decrease); toggle state is
  * carried by the varying label and the tint, since bar-button items have no
@@ -68,6 +63,11 @@ export function createNativeAttentionFilterHeaderItem(input: {
   });
 }
 
+/**
+ * UINavigationBar item that opens the thread list filter/sort menu. Shared by
+ * the compact Home header and the split-view sidebar so both surfaces expose
+ * the same environment/project/sort options.
+ */
 export function createNativeFilterMenuHeaderItem(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;

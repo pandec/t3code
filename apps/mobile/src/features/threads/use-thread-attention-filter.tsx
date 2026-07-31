@@ -13,7 +13,8 @@ import {
 } from "react";
 
 import { allEnvironmentShellsBootstrappedAtom } from "../../state/shell";
-import { threadVisitRegistry } from "../../state/thread-visits";
+import { mobilePreferencesAtom } from "../../state/preferences";
+import { AsyncResult } from "effect/unstable/reactivity";
 import {
   admitNewThreadAttentionThreads,
   createThreadAttentionFilter,
@@ -61,6 +62,19 @@ export function useThreadAttentionFilter(
   threads: ReadonlyArray<EnvironmentThreadShell>,
 ): ThreadAttentionFilter {
   const bootstrapped = useAtomValue(allEnvironmentShellsBootstrappedAtom);
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const visitsReady = AsyncResult.isSuccess(preferencesResult);
+  const lastVisitedAtByThreadKey = useMemo(
+    () =>
+      new Map(
+        Object.entries(
+          AsyncResult.isSuccess(preferencesResult)
+            ? (preferencesResult.value.threadLastVisitedAtById ?? {})
+            : {},
+        ),
+      ),
+    [preferencesResult],
+  );
   const shared = useContext(ThreadAttentionFilterContext);
   const [localState, setLocalState] = useState<ThreadAttentionFilterState | null>(null);
   const state = shared?.state ?? localState;
@@ -82,21 +96,21 @@ export function useThreadAttentionFilter(
   const toggle = useCallback(() => {
     setState((current) => {
       if (current !== null) return null;
-      if (!bootstrapped) return null;
+      if (!bootstrapped || !visitsReady) return null;
       return createThreadAttentionFilter({
         threads,
         now: new Date().toISOString(),
-        lastVisitedAtByThreadKey: threadVisitRegistry.lastVisitedAtByThreadKey(),
+        lastVisitedAtByThreadKey,
       });
     });
-  }, [bootstrapped, setState, threads]);
+  }, [bootstrapped, lastVisitedAtByThreadKey, setState, threads, visitsReady]);
   const clear = useCallback(() => {
     setState(null);
   }, [setState]);
 
   return {
     enabled: effectiveState !== null,
-    ready: bootstrapped,
+    ready: bootstrapped && visitsReady,
     memberThreadKeys: effectiveState?.memberThreadKeys ?? null,
     toggle,
     clear,

@@ -11,15 +11,9 @@ import { resolveThreadListV2Status } from "./threadListV2";
  * the SidebarV2AttentionFilterState helpers), same as the rest of the Thread
  * List v2 model in threadListV2.ts.
  *
- * Semantic limitation vs desktop: the web app persists per-thread
- * lastVisitedAt in localStorage, which feeds the unseen-completion and
- * unseen-wake criteria. Mobile keeps visits in memory only (see
- * state/thread-visits.ts) — after an app restart every thread reads as
- * never-visited, so unseen completion contributes nothing until the thread
- * is opened once, while a woken thread counts as attention until visited.
- * That is the narrowest behavior that matches web semantics for a
- * never-visited thread; no persistent visit-tracking subsystem is invented
- * for it.
+ * Like web, mobile persists device-local per-thread visit markers and compares
+ * them with completion and wake timestamps. The mobile preference map is
+ * bounded so old markers cannot grow storage indefinitely.
  */
 
 export type ThreadAttentionShell = Pick<
@@ -143,15 +137,4 @@ export function admitNewThreadAttentionThreads(
 
   if (knownThreadKeys === null || memberThreadKeys === null) return state;
   return { knownThreadKeys, memberThreadKeys };
-}
-
-/** Applies sticky membership to a thread list; identity-stable when off. */
-export function filterThreadsForAttention<T extends ThreadAttentionKeyInput>(
-  threads: ReadonlyArray<T>,
-  memberThreadKeys: ReadonlySet<string> | null,
-): ReadonlyArray<T> {
-  if (memberThreadKeys === null) return threads;
-  return threads.filter((thread) =>
-    memberThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id)),
-  );
 }

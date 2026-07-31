@@ -25,7 +25,10 @@ import {
 } from "../../components/AndroidScreenHeader";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { threadVisitRegistry } from "../../state/thread-visits";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { markThreadVisited } from "../../state/thread-visits";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { connectionTone } from "../connection/connectionTone";
 
@@ -191,6 +194,8 @@ function ThreadRouteContent(
   const { onReconnectEnvironment } = useRemoteConnections();
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
@@ -211,12 +216,22 @@ function ThreadRouteContent(
     () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
   );
   useEffect(() => {
-    if (selectedThread === null) return;
-    threadVisitRegistry.recordVisit(
+    if (selectedThread === null || !AsyncResult.isSuccess(preferencesResult)) return;
+    const current = preferencesResult.value.threadLastVisitedAtById ?? {};
+    const next = markThreadVisited(
+      current,
       scopedThreadKey(selectedThread.environmentId, selectedThread.id),
       selectedThread.updatedAt,
     );
-  }, [selectedThread]);
+    if (next === current) return;
+    savePreferences({ threadLastVisitedAtById: next });
+  }, [
+    preferencesResult,
+    savePreferences,
+    selectedThread?.environmentId,
+    selectedThread?.id,
+    selectedThread?.updatedAt,
+  ]);
   const inspectorMode = (() => {
     if (inspectorSelection?.routeThreadIdentity === routeThreadIdentity) {
       if (inspectorSelection.mode === "files" && selectedThreadCwd === null) {

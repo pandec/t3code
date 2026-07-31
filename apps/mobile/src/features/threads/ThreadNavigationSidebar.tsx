@@ -572,23 +572,23 @@ function ThreadNavigationSidebarPane(
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
     // deletable while their environment is offline. Same environment,
-    // model, project, and search filters as the list.
+    // model, project, and search filters as the list — but not the attention
+    // filter: a queued task is work the user just started, the same "appeared
+    // after the snapshot" case the filter admits for shells.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
-    const v2PendingTasks = attentionFilter.enabled
-      ? []
-      : pendingTasks.filter(
-          (pendingTask) =>
-            (options.selectedEnvironmentId === null ||
-              pendingTask.message.environmentId === options.selectedEnvironmentId) &&
-            (options.selectedModel === null ||
-              pendingTask.message.modelSelection?.model === options.selectedModel) &&
-            (selectedProjectRefs === null ||
-              selectedProjectRefs.has(
-                scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
-              )) &&
-            (v2SearchQuery.length === 0 ||
-              pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
-        );
+    const v2PendingTasks = pendingTasks.filter(
+      (pendingTask) =>
+        (options.selectedEnvironmentId === null ||
+          pendingTask.message.environmentId === options.selectedEnvironmentId) &&
+        (options.selectedModel === null ||
+          pendingTask.message.modelSelection?.model === options.selectedModel) &&
+        (selectedProjectRefs === null ||
+          selectedProjectRefs.has(
+            scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
+          )) &&
+        (v2SearchQuery.length === 0 ||
+          pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
+    );
     const items: SidebarListItem[] = buildThreadListV2ListItems({
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
@@ -606,7 +606,6 @@ function ThreadNavigationSidebarPane(
     options.selectedEnvironmentId,
     options.selectedModel,
     pendingTasks,
-    attentionFilter.enabled,
     props.searchQuery,
     selectedProjectRefs,
     threadListV2Enabled,

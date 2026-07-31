@@ -655,29 +655,29 @@ export function HomeScreen(props: HomeScreenProps) {
   // they are spliced in below the active block and stay visible and deletable
   // while their environment is offline. Same environment, model, project,
   // and search filters as the list itself.
+  //
+  // The attention filter deliberately does NOT apply: a queued task is work
+  // the user just started that the server has not acknowledged yet, which is
+  // the same "appeared after the snapshot" case the filter admits for shells.
+  // Dropping it would make New Task look like a no-op while the filter is on,
+  // and would hide outbox items indefinitely while offline.
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = useMemo(
     () =>
-      props.attentionMemberThreadKeys === null
-        ? props.pendingTasks.filter(
-            (pendingTask) =>
-              (props.selectedEnvironmentId === null ||
-                pendingTask.message.environmentId === props.selectedEnvironmentId) &&
-              (props.selectedModel === null ||
-                pendingTask.message.modelSelection?.model === props.selectedModel) &&
-              (v2ScopedProjectKeys === null ||
-                v2ScopedProjectKeys.has(
-                  scopedProjectKey(
-                    pendingTask.message.environmentId,
-                    pendingTask.creation.projectId,
-                  ),
-                )) &&
-              (v2SearchQuery.length === 0 ||
-                pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
-          )
-        : [],
+      props.pendingTasks.filter(
+        (pendingTask) =>
+          (props.selectedEnvironmentId === null ||
+            pendingTask.message.environmentId === props.selectedEnvironmentId) &&
+          (props.selectedModel === null ||
+            pendingTask.message.modelSelection?.model === props.selectedModel) &&
+          (v2ScopedProjectKeys === null ||
+            v2ScopedProjectKeys.has(
+              scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
+            )) &&
+          (v2SearchQuery.length === 0 ||
+            pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
+      ),
     [
-      props.attentionMemberThreadKeys,
       props.pendingTasks,
       props.selectedEnvironmentId,
       props.selectedModel,
