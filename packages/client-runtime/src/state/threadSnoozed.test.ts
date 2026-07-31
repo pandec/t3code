@@ -71,6 +71,27 @@ describe("effectiveSnoozed", () => {
     expect(effectiveSnoozed(makeShell({ snoozedUntil: "not-a-date" }), { now: NOW })).toBe(false);
   });
 
+  it("hides an indefinitely snoozed thread (snoozedAt without a wake time)", () => {
+    expect(effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT }), { now: NOW })).toBe(true);
+  });
+
+  it("never hides on a malformed lone snoozedAt marker", () => {
+    expect(effectiveSnoozed(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(false);
+    expect(threadWokeAt(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(null);
+  });
+
+  it("wakes an indefinite snooze early on a raised hand", () => {
+    expect(
+      effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT, pending: "approval" }), { now: NOW }),
+    ).toBe(false);
+    expect(
+      effectiveSnoozed(
+        makeShell({ snoozedAt: SNOOZED_AT, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
+        { now: NOW },
+      ),
+    ).toBe(false);
+  });
+
   it("wakes early when the agent is blocked on the user", () => {
     expect(
       effectiveSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE, pending: "approval" }), {
@@ -199,6 +220,19 @@ describe("threadWokeAt", () => {
   it("is null for never-snoozed and still-snoozed threads", () => {
     expect(threadWokeAt(makeShell({}), { now: NOW })).toBe(null);
     expect(threadWokeAt(makeShell({ snoozedUntil: FUTURE_WAKE }), { now: NOW })).toBe(null);
+  });
+
+  it("never reports a timer wake for an indefinite snooze — there is no timer", () => {
+    expect(threadWokeAt(makeShell({ snoozedAt: SNOOZED_AT }), { now: NOW })).toBe(null);
+  });
+
+  it("reports raised-hand wakes for an indefinite snooze", () => {
+    expect(
+      threadWokeAt(
+        makeShell({ snoozedAt: SNOOZED_AT, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
+        { now: NOW },
+      ),
+    ).toBe("2026-04-10T10:30:00.000Z");
   });
 
   it("reports the wake time for a timer wake", () => {

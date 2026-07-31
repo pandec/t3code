@@ -18,13 +18,13 @@ describe("resolveSnoozePresets", () => {
       "next-week",
     ]);
     const evening = presets.find((preset) => preset.id === "evening");
-    expect(new Date(evening!.snoozedUntil).getHours()).toBe(18);
+    expect(new Date(evening!.snoozedUntil!).getHours()).toBe(18);
     const tomorrow = presets.find((preset) => preset.id === "tomorrow");
-    const tomorrowDate = new Date(tomorrow!.snoozedUntil);
+    const tomorrowDate = new Date(tomorrow!.snoozedUntil!);
     expect(tomorrowDate.getDate()).toBe(9);
     expect(tomorrowDate.getHours()).toBe(9);
     const nextWeek = presets.find((preset) => preset.id === "next-week");
-    const nextWeekDate = new Date(nextWeek!.snoozedUntil);
+    const nextWeekDate = new Date(nextWeek!.snoozedUntil!);
     expect(nextWeekDate.getDay()).toBe(1);
     expect(nextWeekDate.getDate()).toBe(13);
   });
@@ -55,10 +55,19 @@ describe("resolveSnoozePresets", () => {
     ]);
   });
 
+  it("includes the indefinite preset only when opted in, always last", () => {
+    const withoutOption = resolveSnoozePresets(localDate(2026, 4, 8, 10));
+    expect(withoutOption.some((preset) => preset.id === "until-woken")).toBe(false);
+    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), { untilWoken: true });
+    const last = presets.at(-1);
+    expect(last?.id).toBe("until-woken");
+    expect(last?.snoozedUntil).toBe(null);
+  });
+
   it("puts next week a full week out when today is Monday", () => {
     // Monday 2026-04-06.
     const presets = resolveSnoozePresets(localDate(2026, 4, 6, 10));
-    const nextWeek = new Date(presets.find((preset) => preset.id === "next-week")!.snoozedUntil);
+    const nextWeek = new Date(presets.find((preset) => preset.id === "next-week")!.snoozedUntil!);
     expect(nextWeek.getDay()).toBe(1);
     expect(nextWeek.getDate()).toBe(13);
   });

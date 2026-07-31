@@ -84,6 +84,47 @@ it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
     }),
   );
 
+  it.effect("snoozes indefinitely with a null wake time", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.snooze",
+          commandId: CommandId.make("cmd-snooze-indefinite"),
+          threadId: ThreadId.make("thread-1"),
+          snoozedUntil: null,
+        },
+        readModel: makeReadModel({}),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("thread.snoozed");
+      if (events[0]?.type === "thread.snoozed") {
+        expect(events[0].payload.snoozedUntil).toBe(null);
+        expect(events[0].payload.snoozedAt).toBe(events[0].payload.updatedAt);
+      }
+    }),
+  );
+
+  it.effect("re-emits idempotently for a duplicate indefinite snooze", () =>
+    Effect.gen(function* () {
+      const reEmit = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.snooze",
+          commandId: CommandId.make("cmd-snooze-indefinite-again"),
+          threadId: ThreadId.make("thread-1"),
+          snoozedUntil: null,
+        },
+        readModel: makeReadModel({ snoozedUntil: null, snoozedAt: SNOOZED_AT }),
+      });
+      const events = Array.isArray(reEmit) ? reEmit : [reEmit];
+      expect(events).toHaveLength(1);
+      if (events[0]?.type === "thread.snoozed") {
+        expect(events[0].payload.snoozedAt).toBe(SNOOZED_AT);
+        expect(events[0].payload.updatedAt).toBe(NOW);
+      }
+    }),
+  );
+
   it.effect("rejects a wake time that is not in the future", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({
@@ -212,6 +253,53 @@ it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
       if (awakeEvents[0]?.type === "thread.unsnoozed") {
         // No state change — keep the existing updatedAt.
         expect(awakeEvents[0].payload.updatedAt).toBe(NOW);
+      }
+    }),
+  );
+
+  it.effect("unsnoozing an indefinite snooze stamps fresh — it is not already awake", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.unsnooze",
+          commandId: CommandId.make("cmd-unsnooze-indefinite"),
+          threadId: ThreadId.make("thread-1"),
+          reason: "user",
+        },
+        readModel: makeReadModel({ snoozedUntil: null, snoozedAt: SNOOZED_AT }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events[0]?.type).toBe("thread.unsnoozed");
+      if (events[0]?.type === "thread.unsnoozed") {
+        expect(events[0].payload.updatedAt).not.toBe(NOW);
+      }
+    }),
+  );
+
+  it.effect("a user message clears an indefinite snooze (activity wake)", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-indefinite"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-2"),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({ snoozedUntil: null, snoozedAt: SNOOZED_AT }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      const unsnoozed = events.find((entry) => entry.type === "thread.unsnoozed");
+      expect(unsnoozed).toBeDefined();
+      if (unsnoozed?.type === "thread.unsnoozed") {
+        expect(unsnoozed.payload.reason).toBe("activity");
       }
     }),
   );
