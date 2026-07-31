@@ -518,7 +518,7 @@ function AccentTintsExtrasSection() {
     <SettingsSection title="Accent tints">
       <SettingsRow
         title="Project accent tints"
-        description="Wash a project's accent color over its thread rows. Off keeps the color as a dot only. Colors themselves are set per project from the project menu in the sidebar."
+        description="Wash a project's accent color over its thread rows and new-thread choices. Off keeps the color as a dot only. Colors themselves are set per project from the project menu in the sidebar."
         resetAction={
           settings.accentTintsEnabled !== DEFAULT_UNIFIED_SETTINGS.accentTintsEnabled ? (
             <SettingResetButton

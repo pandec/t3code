@@ -1,6 +1,8 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { AccentTintIntensityPercent } from "@t3tools/contracts/settings";
 import { ChevronRightIcon } from "lucide-react";
 import { shortcutLabelForCommand } from "../keybindings";
+import { projectAccentTintStyle } from "../projectAccentTint";
 import {
   type CommandPaletteActionItem,
   type CommandPaletteGroup,
@@ -17,6 +19,7 @@ import {
 import { cn } from "~/lib/utils";
 
 interface CommandPaletteResultsProps {
+  accentTintIntensityPercent: AccentTintIntensityPercent;
   emptyStateMessage?: string;
   groups: ReadonlyArray<CommandPaletteGroup>;
   highlightedItemValue?: string | null;
@@ -51,6 +54,7 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
                   item={item}
                   key={item.value}
                   keybindings={props.keybindings}
+                  accentTintIntensityPercent={props.accentTintIntensityPercent}
                   isActive={props.highlightedItemValue === item.value}
                   onExecuteItem={props.onExecuteItem}
                 />
@@ -93,6 +97,7 @@ function DisabledCommandPaletteResultRow(props: {
 function CommandPaletteResultRow(props: {
   item: CommandPaletteActionItem | CommandPaletteSubmenuItem;
   isActive: boolean;
+  accentTintIntensityPercent: AccentTintIntensityPercent;
   keybindings: ResolvedKeybindingsConfig;
   onExecuteItem: (item: CommandPaletteActionItem | CommandPaletteSubmenuItem) => void;
 }) {
@@ -106,6 +111,10 @@ function CommandPaletteResultRow(props: {
       className={cn(
         "cursor-pointer gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit data-selected:bg-transparent data-selected:text-inherit [&[data-highlighted][data-selected]]:bg-transparent [&[data-highlighted][data-selected]]:text-inherit",
         props.isActive && "bg-accent! text-accent-foreground!",
+      )}
+      style={projectAccentTintStyle(
+        props.item.projectAccentColor,
+        props.accentTintIntensityPercent,
       )}
       onMouseDown={(event) => {
         event.preventDefault();

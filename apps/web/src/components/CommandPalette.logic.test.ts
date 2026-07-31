@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import type { Thread } from "../types";
+import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
+import type { Project, Thread } from "../types";
 import {
   buildBrowseGroups,
+  buildProjectActionItems,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
@@ -66,6 +68,74 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   };
 }
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: PROJECT_ID,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    title: "Project",
+    workspaceRoot: "/repos/project",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("buildProjectActionItems", () => {
+  it("carries a resolved project accent onto the row", () => {
+    const accent = SidebarProjectAccentColor.make("#0055aa");
+    const items = buildProjectActionItems({
+      projects: [makeProject()],
+      valuePrefix: "new-thread-in",
+      icon: () => null,
+      projectAccentColor: () => accent,
+      runProject: async (_project) => undefined,
+    });
+
+    expect(items[0]?.projectAccentColor).toBe(accent);
+  });
+
+  it("omits the accent when the project has none or tints are switched off", () => {
+    const items = buildProjectActionItems({
+      projects: [makeProject()],
+      valuePrefix: "new-thread-in",
+      icon: () => null,
+      projectAccentColor: () => null,
+      runProject: async (_project) => undefined,
+    });
+
+    expect(items[0]).not.toHaveProperty("projectAccentColor");
+  });
+
+  it("leaves rows accent-free when no resolver is supplied", () => {
+    const items = buildProjectActionItems({
+      projects: [makeProject()],
+      valuePrefix: "project",
+      icon: () => null,
+      runProject: async (_project) => undefined,
+    });
+
+    expect(items[0]).not.toHaveProperty("projectAccentColor");
+  });
+
+  it("keeps the accent when positional jump shortcuts are assigned", () => {
+    const accent = SidebarProjectAccentColor.make("#0055aa");
+    const items = enumerateCommandPaletteItems(
+      buildProjectActionItems({
+        projects: [makeProject()],
+        valuePrefix: "new-thread-in",
+        icon: () => null,
+        projectAccentColor: () => accent,
+        runProject: async (_project) => undefined,
+      }),
+    );
+
+    expect(items[0]?.shortcutCommand).toBe("thread.jump.1");
+    expect(items[0]?.projectAccentColor).toBe(accent);
+  });
+});
 
 describe("buildThreadActionItems", () => {
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {

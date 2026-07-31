@@ -13,6 +13,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import type {
+  AccentTintIntensityPercent,
   ScopedThreadRef,
   SidebarProjectAccentColor,
   SidebarProjectGroupingMode,
@@ -105,6 +106,7 @@ import {
   useProjectAccentColorMigration,
   useProjectAccentColors,
 } from "../hooks/useProjectAccentColors";
+import { projectAccentTintStyle } from "../projectAccentTint";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -464,7 +466,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   projectTitle: string | null;
   // Null when the project has no accent, or when accent tints are switched off.
   projectAccentColor: SidebarProjectAccentColor | null;
-  accentTintIntensityPercent: number;
+  accentTintIntensityPercent: AccentTintIntensityPercent;
   compactCards: boolean;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
   providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
@@ -787,12 +789,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // the row's hover/active/selected background classes, not replace them.
   // Intensity is a client setting; `projectAccentColor` already arrives null
   // when tints are switched off, so the picker keeps working either way.
-  const rowAccentStyle =
-    props.projectAccentColor === null
-      ? undefined
-      : {
-          backgroundImage: `linear-gradient(color-mix(in srgb, ${props.projectAccentColor} ${props.accentTintIntensityPercent}%, transparent), color-mix(in srgb, ${props.projectAccentColor} ${props.accentTintIntensityPercent}%, transparent))`,
-        };
+  const rowAccentStyle = projectAccentTintStyle(
+    props.projectAccentColor,
+    props.accentTintIntensityPercent,
+  );
 
   const title = isRenaming ? (
     <input

@@ -180,9 +180,9 @@ export function clampTurnCompletionMinDurationSeconds(
 export const ClientSettingsSchema = Schema.Struct({
   /**
    * Web-only: whether project accent colors tint the surfaces that carry them
-   * (today the sidebar v2 thread rows). Off leaves the per-project color
-   * picker fully functional — the color still shows as a dot, it just stops
-   * washing over rows.
+   * (today the sidebar v2 thread rows and new-thread project choices). Off
+   * leaves the per-project color picker fully functional — the color still
+   * shows as a dot, it just stops washing over rows.
    */
   accentTintsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** Alpha, in percent, of the web accent tint overlay. */
