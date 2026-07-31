@@ -3,7 +3,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  createArchiveUndoHistory,
+  createThreadActionUndoHistory,
   hasOpenArchiveUndoBlockingLayer,
   isArchiveUndoShortcut,
   isEditableKeyboardTarget,
@@ -14,30 +14,50 @@ function threadRef(threadId: string) {
   return scopeThreadRef(EnvironmentId.make("environment-1"), ThreadId.make(threadId));
 }
 
-describe("archive undo history", () => {
-  it("keeps only the latest successful archive and consumes it once", () => {
-    const history = createArchiveUndoHistory();
-    history.arm({ threadRef: threadRef("thread-1"), threadTitle: "First" });
-    const latest = history.arm({ threadRef: threadRef("thread-2"), threadTitle: "Second" });
+describe("thread action undo history", () => {
+  it("keeps only the latest successful archive or snooze and consumes it once", () => {
+    const history = createThreadActionUndoHistory();
+    history.arm({
+      action: "archive",
+      threadRef: threadRef("thread-1"),
+      threadTitle: "First",
+    });
+    const latest = history.arm({
+      action: "snooze",
+      threadRef: threadRef("thread-2"),
+      threadTitle: "Second",
+    });
 
     expect(history.take()).toEqual(latest);
     expect(history.take()).toBeNull();
   });
 
-  it("restores a failed candidate without replacing a newer archive", () => {
-    const history = createArchiveUndoHistory();
-    const first = history.arm({ threadRef: threadRef("thread-1"), threadTitle: "First" });
+  it("restores a failed candidate without replacing a newer action", () => {
+    const history = createThreadActionUndoHistory();
+    const first = history.arm({
+      action: "archive",
+      threadRef: threadRef("thread-1"),
+      threadTitle: "First",
+    });
     expect(history.take()).toEqual(first);
 
-    const second = history.arm({ threadRef: threadRef("thread-2"), threadTitle: "Second" });
+    const second = history.arm({
+      action: "snooze",
+      threadRef: threadRef("thread-2"),
+      threadTitle: "Second",
+    });
     history.restore(first);
 
     expect(history.take()).toEqual(second);
   });
 
-  it("discards a candidate that was unarchived through another UI", () => {
-    const history = createArchiveUndoHistory();
-    history.arm({ threadRef: threadRef("thread-1"), threadTitle: "First" });
+  it("discards a candidate reversed through another UI", () => {
+    const history = createThreadActionUndoHistory();
+    history.arm({
+      action: "snooze",
+      threadRef: threadRef("thread-1"),
+      threadTitle: "First",
+    });
 
     history.discard(threadRef("thread-1"));
 

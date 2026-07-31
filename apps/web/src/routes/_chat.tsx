@@ -27,7 +27,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import {
-  archiveUndoHistory,
+  threadActionUndoHistory,
   hasOpenArchiveUndoBlockingLayer,
   isArchiveUndoShortcut,
   isEditableKeyboardTarget,
@@ -81,7 +81,7 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
-  const { attemptArchiveThread, unarchiveThread } = useThreadActions();
+  const { attemptArchiveThread, unarchiveThread, unsnoozeThread } = useThreadActions();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -126,22 +126,27 @@ function ChatRouteGlobalShortcuts() {
         !isEditableKeyboardTarget(event.target) &&
         !hasOpenArchiveUndoBlockingLayer()
       ) {
-        const candidate = archiveUndoHistory.take();
+        const candidate = threadActionUndoHistory.take();
         if (candidate) {
           const emptyDraftId = readEmptyNewThreadDraftId(router);
 
           event.preventDefault();
           event.stopPropagation();
           void (async () => {
-            const result = await unarchiveThread(candidate.threadRef);
+            const result = await (candidate.action === "archive"
+              ? unarchiveThread(candidate.threadRef)
+              : unsnoozeThread(candidate.threadRef));
             if (result._tag === "Failure") {
-              archiveUndoHistory.restore(candidate);
+              threadActionUndoHistory.restore(candidate);
               if (!isAtomCommandInterrupted(result)) {
                 const error = squashAtomCommandFailure(result);
                 toastManager.add(
                   stackedThreadToast({
                     type: "error",
-                    title: "Failed to restore thread",
+                    title:
+                      candidate.action === "archive"
+                        ? "Failed to restore thread"
+                        : "Failed to wake thread",
                     description: error instanceof Error ? error.message : "An error occurred.",
                   }),
                 );
@@ -177,7 +182,7 @@ function ChatRouteGlobalShortcuts() {
             toastManager.add(
               stackedThreadToast({
                 type: "success",
-                title: "Thread restored",
+                title: candidate.action === "archive" ? "Thread restored" : "Thread woke",
                 description: candidate.threadTitle,
               }),
             );
@@ -297,6 +302,7 @@ function ChatRouteGlobalShortcuts() {
     terminalOpen,
     router,
     unarchiveThread,
+    unsnoozeThread,
   ]);
 
   return null;
