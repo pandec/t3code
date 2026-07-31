@@ -35,7 +35,7 @@ import {
 } from "../archiveUndo";
 import { hasComposerDraftContent, useComposerDraftStore } from "../composerDraftStore";
 import { draftSubmissionTracker } from "../draftSubmissionState";
-import { useUnarchiveThread } from "../hooks/useThreadActions";
+import { useThreadActions } from "../hooks/useThreadActions";
 import {
   buildThreadRouteParams,
   resolveThreadRouteTarget,
@@ -81,7 +81,7 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
-  const unarchiveThread = useUnarchiveThread();
+  const { attemptArchiveThread, unarchiveThread } = useThreadActions();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -223,6 +223,14 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "thread.archive") {
+        if (!routeThreadRef) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void attemptArchiveThread(routeThreadRef);
+        return;
+      }
+
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -274,6 +282,7 @@ function ChatRouteGlobalShortcuts() {
   }, [
     activeDraftThread,
     activeThread,
+    attemptArchiveThread,
     clearSelection,
     handleNewThread,
     keybindings,

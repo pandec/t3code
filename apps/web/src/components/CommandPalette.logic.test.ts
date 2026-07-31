@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
 import type { Project, Thread } from "../types";
 import {
   buildBrowseGroups,
+  buildArchiveCurrentThreadAction,
   buildProjectActionItems,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
@@ -11,6 +13,40 @@ import {
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("buildArchiveCurrentThreadAction", () => {
+  it("omits the action when no thread is open", () => {
+    expect(
+      buildArchiveCurrentThreadAction({
+        threadRef: null,
+        icon: null,
+        runThread: vi.fn(),
+      }),
+    ).toBeNull();
+  });
+
+  it("builds an archive action for the open thread", async () => {
+    const threadRef = scopeThreadRef(
+      EnvironmentId.make("environment-local"),
+      ThreadId.make("thread-current"),
+    );
+    const runThread = vi.fn(async () => undefined);
+    const item = buildArchiveCurrentThreadAction({
+      threadRef,
+      icon: null,
+      runThread,
+    });
+
+    expect(item).toMatchObject({
+      kind: "action",
+      value: "action:archive-current-thread",
+      title: "Archive current thread",
+      shortcutCommand: "thread.archive",
+    });
+    await item?.run();
+    expect(runThread).toHaveBeenCalledWith(threadRef);
+  });
+});
 
 describe("reduceCommandPaletteUiState", () => {
   const closedState = { open: false, mode: "command", openIntent: null } as const;

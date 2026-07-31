@@ -28,6 +28,7 @@ import {
 import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
@@ -56,6 +57,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
@@ -97,6 +99,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  buildArchiveCurrentThreadAction,
   buildBrowseGroups,
   buildProjectActionItems,
   buildRootGroups,
@@ -551,8 +554,9 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
+  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
+  const { attemptArchiveThread } = useThreadActions();
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -1418,6 +1422,15 @@ function OpenCommandPaletteDialog(props: {
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
+  }
+
+  const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
+    threadRef: routeThreadRef,
+    icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
+    runThread: attemptArchiveThread,
+  });
+  if (archiveCurrentThreadAction) {
+    actionItems.push(archiveCurrentThreadAction);
   }
 
   actionItems.push({

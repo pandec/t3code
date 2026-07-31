@@ -1,6 +1,7 @@
 import {
   type FilesystemBrowseEntry,
   type KeybindingCommand,
+  type ScopedThreadRef,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import type {
@@ -160,6 +161,28 @@ export function buildProjectActionItems(input: {
       },
     };
   });
+}
+
+export function buildArchiveCurrentThreadAction(input: {
+  threadRef: ScopedThreadRef | null;
+  icon: ReactNode;
+  runThread: (threadRef: ScopedThreadRef) => Promise<void>;
+}): CommandPaletteActionItem | null {
+  if (!input.threadRef) {
+    return null;
+  }
+  const threadRef = input.threadRef;
+  return {
+    kind: "action",
+    value: "action:archive-current-thread",
+    searchTerms: ["archive", "close", "done", "finish", "current thread"],
+    title: "Archive current thread",
+    icon: input.icon,
+    shortcutCommand: "thread.archive",
+    run: async () => {
+      await input.runThread(threadRef);
+    },
+  };
 }
 
 export type BuildThreadActionItemsThread = Pick<

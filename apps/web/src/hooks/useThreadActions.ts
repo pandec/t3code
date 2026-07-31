@@ -2,8 +2,13 @@ import {
   parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
+  scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -47,6 +52,8 @@ export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArc
     return "Cannot archive a running thread.";
   }
 }
+
+const archivingThreadKeys = new Set<string>();
 
 export class ThreadSettlementUnsupportedError extends Schema.TaggedErrorClass<ThreadSettlementUnsupportedError>()(
   "ThreadSettlementUnsupportedError",
@@ -149,6 +156,7 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
+  const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
@@ -226,6 +234,47 @@ export function useThreadActions() {
       return archiveResult;
     },
     [archiveThreadMutation, getCurrentRouteThreadRef, resolveThreadTarget],
+  );
+  const attemptArchiveThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const threadKey = scopedThreadKey(target);
+      if (archivingThreadKeys.has(threadKey)) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return;
+      archivingThreadKeys.add(threadKey);
+      try {
+        if (confirmThreadArchive) {
+          const localApi = readLocalApi();
+          if (!localApi) return;
+          const confirmed = await settlePromise(() =>
+            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+
+        let didArchive = false;
+        const result = await archiveThread(target, {
+          onArchived: () => {
+            didArchive = true;
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: didArchive
+                ? "Thread archived, but navigation failed"
+                : "Failed to archive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      } finally {
+        archivingThreadKeys.delete(threadKey);
+      }
+    },
+    [archiveThread, confirmThreadArchive, resolveThreadTarget],
   );
 
   const forkThread = useCallback(
@@ -602,6 +651,7 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
+      attemptArchiveThread,
       forkThread,
       unarchiveThread,
       deleteThread,
@@ -613,6 +663,7 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
+      attemptArchiveThread,
       confirmAndDeleteThread,
       deleteThread,
       forkThread,
