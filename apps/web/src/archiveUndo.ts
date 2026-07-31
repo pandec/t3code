@@ -1,15 +1,16 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
-export interface ArchiveUndoCandidate {
+export interface ThreadActionUndoCandidate {
   readonly id: number;
+  readonly action: "archive" | "snooze";
   readonly threadRef: ScopedThreadRef;
   readonly threadTitle: string;
 }
 
-export interface ArchiveUndoHistory {
-  arm: (input: Omit<ArchiveUndoCandidate, "id">) => ArchiveUndoCandidate;
-  take: () => ArchiveUndoCandidate | null;
-  restore: (candidate: ArchiveUndoCandidate) => void;
+export interface ThreadActionUndoHistory {
+  arm: (input: Omit<ThreadActionUndoCandidate, "id">) => ThreadActionUndoCandidate;
+  take: () => ThreadActionUndoCandidate | null;
+  restore: (candidate: ThreadActionUndoCandidate) => void;
   discard: (threadRef: ScopedThreadRef) => void;
 }
 
@@ -17,9 +18,9 @@ function isSameThread(left: ScopedThreadRef, right: ScopedThreadRef): boolean {
   return left.environmentId === right.environmentId && left.threadId === right.threadId;
 }
 
-export function createArchiveUndoHistory(): ArchiveUndoHistory {
+export function createThreadActionUndoHistory(): ThreadActionUndoHistory {
   let nextId = 0;
-  let candidate: ArchiveUndoCandidate | null = null;
+  let candidate: ThreadActionUndoCandidate | null = null;
 
   return {
     arm: (input) => {
@@ -33,7 +34,7 @@ export function createArchiveUndoHistory(): ArchiveUndoHistory {
       return taken;
     },
     restore: (restoredCandidate) => {
-      // A newer archive always wins over a failed attempt to restore an older one.
+      // A newer reversible action always wins over a failed attempt to restore an older one.
       if (candidate === null) {
         candidate = restoredCandidate;
       }
@@ -46,7 +47,7 @@ export function createArchiveUndoHistory(): ArchiveUndoHistory {
   };
 }
 
-export const archiveUndoHistory = createArchiveUndoHistory();
+export const threadActionUndoHistory = createThreadActionUndoHistory();
 
 export function isArchiveUndoShortcut(event: {
   readonly key: string;

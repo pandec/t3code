@@ -39,7 +39,7 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
-import { archiveUndoHistory } from "../archiveUndo";
+import { threadActionUndoHistory } from "../archiveUndo";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -91,7 +91,7 @@ export function useUnarchiveThread() {
         input: { threadId: target.threadId },
       });
       if (result._tag === "Success") {
-        archiveUndoHistory.discard(target);
+        threadActionUndoHistory.discard(target);
         refreshArchivedThreadsForEnvironment(target.environmentId);
       }
       return result;
@@ -214,7 +214,8 @@ export function useThreadActions() {
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
-      archiveUndoHistory.arm({
+      threadActionUndoHistory.arm({
+        action: "archive",
         threadRef,
         threadTitle: thread.title,
       });
@@ -309,7 +310,7 @@ export function useThreadActions() {
           input: { threadId: target.threadId },
         });
         if (result._tag === "Success") {
-          archiveUndoHistory.discard(target);
+          threadActionUndoHistory.discard(target);
           refreshArchivedThreadsForEnvironment(target.environmentId);
         }
         return result;
@@ -393,7 +394,7 @@ export function useThreadActions() {
       if (deleteResult._tag === "Failure") {
         return deleteResult;
       }
-      archiveUndoHistory.discard(threadRef);
+      threadActionUndoHistory.discard(threadRef);
       refreshArchivedThreadsForEnvironment(threadRef.environmentId);
       clearComposerDraftForThread(threadRef);
       clearProjectDraftThreadById(
@@ -592,10 +593,18 @@ export function useThreadActions() {
           ),
         );
       }
-      return snoozeThreadMutation({
+      const result = await snoozeThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId, snoozedUntil },
       });
+      if (result._tag === "Success" && resolved) {
+        threadActionUndoHistory.arm({
+          action: "snooze",
+          threadRef: resolved.threadRef,
+          threadTitle: resolved.thread.title,
+        });
+      }
+      return result;
     },
     [resolveThreadTarget, snoozeThreadMutation],
   );
@@ -612,10 +621,14 @@ export function useThreadActions() {
           ),
         );
       }
-      return unsnoozeThreadMutation({
+      const result = await unsnoozeThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId, reason: "user" },
       });
+      if (result._tag === "Success") {
+        threadActionUndoHistory.discard(target);
+      }
+      return result;
     },
     [unsnoozeThreadMutation],
   );
