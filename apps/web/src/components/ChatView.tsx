@@ -122,6 +122,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -5175,6 +5176,9 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (activeThread.archivedAt !== null) {
+          refreshArchivedThreadsForEnvironment(activeThread.environmentId);
+        }
       }
     }
 

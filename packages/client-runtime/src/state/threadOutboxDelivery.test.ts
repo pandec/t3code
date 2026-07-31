@@ -113,4 +113,27 @@ describe("thread outbox delivery", () => {
     await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
     expect(updateMetadata).not.toHaveBeenCalled();
   });
+
+  it("keeps a delivered message complete when its notification callback throws", async () => {
+    const warn = vi.fn();
+    const delivery = createThreadOutboxDelivery({
+      commands: {
+        startTurn: vi.fn(async () => AsyncResult.success(undefined)),
+        updateMetadata: vi.fn(async () => AsyncResult.success(undefined)),
+        setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
+        setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
+      },
+      removeQueuedMessage: vi.fn(async () => undefined),
+      onDelivered: () => {
+        throw new Error("refresh failed");
+      },
+      warn,
+    });
+
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "[thread-outbox] delivered-message callback failed",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+  });
 });

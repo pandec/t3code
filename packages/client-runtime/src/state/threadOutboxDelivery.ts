@@ -88,10 +88,6 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
 
       try {
         await options.removeQueuedMessage(queuedMessage);
-        if (thread) {
-          options.onDelivered?.(queuedMessage, thread);
-        }
-        return true;
       } catch (error) {
         warn("[thread-outbox] failed to remove delivered queued message", {
           environmentId: queuedMessage.environmentId,
@@ -101,6 +97,19 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         });
         return false;
       }
+      if (thread) {
+        try {
+          options.onDelivered?.(queuedMessage, thread);
+        } catch (error) {
+          warn("[thread-outbox] delivered-message callback failed", {
+            environmentId: queuedMessage.environmentId,
+            threadId: queuedMessage.threadId,
+            messageId: queuedMessage.messageId,
+            error,
+          });
+        }
+      }
+      return true;
     };
     return { reportFailure, completeDelivery };
   };

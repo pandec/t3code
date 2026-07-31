@@ -155,6 +155,10 @@ const ProjectIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+const ThreadRowLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  includeArchived: Schema.Literals([0, 1]),
+});
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
@@ -1025,9 +1029,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const getThreadRowById = SqlSchema.findOneOption({
-    Request: ThreadIdLookupInput,
+    Request: ThreadRowLookupInput,
     Result: ProjectionThreadDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, includeArchived }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -1056,6 +1060,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
+          AND (${includeArchived} OR archived_at IS NULL)
         LIMIT 1
       `,
   });
@@ -2232,7 +2237,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (threadId) =>
     Effect.gen(function* () {
       const [threadRow, latestTurnRow, sessionRow] = yield* Effect.all([
-        getThreadRowById({ threadId }).pipe(
+        getThreadRowById({ threadId, includeArchived: 0 }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadShellById:getThread:query",
@@ -2300,7 +2305,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         completedTurnAssistantMessageRows,
         sessionRow,
       ] = yield* Effect.all([
-        getThreadRowById({ threadId }).pipe(
+        getThreadRowById({ threadId, includeArchived: 1 }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadDetailById:getThread:query",

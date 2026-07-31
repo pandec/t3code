@@ -10,7 +10,8 @@ import {
   type MessageId,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import { Atom } from "effect/unstable/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -39,7 +40,12 @@ import {
   type QueuedThreadCreation,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import {
+  environmentThreadShells,
+  environmentThreads,
+  threadDetailToShell,
+  threadEnvironment,
+} from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
@@ -72,6 +78,23 @@ function findThread(
     (candidate) =>
       candidate.environmentId === message.environmentId && candidate.id === message.threadId,
   );
+}
+
+function findThreadIncludingLoadedDetail(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+  message: QueuedThreadMessage,
+): EnvironmentThreadShell | undefined {
+  const shell = findThread(threads, message);
+  if (shell !== undefined) {
+    return shell;
+  }
+  const state = Option.getOrUndefined(
+    AsyncResult.value(
+      appAtomRegistry.get(environmentThreads.stateAtom(message.environmentId, message.threadId)),
+    ),
+  );
+  const detail = state === undefined ? undefined : Option.getOrUndefined(state.data);
+  return detail === undefined ? undefined : threadDetailToShell(message.environmentId, detail);
 }
 
 function findCreationProject(
@@ -282,7 +305,7 @@ export function useThreadOutboxDrain(): void {
           }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
-          const thread = findThread(threads, message);
+          const thread = findThreadIncludingLoadedDetail(threads, message);
           if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
             return "wait";
           }
@@ -367,7 +390,7 @@ export function useThreadOutboxDrain(): void {
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
           return true;
         }
-        const freshThread = findThread(
+        const freshThread = findThreadIncludingLoadedDetail(
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
           nextQueuedMessage,
         );

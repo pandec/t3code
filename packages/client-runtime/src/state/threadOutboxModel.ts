@@ -238,7 +238,6 @@ export function resolveQueuedThreadSettings(
   thread: ThreadSettingsSnapshot,
 ): ThreadSettingsSnapshot {
   return {
-    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
     modelSelection: message.modelSelection ?? thread.modelSelection,
     branch: message.localCheckoutBranch ?? thread.branch,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,

@@ -799,6 +799,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(archivedShellSnapshot.threads[0]?.archivedAt, "2026-04-06T00:00:06.000Z");
 
+      const archivedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-archived"),
+      );
+      assert.equal(archivedShell._tag, "None");
+
       const archivedDetail = yield* snapshotQuery.getThreadDetailById(
         ThreadId.make("thread-archived"),
       );
