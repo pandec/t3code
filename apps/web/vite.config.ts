@@ -174,6 +174,7 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    assetsInclude: ["**/*.wasm"],
     plugins: [
       tanstackRouter(),
       react(),
