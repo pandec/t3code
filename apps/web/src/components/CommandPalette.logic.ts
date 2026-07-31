@@ -3,7 +3,10 @@ import {
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
-import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type {
+  SidebarProjectAccentColor,
+  SidebarThreadSortOrder,
+} from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
@@ -23,6 +26,8 @@ export interface CommandPaletteItem {
   readonly description?: string;
   readonly timestamp?: string;
   readonly icon: ReactNode;
+  /** Optional project accent washed over this result row. */
+  readonly projectAccentColor?: SidebarProjectAccentColor;
   readonly disabled?: boolean;
   /** Optional content rendered inline before the title text. */
   readonly titleLeadingContent?: ReactNode;
@@ -80,20 +85,25 @@ export function buildProjectActionItems(input: {
   icon: (project: Project) => ReactNode;
   runProject: (project: Project) => Promise<void>;
   searchTerms?: (project: Project) => ReadonlyArray<string>;
+  projectAccentColor?: (project: Project) => SidebarProjectAccentColor | null;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
-  return input.projects.map((project) => ({
-    kind: "action",
-    value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
-    title: project.title,
-    description: project.workspaceRoot,
-    icon: input.icon(project),
-    ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
-    run: async () => {
-      await input.runProject(project);
-    },
-  }));
+  return input.projects.map((project) => {
+    const projectAccentColor = input.projectAccentColor?.(project) ?? null;
+    return {
+      kind: "action",
+      value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
+      searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
+      title: project.title,
+      description: project.workspaceRoot,
+      icon: input.icon(project),
+      ...(projectAccentColor !== null ? { projectAccentColor } : {}),
+      ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
+      run: async () => {
+        await input.runProject(project);
+      },
+    };
+  });
 }
 
 export type BuildThreadActionItemsThread = Pick<

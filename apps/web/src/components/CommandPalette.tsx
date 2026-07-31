@@ -55,7 +55,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useClientSettings } from "../hooks/useSettings";
+import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
+import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -504,6 +505,8 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
+  const projectAccentColors = useProjectAccentColors();
+  const accentTint = useAccentTintSettings();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -611,6 +614,20 @@ function OpenCommandPaletteDialog(props: {
         ]),
       ),
     [projectPickerEntries],
+  );
+  const projectAccentColorByTargetKey = useMemo(
+    () =>
+      new Map(
+        accentTint.enabled
+          ? projectPickerEntries.flatMap(({ group, targetProject }) => {
+              const color = projectAccentColors.resolve(group.memberProjects);
+              return color === null
+                ? []
+                : [[`${targetProject.environmentId}:${targetProject.id}`, color] as const];
+            })
+          : [],
+      ),
+    [accentTint.enabled, projectAccentColors, projectPickerEntries],
   );
 
   const addProjectEnvironmentOptions = useMemo(() => {
@@ -879,6 +896,8 @@ function OpenCommandPaletteDialog(props: {
               group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
             );
           },
+          projectAccentColor: (project) =>
+            projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
           icon: (project) => (
             <ProjectFavicon
               environmentId={project.environmentId}
@@ -903,7 +922,13 @@ function OpenCommandPaletteDialog(props: {
           },
         }),
       ),
-    [contextualProjectRef, handleNewThread, pickerProjects, projectGroupByTargetKey],
+    [
+      contextualProjectRef,
+      handleNewThread,
+      pickerProjects,
+      projectAccentColorByTargetKey,
+      projectGroupByTargetKey,
+    ],
   );
 
   const allThreadItems = useMemo(
@@ -2173,6 +2198,7 @@ function OpenCommandPaletteDialog(props: {
             </div>
           ) : null}
           <CommandPaletteResults
+            accentTintIntensityPercent={accentTint.intensityPercent}
             groups={displayedGroups}
             highlightedItemValue={highlightedItemValue}
             isActionsOnly={isActionsOnly}
