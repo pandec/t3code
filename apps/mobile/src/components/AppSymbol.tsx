@@ -46,7 +46,6 @@ import {
   IconLayoutSidebar,
   IconLetterSpacing,
   IconLink,
-  IconMenuDeep,
   IconMessage,
   IconMinus,
   IconNetwork,
@@ -74,9 +73,34 @@ import {
   IconWorld,
   IconX,
   type Icon,
+  type IconProps,
 } from "@tabler/icons-react-native";
+import { forwardRef } from "react";
 import { Platform } from "react-native";
+import Svg, { Path } from "react-native-svg";
 import { SymbolView as ExpoSymbolView, type SFSymbol, type SymbolViewProps } from "expo-symbols";
+
+const IconListFilter = forwardRef<Svg, IconProps>(function IconListFilter(
+  { color = "currentColor", size = 24, strokeWidth = 2, ...props },
+  ref,
+) {
+  return (
+    <Svg
+      ref={ref}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <Path d="M2 5h20M6 12h12M9 19h6" />
+    </Svg>
+  );
+});
 
 const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.branch": IconGitBranch,
@@ -119,9 +143,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   headphones: IconHeadphones,
   "info.circle": IconInfoCircle,
   link: IconLink,
-  // Attention toggle: three shrinking lines, matching desktop's
-  // ListFilterIcon; menu-deep is Tabler's closest three-line-decrease shape.
-  "line.3.horizontal.decrease": IconMenuDeep,
+  "line.3.horizontal.decrease": IconListFilter,
   "line.3.horizontal.decrease.circle": IconFilter,
   "line.3.horizontal.decrease.circle.fill": IconFilter,
   magnifyingglass: IconSearch,

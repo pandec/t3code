@@ -25,10 +25,6 @@ import {
 } from "../../components/AndroidScreenHeader";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { markThreadVisited } from "../../state/thread-visits";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { connectionTone } from "../connection/connectionTone";
 
@@ -40,6 +36,7 @@ import {
 import { useKnownTerminalSessions } from "../../state/use-terminal-session";
 import { useSelectedThreadDetailState } from "../../state/use-thread-detail";
 import { useThreadSelection } from "../../state/use-thread-selection";
+import { useRecordThreadVisit } from "./use-thread-attention-filter";
 import { GitActionProgressOverlay } from "./GitActionProgressOverlay";
 import {
   buildTerminalMenuSessions,
@@ -194,8 +191,7 @@ function ThreadRouteContent(
   const { onReconnectEnvironment } = useRemoteConnections();
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
-  const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const recordThreadVisit = useRecordThreadVisit();
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
@@ -216,18 +212,13 @@ function ThreadRouteContent(
     () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
   );
   useEffect(() => {
-    if (selectedThread === null || !AsyncResult.isSuccess(preferencesResult)) return;
-    const current = preferencesResult.value.threadLastVisitedAtById ?? {};
-    const next = markThreadVisited(
-      current,
+    if (selectedThread === null) return;
+    recordThreadVisit(
       scopedThreadKey(selectedThread.environmentId, selectedThread.id),
       selectedThread.updatedAt,
     );
-    if (next === current) return;
-    savePreferences({ threadLastVisitedAtById: next });
   }, [
-    preferencesResult,
-    savePreferences,
+    recordThreadVisit,
     selectedThread?.environmentId,
     selectedThread?.id,
     selectedThread?.updatedAt,

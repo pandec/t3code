@@ -44,6 +44,7 @@ export function SidebarFilterButton(props: {
               borderColor,
               borderWidth: StyleSheet.hairlineWidth,
             },
+        props.disabled ? { opacity: 0.45 } : null,
       ]}
     >
       <SymbolView

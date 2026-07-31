@@ -44,6 +44,7 @@ import {
 } from "../threads/thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "../threads/thread-list-v2-items";
 import { resolveThreadProviderDriver } from "../threads/thread-provider";
+import { pendingTaskAttentionKey } from "../threads/threadAttention";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -77,6 +78,7 @@ import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-stat
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly attentionMemberPendingTaskKeys: ReadonlySet<string> | null;
   readonly attentionMemberThreadKeys: ReadonlySet<string> | null;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly catalogState: WorkspaceState;
@@ -656,16 +658,20 @@ export function HomeScreen(props: HomeScreenProps) {
   // while their environment is offline. Same environment, model, project,
   // and search filters as the list itself.
   //
-  // The attention filter deliberately does NOT apply: a queued task is work
-  // the user just started that the server has not acknowledged yet, which is
-  // the same "appeared after the snapshot" case the filter admits for shells.
-  // Dropping it would make New Task look like a no-op while the filter is on,
-  // and would hide outbox items indefinitely while offline.
+  // Attention snapshots exclude tasks already queued at enablement and admit
+  // tasks queued afterward, matching the sticky "newly appeared" shell rule.
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = useMemo(
     () =>
       props.pendingTasks.filter(
         (pendingTask) =>
+          (props.attentionMemberPendingTaskKeys === null ||
+            props.attentionMemberPendingTaskKeys.has(
+              pendingTaskAttentionKey({
+                environmentId: pendingTask.message.environmentId,
+                messageId: pendingTask.message.messageId,
+              }),
+            )) &&
           (props.selectedEnvironmentId === null ||
             pendingTask.message.environmentId === props.selectedEnvironmentId) &&
           (props.selectedModel === null ||
@@ -678,6 +684,7 @@ export function HomeScreen(props: HomeScreenProps) {
             pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
       ),
     [
+      props.attentionMemberPendingTaskKeys,
       props.pendingTasks,
       props.selectedEnvironmentId,
       props.selectedModel,

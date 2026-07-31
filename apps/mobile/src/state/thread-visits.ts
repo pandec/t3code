@@ -1,5 +1,3 @@
-const MAX_THREAD_VISIT_MARKERS = 1_000;
-
 /**
  * Records a visit with the thread's environment-issued `updatedAt`, exactly
  * as web does. Keeping the map device-local preserves unseen completion/wake
@@ -19,10 +17,16 @@ export function markThreadVisited(
     if (!Number.isNaN(previousMs) && previousMs >= visitedAtMs) return current;
   }
 
-  const next = { ...current, [threadKey]: visitedAt };
-  const entries = Object.entries(next);
-  if (entries.length <= MAX_THREAD_VISIT_MARKERS) return next;
+  return { ...current, [threadKey]: visitedAt };
+}
 
-  entries.sort((left, right) => Date.parse(right[1]) - Date.parse(left[1]));
-  return Object.fromEntries(entries.slice(0, MAX_THREAD_VISIT_MARKERS));
+export function mergeThreadVisits(
+  persisted: Readonly<Record<string, string>>,
+  current: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  let merged = persisted;
+  for (const [threadKey, visitedAt] of Object.entries(current)) {
+    merged = markThreadVisited(merged, threadKey, visitedAt);
+  }
+  return merged;
 }

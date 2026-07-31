@@ -146,6 +146,7 @@ describe("mobile thread attention filter", () => {
     const ready = makeThread({ id: ThreadId.make("ready") });
     const state = createThreadAttentionFilter({
       threads: [working, ready],
+      pendingTaskKeys: ["queued-before"],
       now: NOW,
     });
 
@@ -153,16 +154,20 @@ describe("mobile thread attention filter", () => {
     expect(state.knownThreadKeys).toEqual(
       new Set(["environment-1:working", "environment-1:ready"]),
     );
-    expect(admitNewThreadAttentionThreads(state, [working, ready])).toBe(state);
+    expect(state.memberPendingTaskKeys).toEqual(new Set());
+    expect(state.knownPendingTaskKeys).toEqual(new Set(["queued-before"]));
+    expect(admitNewThreadAttentionThreads(state, [working, ready], ["queued-before"])).toBe(state);
 
-    const next = admitNewThreadAttentionThreads(state, [
-      working,
-      ready,
-      makeThread({ id: ThreadId.make("created-elsewhere") }),
-    ]);
+    const next = admitNewThreadAttentionThreads(
+      state,
+      [working, ready, makeThread({ id: ThreadId.make("created-elsewhere") })],
+      ["queued-before", "queued-after"],
+    );
     expect(next.memberThreadKeys).toEqual(
       new Set(["environment-1:working", "environment-1:created-elsewhere"]),
     );
     expect(next.knownThreadKeys).toContain("environment-1:created-elsewhere");
+    expect(next.memberPendingTaskKeys).toEqual(new Set(["queued-after"]));
+    expect(next.knownPendingTaskKeys).toEqual(new Set(["queued-before", "queued-after"]));
   });
 });

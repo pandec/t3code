@@ -23,6 +23,7 @@ import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
 import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
+import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -34,7 +35,18 @@ export function HomeRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
-  const attentionFilter = useThreadAttentionFilter(threads);
+  const pendingTasks = usePendingNewTasks();
+  const pendingTaskKeys = useMemo(
+    () =>
+      pendingTasks.map((task) =>
+        pendingTaskAttentionKey({
+          environmentId: task.message.environmentId,
+          messageId: task.message.messageId,
+        }),
+      ),
+    [pendingTasks],
+  );
+  const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -42,7 +54,6 @@ export function HomeRouteScreen() {
 
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
-  const pendingTasks = usePendingNewTasks();
   const hasAnyThreads = hasHomeThreadListContent({
     threads,
     pendingTaskCount: pendingTasks.length,
@@ -162,6 +173,7 @@ export function HomeRouteScreen() {
         />
 
         <HomeScreen
+          attentionMemberPendingTaskKeys={attentionFilter.memberPendingTaskKeys}
           attentionMemberThreadKeys={attentionFilter.memberThreadKeys}
           catalogState={catalogState}
           environments={environments}

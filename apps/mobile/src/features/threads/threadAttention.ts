@@ -12,8 +12,7 @@ import { resolveThreadListV2Status } from "./threadListV2";
  * List v2 model in threadListV2.ts.
  *
  * Like web, mobile persists device-local per-thread visit markers and compares
- * them with completion and wake timestamps. The mobile preference map is
- * bounded so old markers cannot grow storage indefinitely.
+ * them with completion and wake timestamps.
  */
 
 export type ThreadAttentionShell = Pick<
@@ -81,9 +80,18 @@ export function isThreadAttentionShell(
 export interface ThreadAttentionFilterState {
   readonly memberThreadKeys: ReadonlySet<string>;
   readonly knownThreadKeys: ReadonlySet<string>;
+  readonly memberPendingTaskKeys: ReadonlySet<string>;
+  readonly knownPendingTaskKeys: ReadonlySet<string>;
 }
 
 type ThreadAttentionKeyInput = Pick<EnvironmentThreadShell, "environmentId" | "id">;
+
+export function pendingTaskAttentionKey(input: {
+  readonly environmentId: string;
+  readonly messageId: string;
+}): string {
+  return `${input.environmentId}:${input.messageId}`;
+}
 
 /**
  * Snapshots current attention membership. Membership is sticky: a member
@@ -93,11 +101,13 @@ type ThreadAttentionKeyInput = Pick<EnvironmentThreadShell, "environmentId" | "i
  */
 export function createThreadAttentionFilter(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingTaskKeys?: ReadonlyArray<string>;
   readonly now: string;
   readonly lastVisitedAtByThreadKey?: ReadonlyMap<string, string>;
 }): ThreadAttentionFilterState {
   const memberThreadKeys = new Set<string>();
   const knownThreadKeys = new Set<string>();
+  const knownPendingTaskKeys = new Set(input.pendingTaskKeys ?? []);
   for (const thread of input.threads) {
     const threadKey = scopedThreadKey(thread.environmentId, thread.id);
     knownThreadKeys.add(threadKey);
@@ -112,15 +122,23 @@ export function createThreadAttentionFilter(input: {
       memberThreadKeys.add(threadKey);
     }
   }
-  return { memberThreadKeys, knownThreadKeys };
+  return {
+    memberThreadKeys,
+    knownThreadKeys,
+    memberPendingTaskKeys: new Set(),
+    knownPendingTaskKeys,
+  };
 }
 
 export function admitNewThreadAttentionThreads(
   state: ThreadAttentionFilterState,
   threads: ReadonlyArray<ThreadAttentionKeyInput>,
+  pendingTaskKeys: ReadonlyArray<string> = [],
 ): ThreadAttentionFilterState {
   let knownThreadKeys: Set<string> | null = null;
   let memberThreadKeys: Set<string> | null = null;
+  let knownPendingTaskKeys: Set<string> | null = null;
+  let memberPendingTaskKeys: Set<string> | null = null;
 
   for (const thread of threads) {
     const threadKey = scopedThreadKey(thread.environmentId, thread.id);
@@ -135,6 +153,26 @@ export function admitNewThreadAttentionThreads(
     memberThreadKeys.add(threadKey);
   }
 
-  if (knownThreadKeys === null || memberThreadKeys === null) return state;
-  return { knownThreadKeys, memberThreadKeys };
+  for (const pendingTaskKey of pendingTaskKeys) {
+    if (state.knownPendingTaskKeys.has(pendingTaskKey)) continue;
+    knownPendingTaskKeys ??= new Set(state.knownPendingTaskKeys);
+    memberPendingTaskKeys ??= new Set(state.memberPendingTaskKeys);
+    knownPendingTaskKeys.add(pendingTaskKey);
+    memberPendingTaskKeys.add(pendingTaskKey);
+  }
+
+  if (
+    knownThreadKeys === null &&
+    memberThreadKeys === null &&
+    knownPendingTaskKeys === null &&
+    memberPendingTaskKeys === null
+  ) {
+    return state;
+  }
+  return {
+    knownThreadKeys: knownThreadKeys ?? state.knownThreadKeys,
+    memberThreadKeys: memberThreadKeys ?? state.memberThreadKeys,
+    knownPendingTaskKeys: knownPendingTaskKeys ?? state.knownPendingTaskKeys,
+    memberPendingTaskKeys: memberPendingTaskKeys ?? state.memberPendingTaskKeys,
+  };
 }

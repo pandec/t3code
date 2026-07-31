@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { markThreadVisited } from "./thread-visits";
+import { markThreadVisited, mergeThreadVisits } from "./thread-visits";
 
 describe("thread visit registry", () => {
   it("keeps the newest valid visit for each thread", () => {
@@ -14,18 +14,22 @@ describe("thread visit registry", () => {
     expect(latest["environment-1:thread-1"]).toBe("2026-06-01T11:00:00.000Z");
   });
 
-  it("keeps only the 1,000 newest visit markers", () => {
-    const current = Object.fromEntries(
-      Array.from({ length: 1_000 }, (_, index) => [
-        `environment-1:thread-${index}`,
-        new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
-      ]),
-    );
-
-    const next = markThreadVisited(current, "environment-1:latest", "2026-06-01T10:00:00.000Z");
-
-    expect(Object.keys(next)).toHaveLength(1_000);
-    expect(next["environment-1:latest"]).toBe("2026-06-01T10:00:00.000Z");
-    expect(next["environment-1:thread-0"]).toBeUndefined();
+  it("merges visits recorded before persisted preferences finish loading", () => {
+    expect(
+      mergeThreadVisits(
+        {
+          "environment-1:persisted": "2026-06-01T09:00:00.000Z",
+          "environment-1:shared": "2026-06-01T10:00:00.000Z",
+        },
+        {
+          "environment-1:current": "2026-06-01T11:00:00.000Z",
+          "environment-1:shared": "2026-06-01T09:30:00.000Z",
+        },
+      ),
+    ).toEqual({
+      "environment-1:persisted": "2026-06-01T09:00:00.000Z",
+      "environment-1:shared": "2026-06-01T10:00:00.000Z",
+      "environment-1:current": "2026-06-01T11:00:00.000Z",
+    });
   });
 });

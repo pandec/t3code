@@ -70,6 +70,7 @@ import {
 } from "./thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "./thread-list-v2-items";
 import { resolveThreadProviderDriver } from "./thread-provider";
+import { pendingTaskAttentionKey } from "./threadAttention";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import {
   buildThreadListV2Items,
@@ -199,8 +200,18 @@ function ThreadNavigationSidebarPane(
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
-  const attentionFilter = useThreadAttentionFilter(threads);
   const pendingTasks = usePendingNewTasks();
+  const pendingTaskKeys = useMemo(
+    () =>
+      pendingTasks.map((task) =>
+        pendingTaskAttentionKey({
+          environmentId: task.message.environmentId,
+          messageId: task.message.messageId,
+        }),
+      ),
+    [pendingTasks],
+  );
+  const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
     () =>
@@ -571,13 +582,18 @@ function ThreadNavigationSidebarPane(
     // Queued offline tasks are not thread shells, so the v2 item builder
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Same environment,
-    // model, project, and search filters as the list — but not the attention
-    // filter: a queued task is work the user just started, the same "appeared
-    // after the snapshot" case the filter admits for shells.
+    // deletable while their environment is offline. Attention snapshots
+    // exclude tasks already queued at enablement and admit tasks queued later.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
+        (attentionFilter.memberPendingTaskKeys === null ||
+          attentionFilter.memberPendingTaskKeys.has(
+            pendingTaskAttentionKey({
+              environmentId: pendingTask.message.environmentId,
+              messageId: pendingTask.message.messageId,
+            }),
+          )) &&
         (options.selectedEnvironmentId === null ||
           pendingTask.message.environmentId === options.selectedEnvironmentId) &&
         (options.selectedModel === null ||
@@ -603,6 +619,7 @@ function ThreadNavigationSidebarPane(
     return items;
   }, [
     listLayout.items,
+    attentionFilter.memberPendingTaskKeys,
     options.selectedEnvironmentId,
     options.selectedModel,
     pendingTasks,

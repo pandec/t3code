@@ -646,7 +646,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
               accessibilityLabel={
                 props.attentionFilterEnabled
                   ? "Clear attention filter"
-                  : "Show only threads needing attention"
+                  : props.attentionFilterReady
+                    ? "Show only threads needing attention"
+                    : "Loading threads"
               }
               disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
               icon="line.3.horizontal.decrease"
