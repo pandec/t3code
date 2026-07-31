@@ -64,10 +64,12 @@ import {
 import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import {
+  PROVIDER_USAGE_REFRESH_ACTION_ID,
   providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
 } from "../../lib/providerUsageMenu";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -455,9 +457,42 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       selectedProviderStatus,
     ],
   );
+  const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
-    () => providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs),
-    [providerUsageAccounts, providerUsageNowMs],
+    () =>
+      providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs, {
+        refreshing: isRefreshingProviderUsage,
+      }),
+    [isRefreshingProviderUsage, providerUsageAccounts, providerUsageNowMs],
+  );
+  const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    reportFailure: false,
+  });
+  const lastProviderUsageRefreshAtRef = useRef(0);
+  const handleProviderUsageMenuAction = useCallback(
+    (actionId: string) => {
+      if (actionId !== PROVIDER_USAGE_REFRESH_ACTION_ID) return;
+      const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
+      if (instanceIds.length === 0) return;
+      // Same 5s debounce the web meter uses: each refresh can spawn a CLI
+      // probe per account, so a double-tap must not double-spawn.
+      const refreshAt = Date.now();
+      if (refreshAt - lastProviderUsageRefreshAtRef.current < 5_000) return;
+      lastProviderUsageRefreshAtRef.current = refreshAt;
+      setIsRefreshingProviderUsage(true);
+      void (async () => {
+        try {
+          await refreshProviderUsageCommand({
+            environmentId: props.environmentId,
+            input: { instanceIds },
+          });
+          providerUsageQuery.refresh();
+        } finally {
+          setIsRefreshingProviderUsage(false);
+        }
+      })();
+    },
+    [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand],
   );
   const providerUsageMenuLabel =
     providerUsage?.providerLabel ??
@@ -1065,7 +1100,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     accessibilityLabel={`${providerUsageMenuLabel} usage`}
                     actions={providerUsageActions}
                     title={`${providerUsageMenuLabel} usage`}
-                    onPressAction={() => {}}
+                    onPressAction={({ nativeEvent }) =>
+                      handleProviderUsageMenuAction(nativeEvent.event)
+                    }
                   >
                     <ComposerToolbarTrigger
                       accessibilityLabel={`${providerUsageMenuLabel} usage`}
