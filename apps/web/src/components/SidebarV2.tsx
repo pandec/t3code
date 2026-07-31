@@ -1287,7 +1287,6 @@ export default function SidebarV2() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
-  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   // Accents are server settings, merged across every connected environment —
@@ -1306,7 +1305,7 @@ export default function SidebarV2() {
   );
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
-    archiveThread,
+    attemptArchiveThread,
     unarchiveThread,
     settleThread,
     unsettleThread,
@@ -2264,48 +2263,11 @@ export default function SidebarV2() {
     [navigateToThread, rangeSelectTo, toggleThreadSelection],
   );
 
-  const archivingThreadKeysRef = useRef(new Set<string>());
   const attemptArchive = useCallback(
     (threadRef: ScopedThreadRef) => {
-      void (async () => {
-        const threadKey = scopedThreadKey(threadRef);
-        if (archivingThreadKeysRef.current.has(threadKey)) return;
-        const thread = threadByKeyRef.current.get(threadKey);
-        if (!thread) return;
-        archivingThreadKeysRef.current.add(threadKey);
-        try {
-          if (confirmThreadArchive) {
-            const api = readLocalApi();
-            if (!api) return;
-            const confirmed = await settlePromise(() =>
-              api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-            );
-            if (confirmed._tag === "Failure" || !confirmed.value) return;
-          }
-          let didArchive = false;
-          const result = await archiveThread(threadRef, {
-            onArchived: () => {
-              didArchive = true;
-            },
-          });
-          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: didArchive
-                  ? "Thread archived, but navigation failed"
-                  : "Failed to archive thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-        } finally {
-          archivingThreadKeysRef.current.delete(threadKey);
-        }
-      })();
+      void attemptArchiveThread(threadRef);
     },
-    [archiveThread, confirmThreadArchive],
+    [attemptArchiveThread],
   );
 
   // A settle per thread at a time: double clicks and repeated menu picks
