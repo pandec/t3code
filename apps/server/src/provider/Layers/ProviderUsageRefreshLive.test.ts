@@ -377,3 +377,32 @@ it.effect("starts a new probe when an instance is replaced under the same id", (
     }),
   ),
 );
+
+it.effect("reports only the instances that answered on this call", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Effect.succeed([
+          instance({ id: "claude_ok", read: Effect.succeed({ ok: true }) }),
+          // A provider that has nothing to report, and one that fails outright:
+          // neither may be counted as refreshed, or the client would suppress
+          // its "no new usage data" warning on an all-probes-failed refresh.
+          instance({ id: "claude_empty", read: Effect.succeed(undefined) }),
+          instance({
+            id: "claude_broken",
+            read: Effect.die(new Error("probe exploded")),
+          }),
+        ]),
+        health: usageHealth(),
+      });
+
+      expect(yield* coordinator.refresh()).toEqual([ProviderInstanceId.make("claude_ok")]);
+      expect(
+        yield* coordinator.refresh([
+          ProviderInstanceId.make("claude_empty"),
+          ProviderInstanceId.make("claude_broken"),
+        ]),
+      ).toEqual([]);
+    }),
+  ),
+);

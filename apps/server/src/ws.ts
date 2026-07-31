@@ -1437,7 +1437,13 @@ const makeWsRpcLayer = (
             WS_METHODS.providerUsageRefresh,
             providerUsageRefresh
               .refresh(input.instanceIds)
-              .pipe(Effect.andThen(readProviderUsageSnapshots)),
+              .pipe(
+                Effect.flatMap((refreshedInstanceIds) =>
+                  readProviderUsageSnapshots.pipe(
+                    Effect.map((result) => ({ ...result, refreshedInstanceIds })),
+                  ),
+                ),
+              ),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverListProviderSkills]: (input) =>

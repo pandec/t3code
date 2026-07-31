@@ -15,18 +15,3 @@ export function formatProviderUsageEmail(email: string, masked = false): string 
  * out, so the client compares this across the refresh result to tell
  * "refreshed" from "silently returned nothing".
  */
-export function newestProviderUsageObservedAt(
-  snapshots:
-    | ReadonlyArray<{ readonly instanceId: string; readonly observedAt: number }>
-    | undefined,
-  instanceIds?: ReadonlyArray<string>,
-): number {
-  const wanted = instanceIds === undefined ? null : new Set(instanceIds);
-  return (snapshots ?? []).reduce(
-    (newest, snapshot) =>
-      wanted !== null && !wanted.has(snapshot.instanceId)
-        ? newest
-        : Math.max(newest, snapshot.observedAt),
-    0,
-  );
-}

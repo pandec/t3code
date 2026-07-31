@@ -228,7 +228,6 @@ import {
 } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useClientSettingsHydrated } from "../../hooks/useSettings";
-import { newestProviderUsageObservedAt } from "../../providerUsageEmail";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -1126,10 +1125,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const instanceIds = usageProviders.map((provider) => provider.instanceId);
     if (instanceIds.length === 0) return;
     lastProviderUsageRefreshAtRef.current = refreshAt;
-    const observedBefore = newestProviderUsageObservedAt(
-      providerUsageQuery.data?.snapshots,
-      instanceIds,
-    );
     setIsRefreshingProviderUsage(true);
     try {
       const result = await refreshProviderUsageCommand({
@@ -1150,12 +1145,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // The RPC succeeds even when every probe failed or timed out: the server
       // logs those and reports no snapshot. Without this check the button
       // would silently do nothing -- the exact symptom this fix exists for.
-      // Compare against the command's own result: `refresh()` is fire-and-
-      // forget (`() => void`), so re-reading `data` here would just return
-      // this render's stale snapshot and warn on every success.
-      const observedAfter = newestProviderUsageObservedAt(result.value.snapshots, instanceIds);
+      // `refreshedInstanceIds` names the instances that answered on *this*
+      // call; the snapshots alone can't tell us that, because they also carry
+      // older cached observations that would mask an all-probes-failed run.
       providerUsageQuery.refresh();
-      if (observedAfter <= observedBefore) {
+      if (result.value.refreshedInstanceIds.length === 0) {
         toastManager.add({
           type: "warning",
           title: "No new usage data",
@@ -3566,7 +3560,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeProviderUsage={activeProviderUsage}
                   providerUsageAccounts={providerUsageAccounts}
                   providerUsageRefreshing={isRefreshingProviderUsage}
-                  providerUsageUnavailable={providerUsageQuery.error !== undefined}
+                  providerUsageUnavailable={providerUsageQuery.error !== null}
                   // Fail closed while client settings hydrate: they start at
                   // defaults (masking off), so reading the flag directly would
                   // flash the full address for a user who enabled masking.

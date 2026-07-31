@@ -707,6 +707,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       isBackgroundActivityDirty,
       settings.accentTintsEnabled,
       settings.accentTintIntensityPercent,
+      settings.maskProviderUsageEmails,
       settings.providerUsageWarningPercent,
       settings.providerUsageCriticalPercent,
       settings.steerGraceWindowMs,

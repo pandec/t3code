@@ -32,3 +32,15 @@ export const ProviderUsageSnapshotsResult = Schema.Struct({
   snapshots: ProviderInstanceUsageSnapshots,
 });
 export type ProviderUsageSnapshotsResult = typeof ProviderUsageSnapshotsResult.Type;
+
+/**
+ * A refresh result also reports which instances actually produced a fresh
+ * payload during *this* invocation. Callers cannot infer that from the
+ * snapshots alone: those carry previously cached observations too, so a stale
+ * neighbour can masquerade as a successful probe.
+ */
+export const ProviderUsageRefreshResult = Schema.Struct({
+  snapshots: ProviderInstanceUsageSnapshots,
+  refreshedInstanceIds: Schema.Array(ProviderInstanceId),
+});
+export type ProviderUsageRefreshResult = typeof ProviderUsageRefreshResult.Type;
