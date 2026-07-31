@@ -22,6 +22,8 @@ import { buildHomeProjectScopes, hasHomeThreadListContent } from "./homeThreadLi
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
 import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
+import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
+import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -33,6 +35,18 @@ export function HomeRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
+  const pendingTasks = usePendingNewTasks();
+  const pendingTaskKeys = useMemo(
+    () =>
+      pendingTasks.map((task) =>
+        pendingTaskAttentionKey({
+          environmentId: task.message.environmentId,
+          messageId: task.message.messageId,
+        }),
+      ),
+    [pendingTasks],
+  );
+  const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -42,7 +56,6 @@ export function HomeRouteScreen() {
     useThreadListActions();
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
-  const pendingTasks = usePendingNewTasks();
   const hasAnyThreads = hasHomeThreadListContent({
     threads,
     pendingTaskCount: pendingTasks.length,
@@ -135,6 +148,8 @@ export function HomeRouteScreen() {
         {/* Restore the compact title after the split branch blanks the detail header. */}
         <NativeStackScreenOptions options={getCompactBrandHeaderOptions()} />
         <HomeHeader
+          attentionFilterEnabled={attentionFilter.enabled}
+          attentionFilterReady={attentionFilter.ready}
           connectionStatusState={compactHeaderConnectionStatusState}
           environments={environments}
           projects={projectFilterOptions}
@@ -156,9 +171,12 @@ export function HomeRouteScreen() {
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
+          onToggleAttentionFilter={attentionFilter.toggle}
         />
 
         <HomeScreen
+          attentionMemberPendingTaskKeys={attentionFilter.memberPendingTaskKeys}
+          attentionMemberThreadKeys={attentionFilter.memberThreadKeys}
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
@@ -166,6 +184,7 @@ export function HomeRouteScreen() {
           }
           onArchiveThread={archiveThread}
           onDeleteArchivedThread={confirmDeleteArchivedThread}
+          onClearAttentionFilter={attentionFilter.clear}
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
           onUnsettleThread={unsettleThread}

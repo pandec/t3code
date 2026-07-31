@@ -123,6 +123,25 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("composes sticky attention membership with the existing list filters", () => {
+    const included = makeThread({ id: ThreadId.make("included"), title: "Fix login" });
+    const wrongTitle = makeThread({ id: ThreadId.make("wrong-title"), title: "Greeting" });
+    const notMember = makeThread({ id: ThreadId.make("not-member"), title: "Fix logout" });
+
+    const layout = buildThreadListV2Items({
+      threads: [included, wrongTitle, notMember],
+      attentionMemberThreadKeys: new Set([
+        `${environmentId}:${included.id}`,
+        `${environmentId}:${wrongTitle.id}`,
+      ]),
+      environmentId: null,
+      searchQuery: "login",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["included"]);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [
