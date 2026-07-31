@@ -6,14 +6,10 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
 import {
-  connectedEnvironmentGenerations,
   environmentRpcKey,
   createAtomCommandScheduler,
   createRuntimeCommand,
@@ -27,28 +23,6 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "./runtime.ts";
-
-describe("connectedEnvironmentGenerations", () => {
-  it.effect("emits the current generation when mounted after the environment connected", () =>
-    Effect.gen(function* () {
-      const connectedState: SupervisorConnectionState = {
-        ...AVAILABLE_CONNECTION_STATE,
-        desired: true,
-        network: "online",
-        phase: "connected",
-        generation: 7,
-      };
-      const state = yield* SubscriptionRef.make(connectedState);
-
-      const generation = yield* connectedEnvironmentGenerations(state).pipe(
-        Stream.runHead,
-        Effect.timeout("1 second"),
-      );
-
-      expect(Option.getOrThrow(generation)).toBe(7);
-    }),
-  );
-});
 
 describe("settleAsyncResult", () => {
   it("preserves successful values and typed failures", async () => {

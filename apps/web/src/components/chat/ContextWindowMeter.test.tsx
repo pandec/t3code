@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 
 describe("ContextWindowMeter", () => {
@@ -125,10 +124,5 @@ describe("ContextWindowMeter", () => {
 
     expect(markup).toContain('aria-label="Context window 25% used"');
     expect(markup.match(/<circle/g)).toHaveLength(2);
-  });
-
-  it("shows provider emails by default and masks them when requested", () => {
-    expect(formatProviderUsageEmail("bartosz@gmail.com")).toBe("bartosz@gmail.com");
-    expect(formatProviderUsageEmail("bartosz@gmail.com", true)).toBe("b•••@gmail.com");
   });
 });

@@ -227,6 +227,7 @@ import {
   resolveEffectiveProviderSkills,
 } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
+import { newestProviderUsageObservedAt } from "../../providerUsageEmail";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -1138,7 +1139,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         return;
       }
-      providerUsageQuery.refresh();
+      // The RPC succeeds even when every probe failed or timed out: the server
+      // logs those and reports no snapshot. Without this check the button
+      // would silently do nothing -- the exact symptom this fix exists for.
+      const observedBefore = newestProviderUsageObservedAt(providerUsageQuery.data?.snapshots);
+      await providerUsageQuery.refresh();
+      const observedAfter = newestProviderUsageObservedAt(providerUsageQuery.data?.snapshots);
+      if (observedAfter <= observedBefore) {
+        toastManager.add({
+          type: "warning",
+          title: "No new usage data",
+          description:
+            "The provider did not return usage for any account. Check the account is still signed in.",
+        });
+      }
     } finally {
       setIsRefreshingProviderUsage(false);
     }

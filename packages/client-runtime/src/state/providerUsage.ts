@@ -590,16 +590,13 @@ function normalizeRateLimitPayload(
   const record = asRecord(payload);
   if (!record) return null;
 
-  // Refresh snapshots already contain the provider payload, while thread
-  // activity wraps that same payload in `{ rateLimits: ... }`.
-  if (asString(record.source) === "claude.usage-api") {
-    const normalized = normalizeClaudeUsageApiPayload(record);
-    return normalized ? { ...normalized, authoritative: true } : null;
-  }
-
-  // The activity payload is `{ rateLimits: <provider event> }` (see the
-  // ingestion layer); tolerate the unwrapped shape too.
-  const event = asRecord(record.rateLimits) ?? record;
+  // Two shapes reach here: a server-owned refresh snapshot, which IS the
+  // provider payload, and a thread activity, which wraps that same payload in
+  // `{ rateLimits: <provider event> }`. A payload that names its own `source`
+  // is already unwrapped — unwrapping it again would hand the Claude branch
+  // the inner `rate_limits` object and normalize to null. Codex refresh
+  // payloads carry no top-level `source`, so they still unwrap as before.
+  const event = asString(record.source) !== null ? record : (asRecord(record.rateLimits) ?? record);
 
   // Checked before the Codex branch: the usage-API payload also nests a
   // `rateLimits` key and would otherwise be misread as a Codex snapshot.
