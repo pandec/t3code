@@ -590,6 +590,13 @@ function normalizeRateLimitPayload(
   const record = asRecord(payload);
   if (!record) return null;
 
+  // Refresh snapshots already contain the provider payload, while thread
+  // activity wraps that same payload in `{ rateLimits: ... }`.
+  if (asString(record.source) === "claude.usage-api") {
+    const normalized = normalizeClaudeUsageApiPayload(record);
+    return normalized ? { ...normalized, authoritative: true } : null;
+  }
+
   // The activity payload is `{ rateLimits: <provider event> }` (see the
   // ingestion layer); tolerate the unwrapped shape too.
   const event = asRecord(record.rateLimits) ?? record;

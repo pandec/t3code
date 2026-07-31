@@ -1035,6 +1035,7 @@ describe("server-owned provider usage snapshots", () => {
         providerInstanceId: "claude-work",
       },
     );
+    expect(fromServer?.windows[0]?.usedPercent).toBe(42);
     expect(fromServer).toEqual(fromActivity);
   });
 });

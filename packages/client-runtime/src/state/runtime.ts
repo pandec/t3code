@@ -8,6 +8,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
+import type { SupervisorConnectionState } from "../connection/model.ts";
 import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
 import {
   type EnvironmentRpcInput,
@@ -477,6 +478,20 @@ export function followStreamInEnvironment<A, E, R>(
   );
 }
 
+export function connectedEnvironmentGenerations(
+  state: SubscriptionRef.SubscriptionRef<SupervisorConnectionState>,
+): Stream.Stream<number> {
+  return Stream.concat(
+    Stream.fromEffect(SubscriptionRef.get(state)),
+    SubscriptionRef.changes(state),
+  ).pipe(
+    Stream.filterMap((connection) =>
+      connection.phase === "connected" ? Result.succeed(connection.generation) : Result.failVoid,
+    ),
+    Stream.changes,
+  );
+}
+
 function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: EnvironmentQueryAtomOptions<Input, A, E, EnvironmentSupervisor | R>,
@@ -491,11 +506,7 @@ function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         Stream.unwrap(
           EnvironmentSupervisor.pipe(
             Effect.map((supervisor) =>
-              SubscriptionRef.changes(supervisor.state).pipe(
-                Stream.filterMap((state) =>
-                  state.phase === "connected" ? Result.succeed(state.generation) : Result.failVoid,
-                ),
-                Stream.changes,
+              connectedEnvironmentGenerations(supervisor.state).pipe(
                 Stream.map<number, number | null>((generation) => generation),
               ),
             ),

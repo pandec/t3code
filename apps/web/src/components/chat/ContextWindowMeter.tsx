@@ -9,10 +9,10 @@ import type { ProviderInstanceId } from "@t3tools/contracts";
 import { RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
 
-import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 /**
@@ -162,6 +162,7 @@ export function ContextWindowMeter(props: {
   providerUsage?: ProviderUsageSnapshot | null;
   providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing?: boolean;
+  maskProviderUsageEmails?: boolean;
   /** Driver-derived label ("Claude", "Codex") for the accounts header. */
   providerUsageLabel?: string | null;
   providerDisplayName?: string | null;
@@ -350,13 +351,11 @@ export function ContextWindowMeter(props: {
                             </span>
                           ) : null}
                         </span>
-                        <RedactedSensitiveText
-                          value={account.email}
-                          ariaLabel="Toggle account email visibility"
-                          revealTooltip="Click to reveal email"
-                          hideTooltip="Click to hide email"
-                          className="max-w-44 truncate text-left"
-                        />
+                        {account.email ? (
+                          <span className="max-w-44 truncate text-left text-[11px] text-muted-foreground/60">
+                            {formatProviderUsageEmail(account.email, props.maskProviderUsageEmails)}
+                          </span>
+                        ) : null}
                       </div>
                       <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
                         {props.providerUsageRefreshing

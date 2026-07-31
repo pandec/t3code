@@ -267,6 +267,8 @@ export const ClientSettingsSchema = Schema.Struct({
   providerUsageCriticalPercent: ProviderUsageAlertPercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT)),
   ),
+  /** Web-only: obscure provider account emails in the usage meter. */
+  maskProviderUsageEmails: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1025,6 +1027,7 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   providerUsageWarningPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   providerUsageCriticalPercent: Schema.optionalKey(ProviderUsageAlertPercent),
+  maskProviderUsageEmails: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

@@ -27,6 +27,7 @@ const clientSettings: ClientSettings = {
   environmentIdentificationMode: "artwork",
   favorites: [],
   glassOpacity: 80,
+  maskProviderUsageEmails: false,
   providerModelPreferences: {},
   providerUsageWarningPercent: 80,
   providerUsageCriticalPercent: 95,

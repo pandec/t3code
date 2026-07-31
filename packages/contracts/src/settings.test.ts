@@ -267,6 +267,7 @@ describe("ClientSettings extras", () => {
     expect(settings.steerGraceWindowMs).toBe(5_000);
     expect(settings.providerUsageWarningPercent).toBe(80);
     expect(settings.providerUsageCriticalPercent).toBe(95);
+    expect(settings.maskProviderUsageEmails).toBe(false);
     expect(settings.accentTintsEnabled).toBe(true);
     expect(settings.accentTintIntensityPercent).toBe(12);
     expect(settings.turnCompletionMinDurationSeconds).toBe(0);
@@ -278,6 +279,7 @@ describe("ClientSettings extras", () => {
         steerGraceWindowMs: 0,
         providerUsageWarningPercent: 1,
         providerUsageCriticalPercent: 100,
+        maskProviderUsageEmails: true,
         accentTintsEnabled: false,
         accentTintIntensityPercent: 30,
         turnCompletionMinDurationSeconds: 3_600,
@@ -286,6 +288,7 @@ describe("ClientSettings extras", () => {
       steerGraceWindowMs: 0,
       providerUsageWarningPercent: 1,
       providerUsageCriticalPercent: 100,
+      maskProviderUsageEmails: true,
       accentTintsEnabled: false,
       accentTintIntensityPercent: 30,
       turnCompletionMinDurationSeconds: 3_600,

@@ -20,6 +20,10 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   buildThreadTitleComposerText,
   serializeComposerFileLink,
 } from "@t3tools/shared/composerTrigger";
@@ -432,6 +436,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
   providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing: boolean;
+  maskProviderUsageEmails: boolean;
   providerUsageLabel: string | null;
   activeThreadProviderDisplayName: string | null;
   onRefreshProviderUsage: () => Promise<void>;
@@ -467,6 +472,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           providerUsage={props.activeProviderUsage}
           providerUsageAccounts={props.providerUsageAccounts}
           providerUsageRefreshing={props.providerUsageRefreshing}
+          maskProviderUsageEmails={props.maskProviderUsageEmails}
           providerUsageLabel={props.providerUsageLabel}
           providerDisplayName={props.activeThreadProviderDisplayName}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
@@ -929,6 +935,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     serverEnvironment.providerUsage({ environmentId, input: {} }),
   );
   const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    // Refresh failures are handled with a user-visible toast below.
     reportFailure: false,
   });
   const effectiveProviderSkills = resolveEffectiveProviderSkills(
@@ -1116,10 +1123,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     lastProviderUsageRefreshAtRef.current = refreshAt;
     setIsRefreshingProviderUsage(true);
     try {
-      await refreshProviderUsageCommand({
+      const result = await refreshProviderUsageCommand({
         environmentId,
         input: { instanceIds },
       });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not refresh provider usage",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          });
+        }
+        return;
+      }
       providerUsageQuery.refresh();
     } finally {
       setIsRefreshingProviderUsage(false);
@@ -3524,6 +3542,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeProviderUsage={activeProviderUsage}
                   providerUsageAccounts={providerUsageAccounts}
                   providerUsageRefreshing={isRefreshingProviderUsage}
+                  maskProviderUsageEmails={settings.maskProviderUsageEmails}
                   providerUsageLabel={providerUsageLabel}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   onRefreshProviderUsage={refreshProviderUsage}
