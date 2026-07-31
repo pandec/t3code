@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, Text as RNText, View } from "react-native
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import type { WorkspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export function HomeHeaderConnectionStatus(props: {
@@ -39,8 +40,10 @@ export function HomeHeaderConnectionStatus(props: {
         <>
           {/* Below iOS 26 the title is centred, so the indicator is balanced
               by an equal leading spacer — otherwise "Threads" would slide
-              sideways every time a background sweep starts and ends. */}
-          {syncingThreads ? <View className="w-5" /> : null}
+              sideways every time a background sweep starts and ends. On
+              Liquid Glass the title is leading-aligned and the spacer itself
+              would push "Threads" right, so only the trailing spinner runs. */}
+          {syncingThreads && !NATIVE_LIQUID_GLASS_SUPPORTED ? <View className="w-5" /> : null}
           <RNText
             maxFontSizeMultiplier={1.2}
             style={{ color: titleColor, fontSize: 18, fontWeight: "800" }}
