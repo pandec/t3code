@@ -62,12 +62,37 @@ function formatRelativeAge(observedAt: number | null, nowMs: number): string {
   return `updated ${Math.floor(minutes / 60)}h ago`;
 }
 
-/** One native-menu row per configured account. */
+/**
+ * Menu row id for the refresh action. Exported so the composer can match the
+ * pressed row without re-deriving the string.
+ */
+export const PROVIDER_USAGE_REFRESH_ACTION_ID = "usage-refresh";
+
+/** Minimum gap between refreshes; mirrors the web meter. */
+export const PROVIDER_USAGE_REFRESH_DEBOUNCE_MS = 5_000;
+
+/**
+ * Whether a refresh may start now. A refresh can spawn one CLI probe per
+ * account, so a double-tap must not double-spawn. `lastStartedAtMs` of 0 means
+ * "never refreshed in this environment" and always allows the first attempt.
+ */
+export function canStartProviderUsageRefresh(lastStartedAtMs: number, nowMs: number): boolean {
+  if (lastStartedAtMs === 0) return true;
+  return nowMs - lastStartedAtMs >= PROVIDER_USAGE_REFRESH_DEBOUNCE_MS;
+}
+
+/**
+ * One native-menu row per configured account, plus a trailing refresh row.
+ *
+ * The account rows are informational; only the refresh row is actionable, so
+ * the composer keys on `PROVIDER_USAGE_REFRESH_ACTION_ID` and ignores the rest.
+ */
 export function providerUsageAccountMenuActions(
   accounts: ReadonlyArray<ProviderUsageMenuAccount>,
   nowMs: number,
+  options?: { readonly refreshing?: boolean },
 ): Array<{ id: string; title: string; subtitle: string }> {
-  return accounts.map((account) => {
+  const rows = accounts.map((account) => {
     const windows =
       account.snapshot?.windows.map((window) => describeWindow(window, nowMs)).join(", ") ??
       "No usage data";
@@ -84,4 +109,15 @@ export function providerUsageAccountMenuActions(
         .join(" · "),
     };
   });
+  return [
+    ...rows,
+    {
+      id: PROVIDER_USAGE_REFRESH_ACTION_ID,
+      title: options?.refreshing === true ? "Refreshing…" : "Refresh",
+      subtitle:
+        options?.refreshing === true
+          ? "Reading usage from each account"
+          : "Read current usage for every account",
+    },
+  ];
 }

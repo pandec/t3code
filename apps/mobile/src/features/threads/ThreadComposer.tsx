@@ -64,10 +64,13 @@ import {
 import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import {
+  canStartProviderUsageRefresh,
+  PROVIDER_USAGE_REFRESH_ACTION_ID,
   providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
 } from "../../lib/providerUsageMenu";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -455,9 +458,64 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       selectedProviderStatus,
     ],
   );
+  const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
-    () => providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs),
-    [providerUsageAccounts, providerUsageNowMs],
+    () =>
+      providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs, {
+        refreshing: isRefreshingProviderUsage,
+      }),
+    [isRefreshingProviderUsage, providerUsageAccounts, providerUsageNowMs],
+  );
+  const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    reportFailure: false,
+  });
+  const lastProviderUsageRefreshAtRef = useRef(0);
+  // Identifies the in-flight refresh. The composer outlives an environment
+  // switch, so a refresh started for the previous environment must not clear
+  // the pending state — or report progress — for the current one.
+  const providerUsageRefreshTokenRef = useRef(0);
+  useEffect(() => {
+    providerUsageRefreshTokenRef.current += 1;
+    lastProviderUsageRefreshAtRef.current = 0;
+    setIsRefreshingProviderUsage(false);
+  }, [props.environmentId]);
+  useEffect(
+    // Unmount invalidates any in-flight token so its completion is a no-op.
+    () => () => {
+      providerUsageRefreshTokenRef.current += 1;
+    },
+    [],
+  );
+  const handleProviderUsageMenuAction = useCallback(
+    (actionId: string) => {
+      if (actionId !== PROVIDER_USAGE_REFRESH_ACTION_ID) return;
+      const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
+      if (instanceIds.length === 0) return;
+      // Same 5s debounce the web meter uses: each refresh can spawn a CLI
+      // probe per account, so a double-tap must not double-spawn.
+      if (!canStartProviderUsageRefresh(lastProviderUsageRefreshAtRef.current, Date.now())) {
+        return;
+      }
+      lastProviderUsageRefreshAtRef.current = Date.now();
+      providerUsageRefreshTokenRef.current += 1;
+      const token = providerUsageRefreshTokenRef.current;
+      setIsRefreshingProviderUsage(true);
+      void (async () => {
+        try {
+          await refreshProviderUsageCommand({
+            environmentId: props.environmentId,
+            input: { instanceIds },
+          });
+          if (providerUsageRefreshTokenRef.current !== token) return;
+          providerUsageQuery.refresh();
+        } finally {
+          if (providerUsageRefreshTokenRef.current === token) {
+            setIsRefreshingProviderUsage(false);
+          }
+        }
+      })();
+    },
+    [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand],
   );
   const providerUsageMenuLabel =
     providerUsage?.providerLabel ??
@@ -1065,7 +1123,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     accessibilityLabel={`${providerUsageMenuLabel} usage`}
                     actions={providerUsageActions}
                     title={`${providerUsageMenuLabel} usage`}
-                    onPressAction={() => {}}
+                    onPressAction={({ nativeEvent }) =>
+                      handleProviderUsageMenuAction(nativeEvent.event)
+                    }
                   >
                     <ComposerToolbarTrigger
                       accessibilityLabel={`${providerUsageMenuLabel} usage`}

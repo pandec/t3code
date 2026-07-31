@@ -1,7 +1,13 @@
 import type { ProviderUsageSnapshot } from "@t3tools/client-runtime/state/provider-usage";
 import { describe, expect, it } from "vite-plus/test";
 
-import { providerUsageAccountMenuActions, providerUsageTriggerLabel } from "./providerUsageMenu";
+import {
+  canStartProviderUsageRefresh,
+  PROVIDER_USAGE_REFRESH_ACTION_ID,
+  PROVIDER_USAGE_REFRESH_DEBOUNCE_MS,
+  providerUsageAccountMenuActions,
+  providerUsageTriggerLabel,
+} from "./providerUsageMenu";
 
 const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
 
@@ -105,7 +111,9 @@ describe("providerUsageAccountMenuActions", () => {
       NOW_MS,
     );
 
-    expect(actions).toHaveLength(2);
+    // Two accounts plus the trailing refresh row.
+    expect(actions).toHaveLength(3);
+    expect(actions.at(-1)?.id).toBe(PROVIDER_USAGE_REFRESH_ACTION_ID);
     // The session's live account is marked when a sibling exists to tell apart.
     expect(actions[0]).toMatchObject({
       title: "Claude Work (current)",
@@ -152,5 +160,63 @@ describe("providerUsageAccountMenuActions", () => {
     expect(actions[0]?.subtitle).not.toContain("resets");
     // A lone account needs no "current" marker — there is nothing to tell apart.
     expect(actions[0]?.title).toBe("Claude Work");
+  });
+  it("offers a refresh row after the accounts, and shows progress while running", () => {
+    const account = {
+      instanceId: "claude-work",
+      displayName: "Claude Work",
+      email: undefined,
+      isCurrent: true,
+      snapshot: null,
+      observedAt: null,
+    };
+
+    const idle = providerUsageAccountMenuActions([account], NOW_MS);
+    // The refresh row is the only actionable one, and it comes last so the
+    // accounts stay the focus of the menu.
+    expect(idle.at(-1)?.id).toBe(PROVIDER_USAGE_REFRESH_ACTION_ID);
+    expect(idle.at(-1)?.title).toBe("Refresh");
+    expect(idle).toHaveLength(2);
+
+    const running = providerUsageAccountMenuActions([account], NOW_MS, { refreshing: true });
+    expect(running.at(-1)?.title).toBe("Refreshing…");
+  });
+
+  it("still offers refresh when no account has a snapshot yet", () => {
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-work",
+          displayName: "Claude Work",
+          email: undefined,
+          isCurrent: true,
+          snapshot: null,
+          observedAt: null,
+        },
+      ],
+      NOW_MS,
+    );
+
+    expect(actions[0]?.subtitle).toContain("No usage data");
+    expect(actions[0]?.subtitle).toContain("not updated");
+    expect(actions.at(-1)?.id).toBe(PROVIDER_USAGE_REFRESH_ACTION_ID);
+  });
+});
+
+describe("canStartProviderUsageRefresh", () => {
+  it("allows the first refresh and blocks a rapid second one", () => {
+    // A refresh can spawn one CLI probe per account, so a double-tap must not
+    // double-spawn.
+    expect(canStartProviderUsageRefresh(0, NOW_MS)).toBe(true);
+    expect(canStartProviderUsageRefresh(NOW_MS, NOW_MS + 1_000)).toBe(false);
+    expect(canStartProviderUsageRefresh(NOW_MS, NOW_MS + PROVIDER_USAGE_REFRESH_DEBOUNCE_MS)).toBe(
+      true,
+    );
+  });
+
+  it("treats a reset window as never-refreshed", () => {
+    // Switching environments resets the marker; the new environment must not
+    // inherit the previous one's cooldown.
+    expect(canStartProviderUsageRefresh(0, 0)).toBe(true);
   });
 });
