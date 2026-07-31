@@ -1424,8 +1424,18 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  const openUnarchivedThreadRef =
+    routeThreadRef &&
+    threads.some(
+      (thread) =>
+        thread.environmentId === routeThreadRef.environmentId &&
+        thread.id === routeThreadRef.threadId &&
+        thread.archivedAt === null,
+    )
+      ? routeThreadRef
+      : null;
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
-    threadRef: routeThreadRef,
+    threadRef: openUnarchivedThreadRef,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
     runThread: attemptArchiveThread,
   });

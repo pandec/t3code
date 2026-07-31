@@ -225,8 +225,10 @@ function ChatRouteGlobalShortcuts() {
 
       if (command === "thread.archive") {
         if (!routeThreadRef) return;
+        if (hasOpenArchiveUndoBlockingLayer()) return;
         event.preventDefault();
         event.stopPropagation();
+        if (readThreadShell(routeThreadRef)?.archivedAt !== null) return;
         void attemptArchiveThread(routeThreadRef);
         return;
       }
