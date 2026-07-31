@@ -1,10 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
   clampSteerGraceWindowMs,
+  DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT,
   DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
   DEFAULT_STEER_GRACE_WINDOW_MS,
   type AccentTintIntensityPercent,
+  type ArchivedSectionVisibleCount,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
 import { useMemo } from "react";
@@ -45,6 +48,15 @@ export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   const { preferences } = useMobilePreferences();
   const value = preferences.steerGraceWindowMs;
   return useMemo(() => clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS), [value]);
+}
+
+export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {
+  const { preferences } = useMobilePreferences();
+  const value = preferences.archivedSectionVisibleCount;
+  return useMemo(
+    () => clampArchivedSectionVisibleCount(value ?? DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT),
+    [value],
+  );
 }
 
 export interface AccentTintSettings {

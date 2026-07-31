@@ -9,7 +9,12 @@ import {
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { createThreadOutboxDelivery } from "./threadOutboxDelivery.ts";
-import type { QueuedThreadMessage, ThreadSettingsSnapshot } from "./threadOutboxModel.ts";
+import {
+  decodeQueuedThreadMessage,
+  encodeQueuedThreadMessage,
+  type QueuedThreadMessage,
+  type ThreadSettingsSnapshot,
+} from "./threadOutboxModel.ts";
 
 const baseModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -38,6 +43,13 @@ const threadSettings: ThreadSettingsSnapshot = {
 };
 
 describe("thread outbox delivery", () => {
+  it("persists the existing-thread settings fallback", () => {
+    const message = queuedMessage({ threadSettings });
+    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message)).threadSettings).toEqual(
+      threadSettings,
+    );
+  });
+
   it("syncs queued branch and model snapshots with payload-stable command ids", async () => {
     const calls: string[] = [];
     const updateMetadata = vi.fn(async () => {
@@ -51,6 +63,9 @@ describe("thread outbox delivery", () => {
     const removeQueuedMessage = vi.fn(async () => {
       calls.push("remove");
     });
+    const onDelivered = vi.fn(() => {
+      calls.push("delivered");
+    });
     const delivery = createThreadOutboxDelivery({
       commands: {
         startTurn,
@@ -59,6 +74,7 @@ describe("thread outbox delivery", () => {
         setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
       },
       removeQueuedMessage,
+      onDelivered,
       warn: () => undefined,
     });
     const nextModelSelection = {
@@ -89,7 +105,8 @@ describe("thread outbox delivery", () => {
         worktreePath: null,
       },
     });
-    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove"]);
+    expect(onDelivered).toHaveBeenCalledWith(message, threadSettings);
+    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove", "delivered"]);
   });
 
   it("does not update branch metadata for legacy messages without a snapshot", async () => {
@@ -107,5 +124,28 @@ describe("thread outbox delivery", () => {
 
     await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
     expect(updateMetadata).not.toHaveBeenCalled();
+  });
+
+  it("keeps a delivered message complete when its notification callback throws", async () => {
+    const warn = vi.fn();
+    const delivery = createThreadOutboxDelivery({
+      commands: {
+        startTurn: vi.fn(async () => AsyncResult.success(undefined)),
+        updateMetadata: vi.fn(async () => AsyncResult.success(undefined)),
+        setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
+        setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
+      },
+      removeQueuedMessage: vi.fn(async () => undefined),
+      onDelivered: () => {
+        throw new Error("refresh failed");
+      },
+      warn,
+    });
+
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "[thread-outbox] delivered-message callback failed",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
   });
 });

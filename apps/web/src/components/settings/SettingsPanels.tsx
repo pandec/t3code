@@ -604,6 +604,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
+      ...(settings.archivedSectionVisibleCount !==
+      DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount
+        ? ["Recent archived threads"]
+        : []),
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
@@ -722,6 +726,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectAccentColors,
+      settings.archivedSectionVisibleCount,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
@@ -752,6 +757,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
+      archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectAccentColors: {},
       sidebarThreadProviderIconVisibility:

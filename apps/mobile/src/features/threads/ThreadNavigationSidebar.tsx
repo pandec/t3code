@@ -3,6 +3,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
@@ -29,6 +30,9 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { useThreadAttentionFilter } from "./use-thread-attention-filter";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -54,7 +58,7 @@ import {
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
-import { useThreadListActions } from "../home/useThreadListActions";
+import { useArchivedThreadListActions, useThreadListActions } from "../home/useThreadListActions";
 import { WorkspaceConnectionStatus } from "../home/WorkspaceConnectionStatus";
 import { shouldShowWorkspaceConnectionStatus } from "../home/workspace-connection-status";
 import { SidebarHeaderActions } from "./sidebar-header-actions";
@@ -69,6 +73,7 @@ import {
 } from "./thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "./thread-list-v2-items";
 import { resolveThreadProviderDriver } from "./thread-provider";
+import { pendingTaskAttentionKey } from "./threadAttention";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import {
   buildThreadListV2Items,
@@ -77,6 +82,7 @@ import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
 } from "./threadListV2";
+import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
     List v2 beta is on, flat v2 rows with queued tasks spliced in, and a settled
@@ -134,6 +140,7 @@ interface ThreadNavigationSidebarProps {
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
+  readonly onOpenArchivedThreads: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -197,8 +204,22 @@ function ThreadNavigationSidebarPane(
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const pendingTasks = usePendingNewTasks();
+  const pendingTaskKeys = useMemo(
+    () =>
+      pendingTasks.map((task) =>
+        pendingTaskAttentionKey({
+          environmentId: task.message.environmentId,
+          messageId: task.message.messageId,
+        }),
+      ),
+    [pendingTasks],
+  );
+  const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
     () =>
@@ -209,6 +230,25 @@ function ThreadNavigationSidebarPane(
         }))
         .sort((left, right) => left.label.localeCompare(right.label)),
     [savedConnectionsById],
+  );
+  const archivedEnvironmentIds = useMemo(
+    () => (threadListV2Enabled ? environments.map((environment) => environment.environmentId) : []),
+    [environments, threadListV2Enabled],
+  );
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        environments.map((environment) => [environment.environmentId, environment.label]),
+      ),
+    [environments],
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
@@ -316,6 +356,14 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
+  const displayedRecentArchive =
+    props.searchQuery.trim().length === 0 &&
+    !attentionFilter.enabled &&
+    options.selectedEnvironmentId === null &&
+    options.selectedModel === null &&
+    selectedProjectScope === null
+      ? recentArchive
+      : { threads: [], totalCount: 0 };
   useEffect(() => {
     if (
       selectedProjectKey !== null &&
@@ -470,6 +518,7 @@ function ThreadNavigationSidebarPane(
     selectedProjectKey,
     options.selectedModel,
     props.searchQuery.trim(),
+    attentionFilter.enabled,
   ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
@@ -520,6 +569,7 @@ function ThreadNavigationSidebarPane(
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
     return buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
+      attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
       environmentId: options.selectedEnvironmentId,
       model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -534,6 +584,7 @@ function ThreadNavigationSidebarPane(
     });
   }, [
     changeRequestStateByKey,
+    attentionFilter.memberThreadKeys,
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentId,
@@ -566,11 +617,18 @@ function ThreadNavigationSidebarPane(
     // Queued offline tasks are not thread shells, so the v2 item builder
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Same environment,
-    // model, project, and search filters as the list.
+    // deletable while their environment is offline. Queued work is unresolved,
+    // so snapshots include current tasks and admit tasks queued afterward.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
+        (attentionFilter.memberPendingTaskKeys === null ||
+          attentionFilter.memberPendingTaskKeys.has(
+            pendingTaskAttentionKey({
+              environmentId: pendingTask.message.environmentId,
+              messageId: pendingTask.message.messageId,
+            }),
+          )) &&
         (options.selectedEnvironmentId === null ||
           pendingTask.message.environmentId === options.selectedEnvironmentId) &&
         (options.selectedModel === null ||
@@ -596,6 +654,7 @@ function ThreadNavigationSidebarPane(
     return items;
   }, [
     listLayout.items,
+    attentionFilter.memberPendingTaskKeys,
     options.selectedEnvironmentId,
     options.selectedModel,
     pendingTasks,
@@ -773,6 +832,7 @@ function ThreadNavigationSidebarPane(
   const borderColor = useThemeColor("--color-border");
   const mutedColor = useThemeColor("--color-foreground-muted");
   const placeholderColor = useThemeColor("--color-placeholder");
+  const primaryColor = useThemeColor("--color-primary");
   const headerFadeColor = String(backgroundColor);
   const headerWashOpacity = SIDEBAR_HEADER_WASH_OPACITY[colorScheme];
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
@@ -803,6 +863,20 @@ function ThreadNavigationSidebarPane(
     },
     [props.onSelectThread],
   );
+  const archivedSectionFooter =
+    threadListV2Enabled && displayedRecentArchive.threads.length > 0 ? (
+      <RecentArchivedThreadSection
+        environmentLabels={archivedEnvironmentLabels}
+        projects={projects}
+        threads={displayedRecentArchive.threads}
+        onDelete={confirmDeleteArchivedThread}
+        onOpen={handleSelectThread}
+        onOpenAll={props.onOpenArchivedThreads}
+        onUnarchive={unarchiveThread}
+        pane="sidebar"
+        selectedThreadKey={props.selectedThreadKey}
+      />
+    ) : null;
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const next = event.nativeEvent.contentOffset.y > 6;
     if (headerIsOverContentRef.current === next) {
@@ -1135,43 +1209,79 @@ function ThreadNavigationSidebarPane(
   const nativeHeaderItems = useMemo(
     () =>
       createSidebarHeaderItems({
+        attentionFilterEnabled: attentionFilter.enabled,
+        attentionFilterReady: attentionFilter.ready,
+        attentionFilterActiveTintColor: primaryColor,
+        showAttentionFilter: threadListV2Enabled,
         filterIcon,
         filterMenu,
         onOpenSettings: props.onOpenSettings,
+        onToggleAttentionFilter: attentionFilter.toggle,
       }),
-    [filterIcon, filterMenu, props.onOpenSettings],
+    [
+      attentionFilter.enabled,
+      attentionFilter.ready,
+      attentionFilter.toggle,
+      filterIcon,
+      filterMenu,
+      primaryColor,
+      props.onOpenSettings,
+      threadListV2Enabled,
+    ],
   );
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
   const snoozedCount = threadListV2Layout.snoozedCount;
-  const listEmpty = (
-    <Text className="px-2 py-4 text-sm text-foreground-muted">
-      {catalogState.isLoadingConnections
-        ? "Loading threads…"
-        : props.searchQuery.trim().length > 0
-          ? threadSearch.isPending && snoozedCount === 0
-            ? "Searching thread messages…"
-            : snoozedCount > 0
-              ? // Snoozed matches passed this same search filter — "No
-                // matching threads" would misreport them as nonexistent.
-                snoozedCount === 1
-                ? "1 matching thread snoozed"
-                : "All matching threads snoozed"
-              : "No matching threads"
-          : snoozedCount > 0
-            ? snoozedCount === 1
-              ? "1 thread snoozed"
-              : `${snoozedCount} threads snoozed`
-            : selectedProjectScope !== null
-              ? `No threads in ${selectedProjectScope.title}`
-              : // A model pin can empty the list in one tap; "No threads yet"
-                // over a filtered inbox reads as data loss, same as the
-                // snoozed case above.
-                options.selectedModel !== null
-                ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
-                : "No threads yet"}
-    </Text>
-  );
+  // Null suppresses the empty row entirely: the archived section below is
+  // already showing threads, so "No threads yet" would read as data loss. It
+  // only outranks that last fallback — a search or a filter that matches
+  // nothing still has to say so, archive or not.
+  const listEmptyMessage = catalogState.isLoadingConnections
+    ? "Loading threads…"
+    : props.searchQuery.trim().length > 0
+      ? threadSearch.isPending && snoozedCount === 0
+        ? "Searching thread messages…"
+        : snoozedCount > 0
+          ? // Snoozed matches passed this same search filter — "No
+            // matching threads" would misreport them as nonexistent.
+            snoozedCount === 1
+            ? "1 matching thread snoozed"
+            : "All matching threads snoozed"
+          : "No matching threads"
+      : snoozedCount > 0
+        ? snoozedCount === 1
+          ? "1 thread snoozed"
+          : `${snoozedCount} threads snoozed`
+        : selectedProjectScope !== null
+          ? `No threads in ${selectedProjectScope.title}`
+          : // A model pin can empty the list in one tap; "No threads yet"
+            // over a filtered inbox reads as data loss, same as the
+            // snoozed case above.
+            options.selectedModel !== null
+            ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
+            : displayedRecentArchive.threads.length > 0
+              ? null
+              : "No threads yet";
+  const listEmpty =
+    !catalogState.isLoadingConnections &&
+    props.searchQuery.trim().length === 0 &&
+    attentionFilter.enabled ? (
+      <View className="items-start gap-3 px-2 py-4">
+        <Text className="text-sm text-foreground-muted">No threads need attention</Text>
+        <Pressable
+          accessibilityLabel="Clear attention filter"
+          accessibilityRole="button"
+          className="rounded-full bg-primary px-4 py-2 active:opacity-70"
+          onPress={attentionFilter.clear}
+        >
+          <Text className="text-sm font-t3-bold text-primary-foreground">
+            Clear attention filter
+          </Text>
+        </Pressable>
+      </View>
+    ) : listEmptyMessage === null ? null : (
+      <Text className="px-2 py-4 text-sm text-foreground-muted">{listEmptyMessage}</Text>
+    );
 
   if (props.nativeChrome) {
     return (
@@ -1241,6 +1351,7 @@ function ThreadNavigationSidebarPane(
                   ) : null
                 }
                 ListEmptyComponent={listEmpty}
+                ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -1287,6 +1398,7 @@ function ThreadNavigationSidebarPane(
               showsVerticalScrollIndicator={false}
               style={styles.threadList}
               ListEmptyComponent={listEmpty}
+              ListFooterComponent={archivedSectionFooter}
             />
           </GestureDetector>
         </SwipeableScrollGateProvider>
@@ -1341,6 +1453,22 @@ function ThreadNavigationSidebarPane(
                 icon={filterIcon}
               />
             </ControlPillMenu>
+            {threadListV2Enabled ? (
+              <SidebarFilterButton
+                active={attentionFilter.enabled}
+                accessibilityLabel={
+                  attentionFilter.enabled
+                    ? "Clear attention filter"
+                    : attentionFilter.ready
+                      ? "Show only threads needing attention"
+                      : "Loading threads"
+                }
+                disabled={!attentionFilter.ready && !attentionFilter.enabled}
+                grouped
+                icon="line.3.horizontal.decrease"
+                onPress={attentionFilter.toggle}
+              />
+            ) : null}
             <SidebarHeaderActions grouped onOpenSettings={props.onOpenSettings} />
           </SidebarHeaderButtonGroup>
         </View>

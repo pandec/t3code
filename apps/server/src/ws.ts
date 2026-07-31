@@ -1281,6 +1281,23 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.getRecentArchivedThreads]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getRecentArchivedThreads,
+            projectionSnapshotQuery.getRecentArchivedThreads(input).pipe(
+              Effect.tapError((cause) =>
+                Effect.logError("orchestration recent archived threads load failed", { cause }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to load recent archived threads",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,

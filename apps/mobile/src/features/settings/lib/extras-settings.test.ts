@@ -10,6 +10,7 @@ import {
   formatAccentTintIntensityPercent,
   formatSteerGraceWindowSeconds,
   toStoredAccentTintIntensityPercent,
+  toStoredArchivedSectionVisibleCount,
   toStoredSteerGraceWindowMs,
 } from "./extras-settings";
 
@@ -19,6 +20,14 @@ describe("formatSteerGraceWindowSeconds", () => {
     expect(formatSteerGraceWindowSeconds(2_500)).toBe("2.5s");
     expect(formatSteerGraceWindowSeconds(MIN_STEER_GRACE_WINDOW_MS)).toBe("0.0s");
     expect(formatSteerGraceWindowSeconds(MAX_STEER_GRACE_WINDOW_MS)).toBe("15.0s");
+  });
+});
+
+describe("toStoredArchivedSectionVisibleCount", () => {
+  it("rounds and clamps the archived count", () => {
+    expect(toStoredArchivedSectionVisibleCount(10.4)).toBe(10);
+    expect(toStoredArchivedSectionVisibleCount(-5)).toBe(1);
+    expect(toStoredArchivedSectionVisibleCount(100)).toBe(50);
   });
 });
 

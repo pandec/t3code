@@ -10,12 +10,14 @@ import {
   type MessageId,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import { Atom } from "effect/unstable/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { randomHex } from "../lib/uuid";
+import { refreshArchivedThreadsForEnvironment } from "../features/archive/useArchivedThreadSnapshots";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import {
@@ -38,7 +40,12 @@ import {
   type QueuedThreadCreation,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import {
+  environmentThreadShells,
+  environmentThreads,
+  threadDetailToShell,
+  threadEnvironment,
+} from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
@@ -71,6 +78,23 @@ function findThread(
     (candidate) =>
       candidate.environmentId === message.environmentId && candidate.id === message.threadId,
   );
+}
+
+function findThreadIncludingLoadedDetail(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+  message: QueuedThreadMessage,
+): EnvironmentThreadShell | undefined {
+  const shell = findThread(threads, message);
+  if (shell !== undefined) {
+    return shell;
+  }
+  const state = Option.getOrUndefined(
+    AsyncResult.value(
+      appAtomRegistry.get(environmentThreads.stateAtom(message.environmentId, message.threadId)),
+    ),
+  );
+  const detail = state === undefined ? undefined : Option.getOrUndefined(state.data);
+  return detail === undefined ? undefined : threadDetailToShell(message.environmentId, detail);
 }
 
 function findCreationProject(
@@ -208,6 +232,11 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
+        onDelivered: (message, thread) => {
+          if (thread.archivedAt != null) {
+            refreshArchivedThreadsForEnvironment(message.environmentId);
+          }
+        },
         warn: (message, attributes) => {
           console.warn(message, attributes);
         },
@@ -276,7 +305,8 @@ export function useThreadOutboxDrain(): void {
           }) ||
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
-          const thread = findThread(threads, message);
+          const thread = findThreadIncludingLoadedDetail(threads, message);
+          const threadSettings = thread ?? message.threadSettings;
           if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
             return "wait";
           }
@@ -287,7 +317,7 @@ export function useThreadOutboxDrain(): void {
           const shellStatus = shellStatuses.get(message.environmentId) ?? "empty";
           const action = resolveThreadOutboxDeliveryAction({
             isCreation: creation !== undefined,
-            threadExists: thread !== undefined,
+            threadExists: threadSettings !== undefined,
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadStatus: thread?.session?.status ?? null,
@@ -361,10 +391,11 @@ export function useThreadOutboxDrain(): void {
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
           return true;
         }
-        const freshThread = findThread(
+        const freshThread = findThreadIncludingLoadedDetail(
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
           nextQueuedMessage,
         );
+        const freshThreadSettings = freshThread ?? nextQueuedMessage.threadSettings;
         const freshThreadBusy =
           freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
         if (
@@ -381,8 +412,8 @@ export function useThreadOutboxDrain(): void {
             ? creationProjectCwd !== null
               ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd)
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
-            : freshThread !== undefined
-              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThread)
+            : freshThreadSettings !== undefined
+              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings)
               : Promise.resolve(false);
       });
       void dispatch

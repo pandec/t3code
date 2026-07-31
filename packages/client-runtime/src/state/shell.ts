@@ -22,7 +22,7 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
-import { applyShellStreamEvent } from "./shellReducer.ts";
+import { applyShellStreamEvent, shellEventInvalidatesArchivedThreads } from "./shellReducer.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
@@ -32,12 +32,14 @@ export interface EnvironmentShellState {
   readonly snapshot: Option.Option<OrchestrationShellSnapshot>;
   readonly status: EnvironmentShellStatus;
   readonly error: Option.Option<string>;
+  readonly archiveInvalidationSequence: number;
 }
 
 const EMPTY_SHELL_STATE: EnvironmentShellState = {
   snapshot: Option.none(),
   status: "empty",
   error: Option.none(),
+  archiveInvalidationSequence: 0,
 };
 
 function shellStatusForSnapshot(
@@ -69,6 +71,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     snapshot: cachedSnapshot,
     status: shellStatusForSnapshot(cachedSnapshot),
     error: Option.none(),
+    archiveInvalidationSequence: 0,
   });
   const awaitingCompletion = yield* Ref.make(false);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
@@ -146,6 +149,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }
 
     const current = yield* SubscriptionRef.get(state);
+    const archiveInvalidationSequence =
+      item.kind !== "snapshot" &&
+      Option.isSome(current.snapshot) &&
+      shellEventInvalidatesArchivedThreads(current.snapshot.value, item)
+        ? item.sequence
+        : current.archiveInvalidationSequence;
     const nextSnapshot =
       item.kind === "snapshot"
         ? item.snapshot
@@ -165,6 +174,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       snapshot: Option.some(nextSnapshot),
       status: waiting ? "synchronizing" : "live",
       error: Option.none(),
+      archiveInvalidationSequence,
     });
     yield* Queue.offer(persistence, nextSnapshot);
   });
