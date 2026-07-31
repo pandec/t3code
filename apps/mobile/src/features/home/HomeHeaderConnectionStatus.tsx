@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, Text as RNText } from "react-native";
+import { ActivityIndicator, Pressable, Text as RNText, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
@@ -33,16 +33,25 @@ export function HomeHeaderConnectionStatus(props: {
     >
       {presentation === null ? (
         // Settled: mirror the native stack title (system font, 18/800 — see
-        // GLASS_HEADER_OPTIONS in Stack.tsx) so the header looks unchanged
-        // while staying tappable.
+        // GLASS_HEADER_OPTIONS in Stack.tsx) so the header matches the native
+        // one, with room for the background-sync indicator, while staying
+        // tappable.
         <>
+          {/* Below iOS 26 the title is centred, so the indicator is balanced
+              by an equal leading spacer — otherwise "Threads" would slide
+              sideways every time a background sweep starts and ends. */}
+          {syncingThreads ? <View className="w-5" /> : null}
           <RNText
             maxFontSizeMultiplier={1.2}
             style={{ color: titleColor, fontSize: 18, fontWeight: "800" }}
           >
             Threads
           </RNText>
-          {syncingThreads ? <ActivityIndicator color={iconColor} size="small" /> : null}
+          {syncingThreads ? (
+            <View className="w-5 items-center">
+              <ActivityIndicator color={iconColor} size="small" />
+            </View>
+          ) : null}
         </>
       ) : (
         <>

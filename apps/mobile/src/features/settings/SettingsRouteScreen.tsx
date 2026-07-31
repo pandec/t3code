@@ -655,9 +655,12 @@ function ThreadSyncRow() {
     <Pressable
       accessibilityLabel="Sync threads now"
       accessibilityRole="button"
-      accessibilityState={{ busy: syncing, disabled: syncing }}
+      // Only a manual request blocks the action. A background run reports
+      // itself in the label, but making "sync now" untappable for the
+      // duration would strand anyone who opened Settings to force a sweep.
+      accessibilityState={{ busy: syncing, disabled: manualSyncing }}
       accessibilityValue={{ text: statusLabel }}
-      disabled={syncing}
+      disabled={manualSyncing}
       onPress={() => {
         if (syncInFlight.current) return;
         syncInFlight.current = true;

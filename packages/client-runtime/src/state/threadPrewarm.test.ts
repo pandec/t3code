@@ -16,6 +16,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -29,6 +30,7 @@ import * as Persistence from "../platform/persistence.ts";
 import {
   advanceThreadStreamingSnapshot,
   commitPrewarmedThreadSnapshot,
+  createThreadPrewarmSummaryAtom,
   didEnvironmentPrewarmRunsAdvance,
   EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
   makeEnvironmentThreadPrewarm,
@@ -708,5 +710,89 @@ describe("thread streaming snapshots", () => {
       streamingShell("new-idle"),
     ]);
     expect(settled).toEqual([]);
+  });
+});
+
+describe("createThreadPrewarmSummaryAtom", () => {
+  const OTHER_ENVIRONMENT_ID = EnvironmentId.make("environment-2");
+
+  function environmentEntry(environmentId: EnvironmentId) {
+    return {
+      target: new PrimaryConnectionTarget({
+        environmentId,
+        label: environmentId,
+        httpBaseUrl: `https://${environmentId}.example.test`,
+        wsBaseUrl: `wss://${environmentId}.example.test`,
+      }),
+      profile: Option.none(),
+    };
+  }
+
+  function makeHarness() {
+    const statusAtoms = Atom.family((_environmentId: EnvironmentId) =>
+      Atom.make(
+        AsyncResult.success<EnvironmentThreadPrewarmStatus>(
+          EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+        ),
+      ),
+    );
+    const summaryAtom = createThreadPrewarmSummaryAtom({
+      catalogValueAtom: Atom.make({
+        isReady: true,
+        entries: new Map([
+          [ENVIRONMENT_ID, environmentEntry(ENVIRONMENT_ID)],
+          [OTHER_ENVIRONMENT_ID, environmentEntry(OTHER_ENVIRONMENT_ID)],
+        ]),
+      }),
+      statusAtom: statusAtoms,
+    });
+    return { registry: AtomRegistry.make(), statusAtoms, summaryAtom };
+  }
+
+  it("reports syncing while any environment has a run in flight", () => {
+    const harness = makeHarness();
+    expect(harness.registry.get(harness.summaryAtom).syncing).toBe(false);
+
+    harness.registry.set(
+      harness.statusAtoms(OTHER_ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>({
+        ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+        running: true,
+      }),
+    );
+    expect(harness.registry.get(harness.summaryAtom).syncing).toBe(true);
+  });
+
+  it("keeps a completed run's cursor when a stream restart re-emits the baseline", () => {
+    const harness = makeHarness();
+    harness.registry.set(
+      harness.statusAtoms(ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>({
+        lastRunAt: 1_000,
+        refreshed: 2,
+        skipped: 0,
+        failed: 0,
+        running: false,
+      }),
+    );
+    expect(harness.registry.get(harness.summaryAtom).lastRunAt).toBe(1_000);
+
+    // A catalog entry change restarts the stream, whose first event is the
+    // empty baseline. It exists to clear a stranded `running`, and must not
+    // roll "last synced" back to never — a pending manual sync reads this
+    // cursor to decide whether its own run has completed.
+    harness.registry.set(
+      harness.statusAtoms(ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>(EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS),
+    );
+    const summary = harness.registry.get(harness.summaryAtom);
+    expect(summary.lastRunAt).toBe(1_000);
+    expect(summary.environmentLastRunAt.get(ENVIRONMENT_ID)).toBe(1_000);
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        summary.environmentLastRunAt,
+        new Map([[ENVIRONMENT_ID, 1_000]]),
+      ),
+    ).toBe(false);
   });
 });

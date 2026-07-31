@@ -523,9 +523,16 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       );
       refreshed += status.refreshed;
       syncing ||= status.running;
-      environmentLastRunAt.set(environmentId, status.lastRunAt);
-      if (status.lastRunAt !== null && (lastRunAt === null || status.lastRunAt > lastRunAt)) {
-        lastRunAt = status.lastRunAt;
+      // A stream restart re-emits the empty baseline to clear a stranded
+      // `running`, which would otherwise roll this cursor back to null — long
+      // enough for "last synced" to read "Not synced yet" and for a pending
+      // manual sync to see a false completion. Warmed threads survive the
+      // restart, so the cursor does too.
+      const environmentLastRun =
+        status.lastRunAt ?? previous.environmentLastRunAt.get(environmentId) ?? null;
+      environmentLastRunAt.set(environmentId, environmentLastRun);
+      if (environmentLastRun !== null && (lastRunAt === null || environmentLastRun > lastRunAt)) {
+        lastRunAt = environmentLastRun;
       }
     }
     if (
