@@ -51,6 +51,9 @@ describe("thread outbox delivery", () => {
     const removeQueuedMessage = vi.fn(async () => {
       calls.push("remove");
     });
+    const onDelivered = vi.fn(() => {
+      calls.push("delivered");
+    });
     const delivery = createThreadOutboxDelivery({
       commands: {
         startTurn,
@@ -59,6 +62,7 @@ describe("thread outbox delivery", () => {
         setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
       },
       removeQueuedMessage,
+      onDelivered,
       warn: () => undefined,
     });
     const nextModelSelection = {
@@ -89,7 +93,8 @@ describe("thread outbox delivery", () => {
         worktreePath: null,
       },
     });
-    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove"]);
+    expect(onDelivered).toHaveBeenCalledWith(message, threadSettings);
+    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove", "delivered"]);
   });
 
   it("does not update branch metadata for legacy messages without a snapshot", async () => {

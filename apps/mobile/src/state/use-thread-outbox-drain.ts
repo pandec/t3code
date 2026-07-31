@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { randomHex } from "../lib/uuid";
+import { refreshArchivedThreadsForEnvironment } from "../features/archive/useArchivedThreadSnapshots";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import {
@@ -208,6 +209,11 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
+        onDelivered: (message, thread) => {
+          if (thread.archivedAt != null) {
+            refreshArchivedThreadsForEnvironment(message.environmentId);
+          }
+        },
         warn: (message, attributes) => {
           console.warn(message, attributes);
         },

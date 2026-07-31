@@ -3,6 +3,8 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
@@ -29,6 +31,8 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -54,7 +58,7 @@ import {
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
-import { useThreadListActions } from "../home/useThreadListActions";
+import { useArchivedThreadListActions, useThreadListActions } from "../home/useThreadListActions";
 import { WorkspaceConnectionStatus } from "../home/WorkspaceConnectionStatus";
 import { shouldShowWorkspaceConnectionStatus } from "../home/workspace-connection-status";
 import { SidebarHeaderActions } from "./sidebar-header-actions";
@@ -77,6 +81,7 @@ import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
 } from "./threadListV2";
+import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
     List v2 beta is on, flat v2 rows with queued tasks spliced in, and a settled
@@ -134,6 +139,7 @@ interface ThreadNavigationSidebarProps {
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
+  readonly onOpenArchivedThreads: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -197,7 +203,10 @@ function ThreadNavigationSidebarPane(
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -209,6 +218,29 @@ function ThreadNavigationSidebarPane(
         }))
         .sort((left, right) => left.label.localeCompare(right.label)),
     [savedConnectionsById],
+  );
+  const archivedEnvironmentIds = useMemo(
+    () => (threadListV2Enabled ? environments.map((environment) => environment.environmentId) : []),
+    [environments, threadListV2Enabled],
+  );
+  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const recentArchivedThreads = useMemo(
+    () =>
+      recentArchive.threads.map(({ environmentId, thread }) =>
+        scopeThreadShell(environmentId, thread),
+      ),
+    [recentArchive.threads],
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        environments.map((environment) => [environment.environmentId, environment.label]),
+      ),
+    [environments],
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
@@ -803,6 +835,19 @@ function ThreadNavigationSidebarPane(
     },
     [props.onSelectThread],
   );
+  const archivedSectionFooter =
+    threadListV2Enabled && recentArchivedThreads.length > 0 ? (
+      <RecentArchivedThreadSection
+        environmentLabels={archivedEnvironmentLabels}
+        projects={projects}
+        threads={recentArchivedThreads}
+        onDelete={confirmDeleteArchivedThread}
+        onOpen={handleSelectThread}
+        onOpenAll={props.onOpenArchivedThreads}
+        onUnarchive={unarchiveThread}
+        pane="sidebar"
+      />
+    ) : null;
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const next = event.nativeEvent.contentOffset.y > 6;
     if (headerIsOverContentRef.current === next) {
@@ -1240,7 +1285,8 @@ function ThreadNavigationSidebarPane(
                     </View>
                   ) : null
                 }
-                ListEmptyComponent={listEmpty}
+                ListEmptyComponent={recentArchivedThreads.length > 0 ? null : listEmpty}
+                ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -1286,7 +1332,8 @@ function ThreadNavigationSidebarPane(
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               style={styles.threadList}
-              ListEmptyComponent={listEmpty}
+              ListEmptyComponent={recentArchivedThreads.length > 0 ? null : listEmpty}
+              ListFooterComponent={archivedSectionFooter}
             />
           </GestureDetector>
         </SwipeableScrollGateProvider>

@@ -16,6 +16,11 @@ export interface ArchivedThreadSnapshotsState {
   readonly isLoading: boolean;
 }
 
+export interface RecentArchivedThread {
+  readonly environmentId: EnvironmentId;
+  readonly thread: OrchestrationShellSnapshot["threads"][number];
+}
+
 const ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR = "\u001f";
 const environmentIdOrder = Order.String as Order.Order<EnvironmentId>;
 
@@ -66,4 +71,32 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
       return { snapshots, error, isLoading };
     }).pipe(Atom.withLabel(`${options.labelPrefix}:${environmentKey}`)),
   );
+}
+
+function archivedTimestamp(thread: OrchestrationShellSnapshot["threads"][number]): number {
+  const value = Date.parse(thread.archivedAt ?? thread.updatedAt ?? thread.createdAt);
+  return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
+}
+
+export function selectRecentArchivedThreads(
+  snapshots: ReadonlyArray<ArchivedSnapshotEntry>,
+  visibleCount: number,
+): {
+  readonly threads: ReadonlyArray<RecentArchivedThread>;
+  readonly totalCount: number;
+} {
+  const threads = snapshots.flatMap(({ environmentId, snapshot }) =>
+    snapshot.threads
+      .filter((thread) => thread.archivedAt !== null)
+      .map((thread) => ({ environmentId, thread })),
+  );
+  threads.sort(
+    (left, right) =>
+      archivedTimestamp(right.thread) - archivedTimestamp(left.thread) ||
+      String(right.thread.id).localeCompare(String(left.thread.id)),
+  );
+  return {
+    threads: threads.slice(0, Math.max(0, visibleCount)),
+    totalCount: threads.length,
+  };
 }

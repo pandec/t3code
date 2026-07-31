@@ -20,7 +20,12 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { MAX_STEER_GRACE_WINDOW_MS, MIN_STEER_GRACE_WINDOW_MS } from "@t3tools/contracts/settings";
+import {
+  MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
+  MAX_STEER_GRACE_WINDOW_MS,
+  MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+  MIN_STEER_GRACE_WINDOW_MS,
+} from "@t3tools/contracts/settings";
 import {
   isAtomCommandInterrupted,
   reportAtomCommandResult,
@@ -53,7 +58,10 @@ import {
   useThreadPrewarmSummary,
 } from "../../state/prewarm";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useSteerGraceWindowMs } from "../../state/use-mobile-preferences";
+import {
+  useArchivedSectionVisibleCount,
+  useSteerGraceWindowMs,
+} from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   type AppUpdateCheckState,
@@ -68,6 +76,7 @@ import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
   formatSteerGraceWindowSeconds,
   STEER_GRACE_WINDOW_STEP_MS,
+  toStoredArchivedSectionVisibleCount,
   toStoredSteerGraceWindowMs,
 } from "./lib/extras-settings";
 
@@ -560,6 +569,7 @@ function GeneralSettingsSection() {
     ? preferencesResult.value.projectGroupingEnabled !== false
     : true;
   const steerGraceWindowMs = useSteerGraceWindowMs();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
 
   return (
     <SettingsSection title="General">
@@ -582,6 +592,22 @@ function GeneralSettingsSection() {
         step={STEER_GRACE_WINDOW_STEP_MS}
         value={steerGraceWindowMs}
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
+      />
+      <SettingsSliderRow
+        description="How many recently archived threads appear at the end of the thread list."
+        disabled={!hydrated}
+        icon="archivebox"
+        label="Recent archived threads"
+        max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+        min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+        onChange={(value) =>
+          savePreferences({
+            archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
+          })
+        }
+        step={1}
+        value={archivedSectionVisibleCount}
+        valueLabel={`${archivedSectionVisibleCount}`}
       />
       <ThreadSyncRow />
     </SettingsSection>

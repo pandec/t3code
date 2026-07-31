@@ -7,6 +7,8 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
@@ -33,6 +35,9 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
+import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -105,6 +110,9 @@ interface HomeScreenProps {
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onDeleteArchivedThread: (thread: EnvironmentThreadShell) => void;
+  readonly onUnarchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenAllArchivedThreads: () => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -200,11 +208,39 @@ export function HomeScreen(props: HomeScreenProps) {
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const threadListV2Enabled = useThreadListV2Enabled();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const insets = useSafeAreaInsets();
   const accentColor = useThemeColor("--color-icon-muted");
+  const archivedEnvironmentIds = useMemo(
+    () =>
+      threadListV2Enabled ? props.environments.map((environment) => environment.environmentId) : [],
+    [props.environments, threadListV2Enabled],
+  );
+  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const recentArchivedThreads = useMemo(
+    () =>
+      recentArchive.threads.map(({ environmentId, thread }) =>
+        scopeThreadShell(environmentId, thread),
+      ),
+    [recentArchive.threads],
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.values(props.savedConnectionsById).map((connection) => [
+          connection.environmentId,
+          connection.environmentLabel,
+        ]),
+      ),
+    [props.savedConnectionsById],
+  );
   const iosBottomToolbarClearance =
     Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
       ? PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT
@@ -925,10 +961,12 @@ export function HomeScreen(props: HomeScreenProps) {
   // that matches nothing needs the in-list "No results" state, not the
   // full-page "No threads yet". Settled threads are unarchived live shells,
   // so the v1 check already covers v2.
-  const hasAnyThreads = hasHomeThreadListContent({
-    threads: props.threads,
-    pendingTaskCount: props.pendingTasks.length,
-  });
+  const hasAnyThreads =
+    recentArchive.totalCount > 0 ||
+    hasHomeThreadListContent({
+      threads: props.threads,
+      pendingTaskCount: props.pendingTasks.length,
+    });
   const hasResults = projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
@@ -1026,7 +1064,9 @@ export function HomeScreen(props: HomeScreenProps) {
   // loss.
   const v2SnoozedCount = threadListV2Layout.snoozedCount;
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending && v2SnoozedCount === 0 ? null : hasSearchQuery ? (
+    recentArchive.totalCount > 0 ? null : hasSearchQuery &&
+      threadSearch.isPending &&
+      v2SnoozedCount === 0 ? null : hasSearchQuery ? (
       v2SnoozedCount > 0 ? (
         // The snoozed threads already passed this search filter: "No
         // results" would claim nothing matched when matches are merely
@@ -1065,19 +1105,30 @@ export function HomeScreen(props: HomeScreenProps) {
             extraData={v2ExtraData}
             ListHeaderComponent={v2ListHeader}
             ListFooterComponent={
-              threadListV2Layout.hiddenSettledCount > 0 ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
-                  onPress={showMoreSettled}
-                  className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                >
-                  <Text className="text-xs font-t3-medium text-foreground-muted">
-                    Show more ({threadListV2Layout.hiddenSettledCount} settled hidden)
-                  </Text>
-                </Pressable>
-              ) : null
+              <View>
+                {threadListV2Layout.hiddenSettledCount > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+                    onPress={showMoreSettled}
+                    className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
+                    style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                  >
+                    <Text className="text-xs font-t3-medium text-foreground-muted">
+                      Show more ({threadListV2Layout.hiddenSettledCount} settled hidden)
+                    </Text>
+                  </Pressable>
+                ) : null}
+                <RecentArchivedThreadSection
+                  environmentLabels={archivedEnvironmentLabels}
+                  projects={props.projects}
+                  threads={recentArchivedThreads}
+                  onDelete={props.onDeleteArchivedThread}
+                  onOpen={props.onSelectThread}
+                  onOpenAll={props.onOpenAllArchivedThreads}
+                  onUnarchive={props.onUnarchiveThread}
+                />
+              </View>
             }
             ListEmptyComponent={v2ListEmpty}
             style={{ flex: 1 }}

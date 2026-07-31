@@ -7,6 +7,8 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   scopeProjectRef,
   scopeThreadRef,
@@ -20,6 +22,7 @@ import type {
   SidebarThreadProviderIconVisibility,
   ThreadId,
 } from "@t3tools/contracts";
+import { clampArchivedSectionVisibleCount } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -198,6 +201,7 @@ import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/too
 import { useComposerDraftStore } from "../composerDraftStore";
 import { archivedProjectFilterKey } from "../archivedProjectFilter";
 import { SessionImportDialog } from "./SessionImportDialog";
+import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1188,6 +1192,73 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   );
 });
 
+const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
+  readonly thread: EnvironmentThreadShell;
+  readonly projectCwd: string | null;
+  readonly projectTitle: string | null;
+  readonly onOpen: (threadRef: ScopedThreadRef) => void;
+  readonly onUnarchive: (threadRef: ScopedThreadRef) => void;
+  readonly onContextMenu: (
+    thread: EnvironmentThreadShell,
+    position: { x: number; y: number },
+  ) => void;
+}) {
+  const threadRef = scopeThreadRef(props.thread.environmentId, props.thread.id);
+  return (
+    <li className="group/v2-archived-row list-none">
+      <div
+        role="button"
+        tabIndex={0}
+        className="flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => props.onOpen(threadRef)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            props.onOpen(threadRef);
+          }
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          props.onContextMenu(props.thread, { x: event.clientX, y: event.clientY });
+        }}
+      >
+        <ProjectFavicon
+          environmentId={props.thread.environmentId}
+          cwd={props.projectCwd ?? ""}
+          className="size-3.5 shrink-0 opacity-60"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium">{props.thread.title}</span>
+          {props.projectTitle ? (
+            <span className="block truncate text-[10px] text-muted-foreground/50">
+              {props.projectTitle}
+            </span>
+          ) : null}
+        </span>
+        <span className="text-[10px] tabular-nums text-muted-foreground/45 group-hover/v2-archived-row:hidden group-focus-within/v2-archived-row:hidden">
+          {formatCompactRelativeTimeLabel(
+            props.thread.archivedAt ?? props.thread.updatedAt ?? props.thread.createdAt,
+          )}
+        </span>
+        <span className="hidden items-center group-hover/v2-archived-row:flex group-focus-within/v2-archived-row:flex">
+          <button
+            type="button"
+            aria-label={`Unarchive ${props.thread.title}`}
+            title="Unarchive"
+            className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onUnarchive(threadRef);
+            }}
+          >
+            <Undo2Icon className="size-3.5" />
+          </button>
+        </span>
+      </div>
+    </li>
+  );
+});
+
 function latestTurnDiff(
   thread: SidebarThreadSummary,
 ): { insertions: number; deletions: number } | null {
@@ -1217,14 +1288,19 @@ export default function SidebarV2() {
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
+  const archivedSectionVisibleCount = useClientSettings((s) =>
+    clampArchivedSectionVisibleCount(s.archivedSectionVisibleCount),
+  );
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     archiveThread,
+    unarchiveThread,
     settleThread,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
     deleteThread,
+    confirmAndDeleteThread,
     forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -1334,6 +1410,22 @@ export default function SidebarV2() {
     [isMobile, router, setOpenMobile],
   );
   const { environments } = useEnvironments();
+  const archivedEnvironmentIds = useMemo(
+    () => environments.map((environment) => environment.environmentId),
+    [environments],
+  );
+  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const recentArchivedThreads = useMemo(
+    () =>
+      recentArchive.threads.map(({ environmentId, thread }) =>
+        scopeThreadShell(environmentId, thread),
+      ),
+    [recentArchive.threads],
+  );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -1939,6 +2031,8 @@ export default function SidebarV2() {
   // shortcuts or multi-select), matching the settled tail's paging model.
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
   const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
+  const [archivedShelfExpanded, setArchivedShelfExpanded] = useState(true);
+  const toggleArchivedShelf = useCallback(() => setArchivedShelfExpanded((value) => !value), []);
   const visibleSnoozedThreads = useMemo(() => {
     if (snoozedShelfExpanded) return snoozedThreads;
     // The open thread must never vanish behind the collapsed shelf: a
@@ -2043,6 +2137,61 @@ export default function SidebarV2() {
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  const attemptUnarchive = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void (async () => {
+        const result = await unarchiveThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to unarchive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [unarchiveThread],
+  );
+  const handleArchivedThreadContextMenu = useCallback(
+    (thread: EnvironmentThreadShell, position: { x: number; y: number }) => {
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+        const clicked = await api.contextMenu.show(
+          [
+            { id: "unarchive", label: "Unarchive" },
+            { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+          ],
+          position,
+        );
+        if (clicked === "unarchive") {
+          attemptUnarchive(threadRef);
+          return;
+        }
+        if (clicked !== "delete") return;
+        const result = await confirmAndDeleteThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to delete thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [attemptUnarchive, confirmAndDeleteThread],
+  );
+  const openAllArchivedThreads = useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/settings/archived", search: {} });
+  }, [isMobile, router, setOpenMobile]);
 
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
@@ -3230,9 +3379,69 @@ export default function SidebarV2() {
                   </button>
                 </li>
               ) : null}
+              {recentArchive.totalCount > 0 ? (
+                <>
+                  <li key="archived-shelf-header" data-thread-selection-safe className="list-none">
+                    <button
+                      type="button"
+                      onClick={toggleArchivedShelf}
+                      aria-expanded={archivedShelfExpanded}
+                      data-testid="sidebar-v2-archived-shelf-toggle"
+                      className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                    >
+                      <span className="text-xs font-medium text-muted-foreground/50">
+                        {archivedShelfExpanded
+                          ? "Archived"
+                          : `Archived (${recentArchive.totalCount})`}
+                      </span>
+                      <span className="h-px flex-1 bg-sidebar-border/60" />
+                      <ChevronDownIcon
+                        aria-hidden
+                        className={cn(
+                          "size-3 text-muted-foreground/50 transition-transform",
+                          archivedShelfExpanded && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  </li>
+                  {archivedShelfExpanded
+                    ? recentArchivedThreads.map((thread) => (
+                        <SidebarV2ArchivedRow
+                          key={`archived:${thread.environmentId}:${thread.id}`}
+                          thread={thread}
+                          projectCwd={
+                            projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                            null
+                          }
+                          projectTitle={
+                            projectDisplayNameByKey.get(
+                              `${thread.environmentId}:${thread.projectId}`,
+                            ) ?? null
+                          }
+                          onOpen={navigateToThread}
+                          onUnarchive={attemptUnarchive}
+                          onContextMenu={handleArchivedThreadContextMenu}
+                        />
+                      ))
+                    : null}
+                  {archivedShelfExpanded ? (
+                    <li className="list-none">
+                      <button
+                        type="button"
+                        onClick={openAllArchivedThreads}
+                        className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-xs text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                      >
+                        <ArchiveIcon aria-hidden className="size-3.5 shrink-0" />
+                        View all archived threads
+                      </button>
+                    </li>
+                  ) : null}
+                </>
+              ) : null}
             </ul>
           </TooltipProvider>
-          {activeThreads.length + snoozedThreads.length + settledThreads.length === 0 ? (
+          {activeThreads.length + snoozedThreads.length + settledThreads.length === 0 &&
+          recentArchive.totalCount === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>

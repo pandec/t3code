@@ -46,6 +46,25 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 );
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
+export const MIN_ARCHIVED_SECTION_VISIBLE_COUNT = 1;
+export const MAX_ARCHIVED_SECTION_VISIBLE_COUNT = 50;
+export const ArchivedSectionVisibleCount = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+    maximum: MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
+  }),
+);
+export type ArchivedSectionVisibleCount = typeof ArchivedSectionVisibleCount.Type;
+export const DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT: ArchivedSectionVisibleCount = 10;
+export function clampArchivedSectionVisibleCount(value: number): ArchivedSectionVisibleCount {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+    maximum: MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
+    fallback: DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT,
+    integer: true,
+  }) as ArchivedSectionVisibleCount;
+}
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -178,6 +197,9 @@ export function clampTurnCompletionMinDurationSeconds(
 }
 
 export const ClientSettingsSchema = Schema.Struct({
+  archivedSectionVisibleCount: ArchivedSectionVisibleCount.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT)),
+  ),
   /**
    * Web-only: whether project accent colors tint the surfaces that carry them
    * (today the sidebar v2 thread rows and new-thread project choices). Off
@@ -965,6 +987,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  archivedSectionVisibleCount: Schema.optionalKey(ArchivedSectionVisibleCount),
   accentTintsEnabled: Schema.optionalKey(Schema.Boolean),
   accentTintIntensityPercent: Schema.optionalKey(AccentTintIntensityPercent),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),

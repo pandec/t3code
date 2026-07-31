@@ -7,6 +7,7 @@ import {
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
   parseArchivedThreadsEnvironmentKey,
+  selectRecentArchivedThreads,
 } from "./archivedThreads.ts";
 
 it("round-trips environment keys in sorted order", () => {
@@ -15,6 +16,46 @@ it("round-trips environment keys in sorted order", () => {
   const key = makeArchivedThreadsEnvironmentKey([envB, envA]);
 
   expect(parseArchivedThreadsEnvironmentKey(key)).toEqual([envA, envB]);
+});
+
+it("selects the newest archived threads across environments", () => {
+  const makeSnapshot = (
+    threads: ReadonlyArray<{
+      readonly id: string;
+      readonly archivedAt: string;
+    }>,
+  ) =>
+    ({
+      projects: [],
+      threads: threads.map((thread) => ({
+        id: thread.id,
+        archivedAt: thread.archivedAt,
+        updatedAt: thread.archivedAt,
+        createdAt: thread.archivedAt,
+      })),
+    }) as never;
+  const result = selectRecentArchivedThreads(
+    [
+      {
+        environmentId: EnvironmentId.make("env-a"),
+        snapshot: makeSnapshot([
+          { id: "older", archivedAt: "2026-01-01T00:00:00.000Z" },
+          { id: "newest", archivedAt: "2026-01-03T00:00:00.000Z" },
+        ]),
+      },
+      {
+        environmentId: EnvironmentId.make("env-b"),
+        snapshot: makeSnapshot([{ id: "middle", archivedAt: "2026-01-02T00:00:00.000Z" }]),
+      },
+    ],
+    2,
+  );
+
+  expect(result.totalCount).toBe(3);
+  expect(result.threads.map(({ environmentId, thread }) => [environmentId, thread.id])).toEqual([
+    ["env-a", "newest"],
+    ["env-b", "middle"],
+  ]);
 });
 
 it("does not expose an archived snapshot failure message", () => {

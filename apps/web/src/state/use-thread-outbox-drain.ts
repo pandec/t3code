@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { useClientSettingsHydrated, useSteerGraceWindowMs } from "../hooks/useSettings";
+import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
 import { environmentShell } from "./shell";
@@ -172,6 +173,11 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
+        onDelivered: (message, thread) => {
+          if (thread.archivedAt != null) {
+            refreshArchivedThreadsForEnvironment(message.environmentId);
+          }
+        },
         warn: (message, attributes) => {
           console.warn(message, attributes);
         },

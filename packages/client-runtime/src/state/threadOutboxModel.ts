@@ -226,6 +226,7 @@ export function queuedThreadMessagePreview(
 }
 
 export interface ThreadSettingsSnapshot {
+  readonly archivedAt?: string | null;
   readonly modelSelection: ModelSelectionType;
   readonly branch: string | null;
   readonly runtimeMode: RuntimeModeType;
@@ -237,6 +238,7 @@ export function resolveQueuedThreadSettings(
   thread: ThreadSettingsSnapshot,
 ): ThreadSettingsSnapshot {
   return {
+    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
     modelSelection: message.modelSelection ?? thread.modelSelection,
     branch: message.localCheckoutBranch ?? thread.branch,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,

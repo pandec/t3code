@@ -20,7 +20,7 @@ import { useHomeListOptions } from "./home-list-options";
 import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
 import { buildHomeProjectScopes, hasHomeThreadListContent } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
-import { useThreadListActions } from "./useThreadListActions";
+import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
 import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
@@ -40,6 +40,8 @@ export function HomeRouteScreen() {
 
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const hasAnyThreads = hasHomeThreadListContent({
     threads,
@@ -163,6 +165,7 @@ export function HomeRouteScreen() {
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
           }
           onArchiveThread={archiveThread}
+          onDeleteArchivedThread={confirmDeleteArchivedThread}
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
           onUnsettleThread={unsettleThread}
@@ -172,6 +175,9 @@ export function HomeRouteScreen() {
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
           }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenAllArchivedThreads={() =>
+            navigation.navigate("SettingsSheet", { screen: "SettingsArchive" })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
@@ -201,6 +207,7 @@ export function HomeRouteScreen() {
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
+          onUnarchiveThread={unarchiveThread}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}

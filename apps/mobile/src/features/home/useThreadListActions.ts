@@ -217,14 +217,14 @@ export function useThreadListActions(): {
 }
 
 export function useArchivedThreadListActions(
-  onCompleted: (thread: EnvironmentThreadShell) => void,
+  onCompleted?: (thread: EnvironmentThreadShell) => void,
 ): {
   readonly unarchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
 } {
   const handleCompleted = useCallback(
     (_action: ThreadListAction, thread: EnvironmentThreadShell) => {
-      onCompleted(thread);
+      onCompleted?.(thread);
     },
     [onCompleted],
   );
