@@ -553,7 +553,13 @@ const threadStatusCommand = Command.make("status", {
                 `${summary.id}\t${summary.state}\t${summary.title}`,
                 `Project: ${summary.projectId}`,
                 `Session: ${summary.sessionStatus ?? "not started"}`,
-                `Snoozed: ${summary.snoozedUntil ? `until ${summary.snoozedUntil}` : "no"}`,
+                `Snoozed: ${
+                  summary.snoozedUntil
+                    ? `until ${summary.snoozedUntil}`
+                    : summary.snoozedAt
+                      ? "until woken"
+                      : "no"
+                }`,
                 `Pending approval: ${summary.hasPendingApprovals ? "yes" : "no"}`,
                 `Pending input: ${summary.hasPendingUserInput ? "yes" : "no"}`,
               ].join("\n"),

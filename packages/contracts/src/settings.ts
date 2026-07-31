@@ -303,6 +303,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
   sidebarV2CompactCards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   sidebarV2Enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Whether `sidebarV2Enabled` reflects an explicit choice in Settings → Beta.
   // Client settings persist as a whole blob, so every user who has ever touched
@@ -1035,6 +1038,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadProviderIconVisibility: Schema.optionalKey(SidebarThreadProviderIconVisibility),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
+  sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
   sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),

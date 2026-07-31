@@ -1075,7 +1075,7 @@ export function HomeScreen(props: HomeScreenProps) {
           title={
             v2SnoozedCount === 1 ? "1 matching thread snoozed" : `All matching threads snoozed`
           }
-          detail={`Threads matching "${props.searchQuery}" are snoozed and return when their wake time passes.`}
+          detail={`Threads matching "${props.searchQuery}" are snoozed and return when their wake time passes or when woken.`}
         />
       ) : (
         <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
@@ -1083,7 +1083,7 @@ export function HomeScreen(props: HomeScreenProps) {
     ) : v2SnoozedCount > 0 ? (
       <EmptyState
         title={v2SnoozedCount === 1 ? "1 thread snoozed" : `${v2SnoozedCount} threads snoozed`}
-        detail="Snoozed threads return when their wake time passes."
+        detail="Snoozed threads return when their wake time passes or when woken."
       />
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState

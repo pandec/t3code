@@ -226,6 +226,14 @@ function settledTimeLabel(thread: SidebarThreadSummary): string {
   return timestamp === null ? "" : formatCompactRelativeTimeLabel(timestamp);
 }
 
+// Snoozed-shelf sort key: timed wakes ascending, indefinite snoozes (no
+// wake time) after every timed one — they come back last by definition.
+function snoozeWakeSortMs(thread: Pick<SidebarThreadSummary, "snoozedUntil">): number {
+  return thread.snoozedUntil == null
+    ? Number.MAX_SAFE_INTEGER
+    : firstValidTimestampMs(thread.snoozedUntil);
+}
+
 // Floats at the row's right edge, vertically centered, while the jump
 // modifier is held. An overlay pill instead of an inline slot: the hint
 // must neither displace the status/time label (holding ⌘ used to blank
@@ -375,11 +383,15 @@ function SnoozePopoverButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: SnoozePreset) => void;
+  untilWokenSupported: boolean;
 }) {
-  const { open, onOpenChange, onSnooze } = props;
+  const { open, onOpenChange, onSnooze, untilWokenSupported } = props;
   // Presets resolve at open time so "In 1 hour" is relative to the click,
   // not to when the row mounted.
-  const presets = useMemo(() => (open ? resolveSnoozePresets(new Date()) : []), [open]);
+  const presets = useMemo(
+    () => (open ? resolveSnoozePresets(new Date(), { untilWoken: untilWokenSupported }) : []),
+    [open, untilWokenSupported],
+  );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
@@ -457,6 +469,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   settlementSupported: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
+  // Server accepts a null wake time (indefinite "Until I wake it" snooze);
+  // gates that preset without hiding the timed ones.
+  snoozeUntilWokenSupported: boolean;
   // Compact wake countdown ("2h") for rows in the snoozed shelf.
   snoozeWakeLabelText: string | null;
   // When a snooze ended (timer or early wake); drives the Woke pill until
@@ -1134,6 +1149,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                         open={snoozeMenuOpen}
                         onOpenChange={setSnoozeMenuOpen}
                         onSnooze={handleSnoozePreset}
+                        untilWokenSupported={props.snoozeUntilWokenSupported}
                       />
                     ) : null}
                     {props.settlementSupported ? (
@@ -1287,6 +1303,9 @@ export default function SidebarV2() {
   const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
+  const newThreadButtonInProjectRow = useClientSettings(
+    (s) => s.sidebarV2NewThreadButtonInProjectRow,
+  );
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const archivedSectionVisibleCount = useClientSettings((s) =>
     clampArchivedSectionVisibleCount(s.archivedSectionVisibleCount),
@@ -1944,10 +1963,9 @@ export default function SidebarV2() {
     return {
       activeThreads: sortThreadsForSidebarV2(active),
       // Soonest wake first: "what comes back next" is the shelf's question.
+      // Indefinite snoozes have no wake time and sink below every timed one.
       snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
+        (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
       ),
       settledThreads: sortSettledThreadsForSidebarV2(settled),
       snoozeNow: preciseNow,
@@ -2436,7 +2454,10 @@ export default function SidebarV2() {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+              title:
+                preset.snoozedUntil === null
+                  ? "Snoozed until you wake it"
+                  : `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
               timeout: 5_000,
               actionProps: {
                 children: "Undo",
@@ -2495,7 +2516,16 @@ export default function SidebarV2() {
         supportedCount: titleRegenerationThreads.length,
         actionableCount: regeneratableTitleThreads.length,
       });
-      const snoozePresets = resolveSnoozePresets(new Date());
+      // The indefinite preset needs every selected environment to support
+      // it; a mixed selection would half-apply the same way blocked work
+      // would.
+      const snoozePresets = resolveSnoozePresets(selectionNow, {
+        untilWoken: selectedThreads.every(
+          (thread) =>
+            serverConfigs.get(thread.environmentId)?.environment.capabilities
+              .threadSnoozeIndefinite === true,
+        ),
+      });
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
@@ -2667,7 +2697,11 @@ export default function SidebarV2() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         // Presets resolve at menu-open time (same as the popover).
-        const snoozePresets = resolveSnoozePresets(new Date());
+        const snoozePresets = resolveSnoozePresets(new Date(), {
+          untilWoken:
+            serverConfigs.get(thread.environmentId)?.environment.capabilities
+              .threadSnoozeIndefinite === true,
+        });
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
@@ -2980,6 +3014,51 @@ export default function SidebarV2() {
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
+  const searchButton = (
+    <CommandDialogTrigger
+      render={
+        <SidebarMenuButton
+          type="button"
+          aria-label="Search threads and commands"
+          className="focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+          data-testid="command-palette-trigger"
+        />
+      }
+    >
+      <SearchIcon />
+      <div className="flex-1 truncate text-left">Search</div>
+      {commandPaletteShortcutLabel ? (
+        <Kbd className="mr-px h-4 min-w-0 rounded-sm bg-sidebar-control-surface px-1.5 text-[10px] text-sidebar-muted-foreground ring-1 ring-sidebar-border">
+          {commandPaletteShortcutLabel}
+        </Kbd>
+      ) : null}
+    </CommandDialogTrigger>
+  );
+  const newThreadButton = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarMenuButton
+            size="icon"
+            type="button"
+            className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+            onClick={handleNewThreadClick}
+            disabled={projects.length === 0}
+            aria-label="New thread"
+          />
+        }
+      >
+        <SquarePenIcon />
+        <span
+          className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+          aria-hidden="true"
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="right">
+        {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+      </TooltipPopup>
+    </Tooltip>
+  );
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -2987,24 +3066,14 @@ export default function SidebarV2() {
         className="gap-0"
         fixedHeader={
           <SidebarGroup className="gap-1 p-2">
-            <CommandDialogTrigger
-              render={
-                <SidebarMenuButton
-                  type="button"
-                  aria-label="Search threads and commands"
-                  className="focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                  data-testid="command-palette-trigger"
-                />
-              }
-            >
-              <SearchIcon />
-              <div className="flex-1 truncate text-left">Search</div>
-              {commandPaletteShortcutLabel ? (
-                <Kbd className="mr-px h-4 min-w-0 rounded-sm bg-sidebar-control-surface px-1.5 text-[10px] text-sidebar-muted-foreground ring-1 ring-sidebar-border">
-                  {commandPaletteShortcutLabel}
-                </Kbd>
-              ) : null}
-            </CommandDialogTrigger>
+            {newThreadButtonInProjectRow ? (
+              searchButton
+            ) : (
+              <div className="flex items-center gap-1">
+                <div className="min-w-0 flex-1">{searchButton}</div>
+                {newThreadButton}
+              </div>
+            )}
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
                 <div className="relative min-w-0 flex-1">
@@ -3171,31 +3240,7 @@ export default function SidebarV2() {
                   </TooltipTrigger>
                   <TooltipPopup side="right">New project</TooltipPopup>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
-                        aria-label="New thread"
-                      />
-                    }
-                  >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">
-                    {newThreadShortcutLabel
-                      ? `New thread (${newThreadShortcutLabel})`
-                      : "New thread"}
-                  </TooltipPopup>
-                </Tooltip>
+                {newThreadButtonInProjectRow ? newThreadButton : null}
               </div>
             ) : null}
           </SidebarGroup>
@@ -3252,9 +3297,17 @@ export default function SidebarV2() {
                         serverConfigs.get(thread.environmentId)?.environment.capabilities
                           .threadSnooze === true
                       }
+                      snoozeUntilWokenSupported={
+                        serverConfigs.get(thread.environmentId)?.environment.capabilities
+                          .threadSnoozeIndefinite === true
+                      }
                       snoozeWakeLabelText={
-                        section === "snoozed" && thread.snoozedUntil != null
-                          ? snoozeWakeLabel(thread.snoozedUntil, new Date())
+                        section === "snoozed"
+                          ? thread.snoozedUntil != null
+                            ? snoozeWakeLabel(thread.snoozedUntil, new Date())
+                            : // Indefinite snooze: no countdown to show, the
+                              // row just waits until the user wakes it.
+                              "parked"
                           : null
                       }
                       // All sections: a woken thread can classify straight
