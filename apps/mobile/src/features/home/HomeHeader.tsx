@@ -296,11 +296,13 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
                 Code
               </RNText>
-              <View className="rounded-full bg-subtle px-2 py-0.75">
-                <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                  {stageLabel}
-                </RNText>
-              </View>
+              {stageLabel === null ? null : (
+                <View className="rounded-full bg-subtle px-2 py-0.75">
+                  <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                    {stageLabel}
+                  </RNText>
+                </View>
+              )}
             </View>
 
             {/* Built identically to the filter button so the two circles
