@@ -46,6 +46,7 @@ import {
   IconLayoutSidebar,
   IconLetterSpacing,
   IconLink,
+  IconMenuDeep,
   IconMessage,
   IconMinus,
   IconNetwork,
@@ -118,6 +119,9 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   headphones: IconHeadphones,
   "info.circle": IconInfoCircle,
   link: IconLink,
+  // Attention toggle: three shrinking lines, matching desktop's
+  // ListFilterIcon; menu-deep is Tabler's closest three-line-decrease shape.
+  "line.3.horizontal.decrease": IconMenuDeep,
   "line.3.horizontal.decrease.circle": IconFilter,
   "line.3.horizontal.decrease.circle.fill": IconFilter,
   magnifyingglass: IconSearch,

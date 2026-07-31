@@ -22,6 +22,7 @@ import { buildHomeProjectScopes, hasHomeThreadListContent } from "./homeThreadLi
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
+import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -33,6 +34,7 @@ export function HomeRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
+  const attentionFilter = useThreadAttentionFilter(threads);
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -133,6 +135,8 @@ export function HomeRouteScreen() {
         {/* Restore the compact title after the split branch blanks the detail header. */}
         <NativeStackScreenOptions options={getCompactBrandHeaderOptions()} />
         <HomeHeader
+          attentionFilterEnabled={attentionFilter.enabled}
+          attentionFilterReady={attentionFilter.ready}
           connectionStatusState={compactHeaderConnectionStatusState}
           environments={environments}
           projects={projectFilterOptions}
@@ -154,15 +158,18 @@ export function HomeRouteScreen() {
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
+          onToggleAttentionFilter={attentionFilter.toggle}
         />
 
         <HomeScreen
+          attentionMemberThreadKeys={attentionFilter.memberThreadKeys}
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
           }
           onArchiveThread={archiveThread}
+          onClearAttentionFilter={attentionFilter.clear}
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
           onUnsettleThread={unsettleThread}

@@ -2,6 +2,7 @@ import type {
   NativeStackHeaderItem,
   NativeStackHeaderItemMenu,
 } from "@react-navigation/native-stack";
+import type { ColorValue } from "react-native";
 
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
 import { withNativeGlassHeaderItem } from "./native-glass-header-items";
@@ -36,6 +37,37 @@ export function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): Nat
  * the compact Home header and the split-view sidebar so both surfaces expose
  * the same environment/project/sort options.
  */
+/**
+ * UINavigationBar toggle for the sticky attention filter. Same semantic icon
+ * as desktop's ListFilterIcon (SF line.3.horizontal.decrease); toggle state is
+ * carried by the varying label and the tint, since bar-button items have no
+ * native pressed state. Shared by the compact Home header and the split-view
+ * sidebar. Disabled (with a loading label) until thread shells are loaded so
+ * the snapshot cannot miss late shells.
+ */
+export function createNativeAttentionFilterHeaderItem(input: {
+  readonly enabled: boolean;
+  readonly gated: boolean;
+  readonly activeTintColor: ColorValue;
+  readonly identifier: string;
+  readonly onToggle: () => void;
+}): NativeStackHeaderItem {
+  return withNativeGlassHeaderItem({
+    type: "button",
+    label: "",
+    identifier: input.identifier,
+    accessibilityLabel: input.gated
+      ? "Loading threads"
+      : input.enabled
+        ? "Clear attention filter"
+        : "Show only threads needing attention",
+    disabled: input.gated,
+    icon: sfSymbolIcon("line.3.horizontal.decrease"),
+    onPress: input.onToggle,
+    ...(input.enabled ? { tintColor: input.activeTintColor } : {}),
+  });
+}
+
 export function createNativeFilterMenuHeaderItem(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
