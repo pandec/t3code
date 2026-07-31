@@ -98,7 +98,16 @@ describe("ClientSettings sidebar v2", () => {
     const settings = decodeClientSettings({});
     expect(settings.sidebarV2Enabled).toBe(false);
     expect(settings.sidebarV2CompactCards).toBe(false);
+    expect(settings.sidebarV2NewThreadButtonInProjectRow).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+  });
+
+  it("accepts opting into the project-row new-thread button", () => {
+    expect(
+      decodeClientSettingsPatch({
+        sidebarV2NewThreadButtonInProjectRow: true,
+      }).sidebarV2NewThreadButtonInProjectRow,
+    ).toBe(true);
   });
 
   it("treats settings written before the beta had a per-channel default as unconfigured", () => {

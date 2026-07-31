@@ -422,31 +422,61 @@ function SidebarExtrasSection() {
       />
 
       {sidebarV2Enabled ? (
-        <SettingsRow
-          title="Compact thread cards"
-          description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
-          resetAction={
-            settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
-              <SettingResetButton
-                label="compact thread cards"
-                onClick={() =>
-                  updateSettings({
-                    sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
-                  })
+        <>
+          <SettingsRow
+            title="New thread button beside projects"
+            description="Move the New thread button from the Search row to beside New project."
+            resetAction={
+              settings.sidebarV2NewThreadButtonInProjectRow !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow ? (
+                <SettingResetButton
+                  label="new thread button position"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarV2NewThreadButtonInProjectRow:
+                        DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarV2NewThreadButtonInProjectRow}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarV2NewThreadButtonInProjectRow: Boolean(checked) })
                 }
+                aria-label="Place new thread button beside new project"
               />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarV2CompactCards}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarV2CompactCards: Boolean(checked) })
-              }
-              aria-label="Compact sidebar v2 thread cards"
-            />
-          }
-        />
+            }
+          />
+
+          <SettingsRow
+            title="Compact thread cards"
+            description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
+            resetAction={
+              settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
+                <SettingResetButton
+                  label="compact thread cards"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarV2CompactCards}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarV2CompactCards: Boolean(checked) })
+                }
+                aria-label="Compact sidebar v2 thread cards"
+              />
+            }
+          />
+        </>
       ) : null}
     </SettingsSection>
   );

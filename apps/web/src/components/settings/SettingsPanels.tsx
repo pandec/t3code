@@ -619,6 +619,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
         ? ["Compact thread cards"]
         : []),
+      ...(settings.sidebarV2NewThreadButtonInProjectRow !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
+        ? ["New thread button position"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -722,6 +726,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
       settings.sidebarV2CompactCards,
+      settings.sidebarV2NewThreadButtonInProjectRow,
       settings.timestampFormat,
       settings.wordWrap,
       theme,
@@ -752,6 +757,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+      sidebarV2NewThreadButtonInProjectRow:
+        DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,

@@ -1232,6 +1232,9 @@ export default function SidebarV2() {
   const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
+  const newThreadButtonInProjectRow = useClientSettings(
+    (s) => s.sidebarV2NewThreadButtonInProjectRow,
+  );
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2862,6 +2865,51 @@ export default function SidebarV2() {
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
+  const searchButton = (
+    <CommandDialogTrigger
+      render={
+        <SidebarMenuButton
+          type="button"
+          aria-label="Search threads and commands"
+          className="focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+          data-testid="command-palette-trigger"
+        />
+      }
+    >
+      <SearchIcon />
+      <div className="flex-1 truncate text-left">Search</div>
+      {commandPaletteShortcutLabel ? (
+        <Kbd className="mr-px h-4 min-w-0 rounded-sm bg-sidebar-control-surface px-1.5 text-[10px] text-sidebar-muted-foreground ring-1 ring-sidebar-border">
+          {commandPaletteShortcutLabel}
+        </Kbd>
+      ) : null}
+    </CommandDialogTrigger>
+  );
+  const newThreadButton = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarMenuButton
+            size="icon"
+            type="button"
+            className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+            onClick={handleNewThreadClick}
+            disabled={projects.length === 0}
+            aria-label="New thread"
+          />
+        }
+      >
+        <SquarePenIcon />
+        <span
+          className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+          aria-hidden="true"
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="right">
+        {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+      </TooltipPopup>
+    </Tooltip>
+  );
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -2869,24 +2917,14 @@ export default function SidebarV2() {
         className="gap-0"
         fixedHeader={
           <SidebarGroup className="gap-1 p-2">
-            <CommandDialogTrigger
-              render={
-                <SidebarMenuButton
-                  type="button"
-                  aria-label="Search threads and commands"
-                  className="focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                  data-testid="command-palette-trigger"
-                />
-              }
-            >
-              <SearchIcon />
-              <div className="flex-1 truncate text-left">Search</div>
-              {commandPaletteShortcutLabel ? (
-                <Kbd className="mr-px h-4 min-w-0 rounded-sm bg-sidebar-control-surface px-1.5 text-[10px] text-sidebar-muted-foreground ring-1 ring-sidebar-border">
-                  {commandPaletteShortcutLabel}
-                </Kbd>
-              ) : null}
-            </CommandDialogTrigger>
+            {newThreadButtonInProjectRow ? (
+              searchButton
+            ) : (
+              <div className="flex items-center gap-1">
+                <div className="min-w-0 flex-1">{searchButton}</div>
+                {newThreadButton}
+              </div>
+            )}
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
                 <div className="relative min-w-0 flex-1">
@@ -3053,31 +3091,7 @@ export default function SidebarV2() {
                   </TooltipTrigger>
                   <TooltipPopup side="right">New project</TooltipPopup>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
-                        aria-label="New thread"
-                      />
-                    }
-                  >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">
-                    {newThreadShortcutLabel
-                      ? `New thread (${newThreadShortcutLabel})`
-                      : "New thread"}
-                  </TooltipPopup>
-                </Tooltip>
+                {newThreadButtonInProjectRow ? newThreadButton : null}
               </div>
             ) : null}
           </SidebarGroup>
