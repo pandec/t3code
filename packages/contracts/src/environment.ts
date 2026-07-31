@@ -61,6 +61,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       requires a wake time, so clients hide the preset instead of sending
       a command that would fail to decode. */
   threadSnoozeIndefinite: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes a bounded recent-archive query for always-mounted shelves. */
+  recentArchivedThreads: Schema.optionalKey(Schema.Boolean),
   /** Server persists ServerSettings.projectAccentColors and accepts its
       whole-map patch. Absent on older servers, whose patch decoder silently
       drops the unknown key, so clients must not send accent writes. */

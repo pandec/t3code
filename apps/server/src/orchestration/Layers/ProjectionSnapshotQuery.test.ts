@@ -811,6 +811,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (archivedDetail._tag === "Some") {
         assert.equal(archivedDetail.value.archivedAt, "2026-04-06T00:00:06.000Z");
       }
+
+      const recentArchived = yield* snapshotQuery.getRecentArchivedThreads({ limit: 1 });
+      assert.equal(recentArchived.totalArchivedCount, 1);
+      assert.deepEqual(
+        recentArchived.threads.map((thread) => thread.id),
+        [ThreadId.make("thread-archived")],
+      );
     }),
   );
 

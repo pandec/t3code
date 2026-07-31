@@ -9,7 +9,12 @@ import {
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { createThreadOutboxDelivery } from "./threadOutboxDelivery.ts";
-import type { QueuedThreadMessage, ThreadSettingsSnapshot } from "./threadOutboxModel.ts";
+import {
+  decodeQueuedThreadMessage,
+  encodeQueuedThreadMessage,
+  type QueuedThreadMessage,
+  type ThreadSettingsSnapshot,
+} from "./threadOutboxModel.ts";
 
 const baseModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -38,6 +43,13 @@ const threadSettings: ThreadSettingsSnapshot = {
 };
 
 describe("thread outbox delivery", () => {
+  it("persists the existing-thread settings fallback", () => {
+    const message = queuedMessage({ threadSettings });
+    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message)).threadSettings).toEqual(
+      threadSettings,
+    );
+  });
+
   it("syncs queued branch and model snapshots with payload-stable command ids", async () => {
     const calls: string[] = [];
     const updateMetadata = vi.fn(async () => {

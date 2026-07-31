@@ -35,7 +35,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
-import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -218,11 +218,21 @@ export function HomeScreen(props: HomeScreenProps) {
       threadListV2Enabled ? props.environments.map((environment) => environment.environmentId) : [],
     [props.environments, threadListV2Enabled],
   );
-  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
   );
+  const displayedRecentArchive =
+    props.searchQuery.trim().length === 0 &&
+    props.selectedEnvironmentId === null &&
+    props.selectedProjectKey === null &&
+    props.selectedModel === null
+      ? recentArchive
+      : { threads: [], totalCount: 0 };
   const archivedEnvironmentLabels = useMemo(
     () =>
       Object.fromEntries(
@@ -1048,7 +1058,7 @@ export function HomeScreen(props: HomeScreenProps) {
         title={`No threads in ${selectedEnvironmentLabel}`}
         detail="Choose another environment or create a new task."
       />
-    ) : recentArchive.totalCount > 0 ? null : (
+    ) : displayedRecentArchive.totalCount > 0 ? null : (
       <EmptyState title="No threads yet" detail="Create a task to start a new coding session." />
     )
   ) : null;
@@ -1116,7 +1126,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 <RecentArchivedThreadSection
                   environmentLabels={archivedEnvironmentLabels}
                   projects={props.projects}
-                  threads={recentArchive.threads}
+                  threads={displayedRecentArchive.threads}
                   onDelete={props.onDeleteArchivedThread}
                   onOpen={props.onSelectThread}
                   onOpenAll={props.onOpenAllArchivedThreads}

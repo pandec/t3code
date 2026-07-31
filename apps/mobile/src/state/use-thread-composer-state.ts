@@ -231,6 +231,13 @@ export function useThreadComposerState() {
       modelSelection: draft.modelSelection ?? thread.modelSelection,
       runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
       interactionMode: draft.interactionMode ?? thread.interactionMode,
+      threadSettings: {
+        archivedAt: thread.archivedAt,
+        modelSelection: thread.modelSelection,
+        branch: thread.branch,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+      },
       deliveryIntent: threadIsBusy ? "steer" : "queue",
       createdAt: metadata.createdAt,
     });

@@ -31,7 +31,7 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
-import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -222,7 +222,10 @@ function ThreadNavigationSidebarPane(
     () => (threadListV2Enabled ? environments.map((environment) => environment.environmentId) : []),
     [environments, threadListV2Enabled],
   );
-  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
@@ -340,6 +343,13 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
+  const displayedRecentArchive =
+    props.searchQuery.trim().length === 0 &&
+    options.selectedEnvironmentId === null &&
+    options.selectedModel === null &&
+    selectedProjectScope === null
+      ? recentArchive
+      : { threads: [], totalCount: 0 };
   useEffect(() => {
     if (
       selectedProjectKey !== null &&
@@ -828,16 +838,17 @@ function ThreadNavigationSidebarPane(
     [props.onSelectThread],
   );
   const archivedSectionFooter =
-    threadListV2Enabled && recentArchive.threads.length > 0 ? (
+    threadListV2Enabled && displayedRecentArchive.threads.length > 0 ? (
       <RecentArchivedThreadSection
         environmentLabels={archivedEnvironmentLabels}
         projects={projects}
-        threads={recentArchive.threads}
+        threads={displayedRecentArchive.threads}
         onDelete={confirmDeleteArchivedThread}
         onOpen={handleSelectThread}
         onOpenAll={props.onOpenArchivedThreads}
         onUnarchive={unarchiveThread}
         pane="sidebar"
+        selectedThreadKey={props.selectedThreadKey}
       />
     ) : null;
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1208,7 +1219,7 @@ function ThreadNavigationSidebarPane(
             // snoozed case above.
             options.selectedModel !== null
             ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
-            : recentArchive.threads.length > 0
+            : displayedRecentArchive.threads.length > 0
               ? null
               : "No threads yet";
   const listEmpty =

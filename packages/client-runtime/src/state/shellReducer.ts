@@ -1,6 +1,17 @@
 import * as Arr from "effect/Array";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
+export function shellEventInvalidatesArchivedThreads(
+  snapshot: OrchestrationShellSnapshot,
+  event: OrchestrationShellStreamEvent,
+): boolean {
+  return (
+    event.kind === "thread-removed" ||
+    (event.kind === "thread-upserted" &&
+      !snapshot.threads.some((thread) => thread.id === event.thread.id))
+  );
+}
+
 /**
  * Reduce a single shell stream event into an existing snapshot, returning a new
  * snapshot with the event's changes applied. This is a pure reducer that both

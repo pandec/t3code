@@ -4924,6 +4924,13 @@ function ChatViewContent(props: ChatViewProps) {
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,
+          threadSettings: {
+            archivedAt: activeThread.archivedAt,
+            modelSelection: activeThread.modelSelection,
+            branch: activeThread.branch,
+            runtimeMode: activeThread.runtimeMode,
+            interactionMode: activeThread.interactionMode,
+          },
           deliveryIntent,
           ...(localCheckoutBranchMismatch
             ? { localCheckoutBranch: localCheckoutBranchMismatch.currentBranch }

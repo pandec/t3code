@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -27,6 +27,28 @@ function ChatThreadRouteView() {
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
+  const threadRouteKey =
+    threadRef === null ? null : `${threadRef.environmentId}:${threadRef.threadId}`;
+  const [detailLoad, setDetailLoad] = useState<{
+    readonly threadRouteKey: string | null;
+    readonly started: boolean;
+  }>({ threadRouteKey: null, started: false });
+  useEffect(() => {
+    if (threadRouteKey === null) return;
+    setDetailLoad((current) => {
+      if (current.threadRouteKey !== threadRouteKey) {
+        return {
+          threadRouteKey,
+          started: serverThreadStatus !== "empty",
+        };
+      }
+      if (!current.started && serverThreadStatus !== "empty") {
+        return { ...current, started: true };
+      }
+      return current;
+    });
+  }, [serverThreadStatus, threadRouteKey]);
+  const detailLoadStarted = detailLoad.threadRouteKey === threadRouteKey && detailLoad.started;
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
@@ -44,9 +66,9 @@ function ChatThreadRouteView() {
   });
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
-    serverThreadShellExists: serverThreadShell !== null,
     serverThreadDetailExists: serverThreadDetail !== null,
-    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    serverThreadDetailUnavailable:
+      serverThreadStatus === "deleted" || (detailLoadStarted && serverThreadStatus === "empty"),
     draftThreadExists,
   });
   const threadSyncPhase = resolveThreadSyncPhase({

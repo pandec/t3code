@@ -306,6 +306,7 @@ export function useThreadOutboxDrain(): void {
           (retryNotBeforeRef.current.get(message.messageId) ?? 0) > Date.now(),
         resolveAction: (message) => {
           const thread = findThreadIncludingLoadedDetail(threads, message);
+          const threadSettings = thread ?? message.threadSettings;
           if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
             return "wait";
           }
@@ -316,7 +317,7 @@ export function useThreadOutboxDrain(): void {
           const shellStatus = shellStatuses.get(message.environmentId) ?? "empty";
           const action = resolveThreadOutboxDeliveryAction({
             isCreation: creation !== undefined,
-            threadExists: thread !== undefined,
+            threadExists: threadSettings !== undefined,
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadStatus: thread?.session?.status ?? null,
@@ -394,6 +395,7 @@ export function useThreadOutboxDrain(): void {
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
           nextQueuedMessage,
         );
+        const freshThreadSettings = freshThread ?? nextQueuedMessage.threadSettings;
         const freshThreadBusy =
           freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
         if (
@@ -410,8 +412,8 @@ export function useThreadOutboxDrain(): void {
             ? creationProjectCwd !== null
               ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd)
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
-            : freshThread !== undefined
-              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThread)
+            : freshThreadSettings !== undefined
+              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings)
               : Promise.resolve(false);
       });
       void dispatch

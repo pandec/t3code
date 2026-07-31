@@ -570,6 +570,7 @@ function GeneralSettingsSection() {
     : true;
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const threadListV2Enabled = useThreadListV2Enabled();
 
   return (
     <SettingsSection title="General">
@@ -593,22 +594,24 @@ function GeneralSettingsSection() {
         value={steerGraceWindowMs}
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
       />
-      <SettingsSliderRow
-        description="How many recently archived threads appear at the end of the thread list."
-        disabled={!hydrated}
-        icon="archivebox"
-        label="Recent archived threads"
-        max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
-        min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
-        onChange={(value) =>
-          savePreferences({
-            archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
-          })
-        }
-        step={1}
-        value={archivedSectionVisibleCount}
-        valueLabel={`${archivedSectionVisibleCount}`}
-      />
+      {threadListV2Enabled ? (
+        <SettingsSliderRow
+          description="How many recently archived threads appear at the end of the thread list."
+          disabled={!hydrated}
+          icon="archivebox"
+          label="Recent archived threads"
+          max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+          min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+          onChange={(value) =>
+            savePreferences({
+              archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
+            })
+          }
+          step={1}
+          value={archivedSectionVisibleCount}
+          valueLabel={`${archivedSectionVisibleCount}`}
+        />
+      ) : null}
       <ThreadSyncRow />
     </SettingsSection>
   );

@@ -200,7 +200,7 @@ import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/too
 import { useComposerDraftStore } from "../composerDraftStore";
 import { archivedProjectFilterKey } from "../archivedProjectFilter";
 import { SessionImportDialog } from "./SessionImportDialog";
-import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
+import { useRecentArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1211,6 +1211,7 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly projectCwd: string | null;
   readonly projectTitle: string | null;
+  readonly isActive: boolean;
   readonly onOpen: (threadRef: ScopedThreadRef) => void;
   readonly onUnarchive: (threadRef: ScopedThreadRef) => void;
   readonly onContextMenu: (
@@ -1220,22 +1221,21 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
 }) {
   const threadRef = scopeThreadRef(props.thread.environmentId, props.thread.id);
   return (
-    <li className="group/v2-archived-row list-none">
-      <div
-        role="button"
-        tabIndex={0}
-        className="flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
+    <li
+      className="group/v2-archived-row relative list-none"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        props.onContextMenu(props.thread, { x: event.clientX, y: event.clientY });
+      }}
+    >
+      <button
+        type="button"
+        aria-current={props.isActive ? "page" : undefined}
+        className={cn(
+          "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring",
+          props.isActive && "bg-sidebar-row-hover text-sidebar-foreground",
+        )}
         onClick={() => props.onOpen(threadRef)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            props.onOpen(threadRef);
-          }
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          props.onContextMenu(props.thread, { x: event.clientX, y: event.clientY });
-        }}
       >
         <ProjectFavicon
           environmentId={props.thread.environmentId}
@@ -1255,21 +1255,16 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
             props.thread.archivedAt ?? props.thread.updatedAt ?? props.thread.createdAt,
           )}
         </span>
-        <span className="hidden items-center group-hover/v2-archived-row:flex group-focus-within/v2-archived-row:flex">
-          <button
-            type="button"
-            aria-label={`Unarchive ${props.thread.title}`}
-            title="Unarchive"
-            className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onUnarchive(threadRef);
-            }}
-          >
-            <Undo2Icon className="size-3.5" />
-          </button>
-        </span>
-      </div>
+      </button>
+      <button
+        type="button"
+        aria-label={`Unarchive ${props.thread.title}`}
+        title="Unarchive"
+        className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/v2-archived-row:pointer-events-auto group-hover/v2-archived-row:opacity-100 group-focus-within/v2-archived-row:pointer-events-auto group-focus-within/v2-archived-row:opacity-100"
+        onClick={() => props.onUnarchive(threadRef)}
+      >
+        <Undo2Icon className="size-3.5" />
+      </button>
     </li>
   );
 });
@@ -1432,7 +1427,10 @@ export default function SidebarV2() {
     () => environments.map((environment) => environment.environmentId),
     [environments],
   );
-  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(archivedEnvironmentIds);
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
@@ -1703,6 +1701,10 @@ export default function SidebarV2() {
     }
   }, [attentionFilterState, effectiveAttentionFilterState]);
   const attentionFilterEnabled = effectiveAttentionFilterState !== null;
+  const displayedRecentArchive =
+    projectScopeKeys === null && !attentionFilterEnabled
+      ? recentArchive
+      : { threads: [], totalCount: 0 };
   const toggleAttentionFilter = useCallback(() => {
     setAttentionFilterState((current) => {
       if (current !== null) return null;
@@ -3424,7 +3426,7 @@ export default function SidebarV2() {
                   </button>
                 </li>
               ) : null}
-              {recentArchive.totalCount > 0 ? (
+              {displayedRecentArchive.totalCount > 0 ? (
                 <>
                   <li key="archived-shelf-header" data-thread-selection-safe className="list-none">
                     <button
@@ -3437,7 +3439,7 @@ export default function SidebarV2() {
                       <span className="text-xs font-medium text-muted-foreground/50">
                         {archivedShelfExpanded
                           ? "Archived"
-                          : `Archived (${recentArchive.totalCount})`}
+                          : `Archived (${displayedRecentArchive.totalCount})`}
                       </span>
                       <span className="h-px flex-1 bg-sidebar-border/60" />
                       <ChevronDownIcon
@@ -3450,7 +3452,7 @@ export default function SidebarV2() {
                     </button>
                   </li>
                   {archivedShelfExpanded
-                    ? recentArchive.threads.map((thread) => (
+                    ? displayedRecentArchive.threads.map((thread) => (
                         <SidebarV2ArchivedRow
                           key={`archived:${thread.environmentId}:${thread.id}`}
                           thread={thread}
@@ -3462,6 +3464,10 @@ export default function SidebarV2() {
                             projectDisplayNameByKey.get(
                               `${thread.environmentId}:${thread.projectId}`,
                             ) ?? null
+                          }
+                          isActive={
+                            routeThreadKey ===
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
                           }
                           onOpen={navigateToThread}
                           onUnarchive={attemptUnarchive}
@@ -3486,7 +3492,7 @@ export default function SidebarV2() {
             </ul>
           </TooltipProvider>
           {activeThreads.length + snoozedThreads.length + settledThreads.length === 0 &&
-          recentArchive.totalCount === 0 ? (
+          displayedRecentArchive.totalCount === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>

@@ -39,6 +39,14 @@ const QueuedThreadCreationSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
+const ThreadSettingsSnapshotSchema = Schema.Struct({
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  modelSelection: ModelSelection,
+  branch: Schema.NullOr(Schema.String),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+});
+
 /**
  * How a queued message behaves while its thread has an active turn: "queue"
  * holds until the turn completes, "steer" delivers into the running turn.
@@ -67,6 +75,9 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
+  // Durable fallback for an existing thread that leaves the active shell
+  // before delivery (for example, another client archives it).
+  threadSettings: Schema.optional(ThreadSettingsSnapshotSchema),
   createdAt: IsoDateTime,
 });
 
@@ -97,6 +108,7 @@ export interface QueuedThreadMessage {
   readonly deliveryIntent?: ThreadOutboxDeliveryIntent | undefined;
   readonly localCheckoutBranch?: string | undefined;
   readonly creation?: QueuedThreadCreation | undefined;
+  readonly threadSettings?: ThreadSettingsSnapshot | undefined;
   readonly createdAt: string;
 }
 
@@ -226,7 +238,7 @@ export function queuedThreadMessagePreview(
 }
 
 export interface ThreadSettingsSnapshot {
-  readonly archivedAt?: string | null;
+  readonly archivedAt?: string | null | undefined;
   readonly modelSelection: ModelSelectionType;
   readonly branch: string | null;
   readonly runtimeMode: RuntimeModeType;

@@ -255,12 +255,13 @@ export function useThreadOutboxDrain(): void {
             return "wait";
           }
           const thread = findThread(threads, message);
+          const threadSettings = thread ?? message.threadSettings;
           if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
             return "wait";
           }
           return resolveThreadOutboxDeliveryAction({
             isCreation: false,
-            threadExists: thread !== undefined,
+            threadExists: threadSettings !== undefined,
             shellStatus: shellStatuses.get(message.environmentId) ?? "empty",
             environmentConnected: environmentConnectivity.get(message.environmentId) === true,
             threadStatus: thread?.session?.status ?? null,
@@ -293,6 +294,7 @@ export function useThreadOutboxDrain(): void {
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
           nextQueuedMessage,
         );
+        const freshThreadSettings = freshThread ?? nextQueuedMessage.threadSettings;
         const freshThreadBusy =
           freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
         if (
@@ -315,8 +317,8 @@ export function useThreadOutboxDrain(): void {
                 return false;
               },
             )
-          : freshThread !== undefined
-            ? delivery.sendQueuedMessage(nextQueuedMessage, freshThread)
+          : freshThreadSettings !== undefined
+            ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings)
             : Promise.resolve(false);
       });
       void dispatch

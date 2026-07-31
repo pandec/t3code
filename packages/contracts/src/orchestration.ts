@@ -30,6 +30,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
+  getRecentArchivedThreads: "orchestration.getRecentArchivedThreads",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
 } as const;
@@ -454,6 +455,21 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
+
+export const OrchestrationGetRecentArchivedThreadsInput = Schema.Struct({
+  limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
+});
+export type OrchestrationGetRecentArchivedThreadsInput =
+  typeof OrchestrationGetRecentArchivedThreadsInput.Type;
+
+export const OrchestrationGetRecentArchivedThreadsResult = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  threads: Schema.Array(OrchestrationThreadShell),
+  totalArchivedCount: NonNegativeInt,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationGetRecentArchivedThreadsResult =
+  typeof OrchestrationGetRecentArchivedThreadsResult.Type;
 
 export const OrchestrationShellStreamEvent = Schema.Union([
   Schema.Struct({
@@ -1534,6 +1550,10 @@ export const OrchestrationRpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
+  },
+  getRecentArchivedThreads: {
+    input: OrchestrationGetRecentArchivedThreadsInput,
+    output: OrchestrationGetRecentArchivedThreadsResult,
   },
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,

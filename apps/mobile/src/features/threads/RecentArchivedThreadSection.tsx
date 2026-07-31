@@ -10,7 +10,7 @@ import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { scopedProjectKey } from "../../lib/scopedEntities";
+import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { ThreadListV2SectionDivider } from "./thread-list-v2-items";
@@ -29,6 +29,7 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
   readonly environmentLabel: string | null;
   readonly project: EnvironmentProject | null;
   readonly thread: EnvironmentThreadShell;
+  readonly isSelected: boolean;
   readonly onDelete: (thread: EnvironmentThreadShell) => void;
   readonly onOpen: (thread: EnvironmentThreadShell) => void;
   readonly onUnarchive: (thread: EnvironmentThreadShell) => void;
@@ -52,8 +53,15 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
         accessibilityHint="Opens the archived thread. Sending a message unarchives it."
         accessibilityLabel={props.thread.title}
         accessibilityRole="button"
+        accessibilityState={{ selected: props.isSelected }}
         onPress={() => props.onOpen(props.thread)}
-        className={props.pane === "sidebar" ? "mx-2 rounded-xl bg-drawer" : "bg-screen"}
+        className={
+          props.pane === "sidebar"
+            ? `mx-2 rounded-xl ${props.isSelected ? "bg-control" : "bg-drawer"}`
+            : props.isSelected
+              ? "bg-control"
+              : "bg-screen"
+        }
         style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
       >
         <View
@@ -118,6 +126,7 @@ export function RecentArchivedThreadSection(props: {
   readonly onOpen: (thread: EnvironmentThreadShell) => void;
   readonly onOpenAll: () => void;
   readonly onUnarchive: (thread: EnvironmentThreadShell) => void;
+  readonly selectedThreadKey?: string | null;
   readonly pane?: "screen" | "sidebar";
 }) {
   if (props.threads.length === 0) return null;
@@ -135,6 +144,7 @@ export function RecentArchivedThreadSection(props: {
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
           }
           thread={thread}
+          isSelected={props.selectedThreadKey === scopedThreadKey(thread.environmentId, thread.id)}
           onDelete={props.onDelete}
           onOpen={props.onOpen}
           onUnarchive={props.onUnarchive}
