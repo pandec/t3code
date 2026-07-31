@@ -612,7 +612,8 @@ function useMinuteClockMs(): number {
  * Manual counterpart of the automatic thread prewarming: fires the same
  * engine on demand (bypassing its cooldown) and shows when any environment
  * last completed a warm run. The engine debounces briefly before running, so
- * the row stays in "Syncing…" until a fresher run timestamp arrives.
+ * the row stays in "Syncing…" until a fresher run timestamp arrives — and it
+ * reports background runs the same way, matching the home header indicator.
  */
 const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
 
@@ -626,13 +627,17 @@ function ThreadSyncRow() {
     ThreadPrewarmSummary["environmentLastRunAt"] | null
   >(null);
 
-  const syncing =
+  // Manual requests are tracked separately from the engine's own in-flight
+  // flag: the engine debounces before it starts, so only the request cursor
+  // covers the gap between the tap and the run.
+  const manualSyncing =
     requestedFrom !== null &&
     !didEnvironmentPrewarmRunsAdvance(summary.environmentLastRunAt, requestedFrom);
+  const syncing = manualSyncing || summary.syncing;
 
   useEffect(() => {
     if (requestedFrom === null) return;
-    if (!syncing) {
+    if (!manualSyncing) {
       syncInFlight.current = false;
       setRequestedFrom(null);
       return;
@@ -642,7 +647,7 @@ function ThreadSyncRow() {
       setRequestedFrom(null);
     }, THREAD_SYNC_PENDING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [requestedFrom, syncing]);
+  }, [manualSyncing, requestedFrom]);
 
   const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, nowMs);
 
@@ -650,9 +655,12 @@ function ThreadSyncRow() {
     <Pressable
       accessibilityLabel="Sync threads now"
       accessibilityRole="button"
-      accessibilityState={{ busy: syncing, disabled: syncing }}
+      // Only a manual request blocks the action. A background run reports
+      // itself in the label, but making "sync now" untappable for the
+      // duration would strand anyone who opened Settings to force a sweep.
+      accessibilityState={{ busy: syncing, disabled: manualSyncing }}
       accessibilityValue={{ text: statusLabel }}
-      disabled={syncing}
+      disabled={manualSyncing}
       onPress={() => {
         if (syncInFlight.current) return;
         syncInFlight.current = true;
