@@ -31,7 +31,7 @@ export const THREAD_STATUS_NEUTRAL_ICON = {
   iconBackground: "rgba(142,142,147,0.22)",
 } as const;
 
-function isLatestTurnSettled(
+export function isLatestTurnSettled(
   latestTurn: OrchestrationLatestTurn | null,
   session: OrchestrationSession | null,
 ): boolean {

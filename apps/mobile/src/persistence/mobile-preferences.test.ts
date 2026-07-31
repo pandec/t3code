@@ -20,10 +20,24 @@ import {
   make,
   MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS,
   MobilePreferencesSaveError,
+  sanitizePreferences,
 } from "./mobile-preferences";
 import * as MobileSecureStorage from "./mobile-secure-storage";
 
 describe("mobile preferences persistence", () => {
+  it("keeps only valid persisted thread visit timestamps", () => {
+    expect(
+      sanitizePreferences({
+        threadLastVisitedAtById: {
+          "environment-1:valid": "2026-06-01T10:00:00.000Z",
+          "environment-1:invalid": "not-a-date",
+        },
+      }).threadLastVisitedAtById,
+    ).toEqual({
+      "environment-1:valid": "2026-06-01T10:00:00.000Z",
+    });
+  });
+
   it.effect("releases the update lock after a timed-out preference read", () =>
     Effect.gen(function* () {
       let loadCount = 0;

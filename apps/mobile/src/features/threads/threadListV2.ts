@@ -199,6 +199,9 @@ export function buildThreadListV2ListItems(input: {
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  /** Sticky "needs attention" membership ("environmentId:threadId" keys).
+      Null/absent leaves the list unfiltered. */
+  readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
   readonly model?: string | null;
@@ -243,6 +246,12 @@ export function buildThreadListV2Items(input: {
   for (const thread of input.threads) {
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
+    if (
+      input.attentionMemberThreadKeys != null &&
+      !input.attentionMemberThreadKeys.has(`${thread.environmentId}:${thread.id}`)
+    ) {
+      continue;
+    }
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
     if (input.model != null && thread.modelSelection.model !== input.model) continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {

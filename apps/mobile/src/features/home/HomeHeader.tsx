@@ -18,7 +18,10 @@ import { useThreadPrewarmSummary } from "../../state/prewarm";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import { createNativeFilterMenuHeaderItem } from "../layout/native-filter-menu-items";
+import {
+  createNativeAttentionFilterHeaderItem,
+  createNativeFilterMenuHeaderItem,
+} from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import {
   createNativeMailSearchToolbarItem,
@@ -55,6 +58,10 @@ export function HomeHeader(props: {
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly connectionStatusState: WorkspaceState | null;
+  readonly attentionFilterEnabled: boolean;
+  /** False while thread shells are still loading; gates enabling the filter. */
+  readonly attentionFilterReady: boolean;
+  readonly onToggleAttentionFilter: () => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -81,7 +88,9 @@ function checkedMenuState(checked: boolean) {
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
+  const primaryColor = useThemeColor("--color-primary");
   const mutedColor = useThemeColor("--color-foreground-muted");
+  const attentionFilterGated = !props.attentionFilterReady && !props.attentionFilterEnabled;
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   // Thread List v2 lays the list out in fixed creation order, so the
   // sort/group filter controls would be silently ignored — hide them and
@@ -305,6 +314,33 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
             >
               <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
             </Pressable>
+            {threadListV2Enabled ? (
+              <Pressable
+                accessibilityLabel={
+                  attentionFilterGated
+                    ? "Loading threads"
+                    : props.attentionFilterEnabled
+                      ? "Clear attention filter"
+                      : "Show only threads needing attention"
+                }
+                accessibilityRole="togglebutton"
+                accessibilityState={{
+                  checked: props.attentionFilterEnabled,
+                  disabled: attentionFilterGated,
+                }}
+                disabled={attentionFilterGated}
+                onPress={props.onToggleAttentionFilter}
+                className="size-11 items-center justify-center rounded-full bg-subtle"
+                style={attentionFilterGated ? { opacity: 0.4 } : undefined}
+              >
+                <SymbolView
+                  name="line.3.horizontal.decrease"
+                  size={18}
+                  tintColor={props.attentionFilterEnabled ? primaryColor : iconColor}
+                  type="monochrome"
+                />
+              </Pressable>
+            ) : null}
             <ControlPillMenu
               actions={menuActions}
               isAnchoredToRight
@@ -364,6 +400,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
+  const primaryColor = useThemeColor("--color-primary");
   // Thread List v2 lays the list out in fixed creation order, so the
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
@@ -410,7 +447,13 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, connectionStatusPresentation, syncingThreads]}
+        optionsVersion={[
+          filterMenu.items,
+          connectionStatusPresentation,
+          syncingThreads,
+          props.attentionFilterEnabled,
+          props.attentionFilterReady,
+        ]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -428,6 +471,17 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     onPress: props.onOpenSettings,
                     type: "button",
                   }),
+                  ...(threadListV2Enabled
+                    ? [
+                        createNativeAttentionFilterHeaderItem({
+                          enabled: props.attentionFilterEnabled,
+                          gated: !props.attentionFilterReady && !props.attentionFilterEnabled,
+                          activeTintColor: primaryColor,
+                          identifier: "home-attention-filter",
+                          onToggle: props.onToggleAttentionFilter,
+                        }),
+                      ]
+                    : []),
                   createNativeFilterMenuHeaderItem({
                     filterIcon: hasCustomListOptions
                       ? "line.3.horizontal.decrease.circle.fill"
@@ -587,6 +641,21 @@ function IosHomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             )}
           </NativeHeaderToolbar.Menu>
+          {threadListV2Enabled ? (
+            <NativeHeaderToolbar.Button
+              accessibilityLabel={
+                props.attentionFilterEnabled
+                  ? "Clear attention filter"
+                  : props.attentionFilterReady
+                    ? "Show only threads needing attention"
+                    : "Loading threads"
+              }
+              disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
+              icon="line.3.horizontal.decrease"
+              onPress={props.onToggleAttentionFilter}
+              tintColor={props.attentionFilterEnabled ? primaryColor : undefined}
+            />
+          ) : null}
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"

@@ -44,6 +44,7 @@ import {
 } from "../threads/thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "../threads/thread-list-v2-items";
 import { resolveThreadProviderDriver } from "../threads/thread-provider";
+import { pendingTaskAttentionKey } from "../threads/threadAttention";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -77,6 +78,8 @@ import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-stat
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly attentionMemberPendingTaskKeys: ReadonlySet<string> | null;
+  readonly attentionMemberThreadKeys: ReadonlySet<string> | null;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly catalogState: WorkspaceState;
   readonly savedConnectionsById: Readonly<Record<string, SavedRemoteConnection>>;
@@ -105,6 +108,7 @@ interface HomeScreenProps {
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onClearAttentionFilter: () => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -550,6 +554,7 @@ export function HomeScreen(props: HomeScreenProps) {
     v2ProjectScopeKey,
     props.selectedModel,
     props.searchQuery.trim(),
+    props.attentionMemberThreadKeys !== null,
   ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
@@ -605,6 +610,7 @@ export function HomeScreen(props: HomeScreenProps) {
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
+      attentionMemberThreadKeys: props.attentionMemberThreadKeys,
       environmentId: props.selectedEnvironmentId,
       model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -625,6 +631,7 @@ export function HomeScreen(props: HomeScreenProps) {
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     props.searchQuery,
+    props.attentionMemberThreadKeys,
     props.selectedEnvironmentId,
     props.selectedModel,
     props.threads,
@@ -650,11 +657,21 @@ export function HomeScreen(props: HomeScreenProps) {
   // they are spliced in below the active block and stay visible and deletable
   // while their environment is offline. Same environment, model, project,
   // and search filters as the list itself.
+  //
+  // Queued work is unresolved, so it belongs in the attention snapshot; tasks
+  // queued afterward are admitted by the same sticky rule as new shells.
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = useMemo(
     () =>
       props.pendingTasks.filter(
         (pendingTask) =>
+          (props.attentionMemberPendingTaskKeys === null ||
+            props.attentionMemberPendingTaskKeys.has(
+              pendingTaskAttentionKey({
+                environmentId: pendingTask.message.environmentId,
+                messageId: pendingTask.message.messageId,
+              }),
+            )) &&
           (props.selectedEnvironmentId === null ||
             pendingTask.message.environmentId === props.selectedEnvironmentId) &&
           (props.selectedModel === null ||
@@ -667,6 +684,7 @@ export function HomeScreen(props: HomeScreenProps) {
             pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
       ),
     [
+      props.attentionMemberPendingTaskKeys,
       props.pendingTasks,
       props.selectedEnvironmentId,
       props.selectedModel,
@@ -1040,6 +1058,13 @@ export function HomeScreen(props: HomeScreenProps) {
       ) : (
         <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
       )
+    ) : props.attentionMemberThreadKeys !== null ? (
+      <EmptyState
+        title="No threads need attention"
+        detail="Turn off the attention filter to show every thread."
+        actionLabel="Clear attention filter"
+        onAction={props.onClearAttentionFilter}
+      />
     ) : v2SnoozedCount > 0 ? (
       <EmptyState
         title={v2SnoozedCount === 1 ? "1 thread snoozed" : `${v2SnoozedCount} threads snoozed`}
