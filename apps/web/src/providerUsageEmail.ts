@@ -8,13 +8,25 @@ export function formatProviderUsageEmail(email: string, masked = false): string 
 }
 
 /**
- * Newest `observedAt` across usage snapshots, or 0 when there are none.
+ * Newest `observedAt` across usage snapshots, optionally restricted to the
+ * instances a refresh actually targeted; 0 when there are none.
  *
- * A refresh RPC succeeds even when every probe failed, so the client compares
- * this before and after to tell "refreshed" from "silently returned nothing".
+ * A refresh RPC succeeds even when every server-side probe failed or timed
+ * out, so the client compares this across the refresh result to tell
+ * "refreshed" from "silently returned nothing".
  */
 export function newestProviderUsageObservedAt(
-  snapshots: ReadonlyArray<{ readonly observedAt: number }> | undefined,
+  snapshots:
+    | ReadonlyArray<{ readonly instanceId: string; readonly observedAt: number }>
+    | undefined,
+  instanceIds?: ReadonlyArray<string>,
 ): number {
-  return (snapshots ?? []).reduce((newest, snapshot) => Math.max(newest, snapshot.observedAt), 0);
+  const wanted = instanceIds === undefined ? null : new Set(instanceIds);
+  return (snapshots ?? []).reduce(
+    (newest, snapshot) =>
+      wanted !== null && !wanted.has(snapshot.instanceId)
+        ? newest
+        : Math.max(newest, snapshot.observedAt),
+    0,
+  );
 }

@@ -162,6 +162,12 @@ export function ContextWindowMeter(props: {
   providerUsage?: ProviderUsageSnapshot | null;
   providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing?: boolean;
+  /**
+   * The usage read itself failed, as opposed to succeeding with nothing to
+   * show. Without the distinction a failed read is indistinguishable from an
+   * account that simply has no snapshot yet.
+   */
+  providerUsageUnavailable?: boolean;
   maskProviderUsageEmails?: boolean;
   /** Driver-derived label ("Claude", "Codex") for the accounts header. */
   providerUsageLabel?: string | null;
@@ -369,7 +375,9 @@ export function ContextWindowMeter(props: {
                       ))
                     ) : (
                       <div className="text-[11px] text-muted-foreground/60">
-                        No usage data available
+                        {props.providerUsageUnavailable
+                          ? "Couldn't load usage"
+                          : "No usage data available"}
                       </div>
                     )}
                   </div>

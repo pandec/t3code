@@ -23,17 +23,18 @@ describe("formatProviderUsageEmail", () => {
 });
 
 describe("newestProviderUsageObservedAt", () => {
+  const snapshot = (instanceId: string, observedAt: number) => ({ instanceId, observedAt });
+
   it("reports the newest observation, or 0 when there is nothing", () => {
     expect(newestProviderUsageObservedAt(undefined)).toBe(0);
     expect(newestProviderUsageObservedAt([])).toBe(0);
-    expect(newestProviderUsageObservedAt([{ observedAt: 5 }, { observedAt: 9 }])).toBe(9);
+    expect(newestProviderUsageObservedAt([snapshot("a", 5), snapshot("b", 9)])).toBe(9);
   });
 
-  it("does not advance when a refresh returned nothing new", () => {
-    // The refresh RPC succeeds even if every probe failed, so an unchanged
-    // newest-observation is how the client tells "refreshed" from "no-op".
-    const before = newestProviderUsageObservedAt([{ observedAt: 9 }]);
-    const after = newestProviderUsageObservedAt([{ observedAt: 9 }]);
-    expect(after <= before).toBe(true);
+  it("ignores instances the refresh did not target", () => {
+    // A refresh reports every instance it knows about, so an unrelated
+    // instance's fresher snapshot must not be read as "this refresh worked".
+    const snapshots = [snapshot("claudeAgent", 5), snapshot("codex", 900)];
+    expect(newestProviderUsageObservedAt(snapshots, ["claudeAgent"])).toBe(5);
   });
 });
