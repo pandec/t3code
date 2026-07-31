@@ -171,8 +171,10 @@ export function effectiveSnoozed(
 ): boolean {
   if (shell.snoozedUntil == null) {
     // Indefinite snooze ("until I wake it"): snoozedAt alone marks it. Both
-    // fields clear together on wake, so a lone snoozedAt is never stale.
-    return shell.snoozedAt != null && !threadRaisedHandWhileSnoozed(shell);
+    // fields clear together on wake, so a lone snoozedAt is never stale —
+    // but malformed data never hides a thread, same as the timed branch.
+    if (shell.snoozedAt == null || Number.isNaN(Date.parse(shell.snoozedAt))) return false;
+    return !threadRaisedHandWhileSnoozed(shell);
   }
   const wakeAtMs = Date.parse(shell.snoozedUntil);
   // Malformed data never hides a thread.
@@ -197,8 +199,14 @@ export function threadWokeAt(
   options: { readonly now: string },
 ): string | null {
   // An indefinite snooze (snoozedAt without a wake time) can only wake by
-  // raising its hand; there is no timer to elapse.
-  if (shell.snoozedUntil == null && shell.snoozedAt == null) return null;
+  // raising its hand; there is no timer to elapse. A malformed marker never
+  // classified as snoozed, so it can never wake either.
+  if (
+    shell.snoozedUntil == null &&
+    (shell.snoozedAt == null || Number.isNaN(Date.parse(shell.snoozedAt)))
+  ) {
+    return null;
+  }
   if (shell.snoozedUntil != null && Number.isNaN(Date.parse(shell.snoozedUntil))) return null;
   // An early hand-raise wake stays authoritative even after the scheduled
   // wake time passes: reporting snoozedUntil then would resurface a Woke

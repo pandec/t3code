@@ -75,6 +75,11 @@ describe("effectiveSnoozed", () => {
     expect(effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT }), { now: NOW })).toBe(true);
   });
 
+  it("never hides on a malformed lone snoozedAt marker", () => {
+    expect(effectiveSnoozed(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(false);
+    expect(threadWokeAt(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(null);
+  });
+
   it("wakes an indefinite snooze early on a raised hand", () => {
     expect(
       effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT, pending: "approval" }), { now: NOW }),
