@@ -658,8 +658,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // while their environment is offline. Same environment, model, project,
   // and search filters as the list itself.
   //
-  // Attention snapshots exclude tasks already queued at enablement and admit
-  // tasks queued afterward, matching the sticky "newly appeared" shell rule.
+  // Queued work is unresolved, so it belongs in the attention snapshot; tasks
+  // queued afterward are admitted by the same sticky rule as new shells.
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = useMemo(
     () =>

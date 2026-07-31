@@ -154,7 +154,7 @@ describe("mobile thread attention filter", () => {
     expect(state.knownThreadKeys).toEqual(
       new Set(["environment-1:working", "environment-1:ready"]),
     );
-    expect(state.memberPendingTaskKeys).toEqual(new Set());
+    expect(state.memberPendingTaskKeys).toEqual(new Set(["queued-before"]));
     expect(state.knownPendingTaskKeys).toEqual(new Set(["queued-before"]));
     expect(admitNewThreadAttentionThreads(state, [working, ready], ["queued-before"])).toBe(state);
 
@@ -167,7 +167,7 @@ describe("mobile thread attention filter", () => {
       new Set(["environment-1:working", "environment-1:created-elsewhere"]),
     );
     expect(next.knownThreadKeys).toContain("environment-1:created-elsewhere");
-    expect(next.memberPendingTaskKeys).toEqual(new Set(["queued-after"]));
+    expect(next.memberPendingTaskKeys).toEqual(new Set(["queued-before", "queued-after"]));
     expect(next.knownPendingTaskKeys).toEqual(new Set(["queued-before", "queued-after"]));
   });
 });

@@ -108,6 +108,7 @@ export function createThreadAttentionFilter(input: {
   const memberThreadKeys = new Set<string>();
   const knownThreadKeys = new Set<string>();
   const knownPendingTaskKeys = new Set(input.pendingTaskKeys ?? []);
+  const memberPendingTaskKeys = new Set(knownPendingTaskKeys);
   for (const thread of input.threads) {
     const threadKey = scopedThreadKey(thread.environmentId, thread.id);
     knownThreadKeys.add(threadKey);
@@ -125,7 +126,7 @@ export function createThreadAttentionFilter(input: {
   return {
     memberThreadKeys,
     knownThreadKeys,
-    memberPendingTaskKeys: new Set(),
+    memberPendingTaskKeys,
     knownPendingTaskKeys,
   };
 }

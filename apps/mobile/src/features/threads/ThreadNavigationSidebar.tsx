@@ -582,8 +582,8 @@ function ThreadNavigationSidebarPane(
     // Queued offline tasks are not thread shells, so the v2 item builder
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Attention snapshots
-    // exclude tasks already queued at enablement and admit tasks queued later.
+    // deletable while their environment is offline. Queued work is unresolved,
+    // so snapshots include current tasks and admit tasks queued afterward.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>

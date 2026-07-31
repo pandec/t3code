@@ -52,3 +52,24 @@ Four reviewers were used because this is stateful, cross-layout mobile UI with d
 ## Deferred candidates
 
 None.
+
+## Round 2
+
+- Reviewed head: `984c2a04b`
+- Raw findings: 3
+- Kept: 2
+- Fix now: 2
+- Deferred: 0
+- Discarded: 1
+
+| Area                           | Source roles             | Severity | Disposition | Rationale                                                                                    |
+| ------------------------------ | ------------------------ | -------- | ----------- | -------------------------------------------------------------------------------------------- |
+| Background/unmount visit flush | Correctness, adversarial | Medium   | Fix now     | A pending 500 ms write could be cancelled when the app backgrounds or the provider unmounts. |
+| Pending-task classification    | Adversarial              | Medium   | Fix now     | Existing and newly queued unresolved work should use one attention classification.           |
+
+The provider now flushes dirty visits when React Native leaves the active state
+or unmounts, while retaining foreground coalescing. Current queued tasks are
+classified as unresolved attention members and newly queued tasks remain
+sticky admissions. The suggestion to retry failed storage writes continuously
+was discarded because mobile now retains the marker in memory without a retry
+loop, matching the web client's best-effort persistence failure behavior.

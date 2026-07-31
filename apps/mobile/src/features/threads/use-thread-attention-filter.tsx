@@ -13,6 +13,7 @@ import {
   type PropsWithChildren,
   type SetStateAction,
 } from "react";
+import { AppState } from "react-native";
 
 import { allEnvironmentShellsBootstrappedAtom } from "../../state/shell";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
@@ -49,7 +50,10 @@ export function ThreadAttentionFilterProvider({ children }: PropsWithChildren) {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const didHydrateVisitsRef = useRef(false);
   const visitsDirtyRef = useRef(false);
+  const latestVisitsRef = useRef(lastVisitedAtByThreadKey);
+  const visitPersistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadListV2Enabled = useThreadListV2Enabled();
+  latestVisitsRef.current = lastVisitedAtByThreadKey;
 
   useEffect(() => {
     if (didHydrateVisitsRef.current || !AsyncResult.isSuccess(preferencesResult)) return;
@@ -68,14 +72,35 @@ export function ThreadAttentionFilterProvider({ children }: PropsWithChildren) {
     });
   }, []);
 
+  const flushVisits = useCallback(() => {
+    if (!visitsReady || !visitsDirtyRef.current) return;
+    if (visitPersistTimeoutRef.current !== null) {
+      clearTimeout(visitPersistTimeoutRef.current);
+      visitPersistTimeoutRef.current = null;
+    }
+    visitsDirtyRef.current = false;
+    savePreferences({ threadLastVisitedAtById: latestVisitsRef.current });
+  }, [savePreferences, visitsReady]);
+
   useEffect(() => {
     if (!visitsReady || !visitsDirtyRef.current) return;
-    const timeout = setTimeout(() => {
-      visitsDirtyRef.current = false;
-      savePreferences({ threadLastVisitedAtById: lastVisitedAtByThreadKey });
-    }, THREAD_VISIT_PERSIST_DEBOUNCE_MS);
-    return () => clearTimeout(timeout);
-  }, [lastVisitedAtByThreadKey, savePreferences, visitsReady]);
+    const timeout = setTimeout(flushVisits, THREAD_VISIT_PERSIST_DEBOUNCE_MS);
+    visitPersistTimeoutRef.current = timeout;
+    return () => {
+      clearTimeout(timeout);
+      if (visitPersistTimeoutRef.current === timeout) visitPersistTimeoutRef.current = null;
+    };
+  }, [flushVisits, lastVisitedAtByThreadKey, visitsReady]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active") flushVisits();
+    });
+    return () => {
+      subscription.remove();
+      flushVisits();
+    };
+  }, [flushVisits]);
 
   useEffect(() => {
     if (!threadListV2Enabled) setState(null);
