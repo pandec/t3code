@@ -106,7 +106,8 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
   return (
     <CommandList>
       {props.groups.map((group) => (
-        <CommandGroup items={group.items} key={group.value}>
+        // space-y keeps adjacent accent-tinted project rows from touching.
+        <CommandGroup className="space-y-0.5" items={group.items} key={group.value}>
           <CommandGroupLabel className="ps-[9px]">{group.label}</CommandGroupLabel>
           <CommandCollection>
             {(item) =>

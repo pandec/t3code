@@ -1,7 +1,9 @@
-export type MobileStageLabel = "Alpha" | "Dev" | "Nightly";
+export type MobileStageLabel = "Dev" | "Nightly";
 
-export function resolveMobileStageLabel(appVariant: unknown): MobileStageLabel {
+// Production shows no stage pill: "Alpha" wasted header space, while the
+// Dev/Nightly badges still tell side-by-side installs apart.
+export function resolveMobileStageLabel(appVariant: unknown): MobileStageLabel | null {
   if (appVariant === "development") return "Dev";
   if (appVariant === "preview") return "Nightly";
-  return "Alpha";
+  return null;
 }
