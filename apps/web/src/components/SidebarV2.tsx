@@ -7,7 +7,6 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   scopeProjectRef,
@@ -1437,13 +1436,6 @@ export default function SidebarV2() {
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
-  );
-  const recentArchivedThreads = useMemo(
-    () =>
-      recentArchive.threads.map(({ environmentId, thread }) =>
-        scopeThreadShell(environmentId, thread),
-      ),
-    [recentArchive.threads],
   );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
@@ -3458,7 +3450,7 @@ export default function SidebarV2() {
                     </button>
                   </li>
                   {archivedShelfExpanded
-                    ? recentArchivedThreads.map((thread) => (
+                    ? recentArchive.threads.map((thread) => (
                         <SidebarV2ArchivedRow
                           key={`archived:${thread.environmentId}:${thread.id}`}
                           thread={thread}

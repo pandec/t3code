@@ -3,7 +3,6 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
@@ -227,13 +226,6 @@ function ThreadNavigationSidebarPane(
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
-  );
-  const recentArchivedThreads = useMemo(
-    () =>
-      recentArchive.threads.map(({ environmentId, thread }) =>
-        scopeThreadShell(environmentId, thread),
-      ),
-    [recentArchive.threads],
   );
   const archivedEnvironmentLabels = useMemo(
     () =>
@@ -836,11 +828,11 @@ function ThreadNavigationSidebarPane(
     [props.onSelectThread],
   );
   const archivedSectionFooter =
-    threadListV2Enabled && recentArchivedThreads.length > 0 ? (
+    threadListV2Enabled && recentArchive.threads.length > 0 ? (
       <RecentArchivedThreadSection
         environmentLabels={archivedEnvironmentLabels}
         projects={projects}
-        threads={recentArchivedThreads}
+        threads={recentArchive.threads}
         onDelete={confirmDeleteArchivedThread}
         onOpen={handleSelectThread}
         onOpenAll={props.onOpenArchivedThreads}
@@ -1189,34 +1181,40 @@ function ThreadNavigationSidebarPane(
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
   const snoozedCount = threadListV2Layout.snoozedCount;
-  const listEmpty = (
-    <Text className="px-2 py-4 text-sm text-foreground-muted">
-      {catalogState.isLoadingConnections
-        ? "Loading threads…"
-        : props.searchQuery.trim().length > 0
-          ? threadSearch.isPending && snoozedCount === 0
-            ? "Searching thread messages…"
-            : snoozedCount > 0
-              ? // Snoozed matches passed this same search filter — "No
-                // matching threads" would misreport them as nonexistent.
-                snoozedCount === 1
-                ? "1 matching thread snoozed"
-                : "All matching threads snoozed"
-              : "No matching threads"
-          : snoozedCount > 0
-            ? snoozedCount === 1
-              ? "1 thread snoozed"
-              : `${snoozedCount} threads snoozed`
-            : selectedProjectScope !== null
-              ? `No threads in ${selectedProjectScope.title}`
-              : // A model pin can empty the list in one tap; "No threads yet"
-                // over a filtered inbox reads as data loss, same as the
-                // snoozed case above.
-                options.selectedModel !== null
-                ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
-                : "No threads yet"}
-    </Text>
-  );
+  // Null suppresses the empty row entirely: the archived section below is
+  // already showing threads, so "No threads yet" would read as data loss. It
+  // only outranks that last fallback — a search or a filter that matches
+  // nothing still has to say so, archive or not.
+  const listEmptyMessage = catalogState.isLoadingConnections
+    ? "Loading threads…"
+    : props.searchQuery.trim().length > 0
+      ? threadSearch.isPending && snoozedCount === 0
+        ? "Searching thread messages…"
+        : snoozedCount > 0
+          ? // Snoozed matches passed this same search filter — "No
+            // matching threads" would misreport them as nonexistent.
+            snoozedCount === 1
+            ? "1 matching thread snoozed"
+            : "All matching threads snoozed"
+          : "No matching threads"
+      : snoozedCount > 0
+        ? snoozedCount === 1
+          ? "1 thread snoozed"
+          : `${snoozedCount} threads snoozed`
+        : selectedProjectScope !== null
+          ? `No threads in ${selectedProjectScope.title}`
+          : // A model pin can empty the list in one tap; "No threads yet"
+            // over a filtered inbox reads as data loss, same as the
+            // snoozed case above.
+            options.selectedModel !== null
+            ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
+            : recentArchive.threads.length > 0
+              ? null
+              : "No threads yet";
+  const listEmpty =
+    listEmptyMessage === null ? null : (
+      <Text className="px-2 py-4 text-sm text-foreground-muted">{listEmptyMessage}</Text>
+    );
 
   if (props.nativeChrome) {
     return (
@@ -1285,7 +1283,7 @@ function ThreadNavigationSidebarPane(
                     </View>
                   ) : null
                 }
-                ListEmptyComponent={recentArchivedThreads.length > 0 ? null : listEmpty}
+                ListEmptyComponent={listEmpty}
                 ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
@@ -1332,7 +1330,7 @@ function ThreadNavigationSidebarPane(
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               style={styles.threadList}
-              ListEmptyComponent={recentArchivedThreads.length > 0 ? null : listEmpty}
+              ListEmptyComponent={listEmpty}
               ListFooterComponent={archivedSectionFooter}
             />
           </GestureDetector>

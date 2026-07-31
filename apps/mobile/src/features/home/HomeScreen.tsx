@@ -7,7 +7,6 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
@@ -223,13 +222,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const recentArchive = useMemo(
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
-  );
-  const recentArchivedThreads = useMemo(
-    () =>
-      recentArchive.threads.map(({ environmentId, thread }) =>
-        scopeThreadShell(environmentId, thread),
-      ),
-    [recentArchive.threads],
   );
   const archivedEnvironmentLabels = useMemo(
     () =>
@@ -1034,6 +1026,10 @@ export function HomeScreen(props: HomeScreenProps) {
   // mobile — the menu is the one filter surface).
   const v2ListHeader = listHeader;
 
+  // A recent archive outranks only the last fallback: the archived section
+  // below is already showing threads, so "No threads yet" over it would read
+  // as data loss. A search or a filter that matches nothing still has to say
+  // so, archive or not.
   const listEmpty = !hasResults ? (
     hasSearchQuery && threadSearch.isPending ? null : hasSearchQuery ? (
       <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
@@ -1052,7 +1048,7 @@ export function HomeScreen(props: HomeScreenProps) {
         title={`No threads in ${selectedEnvironmentLabel}`}
         detail="Choose another environment or create a new task."
       />
-    ) : (
+    ) : recentArchive.totalCount > 0 ? null : (
       <EmptyState title="No threads yet" detail="Create a task to start a new coding session." />
     )
   ) : null;
@@ -1064,9 +1060,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // loss.
   const v2SnoozedCount = threadListV2Layout.snoozedCount;
   const v2ListEmpty =
-    recentArchive.totalCount > 0 ? null : hasSearchQuery &&
-      threadSearch.isPending &&
-      v2SnoozedCount === 0 ? null : hasSearchQuery ? (
+    hasSearchQuery && threadSearch.isPending && v2SnoozedCount === 0 ? null : hasSearchQuery ? (
       v2SnoozedCount > 0 ? (
         // The snoozed threads already passed this search filter: "No
         // results" would claim nothing matched when matches are merely
@@ -1122,7 +1116,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 <RecentArchivedThreadSection
                   environmentLabels={archivedEnvironmentLabels}
                   projects={props.projects}
-                  threads={recentArchivedThreads}
+                  threads={recentArchive.threads}
                   onDelete={props.onDeleteArchivedThread}
                   onOpen={props.onSelectThread}
                   onOpenAll={props.onOpenAllArchivedThreads}

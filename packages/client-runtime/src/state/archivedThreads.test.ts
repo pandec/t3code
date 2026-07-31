@@ -52,7 +52,7 @@ it("selects the newest archived threads across environments", () => {
   );
 
   expect(result.totalCount).toBe(3);
-  expect(result.threads.map(({ environmentId, thread }) => [environmentId, thread.id])).toEqual([
+  expect(result.threads.map((thread) => [thread.environmentId, thread.id])).toEqual([
     ["env-a", "newest"],
     ["env-b", "middle"],
   ]);

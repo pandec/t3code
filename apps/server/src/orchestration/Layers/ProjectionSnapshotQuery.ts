@@ -1060,7 +1060,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
-          AND (${includeArchived} OR archived_at IS NULL)
+          AND (${includeArchived} = 1 OR archived_at IS NULL)
         LIMIT 1
       `,
   });
@@ -2293,6 +2293,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       } satisfies OrchestrationThreadShell);
     });
 
+  // Unlike the shell lookup, detail admits archived threads: an archived
+  // thread is openable and readable, and sending into it unarchives it. The
+  // shell stays archive-free so the live thread lists cannot pick one up.
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
     Effect.gen(function* () {
       const [

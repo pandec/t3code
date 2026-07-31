@@ -35,6 +35,12 @@ export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
   readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<unknown>;
+  /**
+   * Fires once a queued message is delivered and cleaned up, carrying the
+   * thread as it looked at send time — that pre-send snapshot is how a caller
+   * sees that the server just auto-unarchived the thread. Throwing here is
+   * reported, never unwinds the delivery.
+   */
   readonly onDelivered?: (message: QueuedThreadMessage, thread: ThreadSettingsSnapshot) => void;
   readonly warn: (message: string, attributes: Record<string, unknown>) => void;
 }
@@ -52,10 +58,7 @@ function settingsCommandId(message: QueuedThreadMessage, setting: string): Comma
 export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions) {
   const warn = options.warn;
 
-  const makeDeliveryHelpers = (
-    queuedMessage: QueuedThreadMessage,
-    thread?: ThreadSettingsSnapshot,
-  ) => {
+  const makeDeliveryHelpers = (queuedMessage: QueuedThreadMessage) => {
     const reportFailure = (
       commandResult: AtomCommandResult<unknown, unknown>,
       stage: ThreadOutboxCommandStage,
@@ -97,18 +100,6 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         });
         return false;
       }
-      if (thread) {
-        try {
-          options.onDelivered?.(queuedMessage, thread);
-        } catch (error) {
-          warn("[thread-outbox] delivered-message callback failed", {
-            environmentId: queuedMessage.environmentId,
-            threadId: queuedMessage.threadId,
-            messageId: queuedMessage.messageId,
-            error,
-          });
-        }
-      }
       return true;
     };
     return { reportFailure, completeDelivery };
@@ -119,7 +110,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     thread: ThreadSettingsSnapshot,
   ): Promise<boolean> => {
     const settings = resolveQueuedThreadSettings(queuedMessage, thread);
-    const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage, thread);
+    const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
 
     const modelSelectionChanged = !modelSelectionsEqual(
       settings.modelSelection,
@@ -208,7 +199,20 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         createdAt: queuedMessage.createdAt,
       },
     });
-    return completeDelivery(deliveryResult);
+    const delivered = await completeDelivery(deliveryResult);
+    if (delivered) {
+      try {
+        options.onDelivered?.(queuedMessage, thread);
+      } catch (error) {
+        warn("[thread-outbox] delivered-message callback failed", {
+          environmentId: queuedMessage.environmentId,
+          threadId: queuedMessage.threadId,
+          messageId: queuedMessage.messageId,
+          error,
+        });
+      }
+    }
+    return delivered;
   };
 
   return { makeDeliveryHelpers, sendQueuedMessage };

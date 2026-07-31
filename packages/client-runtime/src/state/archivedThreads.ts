@@ -5,6 +5,8 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { scopeThreadShell, type EnvironmentThreadShell } from "./models.ts";
+
 export interface ArchivedSnapshotEntry {
   readonly environmentId: EnvironmentId;
   readonly snapshot: OrchestrationShellSnapshot;
@@ -14,11 +16,6 @@ export interface ArchivedThreadSnapshotsState {
   readonly snapshots: ReadonlyArray<ArchivedSnapshotEntry>;
   readonly error: string | null;
   readonly isLoading: boolean;
-}
-
-export interface RecentArchivedThread {
-  readonly environmentId: EnvironmentId;
-  readonly thread: OrchestrationShellSnapshot["threads"][number];
 }
 
 const ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR = "\u001f";
@@ -78,22 +75,26 @@ function archivedTimestamp(thread: OrchestrationShellSnapshot["threads"][number]
   return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
 }
 
+/**
+ * The newest archived threads across every environment, already scoped so
+ * callers can render them like any other thread shell. `totalCount` is the
+ * unclipped total, which is what the section header reports.
+ */
 export function selectRecentArchivedThreads(
   snapshots: ReadonlyArray<ArchivedSnapshotEntry>,
   visibleCount: number,
 ): {
-  readonly threads: ReadonlyArray<RecentArchivedThread>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly totalCount: number;
 } {
   const threads = snapshots.flatMap(({ environmentId, snapshot }) =>
     snapshot.threads
       .filter((thread) => thread.archivedAt !== null)
-      .map((thread) => ({ environmentId, thread })),
+      .map((thread) => scopeThreadShell(environmentId, thread)),
   );
   threads.sort(
     (left, right) =>
-      archivedTimestamp(right.thread) - archivedTimestamp(left.thread) ||
-      String(right.thread.id).localeCompare(String(left.thread.id)),
+      archivedTimestamp(right) - archivedTimestamp(left) || right.id.localeCompare(left.id),
   );
   return {
     threads: threads.slice(0, Math.max(0, visibleCount)),
