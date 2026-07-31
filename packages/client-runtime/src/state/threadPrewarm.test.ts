@@ -196,6 +196,7 @@ describe("commitPrewarmedThreadSnapshot", () => {
 describe("makeEnvironmentThreadPrewarm", () => {
   const makeHarness = Effect.fn("TestThreadPrewarm.makeHarness")(function* (options?: {
     readonly initialPrepared?: Option.Option<PreparedConnection>;
+    readonly cachedShell?: false;
     readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
   }) {
     const shell: OrchestrationShellSnapshot = {
@@ -212,7 +213,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       updatedAt: "2026-04-06T00:00:00.000Z",
     };
     const { cache, stored } = yield* makeCacheStore({
-      shell: Option.some(shell),
+      shell: options?.cachedShell === false ? Option.none() : Option.some(shell),
       // "current" already sits at the shell's cursor, so it must be skipped
       // without a fetch; "stale" is behind it and must be refreshed.
       threads: [detailSnapshot("current", 10), detailSnapshot("stale", 3)],
@@ -245,6 +246,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
     const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
     const triggerRequests = yield* Queue.unbounded<ThreadPrewarmTriggerRequest>();
     const statuses = yield* Queue.unbounded<EnvironmentThreadPrewarmStatus>();
+    // In-flight events are split off so every completion assertion below reads
+    // the settled status without stepping over the run's opening event.
+    const started = yield* Queue.unbounded<EnvironmentThreadPrewarmStatus>();
 
     const stream = yield* makeEnvironmentThreadPrewarm().pipe(
       Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -262,11 +266,15 @@ describe("makeEnvironmentThreadPrewarm", () => {
         }),
       ),
     );
-    yield* Effect.forkScoped(Stream.runForEach(stream, (status) => Queue.offer(statuses, status)));
+    yield* Effect.forkScoped(
+      Stream.runForEach(stream, (status) =>
+        Queue.offer(status.running ? started : statuses, status),
+      ),
+    );
 
     const fire = (request: ThreadPrewarmTriggerRequest) => Queue.offer(triggerRequests, request);
 
-    return { supervisorState, prepared, wakeups, statuses, stored, loaderCalls, fire };
+    return { supervisorState, prepared, wakeups, statuses, started, stored, loaderCalls, fire };
   });
 
   it.effect("warms stale recent threads once the environment connects", () =>
@@ -288,6 +296,81 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
+  it.effect("announces a run in flight before reporting its counts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        // The opening event carries the previous run's counts — there is no
+        // previous run here, so they are empty rather than the run's own.
+        const started = yield* Queue.take(harness.started);
+        expect(started.running).toBe(true);
+        expect(started.lastRunAt).toBe(null);
+        expect(started.refreshed).toBe(0);
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.running).toBe(false);
+        expect(status.refreshed).toBe(1);
+
+        // A second run reports the first run's outcome while it is in flight,
+        // so a "last synced" surface never blanks mid-sync.
+        yield* TestClock.adjust("60 seconds");
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        const restarted = yield* Queue.take(harness.started);
+        expect(restarted.running).toBe(true);
+        expect(restarted.lastRunAt).toBe(status.lastRunAt);
+        expect(restarted.refreshed).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("closes an announced run that produced no result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ cachedShell: false });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        // The run was committed to before it discovered there was no cached
+        // shell to warm from. It still has to clear its own in-flight event,
+        // and must not claim a run it never completed.
+        expect((yield* Queue.take(harness.started)).running).toBe(true);
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.running).toBe(false);
+        expect(status.lastRunAt).toBe(null);
+      }),
+    ),
+  );
+
+  it.effect("does not announce a run when the batch has nothing to do", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.started);
+        yield* Queue.take(harness.statuses);
+
+        // Suppressed by the cooldown: no work, so no in-flight event either.
+        yield* Queue.offer(harness.wakeups, "application-active");
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("does not cool down a no-op foreground attempt before connection", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -297,6 +380,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
         yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+        // An unconnected environment does no work, so it must not announce a
+        // run either.
+        expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
 
         yield* SubscriptionRef.set(harness.prepared, Option.some(PREPARED));
         yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);

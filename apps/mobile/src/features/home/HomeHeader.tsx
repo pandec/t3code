@@ -12,7 +12,9 @@ import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
+import { useMinimumVisibleFlag } from "../../lib/useMinimumVisibleFlag";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useThreadPrewarmSummary } from "../../state/prewarm";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -39,6 +41,8 @@ import { HomeHeaderConnectionStatus } from "./HomeHeaderConnectionStatus";
 import { workspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
+
+const THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS = 700;
 
 export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
@@ -387,11 +391,18 @@ function IosHomeHeader(props: HomeHeaderProps) {
     connectionStatusState === null
       ? null
       : workspaceConnectionStatusPresentation(connectionStatusState);
+  // Background conversation prewarming. A fully cached sweep can finish inside
+  // a frame or two, so hold the indicator long enough to be read.
+  const syncingThreads = useMinimumVisibleFlag(
+    useThreadPrewarmSummary().syncing,
+    THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS,
+  );
   // Always a custom title so the settled "Threads" label stays tappable and
   // keeps opening the environments panel, same as the sync indicator.
   const headerTitle = () => (
     <HomeHeaderConnectionStatus
       presentation={connectionStatusPresentation}
+      syncingThreads={syncingThreads}
       onPress={props.onOpenEnvironments}
     />
   );

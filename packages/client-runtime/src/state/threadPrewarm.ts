@@ -49,6 +49,8 @@ export interface EnvironmentThreadPrewarmStatus {
   readonly refreshed: number;
   readonly skipped: number;
   readonly failed: number;
+  /** True while a run is in flight; the counts then describe the run before it. */
+  readonly running: boolean;
 }
 
 export const EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS: EnvironmentThreadPrewarmStatus =
@@ -57,6 +59,7 @@ export const EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS: EnvironmentThreadPrewarmSt
     refreshed: 0,
     skipped: 0,
     failed: 0,
+    running: false,
   });
 
 function isStreamingSession(thread: Pick<OrchestrationThreadShell, "session">): boolean {
@@ -260,7 +263,13 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
     { concurrency: PREWARM_CONCURRENCY, discard: true },
   );
   const lastRunAt = yield* Clock.currentTimeMillis;
-  const status: EnvironmentThreadPrewarmStatus = { lastRunAt, refreshed, skipped, failed };
+  const status: EnvironmentThreadPrewarmStatus = {
+    lastRunAt,
+    refreshed,
+    skipped,
+    failed,
+    running: false,
+  };
   yield* Effect.logDebug("Prewarmed thread details.").pipe(
     Effect.annotateLogs({
       environmentId: input.environmentId,
@@ -316,6 +325,9 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
     // manual syncs never suppress the next lifecycle sweep.
     const lastFullRunAt = yield* Ref.make<number | null>(null);
     const pending = yield* Ref.make(EMPTY_PENDING_TRIGGERS);
+    // Carried across runs so the in-flight event can report the previous run's
+    // outcome instead of blanking it for the duration of the sync.
+    const lastStatus = yield* Ref.make(EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS);
 
     const connectedGenerations = SubscriptionRef.changes(supervisor.state).pipe(
       Stream.filterMap((state) =>
@@ -355,43 +367,64 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
         Ref.update(pending, (current) => accumulateTrigger(current, trigger)),
       ),
       Stream.debounce(PREWARM_SETTLE_DELAY),
-      Stream.mapEffect(() =>
-        Effect.gen(function* () {
-          const batch = yield* Ref.getAndSet(pending, EMPTY_PENDING_TRIGGERS);
-          const now = yield* Clock.currentTimeMillis;
-          const lastFull = yield* Ref.get(lastFullRunAt);
-          const cooldownElapsed = lastFull === null || now - lastFull >= PREWARM_COOLDOWN_MS;
-          const consumeCooldown = batch.lifecycle && cooldownElapsed;
-          const runFull = batch.manual || consumeCooldown;
-          if (!runFull && batch.settled.size === 0) {
-            return Option.none<EnvironmentThreadPrewarmStatus>();
-          }
-          const result = yield* warmEnvironmentOnce({
-            supervisor,
-            cache,
-            loader,
-            environmentId,
-            ...(runFull ? {} : { only: batch.settled }),
-          }).pipe(
-            Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
-            Effect.map((result) =>
-              Option.flatMap(result, (status) => Option.fromNullishOr(status)),
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Thread prewarm run failed.").pipe(
-                Effect.annotateLogs({ environmentId, cause: String(cause) }),
-                Effect.as(Option.none<EnvironmentThreadPrewarmStatus>()),
-              ),
-            ),
-          );
-          if (consumeCooldown && Option.isSome(result)) {
-            yield* Ref.set(lastFullRunAt, result.value.lastRunAt);
-          }
-          return result;
-        }),
-      ),
-      Stream.filterMap((status) =>
-        Option.isSome(status) ? Result.succeed(status.value) : Result.failVoid,
+      // A run emits a pair: `running: true` the moment the batch commits to
+      // doing work, then the settled counts. A batch that decides to do
+      // nothing emits neither, so an in-flight indicator never flashes for a
+      // no-op sweep.
+      Stream.flatMap(() =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const batch = yield* Ref.getAndSet(pending, EMPTY_PENDING_TRIGGERS);
+            const now = yield* Clock.currentTimeMillis;
+            const lastFull = yield* Ref.get(lastFullRunAt);
+            const cooldownElapsed = lastFull === null || now - lastFull >= PREWARM_COOLDOWN_MS;
+            const consumeCooldown = batch.lifecycle && cooldownElapsed;
+            const runFull = batch.manual || consumeCooldown;
+            if (!runFull && batch.settled.size === 0) {
+              return Stream.empty;
+            }
+            // Checked before the run is announced, not just inside it: a
+            // wakeup that arrives before the environment is connected does no
+            // work at all and must not raise an in-flight indicator.
+            const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+            if (Option.isNone(prepared)) {
+              return Stream.empty;
+            }
+            const previous = yield* Ref.get(lastStatus);
+            const run = Effect.gen(function* () {
+              const result = yield* warmEnvironmentOnce({
+                supervisor,
+                cache,
+                loader,
+                environmentId,
+                ...(runFull ? {} : { only: batch.settled }),
+              }).pipe(
+                Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
+                Effect.map((result) =>
+                  Option.flatMap(result, (status) => Option.fromNullishOr(status)),
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Thread prewarm run failed.").pipe(
+                    Effect.annotateLogs({ environmentId, cause: String(cause) }),
+                    Effect.as(Option.none<EnvironmentThreadPrewarmStatus>()),
+                  ),
+                ),
+              );
+              if (consumeCooldown && Option.isSome(result)) {
+                yield* Ref.set(lastFullRunAt, result.value.lastRunAt);
+              }
+              // A run that timed out, failed, or found no connection still has
+              // to close the pair — but it must not claim a fresher
+              // `lastRunAt` than the last run that actually completed.
+              const settled = Option.getOrElse(result, () => ({ ...previous, running: false }));
+              yield* Ref.set(lastStatus, settled);
+              return settled;
+            });
+            return Stream.make({ ...previous, running: true }).pipe(
+              Stream.concat(Stream.fromEffect(run)),
+            );
+          }),
+        ),
       ),
     );
   },
@@ -423,6 +456,8 @@ export interface ThreadPrewarmSummary {
   /** Latest completed run across environments, or null before the first. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
+  /** True while any environment has a prewarm run in flight. */
+  readonly syncing: boolean;
   /** Per-environment completion cursors used to track a manual all-environment run. */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
 }
@@ -430,6 +465,7 @@ export interface ThreadPrewarmSummary {
 const EMPTY_THREAD_PREWARM_SUMMARY: ThreadPrewarmSummary = Object.freeze({
   lastRunAt: null,
   refreshed: 0,
+  syncing: false,
   environmentLastRunAt: new Map<EnvironmentIdType, number | null>(),
 });
 
@@ -474,6 +510,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
   return Atom.make((get) => {
     let lastRunAt: number | null = null;
     let refreshed = 0;
+    let syncing = false;
     const environmentLastRunAt = new Map<EnvironmentIdType, number | null>();
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
       const status = Option.getOrElse(
@@ -481,6 +518,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
         () => EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
       );
       refreshed += status.refreshed;
+      syncing ||= status.running;
       environmentLastRunAt.set(environmentId, status.lastRunAt);
       if (status.lastRunAt !== null && (lastRunAt === null || status.lastRunAt > lastRunAt)) {
         lastRunAt = status.lastRunAt;
@@ -489,11 +527,12 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
     if (
       previous.lastRunAt === lastRunAt &&
       previous.refreshed === refreshed &&
+      previous.syncing === syncing &&
       environmentRunTimesEqual(previous.environmentLastRunAt, environmentLastRunAt)
     ) {
       return previous;
     }
-    previous = { lastRunAt, refreshed, environmentLastRunAt };
+    previous = { lastRunAt, refreshed, syncing, environmentLastRunAt };
     return previous;
   }).pipe(Atom.withLabel("environment-thread-prewarm-summary"));
 }
