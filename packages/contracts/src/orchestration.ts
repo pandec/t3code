@@ -659,10 +659,13 @@ const ThreadSnoozeCommand = Schema.Struct({
   type: Schema.Literal("thread.snooze"),
   commandId: CommandId,
   threadId: ThreadId,
-  // The wake time. Event-based wake conditions (PR merged, review posted)
-  // will arrive as an optional condition field alongside this; time-based
-  // snooze is just the first kind of condition.
-  snoozedUntil: IsoDateTime,
+  // The wake time, or null for an indefinite snooze ("until I wake it") that
+  // only user action or real activity clears. Event-based wake conditions
+  // (PR merged, review posted) will arrive as an optional condition field
+  // alongside this; time-based snooze is just the first kind of condition.
+  // Null requires the threadSnoozeIndefinite capability: older servers
+  // decode snoozedUntil as a required IsoDateTime and would reject it.
+  snoozedUntil: Schema.NullOr(IsoDateTime),
 });
 
 const ThreadUnsnoozeCommand = Schema.Struct({
@@ -1084,7 +1087,9 @@ export const ThreadUnsettledPayload = Schema.Struct({
 
 export const ThreadSnoozedPayload = Schema.Struct({
   threadId: ThreadId,
-  snoozedUntil: IsoDateTime,
+  // Null = indefinite snooze: snoozedAt alone marks the thread as snoozed
+  // until the user wakes it (or activity does).
+  snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

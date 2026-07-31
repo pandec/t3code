@@ -169,7 +169,11 @@ export function effectiveSnoozed(
   shell: ThreadSnoozeShell,
   options: { readonly now: string },
 ): boolean {
-  if (shell.snoozedUntil == null) return false;
+  if (shell.snoozedUntil == null) {
+    // Indefinite snooze ("until I wake it"): snoozedAt alone marks it. Both
+    // fields clear together on wake, so a lone snoozedAt is never stale.
+    return shell.snoozedAt != null && !threadRaisedHandWhileSnoozed(shell);
+  }
   const wakeAtMs = Date.parse(shell.snoozedUntil);
   // Malformed data never hides a thread.
   if (Number.isNaN(wakeAtMs)) return false;
@@ -192,9 +196,10 @@ export function threadWokeAt(
   shell: ThreadSnoozeShell,
   options: { readonly now: string },
 ): string | null {
-  if (shell.snoozedUntil == null) return null;
-  const wakeAtMs = Date.parse(shell.snoozedUntil);
-  if (Number.isNaN(wakeAtMs)) return null;
+  // An indefinite snooze (snoozedAt without a wake time) can only wake by
+  // raising its hand; there is no timer to elapse.
+  if (shell.snoozedUntil == null && shell.snoozedAt == null) return null;
+  if (shell.snoozedUntil != null && Number.isNaN(Date.parse(shell.snoozedUntil))) return null;
   // An early hand-raise wake stays authoritative even after the scheduled
   // wake time passes: reporting snoozedUntil then would resurface a Woke
   // indicator the user already cleared by visiting (snoozedUntil is newer
@@ -210,8 +215,10 @@ export function threadWokeAt(
     }
     return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
   }
-  // No raised hand: woke iff the timer elapsed (still-snoozed → null).
-  return wakeAtMs <= Date.parse(options.now) ? shell.snoozedUntil : null;
+  // No raised hand: an indefinite snooze is simply still snoozed; a timed
+  // one woke iff the timer elapsed.
+  if (shell.snoozedUntil == null) return null;
+  return Date.parse(shell.snoozedUntil) <= Date.parse(options.now) ? shell.snoozedUntil : null;
 }
 
 /**

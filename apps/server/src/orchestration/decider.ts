@@ -717,8 +717,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // snooze state. Reject instead of silently normalizing. The negated
       // comparison also catches unparseable wake times (IsoDateTime is
       // structurally just a string): NaN fails every comparison, and an
-      // unparseable snoozedUntil must never persist.
-      if (!(Date.parse(command.snoozedUntil) > Date.parse(occurredAt))) {
+      // unparseable snoozedUntil must never persist. A null wake time is the
+      // indefinite snooze ("until I wake it") and skips the check.
+      if (
+        command.snoozedUntil !== null &&
+        !(Date.parse(command.snoozedUntil) > Date.parse(occurredAt))
+      ) {
         return yield* Effect.fail(
           new OrchestrationCommandInvariantError({
             commandType: command.type,
@@ -783,8 +787,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       // Idempotent by re-emission (see thread.settle): waking a thread that
       // is not snoozed lands on the same null state without churning
-      // updatedAt.
-      const alreadyAwake = thread.snoozedUntil == null;
+      // updatedAt. An indefinite snooze has a null snoozedUntil, so awake
+      // means BOTH fields are clear.
+      const alreadyAwake = thread.snoozedUntil == null && thread.snoozedAt == null;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1027,7 +1032,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      if (targetThread.snoozedUntil != null) {
+      // snoozedAt covers the indefinite snooze, whose snoozedUntil is null.
+      if (targetThread.snoozedUntil != null || targetThread.snoozedAt != null) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",

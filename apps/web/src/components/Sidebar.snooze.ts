@@ -8,7 +8,7 @@
  */
 import { parseTimestampDate } from "../timestampFormat";
 
-type SnoozePresetId = "hour" | "evening" | "tomorrow" | "next-week";
+type SnoozePresetId = "hour" | "evening" | "tomorrow" | "next-week" | "until-woken";
 
 export interface SnoozePreset {
   readonly id: SnoozePresetId;
@@ -16,8 +16,8 @@ export interface SnoozePreset {
   /** Menu-row time column. Complements the label instead of repeating it:
       "Tomorrow" pairs with "9:00 AM", not "tomorrow 9:00 AM". */
   readonly whenLabel: string;
-  /** ISO wake time. */
-  readonly snoozedUntil: string;
+  /** ISO wake time, or null for the indefinite "until I wake it" snooze. */
+  readonly snoozedUntil: string | null;
 }
 
 function timeOfDayLabel(date: Date): string {
@@ -47,9 +47,14 @@ function addDays(base: Date, days: number): Date {
 /**
  * Presets for "snooze until", computed against local time. "This evening"
  * only appears while it is still meaningfully before evening; after that
- * the list starts at "Tomorrow".
+ * the list starts at "Tomorrow". The indefinite "Until I wake it" preset is
+ * opt-in: it needs the threadSnoozeIndefinite server capability, so callers
+ * include it only for environments that support it.
  */
-export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
+export function resolveSnoozePresets(
+  now: Date,
+  options?: { readonly untilWoken?: boolean },
+): ReadonlyArray<SnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
   const presets: SnoozePreset[] = [
     {
@@ -89,6 +94,17 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
     whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${timeOfDayLabel(nextWeek)}`,
     snoozedUntil: nextWeek.toISOString(),
   });
+
+  if (options?.untilWoken === true) {
+    // Last on purpose: the timed presets answer "when does it come back",
+    // this one parks the thread until the user retrieves it.
+    presets.push({
+      id: "until-woken",
+      label: "Until I wake it",
+      whenLabel: "no timer",
+      snoozedUntil: null,
+    });
+  }
 
   return presets;
 }
