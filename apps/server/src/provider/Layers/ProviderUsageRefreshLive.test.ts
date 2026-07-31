@@ -377,3 +377,69 @@ it.effect("starts a new probe when an instance is replaced under the same id", (
     }),
   ),
 );
+
+it.effect("reports only the instances that answered on this call", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Effect.succeed([
+          instance({ id: "claude_ok", read: Effect.succeed({ ok: true }) }),
+          // Filtered instances must never appear in the returned array either.
+          instance({ id: "claude_disabled", enabled: false, read: Effect.succeed({ x: 1 }) }),
+          instance({ id: "claude_unsupported" }),
+          // A provider that has nothing to report, and one that fails outright:
+          // neither may be counted as refreshed, or the client would suppress
+          // its "no new usage data" warning on an all-probes-failed refresh.
+          instance({ id: "claude_empty", read: Effect.succeed(undefined) }),
+          instance({
+            id: "claude_broken",
+            read: Effect.die(new Error("probe exploded")),
+          }),
+        ]),
+        health: usageHealth(),
+      });
+
+      expect(yield* coordinator.refresh()).toEqual([ProviderInstanceId.make("claude_ok")]);
+      expect(
+        yield* coordinator.refresh([
+          ProviderInstanceId.make("claude_empty"),
+          ProviderInstanceId.make("claude_broken"),
+        ]),
+      ).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("a joined caller receives the shared probe's own outcome", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const releaseRead = yield* Deferred.make<void>();
+      const readStarted = yield* Deferred.make<void>();
+      const target = ProviderInstanceId.make("claude_shared");
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Effect.succeed([
+          instance({
+            id: target,
+            // The joiner never runs a probe of its own, so it must inherit the
+            // owner's outcome through the shared Deferred. Reading its own
+            // (never-set) Ref would report "not refreshed" and make the client
+            // warn about a refresh that actually succeeded.
+            read: Deferred.succeed(readStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseRead)),
+              Effect.as({ used: 1 }),
+            ),
+          }),
+        ]),
+        health: usageHealth(),
+      });
+
+      const owner = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Deferred.await(readStarted);
+      const joiner = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseRead, undefined);
+      expect(yield* Fiber.join(owner)).toEqual([target]);
+      expect(yield* Fiber.join(joiner)).toEqual([target]);
+    }),
+  ),
+);

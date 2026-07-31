@@ -375,6 +375,41 @@ function NotificationsExtrasSection() {
   );
 }
 
+function ProviderUsageExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsSection title="Provider usage">
+      <SettingsRow
+        title="Mask provider emails"
+        description="Obscure provider account email addresses in the usage meter."
+        resetAction={
+          settings.maskProviderUsageEmails !== DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails ? (
+            <SettingResetButton
+              label="provider email masking"
+              onClick={() =>
+                updateSettings({
+                  maskProviderUsageEmails: DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.maskProviderUsageEmails}
+            onCheckedChange={(checked) =>
+              updateSettings({ maskProviderUsageEmails: Boolean(checked) })
+            }
+            aria-label="Mask provider emails in usage meter"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function SidebarExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -737,6 +772,7 @@ export function ExtrasSettingsPanel() {
   return (
     <SettingsPageContainer>
       <NotificationsExtrasSection />
+      <ProviderUsageExtrasSection />
       <SidebarExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />

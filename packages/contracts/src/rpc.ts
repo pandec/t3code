@@ -68,6 +68,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ProviderUsageReadInput,
   ProviderUsageRefreshInput,
+  ProviderUsageRefreshResult,
   ProviderUsageSnapshotsResult,
 } from "./providerUsage.ts";
 import {
@@ -333,7 +334,7 @@ export const WsProviderUsageReadRpc = Rpc.make(WS_METHODS.providerUsageRead, {
 
 export const WsProviderUsageRefreshRpc = Rpc.make(WS_METHODS.providerUsageRefresh, {
   payload: ProviderUsageRefreshInput,
-  success: ProviderUsageSnapshotsResult,
+  success: ProviderUsageRefreshResult,
   error: EnvironmentAuthorizationError,
 });
 

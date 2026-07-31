@@ -44,7 +44,8 @@ export interface ProviderUsageRefreshDependencies {
 
 interface InFlightUsageProbe {
   readonly adapter: UsageRefreshProviderInstance["adapter"];
-  readonly completion: Deferred.Deferred<void>;
+  /** Resolves to `true` when the probe reported a fresh payload. */
+  readonly completion: Deferred.Deferred<boolean>;
 }
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
@@ -57,7 +58,11 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
   const probeGate = yield* Semaphore.make(MAX_CONCURRENT_USAGE_PROBES);
   const inFlight = yield* Ref.make<ReadonlyMap<ProviderInstanceId, InFlightUsageProbe>>(new Map());
 
-  const runProbe = (instance: UsageRefreshProviderInstance, completion: Deferred.Deferred<void>) =>
+  const runProbe = (
+    instance: UsageRefreshProviderInstance,
+    completion: Deferred.Deferred<boolean>,
+    reported: Ref.Ref<boolean>,
+  ) =>
     probeGate
       .withPermits(1)(
         Effect.gen(function* () {
@@ -71,6 +76,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               observedAt,
               observationToken,
             );
+            yield* Ref.set(reported, true);
           }
         }).pipe(Effect.timeout(USAGE_PROBE_TIMEOUT)),
       )
@@ -93,7 +99,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               next.delete(instance.instanceId);
               return next;
             });
-            yield* Deferred.succeed(completion, undefined);
+            yield* Deferred.succeed(completion, yield* Ref.get(reported));
           }),
         ),
       );
@@ -101,18 +107,19 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
   const refreshInstance = (instance: UsageRefreshProviderInstance) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const candidate = yield* Deferred.make<void>();
+        const candidate = yield* Deferred.make<boolean>();
+        const reported = yield* Ref.make(false);
         const registration = yield* Ref.modify(inFlight, (current) => {
           const existing = current.get(instance.instanceId);
           if (existing !== undefined && existing.adapter === instance.adapter) {
             const joined: {
-              readonly completion: Deferred.Deferred<void>;
+              readonly completion: Deferred.Deferred<boolean>;
               readonly owner: boolean;
             } = { completion: existing.completion, owner: false };
             return [joined, current] as const;
           }
           const owned: {
-            readonly completion: Deferred.Deferred<void>;
+            readonly completion: Deferred.Deferred<boolean>;
             readonly owner: boolean;
           } = { completion: candidate, owner: true };
           return [
@@ -125,9 +132,11 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         });
 
         if (registration.owner) {
-          yield* runProbe(instance, registration.completion).pipe(Effect.forkIn(serverScope));
+          yield* runProbe(instance, registration.completion, reported).pipe(
+            Effect.forkIn(serverScope),
+          );
         }
-        yield* restore(Deferred.await(registration.completion));
+        return yield* restore(Deferred.await(registration.completion));
       }),
     );
 
@@ -144,10 +153,15 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
           (requested === undefined || requested.has(instance.instanceId)),
       );
 
-      yield* Effect.forEach(instances, refreshInstance, {
-        concurrency: "unbounded",
-        discard: true,
-      });
+      const outcomes = yield* Effect.forEach(
+        instances,
+        (instance) =>
+          refreshInstance(instance).pipe(
+            Effect.map((refreshed) => ({ instanceId: instance.instanceId, refreshed })),
+          ),
+        { concurrency: "unbounded" },
+      );
+      return outcomes.filter((outcome) => outcome.refreshed).map((outcome) => outcome.instanceId);
     },
   );
 

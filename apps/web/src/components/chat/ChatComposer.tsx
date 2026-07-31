@@ -20,6 +20,10 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   buildThreadTitleComposerText,
   serializeComposerFileLink,
 } from "@t3tools/shared/composerTrigger";
@@ -223,6 +227,7 @@ import {
   resolveEffectiveProviderSkills,
 } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
+import { useClientSettingsHydrated } from "../../hooks/useSettings";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -432,6 +437,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
   providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing: boolean;
+  providerUsageUnavailable: boolean;
+  maskProviderUsageEmails: boolean;
   providerUsageLabel: string | null;
   activeThreadProviderDisplayName: string | null;
   onRefreshProviderUsage: () => Promise<void>;
@@ -467,6 +474,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           providerUsage={props.activeProviderUsage}
           providerUsageAccounts={props.providerUsageAccounts}
           providerUsageRefreshing={props.providerUsageRefreshing}
+          providerUsageUnavailable={props.providerUsageUnavailable}
+          maskProviderUsageEmails={props.maskProviderUsageEmails}
           providerUsageLabel={props.providerUsageLabel}
           providerDisplayName={props.activeThreadProviderDisplayName}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
@@ -666,6 +675,7 @@ export interface ChatComposerProps {
 // --------------------------------------------------------------------------
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
+  const providerUsageSettingsHydrated = useClientSettingsHydrated();
   const {
     composerDraftTarget,
     environmentId,
@@ -929,6 +939,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     serverEnvironment.providerUsage({ environmentId, input: {} }),
   );
   const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    // Refresh failures are handled with a user-visible toast below.
     reportFailure: false,
   });
   const effectiveProviderSkills = resolveEffectiveProviderSkills(
@@ -1116,11 +1127,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     lastProviderUsageRefreshAtRef.current = refreshAt;
     setIsRefreshingProviderUsage(true);
     try {
-      await refreshProviderUsageCommand({
+      const result = await refreshProviderUsageCommand({
         environmentId,
         input: { instanceIds },
       });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not refresh provider usage",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          });
+        }
+        return;
+      }
+      // The RPC succeeds even when every probe failed or timed out: the server
+      // logs those and reports no snapshot. Without this check the button
+      // would silently do nothing -- the exact symptom this fix exists for.
+      // `refreshedInstanceIds` names the instances that answered on *this*
+      // call; the snapshots alone can't tell us that, because they also carry
+      // older cached observations that would mask an all-probes-failed run.
+      // Absent means the server predates the field -- inconclusive, so stay
+      // quiet. Present but disjoint from what we asked for means none of our
+      // own accounts answered.
+      const refreshed = result.value.refreshedInstanceIds;
       providerUsageQuery.refresh();
+      if (refreshed !== undefined && !refreshed.some((id) => instanceIds.includes(id))) {
+        toastManager.add({
+          type: "warning",
+          title: "No new usage data",
+          description:
+            "The provider did not return usage for any account. Check the account is still signed in.",
+        });
+      }
     } finally {
       setIsRefreshingProviderUsage(false);
     }
@@ -3524,6 +3564,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeProviderUsage={activeProviderUsage}
                   providerUsageAccounts={providerUsageAccounts}
                   providerUsageRefreshing={isRefreshingProviderUsage}
+                  providerUsageUnavailable={providerUsageQuery.error !== null}
+                  // Fail closed while client settings hydrate: they start at
+                  // defaults (masking off), so reading the flag directly would
+                  // flash the full address for a user who enabled masking.
+                  maskProviderUsageEmails={
+                    !providerUsageSettingsHydrated || settings.maskProviderUsageEmails
+                  }
                   providerUsageLabel={providerUsageLabel}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   onRefreshProviderUsage={refreshProviderUsage}
