@@ -23,6 +23,7 @@ import { readLocalApi } from "../localApi";
 import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
@@ -510,9 +511,15 @@ export function useThreadActions() {
   );
 
   const snoozeThread = useCallback(
-    async (target: ScopedThreadRef, snoozedUntil: string) => {
+    async (target: ScopedThreadRef, snoozedUntil: string | null) => {
       // Version skew: never send the command to a server that predates it.
-      if (!readEnvironmentSupportsSnooze(target.environmentId)) {
+      // A null wake time (indefinite snooze) additionally needs the
+      // threadSnoozeIndefinite capability — older snooze-capable servers
+      // decode snoozedUntil as required and would reject the command.
+      if (
+        !readEnvironmentSupportsSnooze(target.environmentId) ||
+        (snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSnoozeUnsupportedError({

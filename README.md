@@ -11,6 +11,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### Conversations & threads
 
+- **Indefinite snooze** — an "Until I wake it" preset in the Sidebar V2 snooze menus parks a thread on the snoozed shelf with no timer: it comes back only when explicitly woken or when you send it a message. Indefinite rows sort after every timed wake and carry a "parked" label; the T3 CLI reports them as `Snoozed: until woken`.
 - **Conversation forking** — fork a Codex or Claude thread mid-conversation into a new thread, including immediately after importing an external session; forked threads are titled with a 🔱 prefix.
 - **Session import** — import external Claude Code and Codex CLI sessions as native T3 threads from Sidebar V2 project settings (choosing the environment when the project is grouped across several) or the desktop project context menu, including strict resume/continuation and CLI-assigned session names in the import picker.
 - **Archived-thread search, grouping & project filtering** — archive chats from Sidebar V2 thread menus, then search, group, and filter them by project, with direct scoped access from project menus and persisted repository identity so grouping survives project changes.
