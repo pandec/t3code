@@ -1,14 +1,17 @@
 import { useCallback, useState, type CSSProperties } from "react";
 import {
+  clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
   clampSteerGraceWindowMs,
   clampTurnCompletionMinDurationSeconds,
   DEFAULT_UNIFIED_SETTINGS,
+  MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
   MAX_PROVIDER_USAGE_ALERT_PERCENT,
   MAX_STEER_GRACE_WINDOW_MS,
   MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
+  MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
   MIN_STEER_GRACE_WINDOW_MS,
   MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
@@ -376,6 +379,9 @@ function SidebarExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const sidebarV2Enabled = useSidebarV2Enabled();
+  const archivedSectionVisibleCount = clampArchivedSectionVisibleCount(
+    settings.archivedSectionVisibleCount,
+  );
 
   return (
     <SettingsSection title="Sidebar">
@@ -473,6 +479,39 @@ function SidebarExtrasSection() {
                   updateSettings({ sidebarV2CompactCards: Boolean(checked) })
                 }
                 aria-label="Compact sidebar v2 thread cards"
+              />
+            }
+          />
+          <SettingsRow
+            title="Recent archived threads"
+            description="Choose how many recently archived threads appear at the end of Sidebar V2."
+            resetAction={
+              archivedSectionVisibleCount !==
+              DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount ? (
+                <SettingResetButton
+                  label="recent archived threads"
+                  onClick={() =>
+                    updateSettings({
+                      archivedSectionVisibleCount:
+                        DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsNumberField
+                ariaLabel="Recent archived threads"
+                max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+                min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+                onCommit={(next) => {
+                  if (next === null) return;
+                  updateSettings({
+                    archivedSectionVisibleCount: clampArchivedSectionVisibleCount(next),
+                  });
+                }}
+                suffix="threads"
+                value={archivedSectionVisibleCount}
               />
             }
           />

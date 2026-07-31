@@ -12,6 +12,8 @@ import type {
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
+  OrchestrationGetRecentArchivedThreadsInput,
+  OrchestrationGetRecentArchivedThreadsResult,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
@@ -95,6 +97,10 @@ export interface ProjectionSnapshotQueryShape {
     OrchestrationShellSnapshot,
     ProjectionRepositoryError
   >;
+
+  readonly getRecentArchivedThreads: (
+    input: OrchestrationGetRecentArchivedThreadsInput,
+  ) => Effect.Effect<OrchestrationGetRecentArchivedThreadsResult, ProjectionRepositoryError>;
 
   /**
    * Search active thread navigation metadata, user messages, and canonical

@@ -15,6 +15,7 @@ const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 export const MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS = 5_000;
 
 export interface Preferences {
+  readonly archivedSectionVisibleCount?: number;
   readonly liveActivitiesEnabled?: boolean;
   readonly baseFontSize?: number;
   readonly terminalFontSize?: number | null;
@@ -82,6 +83,7 @@ export class MobilePreferencesStore extends Context.Service<
 
 export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
+    archivedSectionVisibleCount?: number;
     liveActivitiesEnabled?: boolean;
     baseFontSize?: number;
     terminalFontSize?: number | null;
@@ -98,6 +100,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
+  if (typeof parsed.archivedSectionVisibleCount === "number") {
+    preferences.archivedSectionVisibleCount = parsed.archivedSectionVisibleCount;
+  }
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
   }

@@ -13,6 +13,7 @@ function shellState(status: EnvironmentShellState["status"]): EnvironmentShellSt
     snapshot: Option.none(),
     status,
     error: Option.none(),
+    archiveInvalidationSequence: 0,
   };
 }
 

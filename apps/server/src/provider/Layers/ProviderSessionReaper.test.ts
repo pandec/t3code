@@ -209,6 +209,7 @@ describe("ProviderSessionReaper", () => {
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
           getArchivedShellSnapshot: () => Effect.die("unused"),
+          getRecentArchivedThreads: () => Effect.die("unused"),
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
           getCounts: () => Effect.die("unused"),

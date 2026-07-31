@@ -122,6 +122,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -4923,6 +4924,13 @@ function ChatViewContent(props: ChatViewProps) {
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,
+          threadSettings: {
+            archivedAt: activeThread.archivedAt,
+            modelSelection: activeThread.modelSelection,
+            branch: activeThread.branch,
+            runtimeMode: activeThread.runtimeMode,
+            interactionMode: activeThread.interactionMode,
+          },
           deliveryIntent,
           ...(localCheckoutBranchMismatch
             ? { localCheckoutBranch: localCheckoutBranchMismatch.currentBranch }
@@ -5175,6 +5183,9 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (activeThread.archivedAt !== null) {
+          refreshArchivedThreadsForEnvironment(activeThread.environmentId);
+        }
       }
     }
 

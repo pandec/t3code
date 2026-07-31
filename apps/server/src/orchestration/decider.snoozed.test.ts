@@ -330,6 +330,35 @@ it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
     }),
   );
 
+  it.effect("unarchives an archived thread before accepting a user message", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-send-archived"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+          message: {
+            messageId: MessageId.make("message-archived"),
+            role: "user",
+            text: "Resume this work",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+        readModel: makeReadModel({ archivedAt: "2025-12-31T00:00:00.000Z" }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.unarchived",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+    }),
+  );
+
   it.effect("rejects snoozing an archived thread", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({

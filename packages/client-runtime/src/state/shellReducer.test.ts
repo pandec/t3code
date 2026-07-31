@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
-import { applyShellStreamEvent } from "./shellReducer.ts";
+import { applyShellStreamEvent, shellEventInvalidatesArchivedThreads } from "./shellReducer.ts";
 
 const baseSnapshot: OrchestrationShellSnapshot = {
   snapshotSequence: 0,
@@ -181,5 +181,37 @@ describe("applyShellStreamEvent", () => {
     const unknownEvent = { kind: "unknown-future-event", sequence: 99 } as any;
     const next = applyShellStreamEvent(baseSnapshot, unknownEvent);
     expect(next).toBe(baseSnapshot);
+  });
+});
+
+describe("shellEventInvalidatesArchivedThreads", () => {
+  it("invalidates for removals and newly visible thread upserts", () => {
+    expect(
+      shellEventInvalidatesArchivedThreads(baseSnapshot, {
+        kind: "thread-removed",
+        sequence: 1,
+        threadId: stubThread.id,
+      }),
+    ).toBe(true);
+    expect(
+      shellEventInvalidatesArchivedThreads(baseSnapshot, {
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: stubThread,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not invalidate for ordinary updates to active threads", () => {
+    expect(
+      shellEventInvalidatesArchivedThreads(
+        { ...baseSnapshot, threads: [stubThread] },
+        {
+          kind: "thread-upserted",
+          sequence: 2,
+          thread: { ...stubThread, title: "Updated" },
+        },
+      ),
+    ).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ function shellState(input: {
           }),
     status: input.status,
     error: input.error === undefined ? Option.none() : Option.some(input.error),
+    archiveInvalidationSequence: 0,
   };
 }
 

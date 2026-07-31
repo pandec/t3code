@@ -1014,8 +1014,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // thread, and it clears a keep-active pin back to neutral so the
       // thread can auto-settle again after this burst of work goes stale.
       // A snooze clears the same way — sending a message to a snoozed
-      // thread is the user re-engaging, so the return ticket is spent.
+      // thread is the user re-engaging, so the return ticket is spent. An
+      // archive is the strongest such shelf: a message is the user pulling
+      // the thread back into the live list, so it unarchives first.
       const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (targetThread.archivedAt !== null) {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unarchived",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
       if (targetThread.settledOverride !== null) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({

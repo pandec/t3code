@@ -427,6 +427,10 @@ function AdaptiveWorkspaceLayoutContent(
     navigation.navigate("SettingsSheet", { screen: "Settings" });
   }, [navigation]);
 
+  const handleOpenArchivedThreads = useCallback(() => {
+    navigation.navigate("SettingsSheet", { screen: "SettingsArchive" });
+  }, [navigation]);
+
   // Minted here (root stack navigation) so the sidebar pane stays free of
   // navigation hooks — on iOS it renders inside an independent nav tree.
   const handleOpenEnvironmentSettings = useCallback(() => {
@@ -524,6 +528,7 @@ function AdaptiveWorkspaceLayoutContent(
                   onRequestVisibility={revealPrimarySidebar}
                   selectedThreadKey={selectedThreadKey}
                   onOpenSettings={handleOpenSettings}
+                  onOpenArchivedThreads={handleOpenArchivedThreads}
                   onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                   onNewThreadInProject={handleNewThreadInProject}
                   onSelectThread={handleSelectThread}

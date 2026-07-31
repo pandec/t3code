@@ -3,6 +3,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
@@ -29,6 +30,8 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { useThreadAttentionFilter } from "./use-thread-attention-filter";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -55,7 +58,7 @@ import {
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
-import { useThreadListActions } from "../home/useThreadListActions";
+import { useArchivedThreadListActions, useThreadListActions } from "../home/useThreadListActions";
 import { WorkspaceConnectionStatus } from "../home/WorkspaceConnectionStatus";
 import { shouldShowWorkspaceConnectionStatus } from "../home/workspace-connection-status";
 import { SidebarHeaderActions } from "./sidebar-header-actions";
@@ -79,6 +82,7 @@ import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
 } from "./threadListV2";
+import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
     List v2 beta is on, flat v2 rows with queued tasks spliced in, and a settled
@@ -136,6 +140,7 @@ interface ThreadNavigationSidebarProps {
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
+  readonly onOpenArchivedThreads: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -199,7 +204,10 @@ function ThreadNavigationSidebarPane(
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const pendingTasks = usePendingNewTasks();
   const pendingTaskKeys = useMemo(
     () =>
@@ -222,6 +230,25 @@ function ThreadNavigationSidebarPane(
         }))
         .sort((left, right) => left.label.localeCompare(right.label)),
     [savedConnectionsById],
+  );
+  const archivedEnvironmentIds = useMemo(
+    () => (threadListV2Enabled ? environments.map((environment) => environment.environmentId) : []),
+    [environments, threadListV2Enabled],
+  );
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        environments.map((environment) => [environment.environmentId, environment.label]),
+      ),
+    [environments],
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
@@ -329,6 +356,14 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
+  const displayedRecentArchive =
+    props.searchQuery.trim().length === 0 &&
+    !attentionFilter.enabled &&
+    options.selectedEnvironmentId === null &&
+    options.selectedModel === null &&
+    selectedProjectScope === null
+      ? recentArchive
+      : { threads: [], totalCount: 0 };
   useEffect(() => {
     if (
       selectedProjectKey !== null &&
@@ -828,6 +863,20 @@ function ThreadNavigationSidebarPane(
     },
     [props.onSelectThread],
   );
+  const archivedSectionFooter =
+    threadListV2Enabled && displayedRecentArchive.threads.length > 0 ? (
+      <RecentArchivedThreadSection
+        environmentLabels={archivedEnvironmentLabels}
+        projects={projects}
+        threads={displayedRecentArchive.threads}
+        onDelete={confirmDeleteArchivedThread}
+        onOpen={handleSelectThread}
+        onOpenAll={props.onOpenArchivedThreads}
+        onUnarchive={unarchiveThread}
+        pane="sidebar"
+        selectedThreadKey={props.selectedThreadKey}
+      />
+    ) : null;
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const next = event.nativeEvent.contentOffset.y > 6;
     if (headerIsOverContentRef.current === next) {
@@ -1183,6 +1232,36 @@ function ThreadNavigationSidebarPane(
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
   const snoozedCount = threadListV2Layout.snoozedCount;
+  // Null suppresses the empty row entirely: the archived section below is
+  // already showing threads, so "No threads yet" would read as data loss. It
+  // only outranks that last fallback — a search or a filter that matches
+  // nothing still has to say so, archive or not.
+  const listEmptyMessage = catalogState.isLoadingConnections
+    ? "Loading threads…"
+    : props.searchQuery.trim().length > 0
+      ? threadSearch.isPending && snoozedCount === 0
+        ? "Searching thread messages…"
+        : snoozedCount > 0
+          ? // Snoozed matches passed this same search filter — "No
+            // matching threads" would misreport them as nonexistent.
+            snoozedCount === 1
+            ? "1 matching thread snoozed"
+            : "All matching threads snoozed"
+          : "No matching threads"
+      : snoozedCount > 0
+        ? snoozedCount === 1
+          ? "1 thread snoozed"
+          : `${snoozedCount} threads snoozed`
+        : selectedProjectScope !== null
+          ? `No threads in ${selectedProjectScope.title}`
+          : // A model pin can empty the list in one tap; "No threads yet"
+            // over a filtered inbox reads as data loss, same as the
+            // snoozed case above.
+            options.selectedModel !== null
+            ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
+            : displayedRecentArchive.threads.length > 0
+              ? null
+              : "No threads yet";
   const listEmpty =
     !catalogState.isLoadingConnections &&
     props.searchQuery.trim().length === 0 &&
@@ -1200,33 +1279,8 @@ function ThreadNavigationSidebarPane(
           </Text>
         </Pressable>
       </View>
-    ) : (
-      <Text className="px-2 py-4 text-sm text-foreground-muted">
-        {catalogState.isLoadingConnections
-          ? "Loading threads…"
-          : props.searchQuery.trim().length > 0
-            ? threadSearch.isPending && snoozedCount === 0
-              ? "Searching thread messages…"
-              : snoozedCount > 0
-                ? // Snoozed matches passed this same search filter — "No
-                  // matching threads" would misreport them as nonexistent.
-                  snoozedCount === 1
-                  ? "1 matching thread snoozed"
-                  : "All matching threads snoozed"
-                : "No matching threads"
-            : snoozedCount > 0
-              ? snoozedCount === 1
-                ? "1 thread snoozed"
-                : `${snoozedCount} threads snoozed`
-              : selectedProjectScope !== null
-                ? `No threads in ${selectedProjectScope.title}`
-                : // A model pin can empty the list in one tap; "No threads yet"
-                  // over a filtered inbox reads as data loss, same as the
-                  // snoozed case above.
-                  options.selectedModel !== null
-                  ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
-                  : "No threads yet"}
-      </Text>
+    ) : listEmptyMessage === null ? null : (
+      <Text className="px-2 py-4 text-sm text-foreground-muted">{listEmptyMessage}</Text>
     );
 
   if (props.nativeChrome) {
@@ -1297,6 +1351,7 @@ function ThreadNavigationSidebarPane(
                   ) : null
                 }
                 ListEmptyComponent={listEmpty}
+                ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -1343,6 +1398,7 @@ function ThreadNavigationSidebarPane(
               showsVerticalScrollIndicator={false}
               style={styles.threadList}
               ListEmptyComponent={listEmpty}
+              ListFooterComponent={archivedSectionFooter}
             />
           </GestureDetector>
         </SwipeableScrollGateProvider>

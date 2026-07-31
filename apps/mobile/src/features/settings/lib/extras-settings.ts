@@ -6,9 +6,11 @@
  * so a value set on the phone reads identically to one set on the desktop.
  */
 import {
+  clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
   clampSteerGraceWindowMs,
   type AccentTintIntensityPercent,
+  type ArchivedSectionVisibleCount,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
 
@@ -41,4 +43,8 @@ export function toStoredSteerGraceWindowMs(value: number): SteerGraceWindowMs {
 /** The same guard for the tint intensity, which stores whole percentages. */
 export function toStoredAccentTintIntensityPercent(value: number): AccentTintIntensityPercent {
   return clampAccentTintIntensityPercent(Math.round(value));
+}
+
+export function toStoredArchivedSectionVisibleCount(value: number): ArchivedSectionVisibleCount {
+  return clampArchivedSectionVisibleCount(Math.round(value));
 }

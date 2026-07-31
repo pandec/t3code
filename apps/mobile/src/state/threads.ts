@@ -7,6 +7,8 @@ import {
   type EnvironmentThreadState,
   createThreadEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/threads";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { OrchestrationThread } from "@t3tools/contracts";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -24,6 +26,46 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
 });
+
+function latestUserMessageAt(thread: OrchestrationThread): OrchestrationThread["updatedAt"] | null {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const message = thread.messages[index];
+    if (message?.role === "user") {
+      return message.createdAt;
+    }
+  }
+  return null;
+}
+
+export function threadDetailToShell(
+  environmentId: EnvironmentId,
+  thread: OrchestrationThread,
+): EnvironmentThreadShell {
+  return {
+    environmentId,
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestTurn: thread.latestTurn,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride,
+    settledAt: thread.settledAt,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozedAt: thread.snoozedAt ?? null,
+    session: thread.session,
+    latestUserMessageAt: latestUserMessageAt(thread),
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  };
+}
 
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(
   Atom.withLabel("mobile-environment-thread:empty"),

@@ -147,6 +147,26 @@ describe("ClientSettings sidebar v2", () => {
   });
 });
 
+describe("ClientSettings archived section", () => {
+  it("defaults to ten visible threads", () => {
+    expect(decodeClientSettings({}).archivedSectionVisibleCount).toBe(10);
+  });
+
+  it.each([0, 51, 1.5])("rejects invalid visible count %s", (value) => {
+    expect(() => decodeClientSettings({ archivedSectionVisibleCount: value })).toThrow();
+    expect(() => decodeClientSettingsPatch({ archivedSectionVisibleCount: value })).toThrow();
+  });
+
+  it.each([1, 10, 50])("accepts visible count %s", (value) => {
+    expect(
+      decodeClientSettings({ archivedSectionVisibleCount: value }).archivedSectionVisibleCount,
+    ).toBe(value);
+    expect(
+      decodeClientSettingsPatch({ archivedSectionVisibleCount: value }).archivedSectionVisibleCount,
+    ).toBe(value);
+  });
+});
+
 describe("ClientSettings sidebar project accents", () => {
   it("defaults to no project accents", () => {
     expect(decodeClientSettings({}).sidebarProjectAccentColors).toEqual({});
