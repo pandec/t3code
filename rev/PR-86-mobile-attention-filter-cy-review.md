@@ -44,7 +44,7 @@ Four reviewers were used because this is stateful, cross-layout mobile UI with d
 
 - Visit markers now live in one provider-owned in-memory map, hydrate safely from preferences, and persist through one 500 ms coalescing path.
 - Visit markers are no longer pruned, matching the desktop map semantics.
-- Attention snapshots track queued-task identities separately: existing queued rows are excluded and newly appearing rows are admitted.
+- Attention snapshots track queued-task identities separately: unresolved queued rows are included and newly appearing rows are admitted.
 - Turning Thread List v2 off clears the shared sticky state.
 - Android uses an exact SVG port of the desktop three-line ListFilter icon.
 - Disabled styling and loading accessibility labels now match the other native header paths.
@@ -73,3 +73,15 @@ classified as unresolved attention members and newly queued tasks remain
 sticky admissions. The suggestion to retry failed storage writes continuously
 was discarded because mobile now retains the marker in memory without a retry
 loop, matching the web client's best-effort persistence failure behavior.
+
+## Round 3
+
+- Reviewed head: `2f16f502c`
+- Reviewers: correctness and adversarial solution review
+- Raw findings: 0
+- Kept: 0
+- Deferred: 0
+
+Two targeted reviewers were sufficient because this pass only rechecked the
+round-2 background flush and queued-task classification fixes. Both found the
+targeted behavior coherent and merge-ready; no further pass is justified.
