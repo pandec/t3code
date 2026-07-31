@@ -64,6 +64,7 @@ import {
 import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import {
+  canStartProviderUsageRefresh,
   PROVIDER_USAGE_REFRESH_ACTION_ID,
   providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
@@ -469,6 +470,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     reportFailure: false,
   });
   const lastProviderUsageRefreshAtRef = useRef(0);
+  // Identifies the in-flight refresh. The composer outlives an environment
+  // switch, so a refresh started for the previous environment must not clear
+  // the pending state — or report progress — for the current one.
+  const providerUsageRefreshTokenRef = useRef(0);
+  useEffect(() => {
+    providerUsageRefreshTokenRef.current += 1;
+    lastProviderUsageRefreshAtRef.current = 0;
+    setIsRefreshingProviderUsage(false);
+  }, [props.environmentId]);
+  useEffect(
+    // Unmount invalidates any in-flight token so its completion is a no-op.
+    () => () => {
+      providerUsageRefreshTokenRef.current += 1;
+    },
+    [],
+  );
   const handleProviderUsageMenuAction = useCallback(
     (actionId: string) => {
       if (actionId !== PROVIDER_USAGE_REFRESH_ACTION_ID) return;
@@ -476,9 +493,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       if (instanceIds.length === 0) return;
       // Same 5s debounce the web meter uses: each refresh can spawn a CLI
       // probe per account, so a double-tap must not double-spawn.
-      const refreshAt = Date.now();
-      if (refreshAt - lastProviderUsageRefreshAtRef.current < 5_000) return;
-      lastProviderUsageRefreshAtRef.current = refreshAt;
+      if (!canStartProviderUsageRefresh(lastProviderUsageRefreshAtRef.current, Date.now())) {
+        return;
+      }
+      lastProviderUsageRefreshAtRef.current = Date.now();
+      providerUsageRefreshTokenRef.current += 1;
+      const token = providerUsageRefreshTokenRef.current;
       setIsRefreshingProviderUsage(true);
       void (async () => {
         try {
@@ -486,9 +506,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             environmentId: props.environmentId,
             input: { instanceIds },
           });
+          if (providerUsageRefreshTokenRef.current !== token) return;
           providerUsageQuery.refresh();
         } finally {
-          setIsRefreshingProviderUsage(false);
+          if (providerUsageRefreshTokenRef.current === token) {
+            setIsRefreshingProviderUsage(false);
+          }
         }
       })();
     },
