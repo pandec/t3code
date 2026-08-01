@@ -1,11 +1,11 @@
 ---
 name: sync-upstream
-description: Synchronize this T3 Code private fork by fast-forwarding mirror-only main from upstream-sync/main, pushing origin/main, merging main into dev, preserving fork behavior, running required checks, and pushing origin/dev. Use only when explicitly invoked in this repository; never trigger proactively.
+description: Synchronize this T3 Code private fork by fast-forwarding mirror-only main from upstream-sync/main, pushing origin/main, reconciling fork behavior with upstream, merging main into dev, running required checks, and pushing origin/dev. Use only when explicitly invoked in this repository; never trigger proactively.
 ---
 
 # Sync T3 Code From Upstream
 
-Synchronize this private fork without sacrificing intentional fork behavior. Explicit invocation authorizes fetching both remotes, updating and pushing `main`, merging into and pushing `dev`, and running required checks. Never push to `upstream-sync`.
+Synchronize this private fork while making deliberate choices about fork behavior that upstream overlaps or supersedes. Explicit invocation authorizes fetching both remotes, updating and pushing `main`, merging into and pushing `dev`, and running required checks. Never push to `upstream-sync`.
 
 ## Fixed topology
 
@@ -21,7 +21,7 @@ Verify these facts from live Git state before changing anything. Stop if the rem
 - Never merge `dev` or fork commits into `main`.
 - Merge synchronized `main` into `dev`; do not rebase or squash `dev`.
 - Never force-push, destructively reset, discard changes, or commit unrelated work.
-- Preserve compatible fork additions.
+- Preserve compatible fork additions that remain intentionally distinct after the behavioral-overlap review.
 - Resolve mechanical conflicts autonomously. Stop for the user's decision when upstream and fork logic require different behavior or intent is uncertain.
 - Read and follow the current `AGENTS.md` before acting.
 
@@ -53,7 +53,12 @@ Before changing `dev`, compare:
 
 Inspect overlapping files plus nearby callers, contracts, schemas, tests, configuration, state transitions, persistence, protocols, and failure handling. A clean textual merge does not prove behavioral compatibility.
 
-Continue when upstream and fork changes are clearly complementary. Stop and explain the choice before merging when upstream removed, replaced, or redefined behavior intentionally customized by the fork.
+Classify every behavioral overlap before changing `dev`:
+
+- **Complementary:** both implementations provide distinct value and can coexist without conflicting behavior. Continue.
+- **Superseding:** upstream now implements the same goal, replaces the fork's approach, or moves close enough that keeping both would create redundant or competing functionality. Assess whether the fork code still provides distinct value or should be simplified or removed in favor of upstream. Present the tradeoffs, including fork trimming as an explicit option, and ask the user to choose before starting the `dev` merge.
+
+Continue only after every superseding overlap has an explicit user decision. Apply the same gate if a semantic conflict discovered during the merge reveals an overlap that the pre-merge review could not identify.
 
 ## 4. Merge into dev
 
@@ -65,7 +70,7 @@ Continue when upstream and fork changes are clearly complementary. Stop and expl
    - resolve unrelated mechanical conflicts only if it clarifies the remaining choice
    - leave the merge in a recoverable in-progress state
    - report each file, upstream intent, fork intent, incompatibility, and realistic options
-   - ask the user which behavior to preserve
+   - apply the behavioral-overlap gate above and ask the user which option to take
 5. Inspect the complete staged merge before committing, including cleanly merged behavioral overlap. Stop if it exposes an unresolved product or architecture choice.
 
 ## 5. Validate and publish
