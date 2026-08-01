@@ -17,6 +17,7 @@ import { useThreadOutboxMessages } from "../../state/use-thread-outbox";
 import {
   deleteQueuedMessage,
   editQueuedMessage,
+  holdQueuedMessageForLater,
   steerQueuedMessageNow,
 } from "../../state/use-thread-outbox-actions";
 import { dispatchingQueuedMessageIdAtom } from "../../state/use-thread-outbox-drain";
@@ -48,6 +49,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   // A steer still inside its window can be sent now — the window is a chance
   // to change your mind, not a delay to sit through.
   const canSteer = !props.isDispatching;
+  // A steer waiting out its window can also be pushed back into the queue, to
+  // land after the running turn instead of interrupting it.
+  const canHold = message.deliveryIntent === "steer" && !props.isDispatching;
 
   return (
     <View
@@ -59,6 +63,16 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
         {queuedThreadMessagePreview(message)}
       </Text>
+      {canHold ? (
+        <Pressable
+          accessibilityLabel="Hold for later"
+          accessibilityRole="button"
+          className="size-9 items-center justify-center rounded-full active:opacity-70"
+          onPress={() => void holdQueuedMessageForLater(message)}
+        >
+          <SymbolView name="clock" size={15} tintColor={iconColor} type="monochrome" />
+        </Pressable>
+      ) : null}
       <Pressable
         accessibilityLabel="Send now"
         accessibilityRole="button"

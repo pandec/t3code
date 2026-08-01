@@ -35,6 +35,7 @@ import type {
 } from "../../lib/threadActivity";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import type { SendMessageOptions } from "../../state/use-thread-composer-state";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { QueuedMessageList } from "./QueuedMessageList";
@@ -80,7 +81,7 @@ export interface ThreadDetailScreenProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: (onWillEnqueueAgentMessage?: () => void) => Promise<MessageId | null>;
+  readonly onSendMessage: (options?: SendMessageOptions) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -311,9 +312,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   ]);
 
   const handleSendMessage = useCallback(
-    async (onWillEnqueueAgentMessage?: () => void) => {
+    async (options?: SendMessageOptions) => {
       const targetThreadKey = selectedThreadKey;
-      const messageId = await props.onSendMessage(onWillEnqueueAgentMessage);
+      const messageId = await props.onSendMessage(options);
       if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
         return messageId;
       }

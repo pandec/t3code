@@ -145,6 +145,8 @@ export function ComposerToolbarButton(props: {
   readonly maxWidth?: number;
   readonly minWidth?: number;
   readonly onPress?: () => void;
+  /** Set by ControlPillMenu on Android when the button anchors a long-press menu. */
+  readonly onLongPress?: () => void;
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
@@ -181,6 +183,7 @@ export function ComposerToolbarButton(props: {
       accessibilityRole="button"
       disabled={props.disabled}
       onPress={props.onPress}
+      onLongPress={props.onLongPress}
       className={cn(
         // Default width cap lives in the class chain (not the inline style)
         // so callers can lift it with max-w-full — flex-filling pills in the

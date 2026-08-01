@@ -1,4 +1,5 @@
 import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
+import type { MenuAction } from "@react-native-menu/menu";
 import type {
   EnvironmentId,
   MessageId,
@@ -69,6 +70,7 @@ import {
   providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
 } from "../../lib/providerUsageMenu";
+import type { SendMessageOptions } from "../../state/use-thread-composer-state";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentQuery } from "../../state/query";
@@ -102,6 +104,9 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
 export const COMPOSER_EXPANDED_CHROME = 174;
+
+/** Long-press menu on the send button while a turn is running. */
+const SEND_MENU_ACTIONS: MenuAction[] = [{ id: "queue", title: "Queue for later", image: "clock" }];
 
 function useMinuteClockMs(): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -145,7 +150,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSendMessage: (options?: SendMessageOptions) => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -344,6 +349,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const showStopAction =
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
+
+  // Queueing only differs from the default while the turn is running: any
+  // other time a send already queues for the next turn.
+  const canQueueForLater = showStopAction && canSend;
 
   const sendLabel = threadComposerSendLabel({
     connectionState: props.connectionState,
@@ -725,31 +734,44 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
-  const handleSend = useCallback(async () => {
-    const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
-    if (inFlightThreadIdsRef.current.has(threadKey)) return;
-    inFlightThreadIdsRef.current.add(threadKey);
-    try {
-      const messageId = await onSendMessage();
-      if (messageId !== null) {
-        // Classification happens in the state hook first, so local composer
-        // commands never arm. Waiting for the optimistic enqueue keeps native
-        // activity work off the initiating tap frame.
-        armAgentAwarenessLiveActivityForLocalWork({
-          threadTitle: props.selectedThread.title,
-          projectTitle: props.environmentLabel ?? "T3 Code",
-        });
+  const handleSend = useCallback(
+    async (options?: SendMessageOptions) => {
+      const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+      if (inFlightThreadIdsRef.current.has(threadKey)) return;
+      inFlightThreadIdsRef.current.add(threadKey);
+      try {
+        const messageId = await onSendMessage(options);
+        if (messageId !== null) {
+          // Classification happens in the state hook first, so local composer
+          // commands never arm. Waiting for the optimistic enqueue keeps native
+          // activity work off the initiating tap frame.
+          armAgentAwarenessLiveActivityForLocalWork({
+            threadTitle: props.selectedThread.title,
+            projectTitle: props.environmentLabel ?? "T3 Code",
+          });
+        }
+      } finally {
+        inFlightThreadIdsRef.current.delete(threadKey);
       }
-    } finally {
-      inFlightThreadIdsRef.current.delete(threadKey);
-    }
-  }, [
-    onSendMessage,
-    props.environmentId,
-    props.environmentLabel,
-    props.selectedThread.id,
-    props.selectedThread.title,
-  ]);
+    },
+    [
+      onSendMessage,
+      props.environmentId,
+      props.environmentLabel,
+      props.selectedThread.id,
+      props.selectedThread.title,
+    ],
+  );
+
+  // Press/submit handlers receive their own event argument, so they can never
+  // be wired straight to `handleSend` without it being read as send options.
+  const handleSendDefault = useCallback(() => {
+    void handleSend();
+  }, [handleSend]);
+
+  const handleQueueForLater = useCallback(() => {
+    void handleSend({ deliveryIntent: "queue" });
+  }, [handleSend]);
   const handleCommandSelect = useCallback(
     (item: ComposerCommandItem) => {
       if (!composerTrigger) return;
@@ -1014,7 +1036,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               placeholder={props.placeholder}
               onFocus={handleFocus}
               onBlur={handleBlur}
-              onSubmit={handleSend}
+              onSubmit={handleSendDefault}
               scrollEnabled={isExpanded}
               // Android: collapsed single line centers natively (gravity) in
               // a pill-height box matching the send button; iOS keeps insets.
@@ -1067,7 +1089,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   icon="arrow.up"
                   variant="primary"
                   disabled={!canSend}
-                  onPress={handleSend}
+                  onPress={handleSendDefault}
                 />
               )}
             </Animated.View>
@@ -1155,14 +1177,37 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   />
                 ) : null}
               </ComposerToolbarScroller>
-              <ComposerToolbarButton
-                accessibilityLabel={sendLabel}
-                icon="arrow.up"
-                variant="primary"
-                disabled={!canSend}
-                onPress={handleSend}
-                showChevron={false}
-              />
+              {canQueueForLater ? (
+                // Long-press only: the tap still steers into the running turn.
+                <ControlPillMenu
+                  accessibilityLabel={sendLabel}
+                  actions={SEND_MENU_ACTIONS}
+                  shouldOpenOnLongPress
+                  onPressAction={({ nativeEvent }) => {
+                    if (nativeEvent.event === "queue") {
+                      handleQueueForLater();
+                    }
+                  }}
+                >
+                  <ComposerToolbarButton
+                    accessibilityLabel={sendLabel}
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canSend}
+                    onPress={handleSendDefault}
+                    showChevron={false}
+                  />
+                </ControlPillMenu>
+              ) : (
+                <ComposerToolbarButton
+                  accessibilityLabel={sendLabel}
+                  icon="arrow.up"
+                  variant="primary"
+                  disabled={!canSend}
+                  onPress={handleSendDefault}
+                  showChevron={false}
+                />
+              )}
             </ComposerToolbarRow>
           </Animated.View>
         ) : null}

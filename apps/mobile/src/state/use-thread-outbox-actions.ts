@@ -53,6 +53,18 @@ export async function steerQueuedMessageNow(message: QueuedThreadMessage): Promi
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" });
 }
 
+/** Demotes a pending steer back to a held queue entry the drain leaves for later. */
+export async function holdQueuedMessageForLater(message: QueuedThreadMessage): Promise<void> {
+  if (
+    !isActionableQueuedMessage(message) ||
+    appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId] ||
+    message.deliveryIntent !== "steer"
+  ) {
+    return;
+  }
+  await updateThreadOutboxMessage({ ...message, deliveryIntent: "queue" });
+}
+
 export async function deleteQueuedMessage(message: QueuedThreadMessage): Promise<void> {
   if (!isActionableQueuedMessage(message)) {
     return;
