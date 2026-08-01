@@ -49,6 +49,7 @@ import {
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
 import { resolveThreadProviderDriver } from "../threads/thread-provider";
@@ -627,6 +628,8 @@ export function HomeScreen(props: HomeScreenProps) {
   );
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
   const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
+  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
+  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
   // now is quantized to the minute and ticks so the inactivity auto-settle
   // boundary is actually crossed while the app stays open (mirrors web);
   // without a clock dependency the partition memoizes a frozen "now".
@@ -672,6 +675,8 @@ export function HomeScreen(props: HomeScreenProps) {
         hiddenSettledCount: 0,
         snoozedCount: 0,
         snoozedShelfHeaderIndex: null,
+        settledCount: 0,
+        settledShelfHeaderIndex: null,
         nextSnoozeWakeAt: null,
       };
     // Settled threads are live shells; archived threads keep their original
@@ -691,6 +696,7 @@ export function HomeScreen(props: HomeScreenProps) {
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
       snoozedShelfExpanded,
+      settledShelfExpanded,
       selectedThreadKey: null,
     });
   }, [
@@ -698,6 +704,7 @@ export function HomeScreen(props: HomeScreenProps) {
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,
+    settledShelfExpanded,
     settledVisibleCount,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
@@ -771,9 +778,12 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozedCount: threadListV2Layout.snoozedCount,
         snoozedShelfExpanded,
         snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
+        settledCount: threadListV2Layout.settledCount,
+        settledShelfExpanded,
+        settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
       }),
-    [snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
+    [settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
   );
 
   const renderV2Item = useCallback(
@@ -810,12 +820,20 @@ export function HomeScreen(props: HomeScreenProps) {
           />
         );
       }
+      if (item.type === "v2-settled-shelf") {
+        return (
+          <ThreadListV2SettledShelfHeader
+            count={item.count}
+            expanded={item.expanded}
+            onToggle={toggleSettledShelf}
+          />
+        );
+      }
       const thread = item.item.thread;
       return (
         <ThreadListV2Row
           thread={thread}
           variant={item.item.variant}
-          showSettledDivider={item.item.showSettledDivider}
           snoozed={item.item.snoozed}
           snoozePresetMinute={nowMinute}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
@@ -882,6 +900,7 @@ export function HomeScreen(props: HomeScreenProps) {
       v2ProjectAccentByProjectKey,
       snoozeEnvironmentIds,
       threadSearchMatchByKey,
+      toggleSettledShelf,
       toggleSnoozedShelf,
       v2ProjectTitleByProjectKey,
       props.searchQuery,
@@ -1174,7 +1193,7 @@ export function HomeScreen(props: HomeScreenProps) {
             ListHeaderComponent={v2ListHeader}
             ListFooterComponent={
               <View>
-                {threadListV2Layout.hiddenSettledCount > 0 ? (
+                {settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}

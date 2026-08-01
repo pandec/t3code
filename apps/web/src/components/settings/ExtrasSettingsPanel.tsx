@@ -49,6 +49,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 
 const THREAD_PROVIDER_ICON_LABELS: Record<SidebarThreadProviderIconVisibility, string> = {
   hover: "On hover",
@@ -174,7 +175,7 @@ function NotificationsExtrasSection() {
   };
 
   return (
-    <SettingsSection title="Notifications">
+    <SettingsSection {...searchableSetting("extras-notifications")}>
       <SettingsRow
         title="Completion toasts"
         description="Show an in-app toast when an agent turn finishes."
@@ -380,7 +381,7 @@ function ProviderUsageExtrasSection() {
   const updateSettings = useUpdatePrimarySettings();
 
   return (
-    <SettingsSection title="Provider usage">
+    <SettingsSection {...searchableSetting("extras-provider-usage")}>
       <SettingsRow
         title="Mask provider emails"
         description="Obscure provider account email addresses in the usage meter."
@@ -419,7 +420,7 @@ function SidebarExtrasSection() {
   );
 
   return (
-    <SettingsSection title="Sidebar">
+    <SettingsSection {...searchableSetting("extras-sidebar")}>
       <SettingsRow
         title="Thread provider icon"
         description="Choose whether thread rows show their provider only on hover, at all times, or never."
@@ -562,7 +563,7 @@ function ComposerExtrasSection() {
   const steerGraceWindowMs = clampSteerGraceWindowMs(settings.steerGraceWindowMs);
 
   return (
-    <SettingsSection title="Composer">
+    <SettingsSection {...searchableSetting("extras-composer")}>
       <SettingsRow
         title="Steer grace window"
         description="How long a steered message waits in the composer before it is sent to the running agent. Until the window elapses the message can still be edited or recalled; 0s locks it in immediately."
@@ -619,7 +620,7 @@ function AccentTintsExtrasSection() {
   const intensityPercent = clampAccentTintIntensityPercent(settings.accentTintIntensityPercent);
 
   return (
-    <SettingsSection title="Accent tints">
+    <SettingsSection {...searchableSetting("extras-accent-tints")}>
       <SettingsRow
         title="Project accent tints"
         description="Wash a project's accent color over its thread rows and new-thread choices. Off keeps the color as a dot only. Colors themselves are set per project from the project menu in the sidebar."
@@ -704,7 +705,7 @@ function VoiceExtrasSection() {
   const updateSettings = useUpdatePrimarySettings();
 
   return (
-    <SettingsSection title="Voice & Listening">
+    <SettingsSection {...searchableSetting("extras-voice-listening")}>
       <SettingsRow
         title="Text-to-speech model"
         description="ElevenLabs model used to read assistant messages aloud. Leave empty to use the server's configured default."
