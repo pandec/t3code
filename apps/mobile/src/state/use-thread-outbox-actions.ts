@@ -4,7 +4,7 @@ import { Alert } from "react-native";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
-import type { QueuedThreadMessage } from "./thread-outbox-model";
+import { queuedThreadMessageIntent, type QueuedThreadMessage } from "./thread-outbox-model";
 import {
   appendComposerDraftContentDurably,
   appendedComposerDraftText,
@@ -53,12 +53,12 @@ export async function steerQueuedMessageNow(message: QueuedThreadMessage): Promi
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" });
 }
 
-/** Demotes a pending steer back to a held queue entry the drain leaves for later. */
-export async function holdQueuedMessageForLater(message: QueuedThreadMessage): Promise<void> {
+/** Demotes a pending steer back to a queue delivery, so it lands after the running turn. */
+export async function queueSteeredMessageForLater(message: QueuedThreadMessage): Promise<void> {
   if (
     !isActionableQueuedMessage(message) ||
     appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId] ||
-    message.deliveryIntent !== "steer"
+    queuedThreadMessageIntent(message) !== "steer"
   ) {
     return;
   }

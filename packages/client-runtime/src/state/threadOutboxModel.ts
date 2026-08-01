@@ -328,9 +328,13 @@ export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
  *
  * A steer selected while the thread is already running, a stale-row removal,
  * or a pending-task creation must never open a flush batch.
+ *
+ * Steer-intent rows are left out: they deliver themselves once their grace
+ * window ends, and membership would pin them to a steer even after the user
+ * demotes them back to a queue delivery.
  */
 export function queueFlushBatchIds(
-  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation">>,
+  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation" | "deliveryIntent">>,
   dispatchedMessage: Pick<QueuedThreadMessage, "messageId" | "creation">,
   input: {
     readonly delivered: boolean;
@@ -355,7 +359,10 @@ export function queueFlushBatchIds(
   return new Set(
     messages
       .slice(leaderIndex + 1)
-      .filter((message) => message.creation === undefined)
+      .filter(
+        (message) =>
+          message.creation === undefined && queuedThreadMessageIntent(message) !== "steer",
+      )
       .map(({ messageId }) => messageId),
   );
 }

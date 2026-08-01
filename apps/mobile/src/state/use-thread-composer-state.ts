@@ -51,6 +51,7 @@ import { setPendingConnectionError } from "../state/use-remote-environment-regis
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import type { ThreadOutboxDeliveryIntent } from "./thread-outbox-model";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
@@ -61,7 +62,7 @@ import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
  * steer into a busy turn, otherwise queue for the next one.
  */
 export type SendMessageOptions = {
-  readonly deliveryIntent?: "queue" | "steer";
+  readonly deliveryIntent?: ThreadOutboxDeliveryIntent;
 };
 
 /** Appends text and attachments to a thread's composer draft (review comments, queued-message edits). */

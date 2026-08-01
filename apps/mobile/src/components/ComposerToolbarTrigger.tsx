@@ -140,6 +140,8 @@ export function ComposerToolbarButton(props: {
   readonly iconNode?: ReactNode;
   readonly label?: string;
   readonly accessibilityLabel?: string;
+  readonly accessibilityActions?: ComponentProps<typeof Pressable>["accessibilityActions"];
+  readonly onAccessibilityAction?: ComponentProps<typeof Pressable>["onAccessibilityAction"];
   readonly active?: boolean;
   readonly disabled?: boolean;
   readonly maxWidth?: number;
@@ -181,6 +183,8 @@ export function ComposerToolbarButton(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
+      accessibilityActions={props.accessibilityActions}
+      onAccessibilityAction={props.onAccessibilityAction}
       disabled={props.disabled}
       onPress={props.onPress}
       onLongPress={props.onLongPress}

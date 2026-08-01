@@ -26,6 +26,7 @@ import {
   Pressable,
   useColorScheme,
   View,
+  type AccessibilityActionEvent,
   type ViewStyle,
 } from "react-native";
 import ImageViewing from "react-native-image-viewing";
@@ -952,6 +953,29 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
   }
 
+  // The long-press menu is invisible to assistive tech, so while queueing is
+  // available the same choice is also exposed as an accessibility action.
+  const sendToolbarButton = (
+    <ComposerToolbarButton
+      accessibilityLabel={sendLabel}
+      {...(canQueueForLater
+        ? {
+            accessibilityActions: [{ name: "queue", label: "Queue for later" }],
+            onAccessibilityAction: (event: AccessibilityActionEvent) => {
+              if (event.nativeEvent.actionName === "queue") {
+                handleQueueForLater();
+              }
+            },
+          }
+        : {})}
+      icon="arrow.up"
+      variant="primary"
+      disabled={!canSend}
+      onPress={handleSendDefault}
+      showChevron={false}
+    />
+  );
+
   return (
     <Animated.View
       className="px-4"
@@ -1180,7 +1204,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               {canQueueForLater ? (
                 // Long-press only: the tap still steers into the running turn.
                 <ControlPillMenu
-                  accessibilityLabel={sendLabel}
                   actions={SEND_MENU_ACTIONS}
                   shouldOpenOnLongPress
                   onPressAction={({ nativeEvent }) => {
@@ -1189,24 +1212,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     }
                   }}
                 >
-                  <ComposerToolbarButton
-                    accessibilityLabel={sendLabel}
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canSend}
-                    onPress={handleSendDefault}
-                    showChevron={false}
-                  />
+                  {sendToolbarButton}
                 </ControlPillMenu>
               ) : (
-                <ComposerToolbarButton
-                  accessibilityLabel={sendLabel}
-                  icon="arrow.up"
-                  variant="primary"
-                  disabled={!canSend}
-                  onPress={handleSendDefault}
-                  showChevron={false}
-                />
+                sendToolbarButton
               )}
             </ComposerToolbarRow>
           </Animated.View>
