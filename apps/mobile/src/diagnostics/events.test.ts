@@ -40,4 +40,31 @@ describe("mobile diagnostic events", () => {
     expect(serialized).not.toContain("secret.example");
     expect(serialized).not.toContain("token=abc");
   });
+
+  it("drops a trace id that does not look like one", () => {
+    const details = connectionDiagnosticDetails(
+      EnvironmentId.make("11111111-1111-4111-8111-111111111111"),
+      "RelayConnectionTarget",
+      {
+        desired: true,
+        network: "online",
+        phase: "backoff",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        // The peer controls this field, so it is the one place free-form text
+        // could otherwise reach durable on-device storage.
+        lastFailure: new ConnectionTransientError({
+          reason: "relay-unavailable",
+          detail: "unused",
+          traceId: "https://secret.example/callback?token=abc",
+        }),
+        retryAt: null,
+      },
+      2_000,
+    );
+
+    expect(details.traceId).toBeNull();
+    expect(JSON.stringify(details)).not.toContain("secret.example");
+  });
 });

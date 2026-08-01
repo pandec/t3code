@@ -7,6 +7,8 @@ import { appendMobileDiagnosticEvents } from "./persistence";
 
 const DEFAULT_MAX_PENDING_EVENTS = 512;
 const MAX_CONSECUTIVE_WRITE_FAILURES = 3;
+/** Failures closer together than this are treated as one episode. */
+const WRITE_FAILURE_EPISODE_MS = 5_000;
 
 interface DiagnosticClock {
   readonly wallTimeMs: () => number;
@@ -40,6 +42,7 @@ export function createMobileDiagnosticJournal(
 
   let active = options.enabled;
   let consecutiveWriteFailures = 0;
+  let writeFailureEpisodeStartedAt: number | null = null;
   let droppedEvents = 0;
   let pending: MobileDiagnosticEvent[] = [];
   let writes = Promise.resolve();
@@ -58,13 +61,16 @@ export function createMobileDiagnosticJournal(
 
     const batch = pending;
     pending = [];
-    if (droppedEvents > 0) {
+    const droppedEventsInBatch = droppedEvents;
+    if (droppedEventsInBatch > 0) {
+      // Stamped with the oldest retained event rather than the flush instant, so
+      // the marker sits at the gap it describes and the file stays monotonic.
       batch.unshift(
         mobileDiagnosticEvent(
           "journal",
-          { droppedEvents },
-          clock.wallTimeMs(),
-          clock.monotonicTimeMs(),
+          { droppedEvents: droppedEventsInBatch },
+          batch[0].t,
+          batch[0].m,
         ),
       );
       droppedEvents = 0;
@@ -73,9 +79,31 @@ export function createMobileDiagnosticJournal(
     try {
       await write(batch);
       consecutiveWriteFailures = 0;
+      writeFailureEpisodeStartedAt = null;
     } catch {
-      consecutiveWriteFailures += 1;
-      pending = [...batch, ...pending].slice(-maxPendingEvents);
+      // Backgrounding, a memory warning, a severe stall, and the periodic timer
+      // can all flush within a second of each other, so counting invocations
+      // would spend the entire failure budget on a single bad moment (an early
+      // launch before first unlock, say). Count failure episodes instead.
+      const failedAt = clock.monotonicTimeMs();
+      if (
+        writeFailureEpisodeStartedAt === null ||
+        failedAt - writeFailureEpisodeStartedAt >= WRITE_FAILURE_EPISODE_MS
+      ) {
+        consecutiveWriteFailures += 1;
+        writeFailureEpisodeStartedAt = failedAt;
+      }
+
+      // Requeueing can overflow the buffer. Account for what that discards, or
+      // the journal reports a clean record over a hole it silently created.
+      // The marker is regenerated from its count rather than requeued as an
+      // ordinary event, so evicting it cannot erase the earlier gap it records.
+      const failedEvents = droppedEventsInBatch > 0 ? batch.slice(1) : batch;
+      const restored = [...failedEvents, ...pending];
+      const overflow = Math.max(0, restored.length - maxPendingEvents);
+      droppedEvents += droppedEventsInBatch + overflow;
+      pending = restored.slice(overflow);
+
       if (consecutiveWriteFailures >= MAX_CONSECUTIVE_WRITE_FAILURES) {
         active = false;
         pending = [];

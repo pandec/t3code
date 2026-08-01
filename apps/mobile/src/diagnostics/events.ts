@@ -2,6 +2,7 @@ import type {
   ConnectionTargetKind,
   SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
+import { safeTraceId } from "@t3tools/client-runtime/errors";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 export type MobileDiagnosticValue = string | number | boolean | null;
@@ -54,7 +55,10 @@ export function connectionDiagnosticDetails(
     generation: state.generation,
     failure: state.lastFailure?._tag ?? null,
     reason: state.lastFailure?.reason ?? null,
-    traceId: state.lastFailure?.traceId ?? null,
+    // Every other field here is an enum, count, or digest. A trace id is the one
+    // value a remote peer supplies as free-form text, so it goes through the same
+    // gate the runtime uses before logging it rather than straight to disk.
+    traceId: safeTraceId(state.lastFailure?.traceId),
     retryInMs: state.retryAt === null ? null : Math.max(0, state.retryAt - nowMs),
   };
 }

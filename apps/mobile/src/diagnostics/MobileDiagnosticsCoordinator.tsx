@@ -19,6 +19,7 @@ import {
 import {
   eventLoopStallBucket,
   eventLoopStallDuration,
+  MOBILE_DIAGNOSTIC_STALL_DURABLE_MS,
   MOBILE_DIAGNOSTIC_STALL_INTERVAL_MS,
   MOBILE_DIAGNOSTIC_STALL_THRESHOLD_MS,
 } from "./stallProbe";
@@ -58,7 +59,7 @@ function EnabledMobileDiagnosticsCoordinator() {
     if (!mobileDiagnosticsEnabled) return;
 
     recordMobileDiagnostic("meta", {
-      schema: 1,
+      schema: 2,
       appVersion: Constants.expoConfig?.version ?? null,
       nativeBuild: Constants.platform?.ios?.buildNumber ?? null,
       appVariant:
@@ -93,6 +94,7 @@ function EnabledMobileDiagnosticsCoordinator() {
     });
     const memoryWarningSubscription = AppState.addEventListener("memoryWarning", () => {
       recordMobileDiagnostic("memory-warning");
+      flushHeaderDiagnosticMetrics();
       void flushMobileDiagnostics();
     });
     const networkSubscription = Network.addNetworkStateListener(recordNetworkState);
@@ -106,6 +108,9 @@ function EnabledMobileDiagnosticsCoordinator() {
           durationMs: Number(durationMs.toFixed(1)),
           bucket: eventLoopStallBucket(durationMs),
         });
+        // The stall has already ended by the time the late timer runs, so this
+        // appends after the blockage rather than extending it.
+        if (durationMs >= MOBILE_DIAGNOSTIC_STALL_DURABLE_MS) void flushMobileDiagnostics();
       }
     }, MOBILE_DIAGNOSTIC_STALL_INTERVAL_MS);
 

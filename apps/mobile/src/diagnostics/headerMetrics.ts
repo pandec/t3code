@@ -13,6 +13,19 @@ function emptyOperationMetrics(): OperationMetrics {
   return { count: 0, totalMs: 0, maxMs: 0 };
 }
 
+/**
+ * Header options carry the screen `title`, which is a thread or project name, so
+ * the exact signature length is a (weak) proxy for a name's length. Bucketing
+ * keeps the only thing this metric is for — spotting signature bloat that makes
+ * the per-layout comparison expensive — without recording a title-derived number.
+ */
+export function headerSignatureLengthBucket(length: number): string {
+  if (length >= 8_192) return "8192+";
+  if (length >= 2_048) return "2048-8191";
+  if (length >= 512) return "512-2047";
+  return "0-511";
+}
+
 export class HeaderDiagnosticMetrics {
   private signature = emptyOperationMetrics();
   private stabilize = emptyOperationMetrics();
@@ -45,7 +58,7 @@ export class HeaderDiagnosticMetrics {
       signatureCount: this.signature.count,
       signatureTotalMs: Number(this.signature.totalMs.toFixed(1)),
       signatureMaxMs: Number(this.signature.maxMs.toFixed(1)),
-      maxSignatureLength: this.maxSignatureLength,
+      maxSignatureBucket: headerSignatureLengthBucket(this.maxSignatureLength),
       setOptionsApplied: this.applied,
       setOptionsSkipped: this.skipped,
     };

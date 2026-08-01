@@ -1,6 +1,14 @@
 export const MOBILE_DIAGNOSTIC_STALL_INTERVAL_MS = 500;
 export const MOBILE_DIAGNOSTIC_STALL_THRESHOLD_MS = 150;
 
+/**
+ * A hang this long is the most likely precursor to an iOS watchdog kill, which
+ * takes the whole in-memory batch with it. Stalls at or above this are persisted
+ * immediately instead of waiting for the periodic flush; the probe interval caps
+ * that at roughly one small append per second, and only while already degraded.
+ */
+export const MOBILE_DIAGNOSTIC_STALL_DURABLE_MS = 1_000;
+
 export function eventLoopStallDuration(expectedAtMs: number, observedAtMs: number): number {
   return Math.max(0, observedAtMs - expectedAtMs);
 }
