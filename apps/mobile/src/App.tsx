@@ -23,6 +23,7 @@ import { useThreadPrewarm } from "./state/prewarm";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { appBlurTargetRef } from "./lib/appBlurTarget";
 import { useThemeColor } from "./lib/useThemeColor";
+import { MobileDiagnosticsCoordinator } from "./diagnostics/MobileDiagnosticsCoordinator";
 
 import "../global.css";
 
@@ -73,6 +74,7 @@ export default function App() {
         <AppearancePreferencesProvider>
           <SplashScreenCoordinator />
           <ThreadPrewarmCoordinator />
+          <MobileDiagnosticsCoordinator />
           <GestureHandlerRootView className="flex-1">
             <KeyboardProvider statusBarTranslucent>
               <SafeAreaProvider>
