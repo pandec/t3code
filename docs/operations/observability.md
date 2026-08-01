@@ -12,6 +12,10 @@ The local trace file is the persisted source of truth for normal local launches.
 write a separate server log file, but SSH-managed launches also persist the remote process's
 stdout/stderr at `~/.t3/ssh-launch/<state>/server.log`.
 
+Separately, the mobile app has a small opt-in on-device journal for connection-stability and UI-stall
+investigations. It is unrelated to the server model above and is described in
+[Mobile Diagnostics Journal](#mobile-diagnostics-journal).
+
 ## Where To Find Things
 
 ### Logs
@@ -546,3 +550,75 @@ Current high-value span and metric boundaries include:
 - metrics are not snapshotted locally
 - the old `serverLogPath` still exists in config for compatibility, but the trace file is the primary
   structured persisted artifact
+
+## Mobile Diagnostics Journal
+
+A fork-only, build-gated journal in `apps/mobile/src/diagnostics/` for investigating mobile
+connection instability and multi-second UI stalls on real devices, where no server-side trace exists.
+It is observability only: nothing it records feeds back into connection, retry, navigation, or
+rendering behavior.
+
+### Enabling It
+
+Build or start the app with `EXPO_PUBLIC_MOBILE_DIAGNOSTICS=1`. Optionally set
+`EXPO_PUBLIC_MOBILE_DIAGNOSTIC_COMMIT` to stamp the build's commit into the `meta` record.
+
+Both are `EXPO_PUBLIC_*` vars, so Metro inlines them at bundle time. Without the flag the coordinator
+renders nothing, no listeners or timers are installed, and every record call is a single constant
+check. Disabled builds perform no diagnostic subscriptions, timers, or file writes.
+
+### Where The Data Lands
+
+NDJSON, one event per line, in the app's documents directory under `mobile-diagnostics/`:
+
+- `events.ndjson` — the live file
+- `events.1.ndjson`, `events.2.ndjson` — rotated generations
+
+Each file is capped at ~1 MB, so retention is bounded at roughly 3 MB and three generations. On a
+paired iOS device, retrieve the directory without launching or modifying the app:
+
+```bash
+xcrun devicectl device copy from \
+  --device <device-id-or-name> \
+  --domain-type appDataContainer \
+  --domain-identifier <bundle-id> \
+  --source Documents/mobile-diagnostics \
+  --destination <local-directory>
+```
+
+The Xcode Devices window's Download Container action is another option. Android retrieval depends on
+the build's debug or device access. There is deliberately no in-app UI, export flow, or remote upload.
+
+Every record has `t` (wall clock ms), `m` (monotonic ms), `k` (kind), and `d` (flat scalar details).
+Kinds: `meta`, `app`, `network`, `runtime-network`, `connection`, `js-stall`, `header`,
+`memory-warning`, and `journal` (self-reporting for events dropped under buffer pressure).
+
+Events are buffered in memory (bounded, oldest dropped first) and flushed every 30s, on backgrounding,
+on a memory warning, and immediately after a stall of at least
+`MOBILE_DIAGNOSTIC_STALL_DURABLE_MS` — the last case so evidence survives a watchdog kill. Anything
+dropped under buffer pressure is counted and reported in a `journal` record, so a gap in the timeline
+is always visible as a gap. After write failures in three separate episodes the journal disables
+itself for the rest of the session rather than retrying forever; the episode window exists because
+several flush triggers can coincide and would otherwise burn the whole budget on one bad moment.
+
+Two caveats when reading the output. Appends are synchronous native calls on the JS thread, so a
+flush contributes a little to the very stalls the probe measures. And header metrics are accumulated
+during render, so their counts include renders React discarded.
+
+### Data Minimization
+
+The journal must stay free of anything sensitive, and reviews of it should hold that line:
+
+- no URLs, hostnames, tokens, or connection secrets
+- no user-chosen labels, project/thread names, or message content
+- no raw error messages — connection failures contribute only their error `_tag`, their bounded
+  `reason` literal, and a `traceId` that passed `safeTraceId` (the peer supplies that field as
+  free-form text, so it is gated by the same check the runtime uses before logging it)
+- no title-derived values — the header signature length is bucketed, because screen options carry
+  thread and project titles
+- environment ids are recorded as a short 32-bit FNV-1a digest (`diagnosticEnvironmentKey`) rather
+  than the id itself — enough to correlate events belonging to one environment. It is a correlation
+  key, not a security boundary, so do not treat it as protecting a value that is actually secret
+
+Values are constrained to `string | number | boolean | null` by `MobileDiagnosticDetails`. When adding
+a field, confirm its value domain is a bounded enum, count, or hash rather than free-form text.

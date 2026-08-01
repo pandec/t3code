@@ -17,6 +17,13 @@ import {
 } from "react";
 import type { ColorValue } from "react-native";
 
+import {
+  finishHeaderDiagnosticWork,
+  recordHeaderOptionsDecision,
+  recordHeaderSignatureLength,
+  startHeaderDiagnosticWork,
+} from "../diagnostics/headerMetrics";
+
 export {
   nativeHeaderScrollEdgeEffects,
   nativeTopScrollEdgeEffect,
@@ -157,6 +164,7 @@ export function NativeStackScreenOptions(props: {
   const latestOptionFunctionsRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   const optionFunctionWrappersRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   const normalizedOptions = useMemo(() => normalizeScreenOptions(props.options), [props.options]);
+  const stabilizationStartedAt = startHeaderDiagnosticWork();
   const stableOptions = normalizedOptions
     ? (stabilizeOptionFunctions(
         normalizedOptions,
@@ -165,18 +173,24 @@ export function NativeStackScreenOptions(props: {
         optionFunctionWrappersRef.current,
       ) as NativeStackNavigationOptions)
     : undefined;
+  finishHeaderDiagnosticWork("stabilize", stabilizationStartedAt);
 
   useLayoutEffect(() => {
     if (!navigation || !stableOptions) {
       return;
     }
+    const signatureStartedAt = startHeaderDiagnosticWork();
     const signature = optionsSignature([stableOptions, props.optionsVersion]);
+    finishHeaderDiagnosticWork("signature", signatureStartedAt);
+    recordHeaderSignatureLength(signature.length);
     // Avoid re-entering navigation state when semantically equal options are
     // reapplied every layout (common when callers pass unstable object literals).
     if (lastAppliedOptionsSignatureRef.current === signature) {
+      recordHeaderOptionsDecision(false);
       return;
     }
     lastAppliedOptionsSignatureRef.current = signature;
+    recordHeaderOptionsDecision(true);
     navigation.setOptions(stableOptions);
   }, [navigation, props.optionsVersion, stableOptions]);
 

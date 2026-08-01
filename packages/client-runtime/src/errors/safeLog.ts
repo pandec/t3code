@@ -3,6 +3,15 @@ const SAFE_ERROR_LABEL =
 const SAFE_TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const STACK_FRAME_LIMIT = 32;
 
+/**
+ * A trace id arrives over the wire as an unconstrained string, so it is only safe
+ * to emit once it looks like one. Shared with any other sink that persists or
+ * logs the field.
+ */
+export function safeTraceId(value: unknown): string | null {
+  return typeof value === "string" && SAFE_TRACE_ID.test(value) ? value : null;
+}
+
 export interface SafeErrorLogAttributes {
   readonly errorType: "error" | "array" | "null" | "object" | "primitive";
   readonly errorName?: string;
@@ -64,8 +73,9 @@ function readTraceId(error: unknown): string | undefined {
     while (typeof current === "object" && current !== null && !seen.has(current)) {
       seen.add(current);
       const record = current as { readonly cause?: unknown; readonly traceId?: unknown };
-      if (typeof record.traceId === "string" && SAFE_TRACE_ID.test(record.traceId)) {
-        return record.traceId;
+      const traceId = safeTraceId(record.traceId);
+      if (traceId !== null) {
+        return traceId;
       }
       current = record.cause;
     }
