@@ -4,7 +4,7 @@ import { Alert } from "react-native";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
-import type { QueuedThreadMessage } from "./thread-outbox-model";
+import { queuedThreadMessageIntent, type QueuedThreadMessage } from "./thread-outbox-model";
 import {
   appendComposerDraftContentDurably,
   appendedComposerDraftText,
@@ -51,6 +51,18 @@ export async function steerQueuedMessageNow(message: QueuedThreadMessage): Promi
   // Expediting retires any grace window this steer was still waiting out.
   expediteQueuedMessage(message.messageId);
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "steer" });
+}
+
+/** Demotes a pending steer back to a queue delivery, so it lands after the running turn. */
+export async function queueSteeredMessageForLater(message: QueuedThreadMessage): Promise<void> {
+  if (
+    !isActionableQueuedMessage(message) ||
+    appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId] ||
+    queuedThreadMessageIntent(message) !== "steer"
+  ) {
+    return;
+  }
+  await updateThreadOutboxMessage({ ...message, deliveryIntent: "queue" });
 }
 
 export async function deleteQueuedMessage(message: QueuedThreadMessage): Promise<void> {

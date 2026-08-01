@@ -234,6 +234,22 @@ describe("queueFlushBatchIds", () => {
     ).toBe(0);
   });
 
+  it("leaves steer rows out so a demote back to queue is honoured", () => {
+    const steer = {
+      messageId: MessageId.make("steer"),
+      creation: undefined,
+      deliveryIntent: "steer" as const,
+    };
+    const ids = queueFlushBatchIds([a, steer, b], a, {
+      delivered: true,
+      action: "send",
+      threadStatus: "idle",
+    });
+
+    expect(ids.has(steer.messageId)).toBe(false);
+    expect(ids.has(MessageId.make("b"))).toBe(true);
+  });
+
   it("does not open a batch for stale-row removal", () => {
     expect(
       queueFlushBatchIds([a, b], a, {

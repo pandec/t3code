@@ -140,11 +140,15 @@ export function ComposerToolbarButton(props: {
   readonly iconNode?: ReactNode;
   readonly label?: string;
   readonly accessibilityLabel?: string;
+  readonly accessibilityActions?: ComponentProps<typeof Pressable>["accessibilityActions"];
+  readonly onAccessibilityAction?: ComponentProps<typeof Pressable>["onAccessibilityAction"];
   readonly active?: boolean;
   readonly disabled?: boolean;
   readonly maxWidth?: number;
   readonly minWidth?: number;
   readonly onPress?: () => void;
+  /** Set by ControlPillMenu on Android when the button anchors a long-press menu. */
+  readonly onLongPress?: () => void;
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
@@ -179,8 +183,11 @@ export function ComposerToolbarButton(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
+      accessibilityActions={props.accessibilityActions}
+      onAccessibilityAction={props.onAccessibilityAction}
       disabled={props.disabled}
       onPress={props.onPress}
+      onLongPress={props.onLongPress}
       className={cn(
         // Default width cap lives in the class chain (not the inline style)
         // so callers can lift it with max-w-full — flex-filling pills in the
