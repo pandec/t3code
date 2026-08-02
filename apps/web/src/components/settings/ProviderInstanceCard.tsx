@@ -160,6 +160,30 @@ function configsEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * Project an envelope to the shape the server echoes back. The server
+ * normalizes environment entries on write — a sensitive value is stored out
+ * of band and echoed as `value: ""` with `valueRedacted: true`, and a
+ * client-sent `valueRedacted: false` is dropped — so a pending envelope can
+ * never match its echo byte-for-byte after an environment write, which
+ * would leave it pending forever and let later local edits overwrite newer
+ * remote changes. Masking `value`/`valueRedacted` on both sides lets such
+ * echoes acknowledge the pending write. A concurrent foreign edit differing
+ * only in masked fields can acknowledge one write early; that merely
+ * reverts this card to prop-based behavior, and the local write's own echo
+ * still lands.
+ */
+function withComparableEnvironment(envelope: ProviderInstanceConfig): unknown {
+  if (envelope.environment === undefined) return envelope;
+  return {
+    ...envelope,
+    environment: envelope.environment.map((variable) => ({
+      name: variable.name,
+      sensitive: variable.sensitive,
+    })),
+  };
+}
+
+/**
  * Set `key` to an arbitrary value on the opaque config blob. Unlike
  * provider settings field updates, does not drop empty-looking values — the
  * caller is responsible for deciding whether an empty array / empty
@@ -549,14 +573,21 @@ export function ProviderInstanceCard({
   // card therefore bases on the last *written* envelope. The pending ref is
   // only cleared when an echo structurally matches it: an intermediate echo
   // (of an older write, or a foreign edit) must not make a newer in-flight
-  // write invisible to the next edit. Known caveats, both bounded to this
-  // card's mount lifetime: a server-rejected write (abnormal — payloads are
-  // schema-valid) keeps serving as the base, resubmitted by the next write;
-  // and an environment write containing a sensitive value never matches its
-  // redacted echo, so the pending base persists until remount.
+  // write invisible to the next edit. Environment writes are compared with
+  // the server-normalized fields masked (see withComparableEnvironment) so
+  // their redacted echoes still acknowledge. Remaining caveat, bounded to
+  // this card's mount lifetime: a server-rejected write (abnormal —
+  // payloads are schema-valid) keeps serving as the base, resubmitted by
+  // the next write.
   const pendingInstanceRef = useRef<ProviderInstanceConfig | null>(null);
   useEffect(() => {
-    if (pendingInstanceRef.current !== null && configsEqual(pendingInstanceRef.current, instance)) {
+    if (
+      pendingInstanceRef.current !== null &&
+      configsEqual(
+        withComparableEnvironment(pendingInstanceRef.current),
+        withComparableEnvironment(instance),
+      )
+    ) {
       pendingInstanceRef.current = null;
     }
   }, [instance]);
