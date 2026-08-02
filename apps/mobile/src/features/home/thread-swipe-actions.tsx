@@ -327,6 +327,27 @@ export function ThreadSwipeable(props: {
           props.onSwipeableWillOpen?.(swipeableRef.current);
         }
       }}
+      // A cross-direction drag from an already-open row can cross the
+      // full-swipe threshold, but RNGH resolves that release to translation 0
+      // so onSwipeableWillOpen never fires. Commit here so an armed swipe
+      // (haptic already delivered) always keeps its promise. The refs are
+      // cleared before close() on the normal commit paths, so this cannot
+      // double-fire.
+      onSwipeableWillClose={() => {
+        if (leftFullSwipeArmedRef.current) {
+          leftFullSwipeArmedRef.current = false;
+          leftAction?.onPress();
+          return;
+        }
+        if (fullSwipeArmedRef.current) {
+          fullSwipeArmedRef.current = false;
+          if (fullSwipeAction === "primary") {
+            props.primaryAction.onPress();
+          } else {
+            props.onDelete();
+          }
+        }
+      }}
       // RNGH reports the swipe direction, not the panel side: RIGHT means the
       // user swiped right, so the LEFT panel is what opened.
       onSwipeableWillOpen={(direction) => {

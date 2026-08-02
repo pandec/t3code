@@ -82,9 +82,12 @@ export function resolveThreadListV2SwipeActions(input: {
 }): {
   readonly primary: Exclude<ThreadListV2SwipeAction, "snooze">;
   readonly secondary: "snooze" | null;
+  /** Swipe right always archives, except where archive already owns the
+      swipe-left primary (pre-settlement servers). */
+  readonly left: "archive" | null;
 } {
   if (input.snoozed === true) {
-    return { primary: "unsnooze", secondary: null };
+    return { primary: "unsnooze", secondary: null, left: "archive" };
   }
   const primary = input.settlementSupported
     ? input.variant === "slim"
@@ -94,6 +97,7 @@ export function resolveThreadListV2SwipeActions(input: {
   return {
     primary,
     secondary: input.snoozeSupported && input.snoozable ? "snooze" : null,
+    left: primary === "archive" ? null : "archive",
   };
 }
 

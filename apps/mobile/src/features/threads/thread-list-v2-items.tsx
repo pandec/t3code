@@ -92,8 +92,11 @@ function menuActionsForRow(input: {
 const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
 const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
 const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
+// Archive rides along so the swipe-right gesture keeps a menu (and
+// VoiceOver) twin on the snoozed shelf.
 const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "unsnooze", title: "Wake thread", image: "clock" },
+  MENU_ACTION_BY_ID.archive,
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -592,20 +595,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  // Swipe right always archives — except on pre-settlement servers, where
-  // archive already owns the swipe-left primary and a second archive side
-  // would be noise.
   const archiveLeftAction = useMemo(
     () =>
-      swipeActions.primary === "archive"
-        ? undefined
-        : {
+      swipeActions.left === "archive"
+        ? {
             accessibilityLabel: `Archive ${thread.title}`,
             icon: "archivebox" as const,
             label: "Archive",
             onPress: handleArchive,
-          },
-    [handleArchive, swipeActions.primary, thread.title],
+          }
+        : undefined,
+    [handleArchive, swipeActions.left, thread.title],
   );
   const swipeAccessibilityHint = [
     secondaryAction === null
