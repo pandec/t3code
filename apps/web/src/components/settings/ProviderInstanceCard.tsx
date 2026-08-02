@@ -539,10 +539,38 @@ export function ProviderInstanceCard({
     customModels,
   });
 
+  // Settings writes have no optimistic local patch (the `instance` prop only
+  // updates once the server echoes the new envelope back), and the whole
+  // `providerInstances` map is replaced per write. A second edit computed
+  // from the still-stale prop would therefore silently drop an in-flight
+  // first one — add two models back to back, add a model and immediately
+  // pick its icon, or pick an icon and then toggle Enabled (the envelope
+  // spread carries the stale config, and vice versa). Every mutator in this
+  // card therefore bases on the last *written* envelope. The pending ref is
+  // only cleared when an echo structurally matches it: an intermediate echo
+  // (of an older write, or a foreign edit) must not make a newer in-flight
+  // write invisible to the next edit. Known caveats, both bounded to this
+  // card's mount lifetime: a server-rejected write (abnormal — payloads are
+  // schema-valid) keeps serving as the base, resubmitted by the next write;
+  // and an environment write containing a sensitive value never matches its
+  // redacted echo, so the pending base persists until remount.
+  const pendingInstanceRef = useRef<ProviderInstanceConfig | null>(null);
+  useEffect(() => {
+    if (pendingInstanceRef.current !== null && configsEqual(pendingInstanceRef.current, instance)) {
+      pendingInstanceRef.current = null;
+    }
+  }, [instance]);
+  const baseInstance = () => pendingInstanceRef.current ?? instance;
+  const baseConfig = () => baseInstance().config;
+  const commitInstance = (next: ProviderInstanceConfig) => {
+    pendingInstanceRef.current = next;
+    onUpdate(next);
+  };
+
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
-    const { displayName: _omit, ...rest } = instance;
-    onUpdate(
+    const { displayName: _omit, ...rest } = baseInstance();
+    commitInstance(
       trimmed.length > 0
         ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -550,46 +578,22 @@ export function ProviderInstanceCard({
   };
 
   const updateEnabled = (value: boolean) => {
-    onUpdate({ ...instance, enabled: value });
+    commitInstance({ ...baseInstance(), enabled: value });
   };
 
   const updateAccentColor = (value: string) => {
     const normalized = normalizeProviderAccentColor(value);
-    const { accentColor: _omit, ...rest } = instance;
-    onUpdate(
+    const { accentColor: _omit, ...rest } = baseInstance();
+    commitInstance(
       normalized
         ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
   };
 
-  // Settings writes have no optimistic local patch (the `instance` prop only
-  // updates once the server echoes the new config back), and the whole
-  // `providerInstances` map is replaced per write. A second edit computed
-  // from the still-stale prop would therefore silently drop an in-flight
-  // first one — e.g. add two models back to back, or add a model and
-  // immediately pick its icon. Base successive config writes on the last
-  // *written* blob instead. The pending ref is only cleared when an echo
-  // structurally matches it: an intermediate echo (of an older write, or a
-  // foreign edit) must not make a newer in-flight write invisible to the
-  // next edit. If a write is rejected server-side (abnormal — payloads are
-  // schema-valid), the pending blob keeps serving as the base until the
-  // card remounts; the next successful write resubmits its content.
-  const pendingConfigRef = useRef<{ readonly config: unknown } | null>(null);
-  useEffect(() => {
-    if (
-      pendingConfigRef.current !== null &&
-      configsEqual(pendingConfigRef.current.config, instance.config)
-    ) {
-      pendingConfigRef.current = null;
-    }
-  }, [instance.config]);
-  const baseConfig = () =>
-    pendingConfigRef.current !== null ? pendingConfigRef.current.config : instance.config;
   const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
-    pendingConfigRef.current = { config: nextConfig };
-    const { config: _omit, ...rest } = instance;
-    onUpdate(
+    const { config: _omit, ...rest } = baseInstance();
+    commitInstance(
       nextConfig !== undefined
         ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -692,8 +696,8 @@ export function ProviderInstanceCard({
     // Map the select's string back to the branded id; "None" and stale
     // values both clear the field.
     const target = failoverOptions?.find((option) => String(option.id) === value)?.id;
-    const { failoverInstanceId: _omit, ...rest } = instance;
-    onUpdate(
+    const { failoverInstanceId: _omit, ...rest } = baseInstance();
+    commitInstance(
       target !== undefined
         ? ({ ...rest, failoverInstanceId: target } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -702,8 +706,8 @@ export function ProviderInstanceCard({
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
-    const { environment: _omit, ...rest } = instance;
-    onUpdate(
+    const { environment: _omit, ...rest } = baseInstance();
+    commitInstance(
       cleaned.length > 0
         ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
