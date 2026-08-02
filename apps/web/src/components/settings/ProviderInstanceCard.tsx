@@ -98,7 +98,7 @@ function readConfigStringArray(config: unknown, key: string): ReadonlyArray<stri
  * null-prototype record so user-authored keys like "constructor" miss
  * cleanly instead of resolving to `Object.prototype` members.
  */
-const EMPTY_STRING_RECORD: Readonly<Record<string, string>> = Object.create(null);
+const EMPTY_STRING_RECORD: Readonly<Record<string, string>> = Object.freeze(Object.create(null));
 
 function readConfigStringRecord(config: unknown, key: string): Readonly<Record<string, string>> {
   if (config === null || typeof config !== "object") return EMPTY_STRING_RECORD;
@@ -116,6 +116,47 @@ function readConfigStringRecord(config: unknown, key: string): Readonly<Record<s
     }
   }
   return record;
+}
+
+/**
+ * Read the custom-model slug list from the config blob, trimmed and
+ * deduplicated. Trimming here keeps every Settings-side consumer (display
+ * rows, icon lookups, pruning) keyed consistently with the trimmed
+ * `customModelIcons` record and with the normalized slugs the model picker
+ * resolves — a hand-edited `" gpt-5.6-sol "` heals to its trimmed form on
+ * the next write instead of splitting into two identities.
+ */
+function readConfigCustomModels(config: unknown): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  for (const entry of readConfigStringArray(config, "customModels")) {
+    const slug = entry.trim();
+    if (slug.length > 0) {
+      seen.add(slug);
+    }
+  }
+  return [...seen];
+}
+
+/**
+ * Structural equality for config blobs (JSON-shaped data, key order
+ * ignored). Used to decide whether a server echo corresponds to the latest
+ * pending local write.
+ */
+function configsEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((entry, index) => configsEqual(entry, b[index]));
+  }
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key, index) =>
+      key === bKeys[index] &&
+      configsEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+  );
 }
 
 /**
@@ -488,7 +529,7 @@ export function ProviderInstanceCard({
     ? instance.driver
     : null;
 
-  const customModels = readConfigStringArray(instance.config, "customModels");
+  const customModels = readConfigCustomModels(instance.config);
   const customModelIcons = readConfigStringRecord(instance.config, "customModelIcons");
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
@@ -526,13 +567,22 @@ export function ProviderInstanceCard({
   // updates once the server echoes the new config back), and the whole
   // `providerInstances` map is replaced per write. A second edit computed
   // from the still-stale prop would therefore silently drop an in-flight
-  // first one — e.g. add a model, then immediately pick its icon, or pick
-  // icons on two rows back to back. Base successive config writes on the
-  // last *written* blob instead; the pending ref is cleared when the echo
-  // lands (the prop identity changes).
+  // first one — e.g. add two models back to back, or add a model and
+  // immediately pick its icon. Base successive config writes on the last
+  // *written* blob instead. The pending ref is only cleared when an echo
+  // structurally matches it: an intermediate echo (of an older write, or a
+  // foreign edit) must not make a newer in-flight write invisible to the
+  // next edit. If a write is rejected server-side (abnormal — payloads are
+  // schema-valid), the pending blob keeps serving as the base until the
+  // card remounts; the next successful write resubmits its content.
   const pendingConfigRef = useRef<{ readonly config: unknown } | null>(null);
   useEffect(() => {
-    pendingConfigRef.current = null;
+    if (
+      pendingConfigRef.current !== null &&
+      configsEqual(pendingConfigRef.current.config, instance.config)
+    ) {
+      pendingConfigRef.current = null;
+    }
   }, [instance.config]);
   const baseConfig = () =>
     pendingConfigRef.current !== null ? pendingConfigRef.current.config : instance.config;
@@ -546,20 +596,51 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateConfig = (nextConfig: Record<string, unknown> | undefined) => {
-    commitConfig(nextConfig);
+  // Keys owned by the models section below, not by ProviderSettingsForm.
+  const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
+
+  const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
+    // The form computes a complete replacement blob from its rendered
+    // `value` prop, which may predate an in-flight models/icons write. The
+    // form never edits the models-section keys, so re-overlay those from
+    // the latest base instead of letting the stale form snapshot clobber
+    // them (or resurrect ones the base deleted).
+    const base = baseConfig();
+    const baseObject =
+      base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;
+    let next = formConfig;
+    for (const key of MODEL_SECTION_CONFIG_KEYS) {
+      const baseValue = baseObject?.[key];
+      if (baseValue !== undefined) {
+        next = { ...(next ?? {}), [key]: baseValue };
+      } else if (next !== undefined && Object.hasOwn(next, key)) {
+        const { [key]: _drop, ...rest } = next;
+        next = rest;
+      }
+    }
+    commitConfig(next);
   };
 
-  const updateCustomModels = (next: ReadonlyArray<string>) => {
+  const addCustomModel = (slug: string) => {
     const base = baseConfig();
-    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...next]);
+    const models = readConfigCustomModels(base);
+    // Authoritative dedupe: the section validates against its rendered
+    // list, which may lag behind an in-flight add of the same slug.
+    if (models.includes(slug)) return;
+    commitConfig(nextConfigBlobWithValue(base, "customModels", [...models, slug]));
+  };
+
+  const removeCustomModel = (slug: string) => {
+    const base = baseConfig();
+    const models = readConfigCustomModels(base).filter((model) => model !== slug);
+    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...models]);
     // Prune icon overrides for removed slugs in the same write — a separate
-    // icons write here would start from the same stale config and lose the
+    // icons write here would start from the same base and lose the
     // model-list change.
-    const nextSlugs = new Set(next);
+    const modelSet = new Set(models);
     const keptIcons = Object.fromEntries(
-      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
-        nextSlugs.has(slug),
+      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([iconSlug]) =>
+        modelSet.has(iconSlug),
       ),
     );
     if (Object.keys(keptIcons).length > 0) {
@@ -572,7 +653,12 @@ export function ProviderInstanceCard({
 
   const updateCustomModelIcon = (slug: string, icon: string | null) => {
     const base = baseConfig();
-    const icons: Record<string, string> = { ...readConfigStringRecord(base, "customModelIcons") };
+    // Null prototype so a slug like "__proto__" becomes an own data
+    // property instead of silently vanishing into the inherited setter.
+    const icons: Record<string, string> = Object.assign(
+      Object.create(null),
+      readConfigStringRecord(base, "customModelIcons"),
+    );
     if (icon === null) {
       delete icons[slug];
     } else {
@@ -947,7 +1033,8 @@ export function ProviderInstanceCard({
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
-                onChange={updateCustomModels}
+                onAddCustomModel={addCustomModel}
+                onRemoveCustomModel={removeCustomModel}
                 onCustomModelIconChange={updateCustomModelIcon}
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}

@@ -71,7 +71,7 @@ function readInstanceCustomModels(
 
 // Null prototype, like every record readInstanceCustomModelIcons returns:
 // lookups by user-authored slugs (e.g. "constructor") must miss cleanly.
-const EMPTY_ICON_RECORD: Readonly<Record<string, string>> = Object.create(null);
+const EMPTY_ICON_RECORD: Readonly<Record<string, string>> = Object.freeze(Object.create(null));
 
 /**
  * Read the per-custom-model icon overrides for an instance from its

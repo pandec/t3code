@@ -58,9 +58,10 @@ interface ProviderModelsSectionProps {
    */
   readonly models: ReadonlyArray<ServerProviderModel>;
   /**
-   * The persisted custom-model slug list for this instance. Drives dedup,
-   * and is the array we hand back verbatim (with the new slug appended /
-   * removed) via `onChange`.
+   * The persisted custom-model slug list for this instance. Drives the
+   * rendered rows and best-effort duplicate validation; mutations flow back
+   * as per-slug add/remove deltas so the owner can merge them into the
+   * latest written config rather than a stale rendered snapshot.
    */
   readonly customModels: ReadonlyArray<string>;
   /**
@@ -82,11 +83,12 @@ interface ProviderModelsSectionProps {
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
   /**
-   * Commit the new custom-model list. Caller is responsible for routing the
-   * write to the correct storage (legacy `settings.providers[kind]` vs.
-   * `providerInstances[id].config`).
+   * Append one custom model slug. The owner routes the write to the correct
+   * storage and dedupes against its latest written list.
    */
-  readonly onChange: (next: ReadonlyArray<string>) => void;
+  readonly onAddCustomModel: (slug: string) => void;
+  /** Remove one custom model slug (the owner also prunes its icon override). */
+  readonly onRemoveCustomModel: (slug: string) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
@@ -112,7 +114,8 @@ export function ProviderModelsSection({
   hiddenModels,
   favoriteModels,
   modelOrder,
-  onChange,
+  onAddCustomModel,
+  onRemoveCustomModel,
   onCustomModelIconChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
@@ -150,7 +153,7 @@ export function ProviderModelsSection({
       return;
     }
 
-    onChange([...customModels, normalized]);
+    onAddCustomModel(normalized);
     setInput("");
     setError(null);
 
@@ -171,10 +174,7 @@ export function ProviderModelsSection({
   };
 
   const handleRemove = (slug: string) => {
-    // The customModels write also prunes the removed slug's icon override —
-    // both live in the same config blob, so the owner batches them into one
-    // update (see `updateCustomModels` in ProviderInstanceCard).
-    onChange(customModels.filter((model) => model !== slug));
+    onRemoveCustomModel(slug);
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
