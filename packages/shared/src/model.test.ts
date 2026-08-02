@@ -12,6 +12,7 @@ import {
   getProviderOptionStringSelectionValue,
   normalizeCustomModelSlug,
   normalizeModelSlug,
+  parseCustomModelEntry,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -153,5 +154,46 @@ describe("model slug normalization", () => {
 
     expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5");
     expect(normalizeCustomModelSlug(" opus ")).toBe("opus");
+  });
+});
+
+describe("parseCustomModelEntry", () => {
+  it("treats a plain entry as both slug and name", () => {
+    expect(parseCustomModelEntry(" gpt-5.6-sol ")).toEqual({
+      slug: "gpt-5.6-sol",
+      name: "gpt-5.6-sol",
+    });
+  });
+
+  it("splits a labeled entry into slug and display name", () => {
+    expect(parseCustomModelEntry("gpt-5.6-sol=GPT-5.6-Sol")).toEqual({
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6-Sol",
+    });
+    expect(parseCustomModelEntry(" gpt-5.6-sol = GPT-5.6-Sol ")).toEqual({
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6-Sol",
+    });
+  });
+
+  it("keeps later separators inside the label", () => {
+    expect(parseCustomModelEntry("model=Label = extra")).toEqual({
+      slug: "model",
+      name: "Label = extra",
+    });
+  });
+
+  it("falls back to the slug for an empty label", () => {
+    expect(parseCustomModelEntry("gpt-5.6-sol=")).toEqual({
+      slug: "gpt-5.6-sol",
+      name: "gpt-5.6-sol",
+    });
+  });
+
+  it("rejects entries without a slug", () => {
+    expect(parseCustomModelEntry("=Label")).toBeNull();
+    expect(parseCustomModelEntry("   ")).toBeNull();
+    expect(parseCustomModelEntry(null)).toBeNull();
+    expect(parseCustomModelEntry(undefined)).toBeNull();
   });
 });

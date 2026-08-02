@@ -100,6 +100,28 @@ describe("instance-scoped model selection", () => {
     ).toContain("openai/gpt-5.5");
   });
 
+  it("maps a labeled custom entry to its slug and display name", () => {
+    const providers = [
+      provider({
+        instanceId: "claude_openrouter",
+        models: ["claude-sonnet-4-6"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: { customModels: ["gpt-5.6-sol=GPT-5.6-Sol"] },
+        },
+      },
+    };
+    const entry = deriveProviderInstanceEntries(providers)[0]!;
+
+    const custom = getAppModelOptionsForInstance(settings, entry).find((option) => option.isCustom);
+    expect(custom).toMatchObject({ slug: "gpt-5.6-sol", name: "GPT-5.6-Sol" });
+  });
+
   it("resolves a custom slug against the selected custom instance", () => {
     const providers = [
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
