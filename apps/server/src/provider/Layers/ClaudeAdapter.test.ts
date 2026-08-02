@@ -1324,6 +1324,54 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("rewrites custom model effort into the model id instead of query effort", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "gpt-5.6-sol",
+          [{ id: "effort", value: "medium" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.model, "gpt-5.6-sol(medium)");
+      assert.equal(createInput?.options.effort, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("passes pre-suffixed custom model ids through and ignores the effort option", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "gpt-5.6-sol(high)",
+          [{ id: "effort", value: "low" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.model, "gpt-5.6-sol(high)");
+      assert.equal(createInput?.options.effort, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps the Claude Opus 4.7 default effort to the SDK-supported max value", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -4272,7 +4320,9 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setModelCalls, ["openai/gpt-5.5"]);
+      // Custom models carry the selected effort (default high) as a
+      // parenthesized model-name suffix.
+      assert.deepEqual(harness.query.setModelCalls, ["openai/gpt-5.5(high)"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

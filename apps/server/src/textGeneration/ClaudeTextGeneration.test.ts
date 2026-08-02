@@ -222,6 +222,37 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("rewrites custom model effort into the model id without passing effort", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: {
+            subject: "Add important change",
+            body: "",
+          },
+        }),
+        argsMustContain: "--model gpt-5.6-sol(low)",
+        argsMustNotContain: "--effort",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/claude-effect",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            modelSelection: {
+              ...createModelSelection(ProviderInstanceId.make("claudeAgent"), "gpt-5.6-sol", [
+                { id: "effort", value: "low" },
+              ]),
+            },
+          });
+
+          expect(generated.subject).toBe("Add important change");
+        }),
+    ),
+  );
+
   it.effect("forwards Claude fast mode and supported effort", () =>
     withFakeClaudeEnv(
       {

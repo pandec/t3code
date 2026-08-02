@@ -44,8 +44,21 @@ import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 
+// Custom (gateway-served) models consume the selected effort through a
+// parenthesized model-name suffix (`slug(effort)`) instead of Claude-native
+// effort — see resolveClaudeApiModelId and normalizeClaudeCliEffort.
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [],
+  optionDescriptors: [
+    buildSelectOptionDescriptor({
+      id: "effort",
+      label: "Reasoning",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High", isDefault: true },
+      ],
+    }),
+  ],
 });
 
 const CLAUDE_PRESENTATION = {
@@ -374,6 +387,23 @@ export function getClaudeModelCapabilities(model: string | null | undefined): Mo
   );
 }
 
+export function isBuiltInClaudeModel(model: string | null | undefined): boolean {
+  const slug = model?.trim();
+  return BUILT_IN_MODELS.some((candidate) => candidate.slug === slug);
+}
+
+/**
+ * Whether the model is a custom (settings-provided) model rather than a
+ * built-in Claude model. Custom models are typically served by a gateway
+ * whose translation of Claude-native effort is unreliable, so the selected
+ * effort is consumed by rewriting the model name to `slug(effort)` instead
+ * of being sent as a Claude-native effort level.
+ */
+export function isCustomClaudeModel(model: string | null | undefined): boolean {
+  const slug = model?.trim();
+  return typeof slug === "string" && slug.length > 0 && !isBuiltInClaudeModel(slug);
+}
+
 export function resolveClaudeEffort(
   caps: ModelCapabilities,
   raw: string | null | undefined,
@@ -396,12 +426,19 @@ export function resolveClaudeEffort(
  * Claude Code setting that pairs with `xhigh`, `ultrathink` is filtered out
  * because it is a prompt-prefix mode, and older model compatibility mappings
  * are preserved for current Claude Code behavior.
+ *
+ * Claude-native effort only applies to built-in models. Custom models consume
+ * the selected effort through the model-name suffix instead (see
+ * {@link resolveClaudeApiModelId}) and must never receive a native effort.
  */
 export function normalizeClaudeCliEffort(
   effort: string | null | undefined,
   model: string | null | undefined,
 ): string | undefined {
   if (!effort || effort === "ultrathink") {
+    return undefined;
+  }
+  if (!isBuiltInClaudeModel(model)) {
     return undefined;
   }
   if (effort === "ultracode") {
@@ -440,7 +477,21 @@ export function resolveClaudeContextWindow(
   return typeof value === "string" ? value : undefined;
 }
 
+const CUSTOM_MODEL_EFFORT_SUFFIX_PATTERN = /\([^()]*\)$/;
+
 export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {
+  if (isCustomClaudeModel(modelSelection.model)) {
+    // A slug that already carries a parenthesized suffix pins its own effort;
+    // pass it through verbatim and ignore the effort option.
+    if (CUSTOM_MODEL_EFFORT_SUFFIX_PATTERN.test(modelSelection.model.trim())) {
+      return modelSelection.model;
+    }
+    const effort = resolveClaudeEffort(
+      getClaudeModelCapabilities(modelSelection.model),
+      getModelSelectionStringOptionValue(modelSelection, "effort"),
+    );
+    return effort ? `${modelSelection.model}(${effort})` : modelSelection.model;
+  }
   switch (resolveClaudeContextWindow(modelSelection)) {
     case "1m":
       return `${modelSelection.model}[1m]`;
