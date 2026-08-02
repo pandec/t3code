@@ -69,6 +69,43 @@ function readInstanceCustomModels(
   return legacyProviders[driverKind]?.customModels ?? [];
 }
 
+// Null prototype, like every record readInstanceCustomModelIcons returns:
+// lookups by user-authored slugs (e.g. "constructor") must miss cleanly.
+const EMPTY_ICON_RECORD: Readonly<Record<string, string>> = Object.freeze(Object.create(null));
+
+/**
+ * Read the per-custom-model icon overrides for an instance from its
+ * `providerInstances[id].config.customModelIcons` blob (slug → driver-kind
+ * icon id, see `getModelIconComponent`). Icons only ever live in the
+ * instance envelope — the legacy per-kind bucket predates the feature, so
+ * there is no fallback to it.
+ */
+function readInstanceCustomModelIcons(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+): Readonly<Record<string, string>> {
+  const config = settings.providerInstances?.[instanceId]?.config;
+  if (config === null || typeof config !== "object") return EMPTY_ICON_RECORD;
+  const value = (config as Record<string, unknown>).customModelIcons;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_ICON_RECORD;
+  }
+  // Null prototype: keys are user-authored model slugs, and a slug like
+  // "constructor" must miss cleanly instead of hitting `Object.prototype`.
+  // Keys and values are trimmed so hand-edited settings still match the
+  // normalized slugs that model options carry.
+  const icons: Record<string, string> = Object.create(null);
+  for (const [slug, icon] of Object.entries(value)) {
+    if (typeof icon !== "string") continue;
+    const key = slug.trim();
+    const trimmedIcon = icon.trim();
+    if (key.length > 0 && trimmedIcon.length > 0) {
+      icons[key] = trimmedIcon;
+    }
+  }
+  return icons;
+}
+
 export interface AppModelOption {
   slug: string;
   name: string;
@@ -77,6 +114,8 @@ export interface AppModelOption {
   isCustom: boolean;
   isDefault?: boolean;
   isLegacy?: boolean;
+  /** Per-model icon override for custom models (a driver-kind icon id). */
+  icon?: string;
 }
 
 function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
@@ -102,6 +141,25 @@ function readInstanceModelPreferences(
       modelOrder: [],
     }
   );
+}
+
+/**
+ * Attach the instance's icon overrides to its custom model options. Applies
+ * to both server-reported custom entries and locally-derived ones, keyed by
+ * slug, so the icon shows regardless of whether the probe has caught up with
+ * a settings edit.
+ */
+function applyCustomModelIcons(
+  options: ReadonlyArray<AppModelOption>,
+  icons: Readonly<Record<string, string>>,
+): AppModelOption[] {
+  return options.map((option) => {
+    // hasOwn, not a bare index: slugs are user-authored, and "constructor"
+    // must not resolve to an Object.prototype member.
+    const icon =
+      option.isCustom && Object.hasOwn(icons, option.slug) ? icons[option.slug] : undefined;
+    return icon === undefined ? option : { ...option, icon };
+  });
 }
 
 function applyInstanceModelPreferences(
@@ -180,7 +238,7 @@ export function getAppModelOptions(
   }
 
   return applyInstanceModelPreferences(
-    options,
+    applyCustomModelIcons(options, readInstanceCustomModelIcons(settings, defaultInstanceId)),
     readInstanceModelPreferences(settings, defaultInstanceId),
   );
 }
@@ -219,7 +277,7 @@ export function getAppModelOptionsForInstance(
   }
 
   return applyInstanceModelPreferences(
-    options,
+    applyCustomModelIcons(options, readInstanceCustomModelIcons(settings, entry.instanceId)),
     readInstanceModelPreferences(settings, entry.instanceId),
   );
 }

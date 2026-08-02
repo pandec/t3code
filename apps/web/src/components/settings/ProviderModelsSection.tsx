@@ -21,8 +21,14 @@ import { parseCustomModelEntry } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import {
+  getModelIconComponent,
+  MODEL_ICON_OPTIONS,
+  PROVIDER_ICON_BY_PROVIDER,
+} from "../chat/providerIconUtils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
@@ -53,10 +59,24 @@ interface ProviderModelsSectionProps {
   readonly models: ReadonlyArray<ServerProviderModel>;
   /**
    * The persisted custom-model entry list for this instance (`slug` or
-   * `slug=Label`). Drives dedup by parsed slug, and is the array we hand
-   * back verbatim (with the new entry appended / removed) via `onChange`.
+   * `slug=Label`). Drives the rendered rows and best-effort duplicate
+   * validation by parsed slug; mutations flow back as per-entry add /
+   * per-slug remove deltas so the owner can merge them into the latest
+   * written config rather than a stale rendered snapshot.
    */
   readonly customModels: ReadonlyArray<string>;
+  /**
+   * Per-custom-model icon overrides (slug → driver-kind icon id). Lives in
+   * the instance config blob next to `customModels`.
+   */
+  readonly customModelIcons: Readonly<Record<string, string>>;
+  /**
+   * Set (or clear, with `null`) one model's icon override. A per-slug delta
+   * rather than a full record: the owner merges it into the latest written
+   * config, so two quick picks on different rows cannot overwrite each other
+   * with stale snapshots of the whole record.
+   */
+  readonly onCustomModelIconChange: (slug: string, icon: string | null) => void;
   /** Server-returned model slugs hidden from the model picker. */
   readonly hiddenModels: ReadonlyArray<string>;
   /** Model slugs favorited for this provider instance. */
@@ -64,11 +84,13 @@ interface ProviderModelsSectionProps {
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
   /**
-   * Commit the new custom-model list. Caller is responsible for routing the
-   * write to the correct storage (legacy `settings.providers[kind]` vs.
-   * `providerInstances[id].config`).
+   * Append one custom model entry (`slug` or `slug=Label`). The owner
+   * routes the write to the correct storage and dedupes by parsed slug
+   * against its latest written list.
    */
-  readonly onChange: (next: ReadonlyArray<string>) => void;
+  readonly onAddCustomModel: (entry: string) => void;
+  /** Remove one custom model slug (the owner also prunes its icon override). */
+  readonly onRemoveCustomModel: (slug: string) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
@@ -90,10 +112,13 @@ export function ProviderModelsSection({
   driverKind,
   models,
   customModels,
+  customModelIcons,
   hiddenModels,
   favoriteModels,
   modelOrder,
-  onChange,
+  onAddCustomModel,
+  onRemoveCustomModel,
+  onCustomModelIconChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
@@ -130,8 +155,7 @@ export function ProviderModelsSection({
       return;
     }
 
-    const entry = parsed.name === parsed.slug ? parsed.slug : `${parsed.slug}=${parsed.name}`;
-    onChange([...customModels, entry]);
+    onAddCustomModel(parsed.name === parsed.slug ? parsed.slug : `${parsed.slug}=${parsed.name}`);
     setInput("");
     setError(null);
 
@@ -152,7 +176,7 @@ export function ProviderModelsSection({
   };
 
   const handleRemove = (slug: string) => {
-    onChange(customModels.filter((entry) => parseCustomModelEntry(entry)?.slug !== slug));
+    onRemoveCustomModel(slug);
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
@@ -280,6 +304,18 @@ export function ProviderModelsSection({
                 ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
+                {model.isCustom ? (
+                  <CustomModelIconPicker
+                    modelName={model.name}
+                    icon={customModelIcons[model.slug]}
+                    driverKind={driverKind}
+                    onIconChange={(icon) => onCustomModelIconChange(model.slug, icon)}
+                  />
+                ) : (
+                  // Reserve the picker's slot so the star/arrow columns stay
+                  // aligned between built-in and custom rows.
+                  <span className="size-5" aria-hidden />
+                )}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -413,5 +449,107 @@ export function ProviderModelsSection({
 
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>
+  );
+}
+
+/**
+ * Per-custom-model icon selector. The trigger shows the current override (or
+ * the instance driver's icon, subdued, when unset); the popup offers every
+ * provider glyph plus a reset to the driver default. Lets a gateway-served
+ * model (e.g. a Codex model behind the Claude provider) carry the icon of
+ * its real model family in the model picker.
+ */
+function CustomModelIconPicker({
+  modelName,
+  icon,
+  driverKind,
+  onIconChange,
+}: {
+  readonly modelName: string;
+  readonly icon: string | undefined;
+  readonly driverKind: ProviderDriverKind | null;
+  readonly onIconChange: (icon: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const SelectedIcon = getModelIconComponent(icon);
+  const DriverIcon = driverKind ? (PROVIDER_ICON_BY_PROVIDER[driverKind] ?? null) : null;
+  const TriggerIcon = SelectedIcon ?? DriverIcon;
+  const currentLabel = SelectedIcon
+    ? (MODEL_ICON_OPTIONS.find((option) => option.id === icon)?.label ?? "custom")
+    : "provider default";
+
+  const selectIcon = (next: string | null) => {
+    onIconChange(next);
+    setOpen(false);
+  };
+
+  const optionClassName = (selected: boolean) =>
+    cn(
+      "size-6 rounded-sm p-0",
+      selected
+        ? "bg-primary/10 text-foreground ring-1 ring-inset ring-primary/40"
+        : "text-muted-foreground hover:text-foreground",
+    );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                  aria-label={`Icon for ${modelName}: ${currentLabel} — change`}
+                />
+              }
+            />
+          }
+        >
+          {TriggerIcon ? (
+            <TriggerIcon className="size-3" aria-hidden />
+          ) : (
+            <span className="size-2 rounded-full border border-current" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">Change icon</TooltipPopup>
+      </Tooltip>
+      <PopoverPopup side="bottom" align="end" sideOffset={4} tooltipStyle>
+        <div className="flex items-center gap-0.5">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className={optionClassName(SelectedIcon === null)}
+            title="Provider default"
+            aria-label={`Use the provider default icon for ${modelName}`}
+            aria-pressed={SelectedIcon === null}
+            onClick={() => selectIcon(null)}
+          >
+            {DriverIcon ? (
+              <DriverIcon className="size-3.5" aria-hidden />
+            ) : (
+              <XIcon className="size-3.5" aria-hidden />
+            )}
+          </Button>
+          <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+          {MODEL_ICON_OPTIONS.map((option) => (
+            <Button
+              key={option.id}
+              size="icon-xs"
+              variant="ghost"
+              className={optionClassName(icon === option.id)}
+              title={option.label}
+              aria-label={`Use the ${option.label} icon for ${modelName}`}
+              aria-pressed={icon === option.id}
+              onClick={() => selectIcon(option.id)}
+            >
+              <option.Icon className="size-3.5" aria-hidden />
+            </Button>
+          ))}
+        </div>
+      </PopoverPopup>
+    </Popover>
   );
 }

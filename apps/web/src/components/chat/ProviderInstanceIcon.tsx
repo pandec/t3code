@@ -1,7 +1,7 @@
 import { type CSSProperties, memo } from "react";
 import { type ProviderDriverKind } from "@t3tools/contracts";
 
-import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
+import { getModelIconComponent, PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { cn } from "~/lib/utils";
 
 export function providerInstanceInitials(label: string): string {
@@ -17,6 +17,12 @@ export function providerInstanceInitials(label: string): string {
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
   displayName: string;
+  /**
+   * Per-model icon override (a driver-kind icon id). When it resolves to a
+   * known glyph it replaces the driver's icon; the accent badge and status
+   * dot stay instance-scoped either way.
+   */
+  modelIcon?: string | undefined;
   accentColor?: string | undefined;
   showBadge?: boolean;
   badgeContent?: "initials" | "none";
@@ -26,7 +32,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  const Icon =
+    getModelIconComponent(props.modelIcon) ?? PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentStyle = props.accentColor
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)
