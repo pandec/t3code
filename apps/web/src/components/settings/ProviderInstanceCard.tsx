@@ -22,6 +22,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -120,15 +121,22 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
+  const seen = new Set<string>();
+  const customModels = Arr.filterMap(input.customModels, (entry) => {
+    const parsed = parseCustomModelEntry(entry);
+    if (!parsed || seen.has(parsed.slug)) {
+      return Result.failVoid;
+    }
+    seen.add(parsed.slug);
+    return Result.succeed(
+      liveCustomModelsBySlug.get(parsed.slug) ?? {
+        slug: parsed.slug,
+        name: parsed.name,
         isCustom: true,
         capabilities: null,
       },
-  );
+    );
+  });
   return [...serverModels, ...customModels];
 }
 

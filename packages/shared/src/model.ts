@@ -321,6 +321,10 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
  * the label only changes how the model is presented. Whitespace around
  * either part is trimmed, an entry with an empty slug is invalid, and an
  * empty label falls back to the slug.
+ *
+ * `=` is reserved as the separator, so a model id that itself contains `=`
+ * can no longer be expressed as a bare entry — an accepted trade-off, since
+ * no known provider uses `=` in model identifiers.
  */
 export function parseCustomModelEntry(
   entry: string | null | undefined,
