@@ -2096,6 +2096,7 @@ export default function SidebarV2() {
 
   const moveThreadToTop = useCallback(
     (threadRef: ScopedThreadRef) => {
+      const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
       const sortOptions = {
         bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
         getThreadKey: (thread: EnvironmentThreadShell) =>
@@ -2104,15 +2105,10 @@ export default function SidebarV2() {
       };
       bumpSidebarV2Thread(
         scopedThreadKey(threadRef),
-        nextSidebarV2ThreadBumpAt(activeThreads, sortOptions),
+        nextSidebarV2ThreadBumpAt(unarchivedThreads, sortOptions),
       );
     },
-    [
-      activeThreads,
-      bumpSidebarV2Thread,
-      sidebarV2ThreadBumpedAtByKey,
-      sortActiveByLatestUserMessage,
-    ],
+    [bumpSidebarV2Thread, sidebarV2ThreadBumpedAtByKey, sortActiveByLatestUserMessage, threads],
   );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
