@@ -303,7 +303,9 @@ export function ThreadSwipeable(props: {
       animationOptions={THREAD_SWIPE_SPRING}
       childrenContainerStyle={{ backgroundColor: props.backgroundColor }}
       containerStyle={[{ backgroundColor: props.backgroundColor }, props.containerStyle]}
-      dragOffsetFromLeftEdge={8}
+      // Rows without a left action keep the RNGH default so an inert pan
+      // can't activate earlier than it used to.
+      dragOffsetFromLeftEdge={leftAction === undefined ? 10 : 8}
       dragOffsetFromRightEdge={8}
       enabled={props.enabled !== false && gateEnabled}
       enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
