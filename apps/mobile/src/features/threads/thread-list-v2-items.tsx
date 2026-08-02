@@ -592,10 +592,27 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  const swipeAccessibilityHint =
+  // Swipe right always archives — except on pre-settlement servers, where
+  // archive already owns the swipe-left primary and a second archive side
+  // would be noise.
+  const archiveLeftAction = useMemo(
+    () =>
+      swipeActions.primary === "archive"
+        ? undefined
+        : {
+            accessibilityLabel: `Archive ${thread.title}`,
+            icon: "archivebox" as const,
+            label: "Archive",
+            onPress: handleArchive,
+          },
+    [handleArchive, swipeActions.primary, thread.title],
+  );
+  const swipeAccessibilityHint = [
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
-      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
+      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
+    ...(archiveLeftAction === undefined ? [] : ["Swipe right to archive."]),
+  ].join(" ");
 
   // The sidebar pane fills selected rows with the accent color (matching the
   // v1 sidebar), so every piece of row text needs a white-on-accent variant.
@@ -860,6 +877,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+        leftAction={archiveLeftAction}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}
