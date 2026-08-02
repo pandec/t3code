@@ -94,6 +94,7 @@ import {
   getClaudeModelCapabilities,
   gateClaudeSkillsByUserInvocation,
   isClaudeUltracodeEffort,
+  isCustomClaudeModel,
   mergeClaudeSkills,
   normalizeClaudeCliEffort,
   parseClaudeSkills,
@@ -3717,6 +3718,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
+      if (isCustomClaudeModel(modelSelection?.model)) {
+        // The SDK appends extra args after its generated flags. Keep custom
+        // model selection on the resolved model-id path and never let a
+        // configured native effort override the parenthesized suffix.
+        delete extraArgs.model;
+        delete extraArgs.effort;
+      }
       const caps = getClaudeModelCapabilities(modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
       const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;

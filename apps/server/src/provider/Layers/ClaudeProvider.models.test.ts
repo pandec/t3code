@@ -62,6 +62,17 @@ it("rewrites custom model ids with the default effort when none is selected", ()
   );
 });
 
+it("falls back to the default effort for an invalid stored selection", () => {
+  assert.equal(
+    resolveClaudeApiModelId(
+      createModelSelection(INSTANCE_ID, "gpt-5.6-sol", [
+        { id: "effort", value: "not-a-real-effort" },
+      ]),
+    ),
+    "gpt-5.6-sol(high)",
+  );
+});
+
 it("passes pre-suffixed custom model ids through and ignores the effort option", () => {
   assert.equal(
     resolveClaudeApiModelId(
