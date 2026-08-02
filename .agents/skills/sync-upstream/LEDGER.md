@@ -36,7 +36,8 @@ Self-cleaning rules (apply during every sync's ledger update):
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
-- `apps/server/src/cloud/serviceLauncherClient.ts`, `apps/server/src/server.ts`, `apps/server/src/persistence/Layers/Sqlite.ts`, or `apps/server/src/bin.ts`: if upstream changes launcher activation or trial startup again, do the fork's voice-upload middleware, CLI commands, busy timeout, and pragma-free read-only SQLite layer still compose without weakening rollback safety? Added after the 2026-08-02 compatibility resolution.
+- `apps/server/src/cloud/serviceLauncherClient.ts`, `apps/server/src/server.ts`, `apps/server/src/persistence/Layers/Sqlite.ts`, or `apps/server/src/bin.ts`: if upstream changes launcher activation or trial startup again, do the fork's voice-upload middleware, CLI commands, busy timeout, and pragma-free read-only SQLite layer still compose without weakening rollback safety? Compatibility reconfirmed on 2026-08-02: the fork layers remain structurally isolated from trial commit/rollback and command readiness.
+- `apps/mobile/src/lib/modelOptions.ts`, `apps/mobile/src/features/threads/NewTaskDraftScreen.tsx`, or `apps/mobile/src/features/threads/ThreadComposer.tsx`: if upstream changes model-menu grouping again, does the shared menu helper still preserve the fork's Hermes labeling and compose with its additional composer controls without duplicating selection logic? Added after the 2026-08-02 legacy-model grouping merge.
 
 ## Full audit
 

@@ -50,7 +50,7 @@ import {
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects, useServerConfigs } from "../../state/entities";
 import { VoiceRecorderControl } from "./VoiceRecorderControl";
-import { resolveSelectableModelSelection } from "../../lib/modelOptions";
+import { buildModelMenuActions, resolveSelectableModelSelection } from "../../lib/modelOptions";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
@@ -611,27 +611,7 @@ export function NewTaskDraftScreen(props: {
   );
 
   const modelMenuActions = useMemo(
-    () =>
-      flow.providerGroups.map((group) => ({
-        id: `provider:${group.providerKey}`,
-        title: group.providerLabel,
-        subtitle: group.models.find(
-          (model) =>
-            flow.selectedModel &&
-            model.selection.instanceId === flow.selectedModel.instanceId &&
-            model.selection.model === flow.selectedModel.model,
-        )?.label,
-        subactions: group.models.map((option) => ({
-          id: `model:${option.key}`,
-          title: option.label,
-          state:
-            flow.selectedModel &&
-            option.selection.instanceId === flow.selectedModel.instanceId &&
-            option.selection.model === flow.selectedModel.model
-              ? ("on" as const)
-              : undefined,
-        })),
-      })),
+    () => buildModelMenuActions(flow.providerGroups, flow.selectedModel),
     [flow.providerGroups, flow.selectedModel],
   );
   const providerOptionDescriptors = useMemo(
