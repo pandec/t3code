@@ -22,6 +22,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -119,22 +120,24 @@ function readConfigStringRecord(config: unknown, key: string): Readonly<Record<s
 }
 
 /**
- * Read the custom-model slug list from the config blob, trimmed and
- * deduplicated. Trimming here keeps every Settings-side consumer (display
- * rows, icon lookups, pruning) keyed consistently with the trimmed
- * `customModelIcons` record and with the normalized slugs the model picker
- * resolves — a hand-edited `" gpt-5.6-sol "` heals to its trimmed form on
- * the next write instead of splitting into two identities.
+ * Read the custom-model entry list (`slug` or `slug=Label`) from the config
+ * blob: entries are trimmed, invalid ones dropped, and duplicates (by
+ * parsed slug) collapse to the first occurrence. Keying everything by the
+ * parsed slug keeps Settings-side consumers (display rows, icon lookups,
+ * pruning) consistent with the trimmed `customModelIcons` record and with
+ * the normalized slugs the model picker resolves — a hand-edited
+ * `" gpt-5.6-sol "` heals to its trimmed form on the next write instead of
+ * splitting into two identities.
  */
 function readConfigCustomModels(config: unknown): ReadonlyArray<string> {
-  const seen = new Set<string>();
-  for (const entry of readConfigStringArray(config, "customModels")) {
-    const slug = entry.trim();
-    if (slug.length > 0) {
-      seen.add(slug);
+  const entriesBySlug = new Map<string, string>();
+  for (const rawEntry of readConfigStringArray(config, "customModels")) {
+    const parsed = parseCustomModelEntry(rawEntry);
+    if (parsed !== null && !entriesBySlug.has(parsed.slug)) {
+      entriesBySlug.set(parsed.slug, rawEntry.trim());
     }
   }
-  return [...seen];
+  return [...entriesBySlug.values()];
 }
 
 /**
@@ -212,15 +215,22 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
+  const seen = new Set<string>();
+  const customModels = Arr.filterMap(input.customModels, (entry) => {
+    const parsed = parseCustomModelEntry(entry);
+    if (!parsed || seen.has(parsed.slug)) {
+      return Result.failVoid;
+    }
+    seen.add(parsed.slug);
+    return Result.succeed(
+      liveCustomModelsBySlug.get(parsed.slug) ?? {
+        slug: parsed.slug,
+        name: parsed.name,
         isCustom: true,
         capabilities: null,
       },
-  );
+    );
+  });
   return [...serverModels, ...customModels];
 }
 
@@ -656,26 +666,37 @@ export function ProviderInstanceCard({
     commitConfig(next);
   };
 
-  const addCustomModel = (slug: string) => {
+  const addCustomModel = (entry: string) => {
     const base = baseConfig();
-    const models = readConfigCustomModels(base);
-    // Authoritative dedupe: the section validates against its rendered
-    // list, which may lag behind an in-flight add of the same slug.
-    if (models.includes(slug)) return;
-    commitConfig(nextConfigBlobWithValue(base, "customModels", [...models, slug]));
+    const entries = readConfigCustomModels(base);
+    const slug = parseCustomModelEntry(entry)?.slug;
+    if (slug === undefined) return;
+    // Authoritative dedupe by parsed slug: the section validates against
+    // its rendered list, which may lag behind an in-flight add of the same
+    // slug (possibly under a different label).
+    if (entries.some((existing) => parseCustomModelEntry(existing)?.slug === slug)) return;
+    commitConfig(nextConfigBlobWithValue(base, "customModels", [...entries, entry.trim()]));
   };
 
   const removeCustomModel = (slug: string) => {
     const base = baseConfig();
-    const models = readConfigCustomModels(base).filter((model) => model !== slug);
-    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...models]);
+    const entries = readConfigCustomModels(base).filter(
+      (entry) => parseCustomModelEntry(entry)?.slug !== slug,
+    );
+    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...entries]);
     // Prune icon overrides for removed slugs in the same write — a separate
     // icons write here would start from the same base and lose the
-    // model-list change.
-    const modelSet = new Set(models);
+    // model-list change. Icons are keyed by the parsed slug, not the raw
+    // labeled entry.
+    const remainingSlugs = new Set(
+      Arr.filterMap(entries, (entry) => {
+        const parsed = parseCustomModelEntry(entry);
+        return parsed !== null ? Result.succeed(parsed.slug) : Result.failVoid;
+      }),
+    );
     const keptIcons = Object.fromEntries(
       Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([iconSlug]) =>
-        modelSet.has(iconSlug),
+        remainingSlugs.has(iconSlug),
       ),
     );
     if (Object.keys(keptIcons).length > 0) {

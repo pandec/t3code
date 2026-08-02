@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import {
   createModelSelection,
-  normalizeCustomModelSlug,
+  parseCustomModelEntry,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
@@ -176,26 +176,26 @@ function applyInstanceModelPreferences(
   );
 }
 
-export function normalizeCustomModelSlugs(
+export function normalizeCustomModelEntries(
   models: Iterable<string | null | undefined>,
   builtInModelSlugs: ReadonlySet<string>,
-): string[] {
-  const normalizedModels: string[] = [];
+): Array<{ readonly slug: string; readonly name: string }> {
+  const normalizedModels: Array<{ readonly slug: string; readonly name: string }> = [];
   const seen = new Set<string>();
 
   for (const candidate of models) {
-    const normalized = normalizeCustomModelSlug(candidate);
+    const parsed = parseCustomModelEntry(candidate);
     if (
-      !normalized ||
-      normalized.length > MAX_CUSTOM_MODEL_LENGTH ||
-      builtInModelSlugs.has(normalized) ||
-      seen.has(normalized)
+      !parsed ||
+      parsed.slug.length > MAX_CUSTOM_MODEL_LENGTH ||
+      builtInModelSlugs.has(parsed.slug) ||
+      seen.has(parsed.slug)
     ) {
       continue;
     }
 
-    seen.add(normalized);
-    normalizedModels.push(normalized);
+    seen.add(parsed.slug);
+    normalizedModels.push(parsed);
     if (normalizedModels.length >= MAX_CUSTOM_MODEL_COUNT) {
       break;
     }
@@ -224,7 +224,7 @@ export function getAppModelOptions(
   // see the user's authored custom models.
   const defaultInstanceId = defaultInstanceIdForDriver(provider);
   const customModels = readInstanceCustomModels(settings, defaultInstanceId, provider);
-  for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs)) {
+  for (const { slug, name } of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
     if (seen.has(slug)) {
       continue;
     }
@@ -232,7 +232,7 @@ export function getAppModelOptions(
     seen.add(slug);
     options.push({
       slug,
-      name: slug,
+      name,
       isCustom: true,
     });
   }
@@ -267,13 +267,13 @@ export function getAppModelOptionsForInstance(
   );
 
   const customModels = readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
-  for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs)) {
+  for (const { slug, name } of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
     if (seen.has(slug)) {
       continue;
     }
 
     seen.add(slug);
-    options.push({ slug, name: slug, isCustom: true });
+    options.push({ slug, name, isCustom: true });
   }
 
   return applyInstanceModelPreferences(

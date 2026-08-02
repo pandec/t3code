@@ -16,7 +16,7 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
@@ -58,10 +58,11 @@ interface ProviderModelsSectionProps {
    */
   readonly models: ReadonlyArray<ServerProviderModel>;
   /**
-   * The persisted custom-model slug list for this instance. Drives the
-   * rendered rows and best-effort duplicate validation; mutations flow back
-   * as per-slug add/remove deltas so the owner can merge them into the
-   * latest written config rather than a stale rendered snapshot.
+   * The persisted custom-model entry list for this instance (`slug` or
+   * `slug=Label`). Drives the rendered rows and best-effort duplicate
+   * validation by parsed slug; mutations flow back as per-entry add /
+   * per-slug remove deltas so the owner can merge them into the latest
+   * written config rather than a stale rendered snapshot.
    */
   readonly customModels: ReadonlyArray<string>;
   /**
@@ -83,10 +84,11 @@ interface ProviderModelsSectionProps {
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
   /**
-   * Append one custom model slug. The owner routes the write to the correct
-   * storage and dedupes against its latest written list.
+   * Append one custom model entry (`slug` or `slug=Label`). The owner
+   * routes the write to the correct storage and dedupes by parsed slug
+   * against its latest written list.
    */
-  readonly onAddCustomModel: (slug: string) => void;
+  readonly onAddCustomModel: (entry: string) => void;
   /** Remove one custom model slug (the owner also prunes its icon override). */
   readonly onRemoveCustomModel: (slug: string) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
@@ -135,25 +137,25 @@ export function ProviderModelsSection({
   }, [favoriteModelSet, modelOrder, models]);
 
   const handleAdd = () => {
-    const normalized = normalizeCustomModelSlug(input);
-    if (!normalized) {
+    const parsed = parseCustomModelEntry(input);
+    if (!parsed) {
       setError("Enter a model slug.");
       return;
     }
-    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
+    if (models.some((model) => !model.isCustom && model.slug === parsed.slug)) {
       setError("That model is already built in.");
       return;
     }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
+    if (parsed.slug.length > MAX_CUSTOM_MODEL_LENGTH) {
       setError(`Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`);
       return;
     }
-    if (customModels.includes(normalized)) {
+    if (customModels.some((entry) => parseCustomModelEntry(entry)?.slug === parsed.slug)) {
       setError("That custom model is already saved.");
       return;
     }
 
-    onAddCustomModel(normalized);
+    onAddCustomModel(parsed.name === parsed.slug ? parsed.slug : `${parsed.slug}=${parsed.name}`);
     setInput("");
     setError(null);
 
@@ -440,6 +442,10 @@ export function ProviderModelsSection({
           Add
         </Button>
       </div>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        Append <code className="text-[11px]">=Label</code> to show a custom display name.
+      </p>
 
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>

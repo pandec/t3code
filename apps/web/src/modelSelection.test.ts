@@ -101,6 +101,28 @@ describe("instance-scoped model selection", () => {
     ).toContain("openai/gpt-5.5");
   });
 
+  it("maps a labeled custom entry to its slug and display name", () => {
+    const providers = [
+      provider({
+        instanceId: "claude_openrouter",
+        models: ["claude-sonnet-4-6"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: { customModels: ["gpt-5.6-sol=GPT-5.6-Sol"] },
+        },
+      },
+    };
+    const entry = deriveProviderInstanceEntries(providers)[0]!;
+
+    const custom = getAppModelOptionsForInstance(settings, entry).find((option) => option.isCustom);
+    expect(custom).toMatchObject({ slug: "gpt-5.6-sol", name: "GPT-5.6-Sol" });
+  });
+
   it("resolves a custom slug against the selected custom instance", () => {
     const providers = [
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
@@ -215,6 +237,28 @@ describe("instance-scoped model selection", () => {
         (option) => option.slug === "gpt-5.6-sol",
       )?.icon,
     ).toBe("codex");
+  });
+
+  it("applies icon overrides to labeled custom entries via the parsed slug", () => {
+    const providers = [provider({ instanceId: "claude_openrouter", models: [] })];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: {
+            customModels: ["gpt-5.6-sol=GPT-5.6-Sol"],
+            customModelIcons: { "gpt-5.6-sol": "codex" },
+          },
+        },
+      },
+    };
+    const openrouter = deriveProviderInstanceEntries(providers)[0]!;
+
+    const custom = getAppModelOptionsForInstance(settings, openrouter).find(
+      (option) => option.isCustom,
+    );
+    expect(custom).toMatchObject({ slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", icon: "codex" });
   });
 
   it("normalizes icon record keys and values from hand-edited settings", () => {
