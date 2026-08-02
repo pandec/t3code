@@ -16,10 +16,15 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
  * provider driver kinds ("codex", "claudeAgent", …) so a custom model served
  * through a gateway (e.g. a Codex model behind the Claude provider) can carry
  * the icon of the model's real family. Unknown ids resolve to `null` and
- * callers fall back to the instance's driver icon.
+ * callers fall back to the instance's driver icon. The `Object.hasOwn` guard
+ * matters: ids come from a user-editable settings blob, and a value like
+ * "constructor" passes the open slug check but must not resolve to an
+ * inherited `Object.prototype` member.
  */
 export function getModelIconComponent(icon: string | null | undefined): Icon | null {
-  if (!icon || !isProviderDriverKind(icon)) return null;
+  if (!icon || !isProviderDriverKind(icon) || !Object.hasOwn(PROVIDER_ICON_BY_PROVIDER, icon)) {
+    return null;
+  }
   return PROVIDER_ICON_BY_PROVIDER[icon] ?? null;
 }
 
@@ -40,14 +45,12 @@ export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailablePro
  * kind string consumed by {@link getModelIconComponent}.
  */
 export const MODEL_ICON_OPTIONS: ReadonlyArray<{
-  readonly id: string;
+  readonly id: ProviderDriverKind;
   readonly label: string;
   readonly Icon: Icon;
 }> = AVAILABLE_PROVIDER_OPTIONS.flatMap((option) => {
   const IconComponent = PROVIDER_ICON_BY_PROVIDER[option.value];
-  return IconComponent
-    ? [{ id: String(option.value), label: option.label, Icon: IconComponent }]
-    : [];
+  return IconComponent ? [{ id: option.value, label: option.label, Icon: IconComponent }] : [];
 });
 
 export type ModelEsque = {

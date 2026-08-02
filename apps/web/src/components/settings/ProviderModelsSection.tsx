@@ -68,6 +68,13 @@ interface ProviderModelsSectionProps {
    * the instance config blob next to `customModels`.
    */
   readonly customModelIcons: Readonly<Record<string, string>>;
+  /**
+   * Set (or clear, with `null`) one model's icon override. A per-slug delta
+   * rather than a full record: the owner merges it into the latest written
+   * config, so two quick picks on different rows cannot overwrite each other
+   * with stale snapshots of the whole record.
+   */
+  readonly onCustomModelIconChange: (slug: string, icon: string | null) => void;
   /** Server-returned model slugs hidden from the model picker. */
   readonly hiddenModels: ReadonlyArray<string>;
   /** Model slugs favorited for this provider instance. */
@@ -80,7 +87,6 @@ interface ProviderModelsSectionProps {
    * `providerInstances[id].config`).
    */
   readonly onChange: (next: ReadonlyArray<string>) => void;
-  readonly onCustomModelIconsChange: (next: Readonly<Record<string, string>>) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
@@ -107,7 +113,7 @@ export function ProviderModelsSection({
   favoriteModels,
   modelOrder,
   onChange,
-  onCustomModelIconsChange,
+  onCustomModelIconChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
@@ -172,11 +178,6 @@ export function ProviderModelsSection({
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
-  };
-
-  const handleIconChange = (slug: string, icon: string | null) => {
-    const { [slug]: _omit, ...rest } = customModelIcons;
-    onCustomModelIconsChange(icon === null ? rest : { ...rest, [slug]: icon });
   };
 
   const handleToggleHidden = (slug: string) => {
@@ -306,9 +307,13 @@ export function ProviderModelsSection({
                     modelName={model.name}
                     icon={customModelIcons[model.slug]}
                     driverKind={driverKind}
-                    onIconChange={(icon) => handleIconChange(model.slug, icon)}
+                    onIconChange={(icon) => onCustomModelIconChange(model.slug, icon)}
                   />
-                ) : null}
+                ) : (
+                  // Reserve the picker's slot so the star/arrow columns stay
+                  // aligned between built-in and custom rows.
+                  <span className="size-5" aria-hidden />
+                )}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -463,46 +468,57 @@ function CustomModelIconPicker({
   const SelectedIcon = getModelIconComponent(icon);
   const DriverIcon = driverKind ? (PROVIDER_ICON_BY_PROVIDER[driverKind] ?? null) : null;
   const TriggerIcon = SelectedIcon ?? DriverIcon;
+  const currentLabel = SelectedIcon
+    ? (MODEL_ICON_OPTIONS.find((option) => option.id === icon)?.label ?? "custom")
+    : "provider default";
 
   const selectIcon = (next: string | null) => {
     onIconChange(next);
     setOpen(false);
   };
 
+  const optionClassName = (selected: boolean) =>
+    cn(
+      "size-6 rounded-sm p-0",
+      selected
+        ? "bg-primary/10 text-foreground ring-1 ring-inset ring-primary/40"
+        : "text-muted-foreground hover:text-foreground",
+    );
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className={cn(
-              "size-5 rounded-sm p-0 hover:text-foreground",
-              SelectedIcon ? "text-foreground/80" : "text-muted-foreground/60",
-            )}
-            aria-label={`Change icon for ${modelName}`}
-          >
-            {TriggerIcon ? (
-              <TriggerIcon className="size-3" aria-hidden />
-            ) : (
-              <span className="size-2 rounded-full border border-current" aria-hidden />
-            )}
-          </Button>
-        }
-      />
-      <PopoverPopup side="bottom" align="end" sideOffset={4} className="w-auto">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                  aria-label={`Icon for ${modelName}: ${currentLabel} — change`}
+                />
+              }
+            />
+          }
+        >
+          {TriggerIcon ? (
+            <TriggerIcon className="size-3" aria-hidden />
+          ) : (
+            <span className="size-2 rounded-full border border-current" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">Change icon</TooltipPopup>
+      </Tooltip>
+      <PopoverPopup side="bottom" align="end" sideOffset={4} tooltipStyle>
         <div className="flex items-center gap-0.5">
           <Button
             size="icon-xs"
             variant="ghost"
-            className={cn(
-              "size-6 rounded-sm p-0",
-              SelectedIcon === null
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+            className={optionClassName(SelectedIcon === null)}
             title="Provider default"
             aria-label={`Use the provider default icon for ${modelName}`}
+            aria-pressed={SelectedIcon === null}
             onClick={() => selectIcon(null)}
           >
             {DriverIcon ? (
@@ -517,14 +533,10 @@ function CustomModelIconPicker({
               key={option.id}
               size="icon-xs"
               variant="ghost"
-              className={cn(
-                "size-6 rounded-sm p-0",
-                icon === option.id
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              className={optionClassName(icon === option.id)}
               title={option.label}
               aria-label={`Use the ${option.label} icon for ${modelName}`}
+              aria-pressed={icon === option.id}
               onClick={() => selectIcon(option.id)}
             >
               <option.Icon className="size-3.5" aria-hidden />

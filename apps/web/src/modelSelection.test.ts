@@ -1,6 +1,7 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
+import { getModelIconComponent } from "./components/chat/providerIconUtils";
 import { deriveProviderInstanceEntries } from "./providerInstances";
 import {
   getAppModelOptionsForInstance,
@@ -216,6 +217,51 @@ describe("instance-scoped model selection", () => {
     ).toBe("codex");
   });
 
+  it("normalizes icon record keys and values from hand-edited settings", () => {
+    const providers = [provider({ instanceId: "claude_openrouter", models: [] })];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: {
+            customModels: ["gpt-5.6-sol"],
+            customModelIcons: { "gpt-5.6-sol ": " codex " },
+          },
+        },
+      },
+    };
+    const openrouter = deriveProviderInstanceEntries(providers)[0]!;
+
+    expect(
+      getAppModelOptionsForInstance(settings, openrouter).find(
+        (option) => option.slug === "gpt-5.6-sol",
+      )?.icon,
+    ).toBe("codex");
+  });
+
+  it("ignores malformed icon records and prototype-colliding slugs", () => {
+    const providers = [provider({ instanceId: "claude_openrouter", models: [] })];
+    const makeSettings = (customModelIcons: unknown): UnifiedSettings => ({
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: { customModels: ["constructor"], customModelIcons },
+        },
+      },
+    });
+    const openrouter = deriveProviderInstanceEntries(providers)[0]!;
+
+    for (const malformed of [["codex"], 5, null, "codex", { constructor: 7 }]) {
+      expect(
+        getAppModelOptionsForInstance(makeSettings(malformed), openrouter).find(
+          (option) => option.slug === "constructor",
+        )?.icon,
+      ).toBeUndefined();
+    }
+  });
+
   it("includes Grok custom models from the selected provider instance", () => {
     const providers = [provider({ provider: ProviderDriverKind.make("grok"), instanceId: "grok" })];
     const settings: UnifiedSettings = {
@@ -235,6 +281,16 @@ describe("instance-scoped model selection", () => {
     expect(getAppModelOptionsForInstance(settings, grok).map((option) => option.slug)).toContain(
       "grok-test-custom-model",
     );
+  });
+
+  it("resolves icon ids without falling through to Object.prototype", () => {
+    expect(getModelIconComponent("codex")).not.toBeNull();
+    expect(getModelIconComponent("claudeAgent")).not.toBeNull();
+    expect(getModelIconComponent("constructor")).toBeNull();
+    expect(getModelIconComponent("hasOwnProperty")).toBeNull();
+    expect(getModelIconComponent("not-a-known-driver")).toBeNull();
+    expect(getModelIconComponent("")).toBeNull();
+    expect(getModelIconComponent(undefined)).toBeNull();
   });
 
   it("does not inject an unknown selected slug into the stock instance list", () => {

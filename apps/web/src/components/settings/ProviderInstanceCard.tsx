@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   type ProviderInstanceConfig,
@@ -93,17 +93,26 @@ function readConfigStringArray(config: unknown, key: string): ReadonlyArray<stri
 
 /**
  * Read a string-to-string record at `key` from the opaque config blob,
- * filtering out non-string values. Used for `customModelIcons` (custom model
- * slug → driver-kind icon id).
+ * filtering out non-string values and trimming keys and values. Used for
+ * `customModelIcons` (custom model slug → driver-kind icon id). Returns a
+ * null-prototype record so user-authored keys like "constructor" miss
+ * cleanly instead of resolving to `Object.prototype` members.
  */
+const EMPTY_STRING_RECORD: Readonly<Record<string, string>> = Object.create(null);
+
 function readConfigStringRecord(config: unknown, key: string): Readonly<Record<string, string>> {
-  if (config === null || typeof config !== "object") return {};
+  if (config === null || typeof config !== "object") return EMPTY_STRING_RECORD;
   const value = (config as Record<string, unknown>)[key];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const record: Record<string, string> = {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_STRING_RECORD;
+  }
+  const record: Record<string, string> = Object.create(null);
   for (const [entryKey, entryValue] of Object.entries(value)) {
-    if (typeof entryValue === "string") {
-      record[entryKey] = entryValue;
+    if (typeof entryValue !== "string") continue;
+    const trimmedKey = entryKey.trim();
+    const trimmedValue = entryValue.trim();
+    if (trimmedKey.length > 0 && trimmedValue.length > 0) {
+      record[trimmedKey] = trimmedValue;
     }
   }
   return record;
@@ -513,7 +522,22 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateConfig = (nextConfig: Record<string, unknown> | undefined) => {
+  // Settings writes have no optimistic local patch (the `instance` prop only
+  // updates once the server echoes the new config back), and the whole
+  // `providerInstances` map is replaced per write. A second edit computed
+  // from the still-stale prop would therefore silently drop an in-flight
+  // first one — e.g. add a model, then immediately pick its icon, or pick
+  // icons on two rows back to back. Base successive config writes on the
+  // last *written* blob instead; the pending ref is cleared when the echo
+  // lands (the prop identity changes).
+  const pendingConfigRef = useRef<{ readonly config: unknown } | null>(null);
+  useEffect(() => {
+    pendingConfigRef.current = null;
+  }, [instance.config]);
+  const baseConfig = () =>
+    pendingConfigRef.current !== null ? pendingConfigRef.current.config : instance.config;
+  const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
+    pendingConfigRef.current = { config: nextConfig };
     const { config: _omit, ...rest } = instance;
     onUpdate(
       nextConfig !== undefined
@@ -522,31 +546,43 @@ export function ProviderInstanceCard({
     );
   };
 
+  const updateConfig = (nextConfig: Record<string, unknown> | undefined) => {
+    commitConfig(nextConfig);
+  };
+
   const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+    const base = baseConfig();
+    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...next]);
     // Prune icon overrides for removed slugs in the same write — a separate
     // icons write here would start from the same stale config and lose the
     // model-list change.
     const nextSlugs = new Set(next);
     const keptIcons = Object.fromEntries(
-      Object.entries(customModelIcons).filter(([slug]) => nextSlugs.has(slug)),
+      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
+        nextSlugs.has(slug),
+      ),
     );
     if (Object.keys(keptIcons).length > 0) {
       nextConfig.customModelIcons = keptIcons;
     } else {
       delete nextConfig.customModelIcons;
     }
-    const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    commitConfig(nextConfig);
   };
 
-  const updateCustomModelIcons = (next: Readonly<Record<string, string>>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModelIcons", { ...next });
-    if (Object.keys(next).length === 0) {
+  const updateCustomModelIcon = (slug: string, icon: string | null) => {
+    const base = baseConfig();
+    const icons: Record<string, string> = { ...readConfigStringRecord(base, "customModelIcons") };
+    if (icon === null) {
+      delete icons[slug];
+    } else {
+      icons[slug] = icon;
+    }
+    const nextConfig = nextConfigBlobWithValue(base, "customModelIcons", icons);
+    if (Object.keys(icons).length === 0) {
       delete nextConfig.customModelIcons;
     }
-    const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    commitConfig(nextConfig);
   };
 
   const failoverInstanceId = instance.failoverInstanceId;
@@ -912,7 +948,7 @@ export function ProviderInstanceCard({
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
                 onChange={updateCustomModels}
-                onCustomModelIconsChange={updateCustomModelIcons}
+                onCustomModelIconChange={updateCustomModelIcon}
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}
                 onModelOrderChange={onModelOrderChange}

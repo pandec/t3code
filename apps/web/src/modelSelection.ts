@@ -69,6 +69,10 @@ function readInstanceCustomModels(
   return legacyProviders[driverKind]?.customModels ?? [];
 }
 
+// Null prototype, like every record readInstanceCustomModelIcons returns:
+// lookups by user-authored slugs (e.g. "constructor") must miss cleanly.
+const EMPTY_ICON_RECORD: Readonly<Record<string, string>> = Object.create(null);
+
 /**
  * Read the per-custom-model icon overrides for an instance from its
  * `providerInstances[id].config.customModelIcons` blob (slug → driver-kind
@@ -81,13 +85,22 @@ function readInstanceCustomModelIcons(
   instanceId: ProviderInstanceId,
 ): Readonly<Record<string, string>> {
   const config = settings.providerInstances?.[instanceId]?.config;
-  if (config === null || typeof config !== "object") return {};
+  if (config === null || typeof config !== "object") return EMPTY_ICON_RECORD;
   const value = (config as Record<string, unknown>).customModelIcons;
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const icons: Record<string, string> = {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_ICON_RECORD;
+  }
+  // Null prototype: keys are user-authored model slugs, and a slug like
+  // "constructor" must miss cleanly instead of hitting `Object.prototype`.
+  // Keys and values are trimmed so hand-edited settings still match the
+  // normalized slugs that model options carry.
+  const icons: Record<string, string> = Object.create(null);
   for (const [slug, icon] of Object.entries(value)) {
-    if (typeof icon === "string" && icon.trim().length > 0) {
-      icons[slug] = icon;
+    if (typeof icon !== "string") continue;
+    const key = slug.trim();
+    const trimmedIcon = icon.trim();
+    if (key.length > 0 && trimmedIcon.length > 0) {
+      icons[key] = trimmedIcon;
     }
   }
   return icons;
@@ -141,7 +154,10 @@ function applyCustomModelIcons(
   icons: Readonly<Record<string, string>>,
 ): AppModelOption[] {
   return options.map((option) => {
-    const icon = option.isCustom ? icons[option.slug] : undefined;
+    // hasOwn, not a bare index: slugs are user-authored, and "constructor"
+    // must not resolve to an Object.prototype member.
+    const icon =
+      option.isCustom && Object.hasOwn(icons, option.slug) ? icons[option.slug] : undefined;
     return icon === undefined ? option : { ...option, icon };
   });
 }

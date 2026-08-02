@@ -41,17 +41,14 @@ import {
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
 
-type ModelPickerItem = {
-  slug: string;
-  name: string;
-  shortName?: string;
-  subProvider?: string;
+// Derived from `ModelEsque` so new per-model fields (e.g. `icon`) flow into
+// the list rows instead of being silently dropped by a restated field list.
+type ModelPickerItem = ModelEsque & {
   instanceId: ProviderInstanceId;
   driverKind: ProviderDriverKind;
   instanceDisplayName: string;
   instanceAccentColor?: string | undefined;
   continuationGroupKey?: string | undefined;
-  isLegacy?: boolean | undefined;
 };
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
@@ -221,6 +218,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           ...(model.shortName ? { shortName: model.shortName } : {}),
           ...(model.subProvider ? { subProvider: model.subProvider } : {}),
           ...(model.isLegacy ? { isLegacy: true } : {}),
+          ...(model.icon ? { icon: model.icon } : {}),
           instanceId,
           driverKind: entry.driverKind,
           instanceDisplayName: entry.displayName,
