@@ -2,6 +2,7 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  bumpSidebarV2Thread,
   legacyProjectCwdPreferenceKey,
   markThreadUnread,
   markThreadVisited,
@@ -23,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     sidebarEnvironmentFilterId: null,
     threadLastVisitedAtById: {},
+    sidebarV2ThreadBumpedAtByKey: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     ...overrides,
@@ -38,6 +40,20 @@ describe("uiStateStore pure functions", () => {
     expect(visited.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:30:00.700Z");
     expect(markThreadVisited(visited, threadId, "2026-02-25T12:30:00.000Z")).toBe(visited);
     expect(markThreadVisited(visited, threadId, "not-a-date")).toBe(visited);
+  });
+
+  it("stores valid manual Sidebar V2 recency without changing server state", () => {
+    const initialState = makeUiState();
+    const bumped = bumpSidebarV2Thread(
+      initialState,
+      "environment:thread-1",
+      "2026-02-25T12:30:00.700Z",
+    );
+
+    expect(bumped.sidebarV2ThreadBumpedAtByKey).toEqual({
+      "environment:thread-1": "2026-02-25T12:30:00.700Z",
+    });
+    expect(bumpSidebarV2Thread(bumped, "environment:thread-1", "not-a-date")).toBe(bumped);
   });
 
   it("marks a completed thread unread using the server completion timestamp", () => {
@@ -159,6 +175,10 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
       },
+      sidebarV2ThreadBumpedAtByKey: {
+        "environment:thread-2": "2026-02-25T12:36:00.000Z",
+        invalid: "not-a-date",
+      },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
@@ -177,6 +197,9 @@ describe("parsePersistedState", () => {
       sidebarEnvironmentFilterId: null,
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
+      },
+      sidebarV2ThreadBumpedAtByKey: {
+        "environment:thread-2": "2026-02-25T12:36:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
@@ -285,6 +308,9 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      sidebarV2ThreadBumpedAtByKey: {
+        "environment:thread-2": "2026-02-25T12:36:00.000Z",
+      },
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -307,6 +333,9 @@ describe("uiStateStore persistence", () => {
       sidebarEnvironmentFilterId: null,
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
+      },
+      sidebarV2ThreadBumpedAtByKey: {
+        "environment:thread-2": "2026-02-25T12:36:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 1,

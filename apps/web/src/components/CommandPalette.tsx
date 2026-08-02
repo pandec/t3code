@@ -1,6 +1,10 @@
 "use client";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopeProjectRef,
+  scopeThreadRef,
+  scopedThreadKey,
+} from "@t3tools/client-runtime/environment";
 import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
@@ -30,6 +34,7 @@ import * as Option from "effect/Option";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
+  ArrowUpToLineIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -59,7 +64,11 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
-import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
+import {
+  useAccentTintSettings,
+  useClientSettings,
+  useSidebarV2Enabled,
+} from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -100,6 +109,7 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildArchiveCurrentThreadAction,
+  buildMoveCurrentThreadToTopAction,
   buildBrowseGroups,
   buildProjectActionItems,
   buildRootGroups,
@@ -117,7 +127,11 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import {
+  nextSidebarV2ThreadBumpAt,
+  orderItemsByPreferredIds,
+  sortLogicalProjectsForSidebar,
+} from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -561,7 +575,12 @@ function OpenCommandPaletteDialog(props: {
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const sidebarV2ThreadBumpedAtByKey = useUiStateStore(
+    (store) => store.sidebarV2ThreadBumpedAtByKey,
+  );
+  const bumpSidebarV2Thread = useUiStateStore((store) => store.bumpSidebarV2Thread);
   const threads = useThreadShells();
+  const sidebarV2Enabled = useSidebarV2Enabled();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
@@ -1434,6 +1453,25 @@ function OpenCommandPaletteDialog(props: {
     )
       ? routeThreadRef
       : null;
+  const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
+    threadRef: sidebarV2Enabled ? openUnarchivedThreadRef : null,
+    icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
+    runThread: (threadRef) => {
+      const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
+      bumpSidebarV2Thread(
+        scopedThreadKey(threadRef),
+        nextSidebarV2ThreadBumpAt(unarchivedThreads, {
+          bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
+          getThreadKey: (thread) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          sortByLatestUserMessage: clientSettings.sidebarV2SortActiveByLatestUserMessage,
+        }),
+      );
+    },
+  });
+  if (moveCurrentThreadToTopAction) {
+    actionItems.push(moveCurrentThreadToTopAction);
+  }
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,

@@ -185,6 +185,27 @@ export function buildArchiveCurrentThreadAction(input: {
   };
 }
 
+export function buildMoveCurrentThreadToTopAction(input: {
+  threadRef: ScopedThreadRef | null;
+  icon: ReactNode;
+  runThread: (threadRef: ScopedThreadRef) => void;
+}): CommandPaletteActionItem | null {
+  if (!input.threadRef) {
+    return null;
+  }
+  const threadRef = input.threadRef;
+  return {
+    kind: "action",
+    value: "action:move-current-thread-to-top",
+    searchTerms: ["move", "top", "raise", "current thread"],
+    title: "Move current thread to top",
+    icon: input.icon,
+    run: async () => {
+      input.runThread(threadRef);
+    },
+  };
+}
+
 export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"

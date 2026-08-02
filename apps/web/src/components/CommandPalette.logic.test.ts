@@ -6,6 +6,7 @@ import type { Project, Thread } from "../types";
 import {
   buildBrowseGroups,
   buildArchiveCurrentThreadAction,
+  buildMoveCurrentThreadToTopAction,
   buildProjectActionItems,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
@@ -43,6 +44,40 @@ describe("buildArchiveCurrentThreadAction", () => {
       title: "Archive current thread",
       shortcutCommand: "thread.archive",
     });
+    await item?.run();
+    expect(runThread).toHaveBeenCalledWith(threadRef);
+  });
+});
+
+describe("buildMoveCurrentThreadToTopAction", () => {
+  it("omits the action when no thread is open", () => {
+    expect(
+      buildMoveCurrentThreadToTopAction({
+        threadRef: null,
+        icon: null,
+        runThread: vi.fn(),
+      }),
+    ).toBeNull();
+  });
+
+  it("builds a move action for the open thread without a dedicated shortcut", async () => {
+    const threadRef = scopeThreadRef(
+      EnvironmentId.make("environment-local"),
+      ThreadId.make("thread-current"),
+    );
+    const runThread = vi.fn();
+    const item = buildMoveCurrentThreadToTopAction({
+      threadRef,
+      icon: null,
+      runThread,
+    });
+
+    expect(item).toMatchObject({
+      kind: "action",
+      value: "action:move-current-thread-to-top",
+      title: "Move current thread to top",
+    });
+    expect(item).not.toHaveProperty("shortcutCommand");
     await item?.run();
     expect(runThread).toHaveBeenCalledWith(threadRef);
   });

@@ -627,6 +627,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
         ? ["Compact thread cards"]
         : []),
+      ...(settings.sidebarV2SortActiveByLatestUserMessage !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage
+        ? ["Message-based thread ordering"]
+        : []),
       ...(settings.sidebarV2NewThreadButtonInProjectRow !==
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
@@ -736,6 +740,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
       settings.sidebarV2CompactCards,
+      settings.sidebarV2SortActiveByLatestUserMessage,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.timestampFormat,
       settings.wordWrap,
@@ -769,6 +774,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+      sidebarV2SortActiveByLatestUserMessage:
+        DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,

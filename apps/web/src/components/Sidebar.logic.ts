@@ -651,6 +651,60 @@ export function sortThreadsForSidebarV2<
   );
 }
 
+export interface SidebarV2ActiveThreadSortOptions<T> {
+  readonly bumpedAtByThreadKey: Readonly<Record<string, string>>;
+  readonly getThreadKey: (thread: T) => string;
+  readonly sortByLatestUserMessage: boolean;
+}
+
+function activeThreadSortTimestamp<
+  T extends {
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(thread: T, options: SidebarV2ActiveThreadSortOptions<T>): number {
+  const baseTimestamp = options.sortByLatestUserMessage
+    ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
+    : parseTimestampMs(thread.createdAt);
+  const bumpedAt = options.bumpedAtByThreadKey[options.getThreadKey(thread)];
+  return Math.max(baseTimestamp, firstValidTimestampMs(bumpedAt));
+}
+
+/** Optional Sidebar V2 recency layers. The default creation-order helper stays
+    unchanged; manual moves and latest-user-message sorting only affect active
+    threads when their client-owned controls opt in. */
+export function sortActiveThreadsForSidebarV2<
+  T extends {
+    readonly id: string;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions<T>): T[] {
+  if (!options.sortByLatestUserMessage && Object.keys(options.bumpedAtByThreadKey).length === 0) {
+    return sortThreadsForSidebarV2(threads);
+  }
+  return [...threads].toSorted(
+    (left, right) =>
+      activeThreadSortTimestamp(right, options) - activeThreadSortTimestamp(left, options) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+/** Produces a synthetic recency newer than every active sort key, including
+    future-skewed remote timestamps, so a manual move always reaches the top. */
+export function nextSidebarV2ThreadBumpAt<
+  T extends {
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions<T>): string {
+  const latestTimestamp = threads.reduce(
+    (latest, thread) => Math.max(latest, activeThreadSortTimestamp(thread, options)),
+    Date.now(),
+  );
+  return new Date(latestTimestamp + 1).toISOString();
+}
+
 /**
  * Search the already-ordered sidebar thread collection by title only.
  * Keeping the input order means lifecycle ordering (active, snoozed, settled)
