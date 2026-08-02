@@ -172,7 +172,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
       }),
-    ).toEqual({ primary: "settle", secondary: "snooze" });
+    ).toEqual({ primary: "settle", secondary: "snooze", left: "archive" });
   });
 
   it("offers un-settle and snooze for settled history", () => {
@@ -183,7 +183,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
       }),
-    ).toEqual({ primary: "unsettle", secondary: "snooze" });
+    ).toEqual({ primary: "unsettle", secondary: "snooze", left: "archive" });
   });
 
   it("omits snooze when the server or thread does not allow it", () => {
@@ -194,7 +194,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: false,
         snoozable: true,
       }),
-    ).toEqual({ primary: "settle", secondary: null });
+    ).toEqual({ primary: "settle", secondary: null, left: "archive" });
     expect(
       resolveThreadListV2SwipeActions({
         variant: "card",
@@ -202,7 +202,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: false,
       }),
-    ).toEqual({ primary: "settle", secondary: null });
+    ).toEqual({ primary: "settle", secondary: null, left: "archive" });
   });
 
   it("falls back to archive only for a pre-lifecycle server", () => {
@@ -213,7 +213,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: false,
         snoozable: true,
       }),
-    ).toEqual({ primary: "archive", secondary: null });
+    ).toEqual({ primary: "archive", secondary: null, left: null });
   });
 
   it("offers wake and no snooze on a snoozed row", () => {
@@ -225,7 +225,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozable: true,
         snoozed: true,
       }),
-    ).toEqual({ primary: "unsnooze", secondary: null });
+    ).toEqual({ primary: "unsnooze", secondary: null, left: "archive" });
   });
 });
 
