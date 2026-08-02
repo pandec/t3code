@@ -44,6 +44,7 @@ const clientSettings: ClientSettings = {
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
   sidebarV2CompactCards: true,
+  sidebarV2SortActiveByLatestUserMessage: true,
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarV2Enabled: false,
   sidebarV2ConfiguredByUser: false,

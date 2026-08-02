@@ -153,9 +153,10 @@ import {
   resolveWorkingStartedAt,
   sidebarProjectScopeSignature,
   shouldNavigateAfterProjectRemoval,
+  nextSidebarV2ThreadBumpAt,
   sortLogicalProjectsForSidebar,
+  sortActiveThreadsForSidebarV2,
   sortSettledThreadsForSidebarV2,
-  sortThreadsForSidebarV2,
   toggleSidebarProjectScope,
 } from "./Sidebar.logic";
 import type { SidebarProjectScope, SidebarV2AttentionFilterState } from "./Sidebar.logic";
@@ -1387,6 +1388,10 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const sidebarV2ThreadBumpedAtByKey = useUiStateStore(
+    (store) => store.sidebarV2ThreadBumpedAtByKey,
+  );
+  const bumpSidebarV2Thread = useUiStateStore((store) => store.bumpSidebarV2Thread);
   const threads = useThreadShells();
   const allEnvironmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const router = useRouter();
@@ -1402,6 +1407,9 @@ export default function SidebarV2() {
   const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
+  const sortActiveByLatestUserMessage = useClientSettings(
+    (s) => s.sidebarV2SortActiveByLatestUserMessage,
+  );
   const newThreadButtonInProjectRow = useClientSettings(
     (s) => s.sidebarV2NewThreadButtonInProjectRow,
   );
@@ -2060,7 +2068,11 @@ export default function SidebarV2() {
       }
     }
     return {
-      activeThreads: sortThreadsForSidebarV2(active),
+      activeThreads: sortActiveThreadsForSidebarV2(active, {
+        bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
+        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        sortByLatestUserMessage: sortActiveByLatestUserMessage,
+      }),
       // Soonest wake first: "what comes back next" is the shelf's question.
       // Indefinite snoozes have no wake time and sink below every timed one.
       snoozedThreads: snoozed.toSorted(
@@ -2076,9 +2088,32 @@ export default function SidebarV2() {
     nowMinute,
     scopedProjectKeys,
     serverConfigs,
+    sidebarV2ThreadBumpedAtByKey,
     snoozeWakeTick,
+    sortActiveByLatestUserMessage,
     threads,
   ]);
+
+  const moveThreadToTop = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      const sortOptions = {
+        bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
+        getThreadKey: (thread: EnvironmentThreadShell) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        sortByLatestUserMessage: sortActiveByLatestUserMessage,
+      };
+      bumpSidebarV2Thread(
+        scopedThreadKey(threadRef),
+        nextSidebarV2ThreadBumpAt(activeThreads, sortOptions),
+      );
+    },
+    [
+      activeThreads,
+      bumpSidebarV2Thread,
+      sidebarV2ThreadBumpedAtByKey,
+      sortActiveByLatestUserMessage,
+    ],
+  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -2885,6 +2920,7 @@ export default function SidebarV2() {
                   ]
                 : []),
               { id: "mark-unread", label: "Mark unread" },
+              ...(!isSettled && !isSnoozed ? [{ id: "move-to-top", label: "Move to top" }] : []),
               ...(canForkConversation(thread) ? [{ id: "fork", label: "Fork conversation" }] : []),
               {
                 id: "archive",
@@ -2964,6 +3000,9 @@ export default function SidebarV2() {
           }
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+            return;
+          case "move-to-top":
+            moveThreadToTop(threadRef);
             return;
           case "fork": {
             const result = await forkThread(threadRef);
@@ -3049,6 +3088,7 @@ export default function SidebarV2() {
       forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
+      moveThreadToTop,
       projectCwdByKey,
       serverConfigs,
       startThreadRename,
