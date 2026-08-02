@@ -152,6 +152,70 @@ describe("instance-scoped model selection", () => {
     ).toBe("opus");
   });
 
+  it("attaches icon overrides to custom models from the instance config", () => {
+    const providers = [
+      provider({
+        instanceId: "claude_openrouter",
+        models: ["claude-sonnet-4-6"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: {
+            customModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+            customModelIcons: {
+              "gpt-5.6-sol": "codex",
+              // Built-in slugs never pick up an icon even if a stale entry
+              // lingers in the record.
+              "claude-sonnet-4-6": "codex",
+            },
+          },
+        },
+      },
+    };
+    const openrouter = deriveProviderInstanceEntries(providers)[0]!;
+
+    const options = getAppModelOptionsForInstance(settings, openrouter);
+    expect(options.find((option) => option.slug === "gpt-5.6-sol")?.icon).toBe("codex");
+    expect(options.find((option) => option.slug === "gpt-5.6-terra")?.icon).toBeUndefined();
+    expect(options.find((option) => option.slug === "claude-sonnet-4-6")?.icon).toBeUndefined();
+  });
+
+  it("attaches icon overrides to server-reported custom models", () => {
+    const baseProvider = provider({
+      instanceId: "claude_openrouter",
+      models: ["gpt-5.6-sol"],
+    });
+    const providers = [
+      {
+        ...baseProvider,
+        models: [{ ...baseProvider.models[0]!, isCustom: true }],
+      },
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        [ProviderInstanceId.make("claude_openrouter")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: {
+            customModels: ["gpt-5.6-sol"],
+            customModelIcons: { "gpt-5.6-sol": "codex" },
+          },
+        },
+      },
+    };
+    const openrouter = deriveProviderInstanceEntries(providers)[0]!;
+
+    expect(
+      getAppModelOptionsForInstance(settings, openrouter).find(
+        (option) => option.slug === "gpt-5.6-sol",
+      )?.icon,
+    ).toBe("codex");
+  });
+
   it("includes Grok custom models from the selected provider instance", () => {
     const providers = [provider({ provider: ProviderDriverKind.make("grok"), instanceId: "grok" })];
     const settings: UnifiedSettings = {

@@ -1,4 +1,4 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
 import { ClaudeAI, CursorIcon, GrokIcon, HermesIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { PROVIDER_OPTIONS } from "../../session-logic";
 
@@ -11,6 +11,18 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("hermes")]: HermesIcon,
 };
 
+/**
+ * Resolve a per-model icon override to its glyph component. Icon ids are
+ * provider driver kinds ("codex", "claudeAgent", …) so a custom model served
+ * through a gateway (e.g. a Codex model behind the Claude provider) can carry
+ * the icon of the model's real family. Unknown ids resolve to `null` and
+ * callers fall back to the instance's driver icon.
+ */
+export function getModelIconComponent(icon: string | null | undefined): Icon | null {
+  if (!icon || !isProviderDriverKind(icon)) return null;
+  return PROVIDER_ICON_BY_PROVIDER[icon] ?? null;
+}
+
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderDriverKind;
   label: string;
@@ -22,12 +34,30 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 
+/**
+ * Selectable icon choices for custom models — one per available provider
+ * glyph. Rendered by the Settings icon picker; the stored id is the driver
+ * kind string consumed by {@link getModelIconComponent}.
+ */
+export const MODEL_ICON_OPTIONS: ReadonlyArray<{
+  readonly id: string;
+  readonly label: string;
+  readonly Icon: Icon;
+}> = AVAILABLE_PROVIDER_OPTIONS.flatMap((option) => {
+  const IconComponent = PROVIDER_ICON_BY_PROVIDER[option.value];
+  return IconComponent
+    ? [{ id: String(option.value), label: option.label, Icon: IconComponent }]
+    : [];
+});
+
 export type ModelEsque = {
   slug: string;
   name: string;
   shortName?: string | undefined;
   subProvider?: string | undefined;
   isLegacy?: boolean | undefined;
+  /** Per-model icon override (a driver-kind id); see {@link getModelIconComponent}. */
+  icon?: string | undefined;
 };
 
 function escapeRegExp(value: string): string {

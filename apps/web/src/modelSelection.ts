@@ -69,6 +69,30 @@ function readInstanceCustomModels(
   return legacyProviders[driverKind]?.customModels ?? [];
 }
 
+/**
+ * Read the per-custom-model icon overrides for an instance from its
+ * `providerInstances[id].config.customModelIcons` blob (slug → driver-kind
+ * icon id, see `getModelIconComponent`). Icons only ever live in the
+ * instance envelope — the legacy per-kind bucket predates the feature, so
+ * there is no fallback to it.
+ */
+function readInstanceCustomModelIcons(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+): Readonly<Record<string, string>> {
+  const config = settings.providerInstances?.[instanceId]?.config;
+  if (config === null || typeof config !== "object") return {};
+  const value = (config as Record<string, unknown>).customModelIcons;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const icons: Record<string, string> = {};
+  for (const [slug, icon] of Object.entries(value)) {
+    if (typeof icon === "string" && icon.trim().length > 0) {
+      icons[slug] = icon;
+    }
+  }
+  return icons;
+}
+
 export interface AppModelOption {
   slug: string;
   name: string;
@@ -77,6 +101,8 @@ export interface AppModelOption {
   isCustom: boolean;
   isDefault?: boolean;
   isLegacy?: boolean;
+  /** Per-model icon override for custom models (a driver-kind icon id). */
+  icon?: string;
 }
 
 function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
@@ -102,6 +128,22 @@ function readInstanceModelPreferences(
       modelOrder: [],
     }
   );
+}
+
+/**
+ * Attach the instance's icon overrides to its custom model options. Applies
+ * to both server-reported custom entries and locally-derived ones, keyed by
+ * slug, so the icon shows regardless of whether the probe has caught up with
+ * a settings edit.
+ */
+function applyCustomModelIcons(
+  options: ReadonlyArray<AppModelOption>,
+  icons: Readonly<Record<string, string>>,
+): AppModelOption[] {
+  return options.map((option) => {
+    const icon = option.isCustom ? icons[option.slug] : undefined;
+    return icon === undefined ? option : { ...option, icon };
+  });
 }
 
 function applyInstanceModelPreferences(
@@ -180,7 +222,7 @@ export function getAppModelOptions(
   }
 
   return applyInstanceModelPreferences(
-    options,
+    applyCustomModelIcons(options, readInstanceCustomModelIcons(settings, defaultInstanceId)),
     readInstanceModelPreferences(settings, defaultInstanceId),
   );
 }
@@ -219,7 +261,7 @@ export function getAppModelOptionsForInstance(
   }
 
   return applyInstanceModelPreferences(
-    options,
+    applyCustomModelIcons(options, readInstanceCustomModelIcons(settings, entry.instanceId)),
     readInstanceModelPreferences(settings, entry.instanceId),
   );
 }

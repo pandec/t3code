@@ -92,6 +92,24 @@ function readConfigStringArray(config: unknown, key: string): ReadonlyArray<stri
 }
 
 /**
+ * Read a string-to-string record at `key` from the opaque config blob,
+ * filtering out non-string values. Used for `customModelIcons` (custom model
+ * slug → driver-kind icon id).
+ */
+function readConfigStringRecord(config: unknown, key: string): Readonly<Record<string, string>> {
+  if (config === null || typeof config !== "object") return {};
+  const value = (config as Record<string, unknown>)[key];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const record: Record<string, string> = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (typeof entryValue === "string") {
+      record[entryKey] = entryValue;
+    }
+  }
+  return record;
+}
+
+/**
  * Set `key` to an arbitrary value on the opaque config blob. Unlike
  * provider settings field updates, does not drop empty-looking values — the
  * caller is responsible for deciding whether an empty array / empty
@@ -462,6 +480,7 @@ export function ProviderInstanceCard({
     : null;
 
   const customModels = readConfigStringArray(instance.config, "customModels");
+  const customModelIcons = readConfigStringRecord(instance.config, "customModelIcons");
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -505,6 +524,27 @@ export function ProviderInstanceCard({
 
   const updateCustomModels = (next: ReadonlyArray<string>) => {
     const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+    // Prune icon overrides for removed slugs in the same write — a separate
+    // icons write here would start from the same stale config and lose the
+    // model-list change.
+    const nextSlugs = new Set(next);
+    const keptIcons = Object.fromEntries(
+      Object.entries(customModelIcons).filter(([slug]) => nextSlugs.has(slug)),
+    );
+    if (Object.keys(keptIcons).length > 0) {
+      nextConfig.customModelIcons = keptIcons;
+    } else {
+      delete nextConfig.customModelIcons;
+    }
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const updateCustomModelIcons = (next: Readonly<Record<string, string>>) => {
+    const nextConfig = nextConfigBlobWithValue(instance.config, "customModelIcons", { ...next });
+    if (Object.keys(next).length === 0) {
+      delete nextConfig.customModelIcons;
+    }
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
@@ -867,10 +907,12 @@ export function ProviderInstanceCard({
                 driverKind={driverKind}
                 models={modelsForDisplay}
                 customModels={customModels}
+                customModelIcons={customModelIcons}
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
                 onChange={updateCustomModels}
+                onCustomModelIconsChange={updateCustomModelIcons}
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}
                 onModelOrderChange={onModelOrderChange}
