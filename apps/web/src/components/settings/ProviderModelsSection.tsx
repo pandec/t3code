@@ -16,7 +16,7 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
@@ -52,9 +52,9 @@ interface ProviderModelsSectionProps {
    */
   readonly models: ReadonlyArray<ServerProviderModel>;
   /**
-   * The persisted custom-model slug list for this instance. Drives dedup,
-   * and is the array we hand back verbatim (with the new slug appended /
-   * removed) via `onChange`.
+   * The persisted custom-model entry list for this instance (`slug` or
+   * `slug=Label`). Drives dedup by parsed slug, and is the array we hand
+   * back verbatim (with the new entry appended / removed) via `onChange`.
    */
   readonly customModels: ReadonlyArray<string>;
   /** Server-returned model slugs hidden from the model picker. */
@@ -112,25 +112,26 @@ export function ProviderModelsSection({
   }, [favoriteModelSet, modelOrder, models]);
 
   const handleAdd = () => {
-    const normalized = normalizeCustomModelSlug(input);
-    if (!normalized) {
+    const parsed = parseCustomModelEntry(input);
+    if (!parsed) {
       setError("Enter a model slug.");
       return;
     }
-    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
+    if (models.some((model) => !model.isCustom && model.slug === parsed.slug)) {
       setError("That model is already built in.");
       return;
     }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
+    if (parsed.slug.length > MAX_CUSTOM_MODEL_LENGTH) {
       setError(`Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`);
       return;
     }
-    if (customModels.includes(normalized)) {
+    if (customModels.some((entry) => parseCustomModelEntry(entry)?.slug === parsed.slug)) {
       setError("That custom model is already saved.");
       return;
     }
 
-    onChange([...customModels, normalized]);
+    const entry = parsed.name === parsed.slug ? parsed.slug : `${parsed.slug}=${parsed.name}`;
+    onChange([...customModels, entry]);
     setInput("");
     setError(null);
 
@@ -151,7 +152,7 @@ export function ProviderModelsSection({
   };
 
   const handleRemove = (slug: string) => {
-    onChange(customModels.filter((model) => model !== slug));
+    onChange(customModels.filter((entry) => parseCustomModelEntry(entry)?.slug !== slug));
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
@@ -405,6 +406,10 @@ export function ProviderModelsSection({
           Add
         </Button>
       </div>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        Append <code className="text-[11px]">=Label</code> to show a custom display name.
+      </p>
 
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>
