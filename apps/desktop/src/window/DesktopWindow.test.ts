@@ -118,6 +118,7 @@ function makeFakeBrowserWindow() {
     loadURL: window.loadURL,
     maximize: window.maximize,
     openDevTools: webContents.openDevTools,
+    webContentsOnce: webContents.once,
     reload: webContents.reload,
     send: webContents.send,
     setAutoHideCursor: window.setAutoHideCursor,
@@ -538,6 +539,44 @@ describe("DesktopWindow", () => {
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
         assert.equal(fakeWindow.maximize.mock.calls.length, 0);
+        const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+        if (!readyToShow) {
+          return yield* Effect.die("window ready-to-show listener was not registered");
+        }
+        readyToShow();
+        assert.equal(fakeWindow.maximize.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("reveals the macOS window when the renderer finishes loading", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        desktopSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          mainWindowMaximized: true,
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const subscription = fakeWindow.webContentsOnce.mock.calls.find(
+          ([eventName]) => eventName === "did-finish-load",
+        );
+        if (!subscription) {
+          return yield* Effect.die("renderer load reveal listener was not registered");
+        }
+        const listener = subscription[1] as () => void;
+        listener();
+
         const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
         if (!readyToShow) {
           return yield* Effect.die("window ready-to-show listener was not registered");

@@ -20,7 +20,7 @@ const MAC_APP_PROCESS_PATTERN = escapeProcessNameForExactMatch(MAC_APP_PROCESS);
 const MAC_APP_ID = "com.t3tools.t3code.dev";
 const LINUX_APP_PROCESS = "t3code-dev";
 const LINUX_SERVICE = "t3code.service";
-const PROCESS_STOP_ATTEMPTS = 20;
+const PROCESS_STATE_ATTEMPTS = 20;
 
 export class DesktopInstallError extends Data.TaggedError("DesktopInstallError")<{
   readonly message: string;
@@ -110,12 +110,40 @@ const waitForProcessToStop = Effect.fn("installDesktopDev.waitForProcessToStop")
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   processPattern: string,
 ) {
-  for (let attempt = 0; attempt < PROCESS_STOP_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < PROCESS_STATE_ATTEMPTS; attempt += 1) {
     if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]))) return true;
     yield* Effect.sleep("250 millis");
   }
   return !(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]));
 });
+
+const waitForAppToStart = Effect.fn("installDesktopDev.waitForAppToStart")(function* (
+  isRunning: Effect.Effect<boolean, DesktopInstallError>,
+) {
+  for (let attempt = 0; attempt < PROCESS_STATE_ATTEMPTS; attempt += 1) {
+    if (yield* isRunning) return true;
+    yield* Effect.sleep("250 millis");
+  }
+  return yield* isRunning;
+});
+
+export const startAppWithVerification = Effect.fn("installDesktopDev.startAppWithVerification")(
+  function* (
+    appName: string,
+    start: Effect.Effect<void, DesktopInstallError>,
+    waitForStart: () => Effect.Effect<boolean, DesktopInstallError>,
+  ) {
+    yield* start;
+    if (yield* waitForStart()) return;
+    yield* start;
+    if (!(yield* waitForStart())) {
+      return yield* new DesktopInstallError({
+        message: `${appName} did not start`,
+        cause: undefined,
+      });
+    }
+  },
+);
 
 export const terminateProcessWithEscalation = Effect.fn(
   "installDesktopDev.terminateProcessWithEscalation",
@@ -265,12 +293,14 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const releaseDirectory = path.join(repoRoot, "release-dev");
+  const isRunning = commandSucceeds(spawner, "pgrep", ["-x", MAC_APP_PROCESS_PATTERN]);
+  const start = runCommand(spawner, "open", [MAC_APP_PATH]);
   return {
-    isRunning: commandSucceeds(spawner, "pgrep", ["-x", MAC_APP_PROCESS_PATTERN]),
+    isRunning,
     stop: stopMacApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev"], { cwd: repoRoot }),
     install: installMacArtifact(spawner, fs, path, releaseDirectory),
-    start: runCommand(spawner, "open", [MAC_APP_PATH]),
+    start: startAppWithVerification(MAC_APP_PROCESS, start, () => waitForAppToStart(isRunning)),
   } satisfies DesktopInstallLifecycle;
 });
 
@@ -372,22 +402,22 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const isRunning = Effect.gen(function* () {
+    const serviceRunning = yield* commandSucceeds(spawner, "systemctl", [
+      "--user",
+      "is-active",
+      "--quiet",
+      LINUX_SERVICE,
+    ]);
+    return serviceRunning || (yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]));
+  });
+  const start = runCommand(spawner, "systemctl", ["--user", "start", LINUX_SERVICE]);
   return {
-    isRunning: Effect.gen(function* () {
-      const serviceRunning = yield* commandSucceeds(spawner, "systemctl", [
-        "--user",
-        "is-active",
-        "--quiet",
-        LINUX_SERVICE,
-      ]);
-      return (
-        serviceRunning || (yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]))
-      );
-    }),
+    isRunning,
     stop: stopLinuxApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev:linux"], { cwd: repoRoot }),
     install: installLinuxArtifact(spawner, fs, path, repoRoot, homeDirectory),
-    start: runCommand(spawner, "systemctl", ["--user", "start", LINUX_SERVICE]),
+    start: startAppWithVerification("T3 Code (Dev)", start, () => waitForAppToStart(isRunning)),
   } satisfies DesktopInstallLifecycle;
 });
 

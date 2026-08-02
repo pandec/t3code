@@ -6,6 +6,7 @@ import {
   escapeProcessNameForExactMatch,
   parseMacDmgMountPoint,
   runDesktopInstallLifecycle,
+  startAppWithVerification,
   terminateProcessWithEscalation,
 } from "./install-desktop-dev.ts";
 
@@ -33,6 +34,38 @@ it.effect("escalates process termination from TERM to KILL", () =>
     );
 
     assert.deepStrictEqual(events, ["TERM", "wait", "KILL", "wait"]);
+  }),
+);
+
+it.effect("retries a launch request until the app is running", () =>
+  Effect.gen(function* () {
+    const events: Array<string> = [];
+    let waitCount = 0;
+
+    yield* startAppWithVerification(
+      "T3 Code (Dev)",
+      Effect.sync(() => {
+        events.push("start");
+      }),
+      () =>
+        Effect.sync(() => {
+          events.push("wait");
+          waitCount += 1;
+          return waitCount === 2;
+        }),
+    );
+
+    assert.deepStrictEqual(events, ["start", "wait", "start", "wait"]);
+  }),
+);
+
+it.effect("fails when neither launch request starts the app", () =>
+  Effect.gen(function* () {
+    const error = yield* startAppWithVerification("T3 Code (Dev)", Effect.void, () =>
+      Effect.succeed(false),
+    ).pipe(Effect.flip);
+
+    assert.equal(error.message, "T3 Code (Dev) did not start");
   }),
 );
 
