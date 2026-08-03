@@ -37,8 +37,13 @@ import type { ProviderRuntimeBindingWithMetadata } from "./ProviderSessionDirect
 export interface ProviderSessionStartOptions {
   /**
    * `fail` makes an existing persisted cursor authoritative: the session may
-   * start only on the same continuation identity. The default `start-fresh`
-   * preserves direct-call behavior for intentional incompatible replacement.
+   * start only on a continuation-compatible identity, so a thread is never
+   * silently reset to an empty conversation. Thread-driven starts (the
+   * reactor) use it.
+   *
+   * The default `start-fresh` keeps direct-call behavior for an intentional
+   * provider replacement, where the caller has already decided to abandon the
+   * previous provider's conversation.
    */
   readonly onIncompatiblePersistedState?: "start-fresh" | "fail";
 }

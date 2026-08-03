@@ -631,10 +631,15 @@ const make = Effect.gen(function* () {
     }
     // ProviderService owns continuation compatibility because its durable
     // binding key remains authoritative if a stopped owner's live config has
-    // drifted. The reactor can still reject a cross-driver move early.
+    // drifted. The reactor can still reject a cross-driver move early — but
+    // only for a session that actually reached a provider. A turn that failed
+    // before any session existed leaves the last-attempted instance projected
+    // with no binding behind it, and that must not pin the thread to a driver
+    // it never ran on.
     if (
       currentInfo !== undefined &&
       thread.session !== null &&
+      thread.session.status !== "error" &&
       restartComparisonSelection !== undefined &&
       restartComparisonSelection.instanceId !== currentInstanceId
     ) {
@@ -687,6 +692,8 @@ const make = Effect.gen(function* () {
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         },
+        // A thread keeps its conversation across an instance switch, so a
+        // start that cannot carry the cursor must fail rather than reset it.
         { onIncompatiblePersistedState: "fail" },
       );
 

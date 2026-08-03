@@ -2203,6 +2203,8 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       providerInstanceId: ProviderInstanceId.make("codex_work"),
     });
+    // A thread-driven start must opt into fail-closed so it can never
+    // silently reset a conversation the persisted cursor still owns.
     expect(harness.startSession.mock.calls[0]?.[2]).toEqual({
       onIncompatiblePersistedState: "fail",
     });
@@ -2414,9 +2416,6 @@ describe("ProviderCommandReactor", () => {
     });
 
     expect(harness.startSession).toHaveBeenCalledTimes(1);
-    expect(harness.startSession.mock.calls[0]?.[2]).toEqual({
-      onIncompatiblePersistedState: "fail",
-    });
     expect(harness.sendTurn).not.toHaveBeenCalled();
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
@@ -3366,6 +3365,64 @@ describe("ProviderCommandReactor", () => {
       payload: {
         detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
       },
+    });
+  });
+
+  it("allows a driver switch after a turn failed before any session existed", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // A first turn that never reached a provider still projects the instance
+    // it was attempted on. Nothing is bound to that driver, so retrying on
+    // another one must not be rejected as a cross-driver move.
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-set-failed-first-turn"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
+        threadId: ThreadId.make("thread-1"),
+        status: "error",
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: "codex binary not found",
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.make("cmd-meta-failed-first-turn-switch"),
+      threadId: ThreadId.make("thread-1"),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-4-6",
+      },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-failed-first-turn-switch"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-failed-first-turn-switch"),
+        role: "user",
+        text: "retry on claude",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-4-6",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
     });
   });
 

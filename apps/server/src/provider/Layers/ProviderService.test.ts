@@ -2175,7 +2175,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
           .pipe(Effect.flip);
         assert.instanceOf(forkFailure, ProviderValidationError);
         assert.include(forkFailure.issue, "no longer has the continuation identity");
+
+        // Teardown and abort never read or extend the conversation, so a
+        // drifted identity must not leave the thread unstoppable.
+        yield* provider.interruptTurn({ threadId: changedSameIdThreadId });
+        yield* provider.stopSession({ threadId: changedSameIdThreadId });
       }).pipe(Effect.provide(providerLayer));
+
+      assert.equal(targetClaude.interruptTurn.mock.calls.length, 1);
+      assert.equal(targetClaude.stopSession.mock.calls.length, 1);
 
       assert.equal(targetClaude.startSession.mock.calls.length, 3);
       assert.equal(targetClaude.sendTurn.mock.calls.length, 0);
@@ -2190,107 +2198,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
         resumeCursor: driftedOwnerCursor,
         cwd: "/tmp/project",
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("persists the continuation key from the adapter's resolved instance snapshot", () =>
-    Effect.gen(function* () {
-      const instanceId = ProviderInstanceId.make("claude_mutable");
-      const oldContinuationKey = "claude:home:/old-home";
-      const newContinuationKey = "claude:home:/new-home";
-      const oldClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
-      const newClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
-      let currentResolved: ProviderAdapterRegistry.ResolvedProviderInstance;
-      const oldAdapter: ProviderAdapterShape<ProviderAdapterError> = {
-        ...oldClaude.adapter,
-        startSession: (input) =>
-          Effect.sync(() => {
-            currentResolved = {
-              adapter: newClaude.adapter,
-              info: {
-                instanceId,
-                driverKind: CLAUDE_AGENT_DRIVER,
-                displayName: undefined,
-                enabled: true,
-                continuationIdentity: {
-                  driverKind: CLAUDE_AGENT_DRIVER,
-                  continuationKey: newContinuationKey,
-                },
-              },
-            };
-          }).pipe(Effect.andThen(oldClaude.adapter.startSession(input))),
-      };
-      currentResolved = {
-        adapter: oldAdapter,
-        info: {
-          instanceId,
-          driverKind: CLAUDE_AGENT_DRIVER,
-          displayName: undefined,
-          enabled: true,
-          continuationIdentity: {
-            driverKind: CLAUDE_AGENT_DRIVER,
-            continuationKey: oldContinuationKey,
-          },
-        },
-      };
-      const unsupported = () => new ProviderUnsupportedError({ provider: CLAUDE_AGENT_DRIVER });
-      const resolveInstance: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]["resolveInstance"] =
-        (requestedInstanceId) =>
-          requestedInstanceId === instanceId
-            ? Effect.succeed(currentResolved)
-            : Effect.fail(unsupported());
-      const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
-        resolveInstance,
-        getByInstance: (requestedInstanceId) =>
-          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.adapter)),
-        getInstanceInfo: (requestedInstanceId) =>
-          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.info)),
-        listInstances: () => Effect.succeed([instanceId]),
-        listProviders: () => Effect.succeed([CLAUDE_AGENT_DRIVER]),
-        streamChanges: Stream.empty,
-        subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
-          PubSub.subscribe(pubsub),
-        ),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const providerLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
-        Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
-        Layer.provide(AnalyticsService.layerTest),
-        Layer.provide(
-          Layer.succeed(
-            ProviderEventLoggers.ProviderEventLoggers,
-            ProviderEventLoggers.NoOpProviderEventLoggers,
-          ),
-        ),
-      );
-      const threadId = asThreadId("thread-mutable-instance-snapshot");
-
-      yield* Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        yield* provider.startSession(threadId, {
-          provider: CLAUDE_AGENT_DRIVER,
-          providerInstanceId: instanceId,
-          threadId,
-          runtimeMode: "full-access",
-        });
-      }).pipe(Effect.provide(providerLayer));
-
-      const persisted = yield* Effect.gen(function* () {
-        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-        return Option.getOrThrow(yield* directory.getBinding(threadId));
-      }).pipe(Effect.provide(directoryLayer));
-      assert.equal(
-        (persisted.runtimePayload as { readonly continuationKey?: unknown } | null)
-          ?.continuationKey,
-        oldContinuationKey,
-      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

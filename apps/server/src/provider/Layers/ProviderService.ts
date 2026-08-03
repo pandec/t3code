@@ -204,6 +204,65 @@ function hasDurableImportedCwdAuthority(
   );
 }
 
+/**
+ * How a persisted binding's conversation state relates to the instance a
+ * session is starting on.
+ *
+ * `same-instance` and `continuation-group` are the reusable states. The
+ * distinction that matters is which key is authoritative: the key persisted
+ * with the binding wins over the live registry, because a renamed or deleted
+ * owner can no longer answer for itself. Driver identity always comes from the
+ * durable binding — an instance id is a user-authored slug and can be
+ * recreated on a different driver.
+ */
+type BindingCompatibility =
+  | "none"
+  | "same-instance"
+  | "continuation-group"
+  | "incompatible"
+  | "unprovable";
+
+function classifyBindingCompatibility(input: {
+  readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined;
+  readonly bindingInstanceId: ProviderInstanceId | undefined;
+  readonly bindingOwnerInfo: ProviderAdapterRegistry.ProviderInstanceRoutingInfo | undefined;
+  readonly targetInstanceId: ProviderInstanceId;
+  readonly targetProvider: ProviderDriverKind;
+  readonly targetContinuationKey: string;
+}): BindingCompatibility {
+  const { binding, targetContinuationKey } = input;
+  if (binding === undefined) return "none";
+  const persistedKey = readPersistedContinuationKey(binding.runtimePayload);
+  if (binding.provider !== input.targetProvider) return "incompatible";
+  if (input.bindingInstanceId === input.targetInstanceId) {
+    // The id is unchanged, but the instance's config may have moved to a
+    // different account/home since the cursor was written.
+    return persistedKey !== undefined && persistedKey !== targetContinuationKey
+      ? "incompatible"
+      : "same-instance";
+  }
+  const ownerKey = persistedKey ?? input.bindingOwnerInfo?.continuationIdentity.continuationKey;
+  if (ownerKey === undefined) return "unprovable";
+  return ownerKey === targetContinuationKey ? "continuation-group" : "incompatible";
+}
+
+/**
+ * Where a session's resume cursor or cwd came from. `persisted-continuation-group`
+ * separates a cross-instance carry from a same-instance restart, so a silently
+ * dropped cursor can never be mistaken for "nothing was persisted".
+ */
+function describeStateSource(input: {
+  readonly fromRequest: boolean;
+  readonly fromPersisted: boolean;
+  readonly bindingCompatibility: BindingCompatibility;
+}): string {
+  if (input.fromRequest) return "request";
+  if (!input.fromPersisted) return "none";
+  return input.bindingCompatibility === "same-instance"
+    ? "persisted"
+    : "persisted-continuation-group";
+}
+
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -286,7 +345,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             const ownerInfo = Option.getOrUndefined(
               yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
             );
-            if (ownerInfo === undefined) return;
+            // An instance id is a user-authored slug and can be recreated on a
+            // different driver. Only stamp when the live owner still matches
+            // the driver that produced the persisted cursor.
+            if (ownerInfo === undefined || ownerInfo.driverKind !== binding.provider) return;
             yield* directory.refreshIfUnchanged({
               binding,
               touchLastSeenAt: false,
@@ -696,6 +758,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly threadId: ThreadId;
     readonly operation: string;
     readonly allowRecovery: boolean;
+    /**
+     * Teardown/abort operations (stop, interrupt) neither read nor extend the
+     * conversation, so a drifted continuation identity must not wedge them —
+     * otherwise a thread whose instance config moved can never be stopped.
+     */
+    readonly enforceContinuationIdentity?: boolean;
   }) {
     const bindingOption = yield* directory.getBinding(input.threadId);
     const binding = Option.getOrUndefined(bindingOption);
@@ -708,7 +776,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const instanceId = yield* requireBindingInstanceId(input.operation, binding);
     const resolvedInstance = yield* registry.resolveInstance(instanceId);
     const adapter = resolvedInstance.adapter;
-    yield* validateBindingContinuationIdentity(input.operation, binding, resolvedInstance);
+    if (input.enforceContinuationIdentity !== false) {
+      yield* validateBindingContinuationIdentity(input.operation, binding, resolvedInstance);
+    }
 
     // A turn was live when this thread's session was last torn down, and
     // nothing has been sent since. Read before any recovery, which rewrites
@@ -849,60 +919,47 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 yield* registry.getInstanceInfo(persistedBindingInstanceId).pipe(Effect.option),
               )
             : undefined;
-        const persistedOwnerMissing =
-          persistedBinding !== undefined &&
-          persistedBindingInstanceId !== undefined &&
-          persistedBindingInstanceId !== resolvedInstanceId &&
-          persistedOwnerInfo === undefined;
-        const persistedContinuationKey = readPersistedContinuationKey(
-          persistedBinding?.runtimePayload,
-        );
-        const ownerContinuationKey =
-          persistedContinuationKey ?? persistedOwnerInfo?.continuationIdentity.continuationKey;
-        const bindingCompatibility =
-          persistedBinding === undefined
-            ? ("none" as const)
-            : persistedBindingInstanceId === resolvedInstanceId
-              ? persistedBinding.provider !== resolvedProvider ||
-                (persistedContinuationKey !== undefined &&
-                  persistedContinuationKey !== instanceInfo.continuationIdentity.continuationKey)
-                ? ("incompatible" as const)
-                : ("same-instance" as const)
-              : ownerContinuationKey === undefined
-                ? ("unprovable" as const)
-                : (persistedOwnerInfo?.driverKind ?? persistedBinding.provider) ===
-                      resolvedProvider &&
-                    ownerContinuationKey === instanceInfo.continuationIdentity.continuationKey
-                  ? ("continuation-group" as const)
-                  : ("incompatible" as const);
+        const bindingCompatibility = classifyBindingCompatibility({
+          binding: persistedBinding,
+          bindingInstanceId: persistedBindingInstanceId,
+          bindingOwnerInfo: persistedOwnerInfo,
+          targetInstanceId: resolvedInstanceId,
+          targetProvider: resolvedProvider,
+          targetContinuationKey: instanceInfo.continuationIdentity.continuationKey,
+        });
         const reusePersistedState =
           bindingCompatibility === "same-instance" || bindingCompatibility === "continuation-group";
         const persistedCursorPresent =
           persistedBinding?.resumeCursor !== null && persistedBinding?.resumeCursor !== undefined;
         const persistedStateIncompatible = persistedCursorPresent && !reusePersistedState;
-        const persistedCursorDropped =
-          input.resumeCursor === undefined && persistedStateIncompatible;
+        // A persisted cursor is the thread's conversation. Carrying it is
+        // impossible here, so either the caller deliberately replaces the
+        // provider (`start-fresh`) or the start must fail rather than
+        // silently reset the model's context behind a full history.
+        // `start-fresh` only covers a replacement the caller can see the whole
+        // picture for. A removed owner, or an instance whose own identity
+        // drifted under a stable id, is never an intentional replacement.
+        const persistedOwnerMissing =
+          persistedBindingInstanceId !== undefined &&
+          persistedBindingInstanceId !== resolvedInstanceId &&
+          persistedOwnerInfo === undefined;
         const rejectIncompatiblePersistedState =
           persistedStateIncompatible &&
           (input.resumeCursor !== undefined ||
             options?.onIncompatiblePersistedState === "fail" ||
             persistedOwnerMissing ||
-            (persistedBindingInstanceId === resolvedInstanceId &&
-              bindingCompatibility === "incompatible"));
-        if (persistedCursorDropped && persistedBinding !== undefined) {
+            persistedBindingInstanceId === resolvedInstanceId);
+        if (persistedStateIncompatible && persistedBinding !== undefined) {
           yield* Effect.logWarning("provider.session.resume-state-not-carried", {
             threadId,
             requestedInstanceId: resolvedInstanceId,
             bindingInstanceId: persistedBindingInstanceId,
             bindingProvider: persistedBinding.provider,
             bindingCompatibility,
+            rejected: rejectIncompatiblePersistedState,
           });
         }
         if (rejectIncompatiblePersistedState && persistedBinding !== undefined) {
-          // Never accept a caller-supplied cursor whose durable owner is not
-          // compatible with the resolved adapter snapshot. Reactor-driven
-          // switches also opt into this fail-closed policy so their guard and
-          // start cannot be split by a registry hot reload.
           return yield* toValidationError(
             "ProviderService.startSession",
             bindingCompatibility === "unprovable"
@@ -925,25 +982,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
-          "provider.resume_cursor.source":
-            input.resumeCursor !== undefined
-              ? "request"
-              : effectiveResumeCursor !== undefined
-                ? bindingCompatibility === "same-instance"
-                  ? "persisted"
-                  : "persisted-continuation-group"
-                : persistedCursorDropped
-                  ? "dropped-incompatible"
-                  : "none",
+          "provider.resume_cursor.source": describeStateSource({
+            fromRequest: input.resumeCursor !== undefined,
+            fromPersisted: effectiveResumeCursor !== undefined,
+            bindingCompatibility,
+          }),
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
-          "provider.cwd.source":
-            input.cwd !== undefined
-              ? "request"
-              : effectiveCwd !== undefined
-                ? bindingCompatibility === "same-instance"
-                  ? "persisted"
-                  : "persisted-continuation-group"
-                : "none",
+          "provider.cwd.source": describeStateSource({
+            fromRequest: input.cwd !== undefined,
+            fromPersisted: effectiveCwd !== undefined,
+            bindingCompatibility,
+          }),
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = resolvedInstance.adapter;
@@ -1171,7 +1220,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          // Resuming a session purely to abort it is pointless, and an
+          // aborted turn never depends on continuation identity.
+          allowRecovery: false,
+          enforceContinuationIdentity: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -1281,6 +1333,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           threadId: input.threadId,
           operation: "ProviderService.stopSession",
           allowRecovery: false,
+          enforceContinuationIdentity: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
