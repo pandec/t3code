@@ -232,16 +232,11 @@ function classifyBindingCompatibility(input: {
 }): BindingCompatibility {
   const { binding, targetContinuationKey } = input;
   if (binding === undefined) return "none";
-  const persistedKey = readPersistedContinuationKey(binding.runtimePayload);
   if (binding.provider !== input.targetProvider) return "incompatible";
-  if (input.bindingInstanceId === input.targetInstanceId) {
-    // The id is unchanged, but the instance's config may have moved to a
-    // different account/home since the cursor was written.
-    return persistedKey !== undefined && persistedKey !== targetContinuationKey
-      ? "incompatible"
-      : "same-instance";
-  }
-  const ownerKey = persistedKey ?? input.bindingOwnerInfo?.continuationIdentity.continuationKey;
+  if (input.bindingInstanceId === input.targetInstanceId) return "same-instance";
+  const ownerKey =
+    readPersistedContinuationKey(binding.runtimePayload) ??
+    input.bindingOwnerInfo?.continuationIdentity.continuationKey;
   if (ownerKey === undefined) return "unprovable";
   return ownerKey === targetContinuationKey ? "continuation-group" : "incompatible";
 }
@@ -479,7 +474,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly lastRuntimeEventAt?: string;
       readonly clearHasPendingWork?: boolean;
       readonly preserveImportedCwd?: boolean;
-      readonly ownerContinuationKey?: string;
     },
   ) =>
     Effect.gen(function* () {
@@ -504,7 +498,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         readPersistedContinuationKey(previousBinding?.runtimePayload) ??
         previousOwnerInfo?.continuationIdentity.continuationKey;
       const ownerContinuationKey =
-        extra?.ownerContinuationKey ??
         (!instanceChanged ? previousContinuationKey : undefined) ??
         Option.getOrUndefined(
           yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
@@ -621,28 +614,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     () => reconcileInstanceSubscriptions,
   ).pipe(Effect.forkScoped);
 
-  const validateBindingContinuationIdentity = (
-    operation: string,
-    binding: ProviderSessionDirectory.ProviderRuntimeBinding,
-    resolvedInstance: ProviderAdapterRegistry.ResolvedProviderInstance,
-  ): Effect.Effect<void, ProviderValidationError> => {
-    const persistedContinuationKey = readPersistedContinuationKey(binding.runtimePayload);
-    return binding.provider !== resolvedInstance.info.driverKind ||
-      (persistedContinuationKey !== undefined &&
-        persistedContinuationKey !== resolvedInstance.info.continuationIdentity.continuationKey)
-      ? Effect.fail(
-          toValidationError(
-            operation,
-            `Cannot route thread '${binding.threadId}' because provider instance '${resolvedInstance.info.instanceId}' no longer has the continuation identity that owns its persisted conversation state.`,
-          ),
-        )
-      : Effect.void;
-  };
-
   const recoverSessionForThread = Effect.fn("recoverSessionForThread")(function* (input: {
     readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding;
     readonly operation: string;
-    readonly resolvedInstance?: ProviderAdapterRegistry.ResolvedProviderInstance;
   }) {
     const bindingInstanceId = yield* requireBindingInstanceId(input.operation, input.binding);
     yield* Effect.annotateCurrentSpan({
@@ -652,11 +626,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       "provider.thread_id": input.binding.threadId,
     });
     return yield* Effect.gen(function* () {
-      const resolvedInstance =
-        input.resolvedInstance ?? (yield* registry.resolveInstance(bindingInstanceId));
-      const adapter = resolvedInstance.adapter;
-      const ownerContinuationKey = resolvedInstance.info.continuationIdentity.continuationKey;
-      yield* validateBindingContinuationIdentity(input.operation, input.binding, resolvedInstance);
+      const adapter = yield* registry.getByInstance(bindingInstanceId);
       const hasResumeCursor =
         input.binding.resumeCursor !== null && input.binding.resumeCursor !== undefined;
       const hasActiveSession = yield* adapter.hasSession(input.binding.threadId);
@@ -669,7 +639,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           yield* upsertSessionBinding(
             { ...existing, providerInstanceId: bindingInstanceId },
             input.binding.threadId,
-            { ownerContinuationKey },
           );
           yield* analytics.record("provider.session.recovered", {
             provider: existing.provider,
@@ -715,7 +684,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         input.binding.threadId,
         // A resumed session runs in a fresh provider subprocess: any wakeups
         // or background tasks armed by the previous process are gone.
-        { clearHasPendingWork: true, ownerContinuationKey },
+        { clearHasPendingWork: true },
       );
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
@@ -758,12 +727,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly threadId: ThreadId;
     readonly operation: string;
     readonly allowRecovery: boolean;
-    /**
-     * Teardown/abort operations (stop, interrupt) neither read nor extend the
-     * conversation, so a drifted continuation identity must not wedge them —
-     * otherwise a thread whose instance config moved can never be stopped.
-     */
-    readonly enforceContinuationIdentity?: boolean;
   }) {
     const bindingOption = yield* directory.getBinding(input.threadId);
     const binding = Option.getOrUndefined(bindingOption);
@@ -774,11 +737,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     }
     const instanceId = yield* requireBindingInstanceId(input.operation, binding);
-    const resolvedInstance = yield* registry.resolveInstance(instanceId);
-    const adapter = resolvedInstance.adapter;
-    if (input.enforceContinuationIdentity !== false) {
-      yield* validateBindingContinuationIdentity(input.operation, binding, resolvedInstance);
-    }
+    const adapter = yield* registry.getByInstance(instanceId);
 
     // A turn was live when this thread's session was last torn down, and
     // nothing has been sent since. Read before any recovery, which rewrites
@@ -811,7 +770,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const recovered = yield* recoverSessionForThread({
       binding,
       operation: input.operation,
-      resolvedInstance,
     });
     return {
       adapter: recovered.adapter,
@@ -877,8 +835,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.runtime_mode": parsed.runtimeMode,
       });
       return yield* Effect.gen(function* () {
-        const resolvedInstance = yield* registry.resolveInstance(resolvedInstanceId);
-        const instanceInfo = resolvedInstance.info;
+        const instanceInfo = yield* registry.getInstanceInfo(resolvedInstanceId);
         const resolvedProvider = instanceInfo.driverKind;
         metricProvider = resolvedProvider;
         if (parsed.provider !== undefined && parsed.provider !== resolvedProvider) {
@@ -932,13 +889,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const persistedCursorPresent =
           persistedBinding?.resumeCursor !== null && persistedBinding?.resumeCursor !== undefined;
         const persistedStateIncompatible = persistedCursorPresent && !reusePersistedState;
-        // A persisted cursor is the thread's conversation. Carrying it is
-        // impossible here, so either the caller deliberately replaces the
-        // provider (`start-fresh`) or the start must fail rather than
-        // silently reset the model's context behind a full history.
-        // `start-fresh` only covers a replacement the caller can see the whole
-        // picture for. A removed owner, or an instance whose own identity
-        // drifted under a stable id, is never an intentional replacement.
+        // A persisted cursor is the thread's conversation. When it cannot be
+        // carried, either the caller deliberately replaces the provider
+        // (`start-fresh`) or the start must fail rather than silently reset
+        // the model's context behind a full history. A removed owner is never
+        // an intentional replacement, so it always fails.
         const persistedOwnerMissing =
           persistedBindingInstanceId !== undefined &&
           persistedBindingInstanceId !== resolvedInstanceId &&
@@ -947,8 +902,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           persistedStateIncompatible &&
           (input.resumeCursor !== undefined ||
             options?.onIncompatiblePersistedState === "fail" ||
-            persistedOwnerMissing ||
-            persistedBindingInstanceId === resolvedInstanceId);
+            persistedOwnerMissing);
         if (persistedStateIncompatible && persistedBinding !== undefined) {
           yield* Effect.logWarning("provider.session.resume-state-not-carried", {
             threadId,
@@ -964,9 +918,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             "ProviderService.startSession",
             bindingCompatibility === "unprovable"
               ? `Thread '${threadId}' has persisted conversation state owned by unavailable provider instance '${persistedBindingInstanceId}', and its continuation compatibility with instance '${resolvedInstanceId}' cannot be verified. Starting here would discard the conversation context; restore or re-add instance '${persistedBindingInstanceId}' with the same account/config to continue this thread, or start a new thread.`
-              : persistedBindingInstanceId === resolvedInstanceId
-                ? `Thread '${threadId}' has persisted conversation state for provider instance '${resolvedInstanceId}', but that instance's continuation identity has changed. Starting here would discard the conversation context; restore the instance's previous account/config to continue this thread, or start a new thread.`
-                : `Thread '${threadId}' has persisted conversation state owned by provider instance '${persistedBindingInstanceId}' and is not continuation-compatible with instance '${resolvedInstanceId}'. Starting here would discard the conversation context; switch the thread to a compatible instance or start a new thread.`,
+              : `Thread '${threadId}' has persisted conversation state owned by provider instance '${persistedBindingInstanceId}' and is not continuation-compatible with instance '${resolvedInstanceId}'. Starting here would discard the conversation context; switch the thread to a compatible instance or start a new thread.`,
           );
         }
         const effectiveResumeCursor =
@@ -995,7 +947,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }),
           "provider.cwd.effective": effectiveCwd ?? "",
         });
-        const adapter = resolvedInstance.adapter;
+        const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
@@ -1025,7 +977,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
           clearHasPendingWork: true,
-          ownerContinuationKey: instanceInfo.continuationIdentity.continuationKey,
         });
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
@@ -1068,9 +1019,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const providerInstanceId = yield* requireBindingInstanceId(operation, binding);
-      const resolvedInstance = yield* registry.resolveInstance(providerInstanceId);
-      const adapter = resolvedInstance.adapter;
-      yield* validateBindingContinuationIdentity(operation, binding, resolvedInstance);
+      const adapter = yield* registry.getByInstance(providerInstanceId);
       if (!adapter.forkSession) {
         return yield* toValidationError(
           operation,
@@ -1092,6 +1041,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const modelSelection = readPersistedModelSelection(binding.runtimePayload);
       const cwd = readPersistedCwd(binding.runtimePayload);
+      // The destination continues the same native conversation store as the
+      // source, so it inherits the source binding's continuation key.
+      const sourceContinuationKey =
+        readPersistedContinuationKey(binding.runtimePayload) ??
+        Option.getOrUndefined(
+          yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+        )?.continuationIdentity.continuationKey;
       const result = yield* adapter.forkSession({
         sourceThreadId: input.sourceThreadId,
         destinationThreadId: input.destinationThreadId,
@@ -1114,7 +1070,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           activeTurnId: null,
           lastRuntimeEvent: "provider.forkConversation",
           lastRuntimeEventAt: yield* nowIso,
-          continuationKey: resolvedInstance.info.continuationIdentity.continuationKey,
+          ...(sourceContinuationKey !== undefined
+            ? { continuationKey: sourceContinuationKey }
+            : {}),
         },
       });
       return result;
@@ -1220,10 +1178,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          // Resuming a session purely to abort it is pointless, and an
-          // aborted turn never depends on continuation identity.
-          allowRecovery: false,
-          enforceContinuationIdentity: false,
+          allowRecovery: true,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -1333,7 +1288,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           threadId: input.threadId,
           operation: "ProviderService.stopSession",
           allowRecovery: false,
-          enforceContinuationIdentity: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({

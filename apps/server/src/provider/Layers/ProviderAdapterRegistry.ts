@@ -18,14 +18,12 @@
 import {
   defaultInstanceIdForDriver,
   ProviderInstanceId,
-  type ProviderInstanceConfig,
   type ProviderDriverKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { ProviderUnsupportedError } from "../Errors.ts";
-import type { ProviderInstance } from "../ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import {
   ProviderAdapterRegistry,
@@ -35,51 +33,42 @@ import {
 const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(function* () {
   const registry = yield* ProviderInstanceRegistry;
 
-  const resolveInstance: ProviderAdapterRegistryShape["resolveInstance"] = (instanceId) => {
-    const entryEffect: Effect.Effect<
-      | {
-          readonly instance: ProviderInstance;
-          readonly config: ProviderInstanceConfig | undefined;
-        }
-      | undefined
-    > =
-      registry.getInstanceEntry?.(instanceId) ??
-      registry
-        .getInstance(instanceId)
-        .pipe(
-          Effect.map((instance) =>
-            instance === undefined ? undefined : { instance, config: undefined },
-          ),
-        );
-    return entryEffect.pipe(
-      Effect.flatMap((entry) =>
-        entry === undefined
+  const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) =>
+    registry.getInstance(instanceId).pipe(
+      Effect.flatMap((instance) =>
+        instance === undefined
+          ? Effect.fail(
+              new ProviderUnsupportedError({
+                provider: instanceId,
+              }),
+            )
+          : Effect.succeed(instance.adapter),
+      ),
+    );
+
+  const getInstanceInfo: ProviderAdapterRegistryShape["getInstanceInfo"] = (instanceId) =>
+    Effect.all([
+      registry.getInstance(instanceId),
+      registry.getInstanceConfig?.(instanceId) ?? Effect.succeed(undefined),
+    ]).pipe(
+      Effect.flatMap(([instance, config]) =>
+        instance === undefined
           ? Effect.fail(
               new ProviderUnsupportedError({
                 provider: instanceId,
               }),
             )
           : Effect.succeed({
-              adapter: entry.instance.adapter,
-              info: {
-                instanceId: entry.instance.instanceId,
-                driverKind: entry.instance.driverKind,
-                displayName: entry.instance.displayName,
-                accentColor: entry.instance.accentColor,
-                enabled: entry.instance.enabled,
-                continuationIdentity: entry.instance.continuationIdentity,
-                failoverInstanceId: entry.config?.failoverInstanceId,
-              },
+              instanceId: instance.instanceId,
+              driverKind: instance.driverKind,
+              displayName: instance.displayName,
+              accentColor: instance.accentColor,
+              enabled: instance.enabled,
+              continuationIdentity: instance.continuationIdentity,
+              failoverInstanceId: config?.failoverInstanceId,
             }),
       ),
     );
-  };
-
-  const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) =>
-    resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.adapter));
-
-  const getInstanceInfo: ProviderAdapterRegistryShape["getInstanceInfo"] = (instanceId) =>
-    resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.info));
 
   const listInstances: ProviderAdapterRegistryShape["listInstances"] = () =>
     registry.listInstances.pipe(
@@ -104,7 +93,6 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
     );
 
   return {
-    resolveInstance,
     getByInstance,
     getInstanceInfo,
     listInstances,

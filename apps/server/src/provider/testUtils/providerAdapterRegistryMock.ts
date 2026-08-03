@@ -46,22 +46,10 @@ export const makeAdapterRegistryMock = (adapters: KindAdapterMap): ProviderAdapt
     byInstanceId.set(defaultInstanceIdForDriver(driverKind), adapter);
   }
 
-  const resolveInstance: ProviderAdapterRegistryShape["resolveInstance"] = (instanceId) => {
+  const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) => {
     const adapter = byInstanceId.get(instanceId);
     return adapter
-      ? Effect.succeed({
-          adapter,
-          info: {
-            instanceId,
-            driverKind: ProviderDriverKind.make(adapter.provider),
-            displayName: undefined,
-            enabled: true,
-            continuationIdentity: {
-              driverKind: ProviderDriverKind.make(adapter.provider),
-              continuationKey: `${adapter.provider}:instance:${instanceId}`,
-            },
-          },
-        })
+      ? Effect.succeed(adapter)
       : Effect.fail(
           new ProviderUnsupportedError({
             provider: ProviderDriverKind.make(instanceId),
@@ -70,11 +58,27 @@ export const makeAdapterRegistryMock = (adapters: KindAdapterMap): ProviderAdapt
   };
 
   return {
-    resolveInstance,
-    getByInstance: (instanceId) =>
-      resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.adapter)),
-    getInstanceInfo: (instanceId) =>
-      resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.info)),
+    getByInstance,
+    getInstanceInfo: (instanceId) => {
+      const adapter = byInstanceId.get(instanceId);
+      if (!adapter) {
+        return Effect.fail(
+          new ProviderUnsupportedError({
+            provider: ProviderDriverKind.make(instanceId),
+          }),
+        );
+      }
+      return Effect.succeed({
+        instanceId,
+        driverKind: ProviderDriverKind.make(adapter.provider),
+        displayName: undefined,
+        enabled: true,
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make(adapter.provider),
+          continuationKey: `${adapter.provider}:instance:${instanceId}`,
+        },
+      });
+    },
     listInstances: () => Effect.succeed(Array.from(byInstanceId.keys())),
     listProviders: () =>
       Effect.succeed(
