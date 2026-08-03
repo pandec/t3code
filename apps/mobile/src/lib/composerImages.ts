@@ -72,7 +72,27 @@ function toJpegFileName(name: string): string {
   return `${base.length > 0 ? base : "image"}.jpg`;
 }
 
+// A second native launch while a picker is already presented orphans the visible
+// picker's delegate (expo-image-picker keeps a single picking context), leaving it
+// stuck on screen. Serialize launches across every composer surface.
+let pickImagesInFlight = false;
+
 export async function pickComposerImages(input: { readonly existingCount: number }): Promise<{
+  readonly images: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly error: string | null;
+}> {
+  if (pickImagesInFlight) {
+    return { images: [], error: null };
+  }
+  pickImagesInFlight = true;
+  try {
+    return await pickComposerImagesOnce(input);
+  } finally {
+    pickImagesInFlight = false;
+  }
+}
+
+async function pickComposerImagesOnce(input: { readonly existingCount: number }): Promise<{
   readonly images: ReadonlyArray<DraftComposerImageAttachment>;
   readonly error: string | null;
 }> {
@@ -95,17 +115,25 @@ export async function pickComposerImages(input: { readonly existingCount: number
     };
   }
 
-  const result = await imagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
-    allowsMultipleSelection: true,
-    selectionLimit: remainingSlots,
-    base64: true,
-    // Keep the picker itself lossless; downsizing happens in
-    // reencodeImageAsJpeg, which sets a matching mime type. Sub-1 quality
-    // here would re-encode to JPEG on Android while the asset keeps its
-    // original mime type, producing mislabeled data URLs.
-    quality: 1,
-  });
+  let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
+  try {
+    result = await imagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: remainingSlots,
+      base64: true,
+      // Keep the picker itself lossless; downsizing happens in
+      // reencodeImageAsJpeg, which sets a matching mime type. Sub-1 quality
+      // here would re-encode to JPEG on Android while the asset keeps its
+      // original mime type, producing mislabeled data URLs.
+      quality: 1,
+    });
+  } catch {
+    return {
+      images: [],
+      error: "Could not open the photo library. Try again.",
+    };
+  }
 
   if (result.canceled) {
     return {

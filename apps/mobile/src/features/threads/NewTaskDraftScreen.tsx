@@ -1233,7 +1233,12 @@ export function NewTaskDraftScreen(props: {
     <View className="flex-1 bg-sheet">
       <NativeStackScreenOptions options={{ title: selectedProject.title }} />
 
-      <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
+      {/* behavior="height" (not "padding"): only "height" freezes the measured
+          baseline frame while the keyboard is open. With "padding", any mid-open
+          relayout recaptures this form sheet's transiently keyboard-shifted
+          window frame, collapsing the padding and hiding the toolbar behind the
+          keyboard until the sheet is dragged or the keyboard is cycled. */}
+      <KeyboardAvoidingView automaticOffset behavior="height" className="flex-1">
         <View className="relative min-h-0 flex-1 px-5 pt-2">
           {promptEditor}
           {skillPopover ? (
@@ -1241,7 +1246,7 @@ export function NewTaskDraftScreen(props: {
           ) : null}
         </View>
 
-        <View className="border-t border-border" style={{ paddingBottom: controlsBottomPadding }}>
+        <View className="border-t border-border">
           {flow.attachments.length > 0 ? (
             <View className="px-4 pt-3">
               <ComposerAttachmentStrip

@@ -505,6 +505,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         image: "clock",
         subactions: snoozePresetActions,
       },
+      MENU_ACTION_BY_ID.archive,
       { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
     [snoozePresetActions],
