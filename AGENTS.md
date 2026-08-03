@@ -75,6 +75,9 @@ platform-specific list.
 - `t3-dev` (macOS): run the Electron desktop app directly from source for development checks.
 - `t3-run` / `qt3`: launch or restart the installed packaged Dev desktop app.
 - `t3-install-ios` (macOS): build and install the self-contained iOS release on a connected iPhone.
+- `t3-build-ios` (macOS): archive the production iOS app and upload it to internal TestFlight.
+- `t3-build-expo` (macOS): publish a JavaScript-only Expo (OTA) update to the installed production
+  build; only valid while the runtime fingerprint still matches that binary.
 
 ## Upstream project guidance
 
