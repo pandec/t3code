@@ -498,14 +498,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
-      { id: "settle", title: "Settle", image: "checkmark" },
+      MENU_ACTION_BY_ID.settle,
       {
         id: "snooze",
         title: "Snooze",
         image: "clock",
         subactions: snoozePresetActions,
       },
-      { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+      MENU_ACTION_BY_ID.archive,
+      MENU_ACTION_BY_ID.delete,
     ],
     [snoozePresetActions],
   );

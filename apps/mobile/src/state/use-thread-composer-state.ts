@@ -303,7 +303,10 @@ export function useThreadComposerState() {
       appendComposerDraftAttachments(threadKey, result.images);
     }
     if (result.error) {
-      setPendingConnectionError(result.error);
+      // A local alert, not the connection-error channel: that channel only
+      // renders in connection/pairing UI, so a picker failure pushed there is
+      // invisible from a connected thread.
+      Alert.alert("Could not attach images", result.error);
     }
   }, [composerDrafts, selectedThreadShell]);
 
@@ -323,7 +326,7 @@ export function useThreadComposerState() {
       appendComposerDraftText(threadKey, result.text);
     }
     if (result.error) {
-      setPendingConnectionError(result.error);
+      Alert.alert("Could not paste", result.error);
     }
   }, [composerDrafts, selectedThreadShell]);
 

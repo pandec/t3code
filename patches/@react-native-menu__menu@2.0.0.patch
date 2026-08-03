@@ -1,8 +1,47 @@
 diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
-index 5c4e0da4292b15d3a27b5ea1555f11452a470815..ea19f2eec02dd78fbc78cc455c91b4e71e734d70 100644
+index 5c4e0da4292b15d3a27b5ea1555f11452a470815..2750b2d97e57c63d1f553e642d6f6d3516ab47cb 100644
 --- a/ios/Shared/MenuViewImplementation.swift
 +++ b/ios/Shared/MenuViewImplementation.swift
-@@ -88,6 +88,41 @@ public class MenuViewImplementation: UIButton {
+@@ -54,21 +54,34 @@ public class MenuViewImplementation: UIButton {
+ 
+     override init(frame: CGRect) {
+         super.init(frame: frame)
+-        let interaction = UIContextMenuInteraction(delegate: self)
+-        self.addInteraction(interaction)
++        // No manual UIContextMenuInteraction here: assigning `menu` with
++        // `showsMenuAsPrimaryAction` installs UIKit's own interaction, and a
++        // second one on the same button corrupts the presenter's geometry
++        // (menus can render height-clamped at the top of the screen when the
++        // keyboard is up). Long-press menus get a superview-hosted interaction
++        // in updateLongPressInteraction() instead.
+         self.setup()
+     }
+-   
++
+     public override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+         sendMenuOpen()
++        // Tap menus must use UIButton's built-in pull-down configuration so
++        // UIKit anchors and sizes the menu itself; the bare configuration below
++        // is only for the superview-hosted long-press interaction.
++        guard shouldOpenOnLongPress else {
++            return super.contextMenuInteraction(interaction, configurationForMenuAtLocation: location)
++        }
+         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+             guard let self = self else { return nil }
+             return self.menu
+         }
+     }
+-    
++
+     public override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+         sendMenuClose()
++        if !shouldOpenOnLongPress {
++            super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
++        }
+     }
+ 
+     func setup () {
+@@ -88,6 +101,41 @@ public class MenuViewImplementation: UIButton {
  
          self.menu = menu
          self.showsMenuAsPrimaryAction = !shouldOpenOnLongPress

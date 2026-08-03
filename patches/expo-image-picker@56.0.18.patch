@@ -1,0 +1,66 @@
+diff --git a/ios/ImagePickerHandler.swift b/ios/ImagePickerHandler.swift
+index 476910ded2a9f53ce18563b3f8c005717cb451e4..ff9260a8e0c5b73e55afb083315bae5efcfb105a 100644
+--- a/ios/ImagePickerHandler.swift
++++ b/ios/ImagePickerHandler.swift
+@@ -52,25 +52,33 @@ internal class ImagePickerHandler: NSObject,
+   // MARK: - UIImagePickerControllerDelegate
+ 
+   func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: MediaInfo) {
+-    handlePickedMedia(mediaInfo: info)
+-    picker.dismiss(animated: true)
++    picker.dismiss(animated: true) { [weak self] in
++      self?.handlePickedMedia(mediaInfo: info)
++    }
+   }
+ 
+   func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+-    handlePickingCancellation()
+-    picker.dismiss(animated: true)
++    picker.dismiss(animated: true) { [weak self] in
++      self?.handlePickingCancellation()
++    }
+   }
+ 
+   // MARK: - PHPickerViewControllerDelegate
+ 
+   func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+-    // The PHPickerViewController returns empty collection when canceled
+-    if results.isEmpty {
+-      handlePickingCancellation()
+-    } else {
+-      handlePickedMedia(selection: results)
++    // Settle the picking operation only after the picker has fully left the
++    // screen, so JS cannot start an overlapping presentation mid-dismissal.
++    picker.dismiss(animated: true) { [weak self] in
++      guard let self else {
++        return
++      }
++      // The PHPickerViewController returns empty collection when canceled
++      if results.isEmpty {
++        self.handlePickingCancellation()
++      } else {
++        self.handlePickedMedia(selection: results)
++      }
+     }
+-    picker.dismiss(animated: true)
+   }
+ 
+   // MARK: - UIAdaptivePresentationControllerDelegate
+diff --git a/ios/ImagePickerModule.swift b/ios/ImagePickerModule.swift
+index 6d413603b378ee4b70cdd37bd48bb020ffc49755..f643d04f7cd13505a9f5a8c2e86c4bdc364aa5ed 100644
+--- a/ios/ImagePickerModule.swift
++++ b/ios/ImagePickerModule.swift
+@@ -163,6 +163,13 @@ public class ImagePickerModule: Module, OnMediaPickingResultHandler {
+   }
+ 
+   private func presentPickerUI(_ picker: PickerUIController, pickingContext context: PickingContext) {
++    // Overwriting an in-flight context would deallocate the visible picker's
++    // (weakly referenced) delegate, leaving it stuck on screen with dead
++    // buttons and a promise that never settles. Treat the overlap as a cancel.
++    guard self.currentPickingContext == nil else {
++      return context.promise.resolve(ImagePickerResponse(assets: nil, canceled: true))
++    }
++
+     guard let currentViewController = self.appContext?.utilities?.currentViewController() else {
+       return context.promise.reject(MissingCurrentViewControllerException())
+     }

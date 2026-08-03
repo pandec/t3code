@@ -264,7 +264,7 @@ export function VoiceRecorderControl(props: {
   const content = (() => {
     if (phase === "recording") {
       return (
-        <View className="h-11 flex-row items-center gap-1 rounded-full bg-danger/10 px-2">
+        <View className="h-11 flex-row items-center gap-2 rounded-full bg-danger/10 pl-1 pr-2">
           <Text className="min-w-10 text-center text-xs font-t3-bold text-danger tabular-nums">
             {`${Math.floor(elapsedMs / 60_000)}:${String(Math.floor(elapsedMs / 1_000) % 60).padStart(2, "0")}`}
           </Text>
@@ -301,7 +301,7 @@ export function VoiceRecorderControl(props: {
 
     if (phase === "failed" && retained !== null) {
       return (
-        <View className="h-11 flex-row items-center gap-1 rounded-full bg-subtle px-2">
+        <View className="h-11 flex-row items-center gap-2 rounded-full bg-subtle px-2">
           <Text className="text-2xs text-foreground-muted">Transcription failed</Text>
           <ComposerToolbarButton
             accessibilityLabel="Retry transcription"

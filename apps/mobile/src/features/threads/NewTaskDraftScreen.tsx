@@ -2,7 +2,13 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
+import {
+  KeyboardAvoidingView,
+  KeyboardStickyView,
+  useKeyboardState,
+  useReanimatedKeyboardAnimation,
+} from "react-native-keyboard-controller";
+import Reanimated, { useAnimatedStyle } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
@@ -97,6 +103,18 @@ export function NewTaskDraftScreen(props: {
   const colorScheme = useColorScheme();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const controlsBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 10);
+  // The iOS branch carries the toolbar's whole bottom inset on the row itself,
+  // where the other surfaces split the same total across a container and the
+  // row (`controlsBottomPadding` + the row's own 8). Keeping the totals equal
+  // stops the identical toolbar from shifting between surfaces.
+  const iosControlsBottomPadding = controlsBottomPadding + 8;
+  // Same shared value KeyboardStickyView translates by, so the editor inset
+  // and the sticky toolbar stay in sync frame-for-frame. `height` is 0 when
+  // closed and -keyboardHeight when open.
+  const reanimatedKeyboard = useReanimatedKeyboardAnimation();
+  const editorKeyboardInsetStyle = useAnimatedStyle(() => ({
+    paddingBottom: Math.max(0, -reanimatedKeyboard.height.value),
+  }));
   const { logicalProjects, selectedProject, setProject } = flow;
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
@@ -821,6 +839,9 @@ export function NewTaskDraftScreen(props: {
     if (result.images.length > 0) {
       flow.appendAttachments(result.images);
     }
+    if (result.error) {
+      Alert.alert("Could not attach images", result.error);
+    }
   }
 
   const handleNativePasteImages = useCallback(
@@ -1233,15 +1254,23 @@ export function NewTaskDraftScreen(props: {
     <View className="flex-1 bg-sheet">
       <NativeStackScreenOptions options={{ title: selectedProject.title }} />
 
-      <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
-        <View className="relative min-h-0 flex-1 px-5 pt-2">
-          {promptEditor}
-          {skillPopover ? (
-            <View className="absolute inset-x-5 bottom-2 z-10">{skillPopover}</View>
-          ) : null}
-        </View>
+      {/* No KeyboardAvoidingView here: every measured-frame strategy misjudges
+          this nested form sheet when the keyboard is already up as it mounts or
+          shifts it mid-open. The toolbar rides a KeyboardStickyView (pure
+          keyboard-height translate, no frame measurement) and the editor gets a
+          keyboard-height inset from the same shared value. */}
+      <Reanimated.View
+        className="relative min-h-0 flex-1 px-5 pt-2"
+        style={editorKeyboardInsetStyle}
+      >
+        {promptEditor}
+        {skillPopover ? (
+          <View className="absolute inset-x-5 bottom-2 z-10">{skillPopover}</View>
+        ) : null}
+      </Reanimated.View>
 
-        <View className="border-t border-border" style={{ paddingBottom: controlsBottomPadding }}>
+      <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
+        <View className="border-t border-border bg-sheet">
           {flow.attachments.length > 0 ? (
             <View className="px-4 pt-3">
               <ComposerAttachmentStrip
@@ -1252,7 +1281,7 @@ export function NewTaskDraftScreen(props: {
               />
             </View>
           ) : null}
-          <ComposerToolbarRow paddingBottom={controlsBottomPadding} paddingHorizontal={6}>
+          <ComposerToolbarRow paddingBottom={iosControlsBottomPadding} paddingHorizontal={6}>
             <ComposerToolbarScroller
               fadeOpaque={sheetFadeOpaque}
               fadeTransparent={sheetFadeTransparent}
@@ -1262,7 +1291,7 @@ export function NewTaskDraftScreen(props: {
             {startButton}
           </ComposerToolbarRow>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardStickyView>
     </View>
   );
 }
