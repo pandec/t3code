@@ -239,7 +239,8 @@ export const ProviderUsageRefreshLive = Layer.effect(
       if (
         cached &&
         cached.target.managementUrl === target.managementUrl &&
-        cached.target.managementKey === target.managementKey
+        cached.target.managementKey === target.managementKey &&
+        cached.target.clientKey === target.clientKey
       ) {
         return cached.adapter;
       }
