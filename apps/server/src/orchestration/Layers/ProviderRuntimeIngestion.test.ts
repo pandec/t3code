@@ -1,9 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { ProviderInstanceHealthLive } from "../../provider/Layers/ProviderInstanceHealthLive.ts";
+import type { ProviderInstance } from "../../provider/ProviderDriver.ts";
 import {
   ProviderInstanceHealth,
   type ProviderInstanceHealthShape,
 } from "../../provider/Services/ProviderInstanceHealth.ts";
+import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -239,6 +241,15 @@ describe("ProviderRuntimeIngestion", () => {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
+    const providerInstanceConfigs = options?.serverSettings?.providerInstances ?? {};
+    const providerInstanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry, {
+      getInstance: () => Effect.succeed<ProviderInstance | undefined>(undefined),
+      getInstanceConfig: (instanceId) => Effect.succeed(providerInstanceConfigs[instanceId]),
+      listInstances: Effect.succeed([]),
+      listUnavailable: Effect.succeed([]),
+      streamChanges: Stream.empty,
+      subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+    });
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -256,6 +267,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(providerInstanceRegistryLayer),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(
@@ -3025,6 +3037,44 @@ describe("ProviderRuntimeIngestion", () => {
         observedAt: Date.parse(now),
       },
     ]);
+  });
+
+  it("keeps gateway pool snapshots owned by active refreshes while still reporting failover health", async () => {
+    const gatewayInstanceId = ProviderInstanceId.make("claudeAgent_proxy");
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          [gatewayInstanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            usageSource: { kind: "cliproxyapi", managementKey: "management-key" },
+            config: {},
+          },
+        },
+      },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-gateway-rate-limit"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: gatewayInstanceId,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "rejected",
+            resetsAt: FAR_FUTURE_RESETS_AT_SECONDS,
+          },
+        },
+      },
+    });
+    await harness.drain();
+
+    expect(await harness.getRateLimitState(gatewayInstanceId)).toBeDefined();
+    expect(await harness.listUsageSnapshots()).toEqual([]);
   });
 
   it("feeds instance rate-limit health from runtime events", async () => {

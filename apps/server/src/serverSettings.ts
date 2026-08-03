@@ -18,6 +18,7 @@ import {
   type ModelSelection,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
+  type ProviderInstanceUsageSource,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettings,
@@ -83,6 +84,22 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+function providerUsageSourceSecretName(instanceId: string): string {
+  return `provider-usage-source-${Buffer.from(instanceId, "utf8").toString("base64url")}`;
+}
+
+function redactProviderUsageSource(
+  usageSource: ProviderInstanceUsageSource,
+): ProviderInstanceUsageSource {
+  return {
+    ...usageSource,
+    managementKey: "",
+    ...(usageSource.managementKey.length > 0 || usageSource.managementKeyRedacted
+      ? { managementKeyRedacted: true }
+      : {}),
+  };
+}
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -101,10 +118,15 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
       instanceId,
-      instance.environment
+      instance.environment || instance.usageSource
         ? {
             ...instance,
-            environment: instance.environment.map(redactProviderEnvironmentVariable),
+            ...(instance.environment
+              ? { environment: instance.environment.map(redactProviderEnvironmentVariable) }
+              : {}),
+            ...(instance.usageSource
+              ? { usageSource: redactProviderUsageSource(instance.usageSource) }
+              : {}),
           }
         : instance,
     ]),
@@ -321,9 +343,9 @@ const make = Effect.gen(function* () {
         ...settings.providerInstances,
       };
       for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-        if (!instance.environment) continue;
+        if (!instance.environment && !instance.usageSource?.managementKeyRedacted) continue;
         const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
+        for (const variable of instance.environment ?? []) {
           if (!variable.sensitive || !variable.valueRedacted) {
             environment.push(variable);
             continue;
@@ -347,9 +369,28 @@ const make = Effect.gen(function* () {
             value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
           });
         }
+        let usageSource = instance.usageSource;
+        if (usageSource?.managementKeyRedacted) {
+          const secret = yield* secretStore.get(providerUsageSourceSecretName(instanceId)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-secret",
+                  providerInstanceId: instanceId,
+                  cause,
+                }),
+            ),
+          );
+          usageSource = {
+            ...usageSource,
+            managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+          };
+        }
         providerInstances[instanceId] = {
           ...instance,
-          environment,
+          ...(instance.environment ? { environment } : {}),
+          ...(usageSource ? { usageSource } : {}),
         } satisfies ProviderInstanceConfig;
       }
       return {
@@ -386,9 +427,9 @@ const make = Effect.gen(function* () {
 
       const nextSecretKeys = new Set<string>();
       for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
-        if (!instance.environment) continue;
+        if (!instance.environment && !instance.usageSource) continue;
         const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
+        for (const variable of instance.environment ?? []) {
           const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
           if (!variable.sensitive) {
             yield* secretStore.remove(secretName).pipe(
@@ -444,9 +485,55 @@ const make = Effect.gen(function* () {
 
           environment.push(redactProviderEnvironmentVariable(variable));
         }
+
+        let usageSource = instance.usageSource;
+        if (usageSource) {
+          const secretName = providerUsageSourceSecretName(instanceId);
+          // The value decides, not the flag: a caller that sends a non-empty
+          // key alongside `managementKeyRedacted: true` (hand-edited settings,
+          // a non-web client) must not have that key persisted verbatim —
+          // redaction on read would then hide the plaintext on disk forever.
+          if (usageSource.managementKey.length > 0 || !usageSource.managementKeyRedacted) {
+            if (usageSource.managementKey.length > 0) {
+              yield* secretStore
+                .set(secretName, textEncoder.encode(usageSource.managementKey))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerSettingsError({
+                        settingsPath,
+                        operation: "write-secret",
+                        providerInstanceId: instanceId,
+                        cause,
+                      }),
+                  ),
+                );
+              usageSource = { ...usageSource, managementKey: "", managementKeyRedacted: true };
+            } else {
+              yield* secretStore.remove(secretName).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      operation: "remove-secret",
+                      providerInstanceId: instanceId,
+                      cause,
+                    }),
+                ),
+              );
+              const { managementKeyRedacted: _omit, ...rest } = usageSource;
+              usageSource = rest;
+            }
+          }
+          if (usageSource.managementKeyRedacted) {
+            nextSecretKeys.add(secretName);
+          }
+        }
+
         providerInstances[instanceId] = {
           ...instance,
-          environment,
+          ...(instance.environment ? { environment } : {}),
+          ...(usageSource ? { usageSource } : {}),
         } satisfies ProviderInstanceConfig;
       }
 
@@ -463,6 +550,21 @@ const make = Effect.gen(function* () {
                   operation: "remove-stale-secret",
                   providerInstanceId: instanceId,
                   environmentVariable: variable.name,
+                  cause,
+                }),
+            ),
+          );
+        }
+        if (instance.usageSource?.managementKeyRedacted) {
+          const secretName = providerUsageSourceSecretName(instanceId);
+          if (nextSecretKeys.has(secretName)) continue;
+          yield* secretStore.remove(secretName).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "remove-stale-secret",
+                  providerInstanceId: instanceId,
                   cause,
                 }),
             ),

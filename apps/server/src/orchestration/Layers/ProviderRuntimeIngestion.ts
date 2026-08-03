@@ -28,7 +28,9 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { CLIPROXYAPI_USAGE_SOURCE_KIND } from "../../provider/cliProxyApiUsage.ts";
 import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
+import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -717,6 +719,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const providerInstanceHealth = yield* ProviderInstanceHealth;
+  const providerInstanceRegistry = yield* ProviderInstanceRegistry;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
@@ -1350,6 +1353,20 @@ const make = Effect.gen(function* () {
     yield* reportHealthSafely(
       event,
       Effect.gen(function* () {
+        // An instance with an external usage source (gateway pool) owns its
+        // usage snapshot slot: the snapshot storage is whole-payload
+        // last-write-wins, so a passive single-window event forwarded through
+        // the gateway must not overwrite the pooled-accounts snapshot.
+        // Failover health above still sees the passive payload.
+        const instanceConfig = yield* (
+          providerInstanceRegistry.getInstanceConfig?.(instanceId) ?? Effect.succeed(undefined)
+        );
+        // Gate on the *recognized* kind: an unknown kind must not silently
+        // suppress the driver's own usage (the envelope round-trips across
+        // builds, so this can be a downgrade or a future kind).
+        if (instanceConfig?.usageSource?.kind === CLIPROXYAPI_USAGE_SOURCE_KIND) {
+          return;
+        }
         const observationToken = yield* providerInstanceHealth.beginUsageObservation();
         yield* providerInstanceHealth.reportUsageSnapshot(
           instanceId,

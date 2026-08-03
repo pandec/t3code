@@ -669,11 +669,31 @@ type ProviderUsagePayloadSource = {
  * Normalize one server-owned per-instance usage snapshot. The caller supplies
  * the instance's driver via `options.provider` (it already has it from the
  * provider list).
+ *
+ * A gateway snapshot (`cliproxyapi.management`) carries a pool of upstream
+ * accounts rather than one; here it collapses to the featured account so
+ * single-account surfaces (the ring, alerts) keep working — the full pool is
+ * available through `deriveProviderUsageAccountsFromServerSnapshot`. Pass
+ * `preferredUpstreamProvider` when the caller knows which upstream serves the
+ * thread; see `featuredProviderUsageAccount`.
  */
 export function deriveProviderUsageSnapshotFromServerSnapshot(
   snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
-  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> = {},
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> & {
+    readonly preferredUpstreamProvider?: string | null;
+  } = {},
 ): ProviderUsageSnapshot | null {
+  const accounts = deriveProviderUsageAccountsFromServerSnapshot(snapshot, options);
+  if (accounts !== null) {
+    return (
+      featuredProviderUsageAccount(
+        accounts.accounts,
+        options.preferredUpstreamProvider === undefined
+          ? "claude"
+          : options.preferredUpstreamProvider,
+      )?.usage ?? null
+    );
+  }
   return deriveProviderUsageSnapshotFromSources(
     [
       {
@@ -686,6 +706,163 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
       providerInstanceId: snapshot.instanceId,
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// CLIProxyAPI gateway pools
+//
+// A provider instance backed by a CLIProxyAPI gateway reports one snapshot
+// carrying every pooled upstream account: `{ source: "cliproxyapi.management",
+// accounts: [{ id, label, provider, priority, state, planType?, usage,
+// error? }] }`. Each account's `usage` arrives in the matching direct
+// provider's payload shape, so per-account normalization reuses the dispatch
+// above verbatim.
+// ---------------------------------------------------------------------------
+
+export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
+
+export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";
+
+export type ProviderUsageAccount = {
+  /** Stable identity within the pool (the gateway's auth-file name). */
+  readonly id: string;
+  readonly label: string;
+  /** Upstream provider slug as the gateway reports it ("claude", "codex"). */
+  readonly provider: string;
+  /** Failover-ladder tier; higher serves first. Null when unreported. */
+  readonly priority: number | null;
+  readonly state: ProviderUsageAccountState;
+  /** Plan tier when the upstream reports one (Codex only today). */
+  readonly planType: string | null;
+  /** Why this account's usage is missing, when the gateway said so. */
+  readonly error: string | null;
+  readonly usage: ProviderUsageSnapshot | null;
+};
+
+export type ProviderUsageAccountsSnapshot = {
+  readonly providerInstanceId: string;
+  readonly accounts: ReadonlyArray<ProviderUsageAccount>;
+  readonly updatedAt: string;
+};
+
+function asAccountState(value: unknown): ProviderUsageAccountState {
+  return value === "disabled" || value === "cooldown" ? value : "available";
+}
+
+/**
+ * Normalize a gateway pool snapshot into per-account usage. Returns null for
+ * snapshots from any other source, which is how callers detect that an
+ * instance is gateway-backed in the first place.
+ */
+export function deriveProviderUsageAccountsFromServerSnapshot(
+  snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId" | "provider"> = {},
+): ProviderUsageAccountsSnapshot | null {
+  const payload = asRecord(snapshot.payload);
+  if (asString(payload?.source) !== CLIPROXYAPI_USAGE_PAYLOAD_SOURCE) return null;
+  const rawAccounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  const observedAtIso = DateTime.formatIso(DateTime.makeUnsafe(snapshot.observedAt));
+
+  const accounts: ProviderUsageAccount[] = [];
+  for (const [index, value] of rawAccounts.entries()) {
+    const account = asRecord(value);
+    if (!account) continue;
+    accounts.push({
+      id: asString(account.id) ?? `account-${index}`,
+      label: asString(account.label) ?? `Account ${index + 1}`,
+      provider: asString(account.provider) ?? "unknown",
+      priority: asFiniteNumber(account.priority),
+      state: asAccountState(account.state),
+      planType: asString(account.planType),
+      error: asString(account.error),
+      // No driver filter (deliberately not spreading caller options): a
+      // Claude-driver gateway instance legitimately pools Codex accounts for
+      // its custom models.
+      usage: deriveProviderUsageSnapshotFromSources(
+        [{ payload: account.usage, createdAt: observedAtIso }],
+        {
+          ...(options.now !== undefined ? { now: options.now } : {}),
+          ...(options.thresholds !== undefined ? { thresholds: options.thresholds } : {}),
+          providerInstanceId: snapshot.instanceId,
+        },
+      ),
+    });
+  }
+  if (accounts.length === 0) return null;
+
+  return {
+    providerInstanceId: snapshot.instanceId,
+    accounts,
+    updatedAt: observedAtIso,
+  };
+}
+
+const byProviderUsageAccountPriority = (a: ProviderUsageAccount, b: ProviderUsageAccount) =>
+  (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
+
+/** Highest priority first — the order the gateway's failover ladder serves. */
+export function sortProviderUsageAccountsByPriority(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+): ReadonlyArray<ProviderUsageAccount> {
+  // Hermes lacks ES2023 change-by-copy methods, so copy before sorting.
+  return [...accounts].sort(byProviderUsageAccountPriority);
+}
+
+/**
+ * The pooled account a compact single-account surface (ring, alerts) should
+ * represent: the highest-priority account of `preferredUpstreamProvider` that
+ * the gateway can still serve — the one the next turn will actually spend.
+ *
+ * Two deliberate choices:
+ *   - An account whose own usage read failed is still featured. Substituting a
+ *     sibling's percentage would misreport the account being spent; the
+ *     popover shows that account's error instead.
+ *   - When every matching account is cooling down, the highest-priority
+ *     cooled-down one is featured rather than nothing: a fully exhausted pool
+ *     is exactly when the meter must be loudest, and returning null there
+ *     would make it go dark instead of red.
+ *
+ * `preferredUpstreamProvider` of null means the caller cannot tell which
+ * upstream serves this thread (e.g. a custom model on a mixed pool); feature
+ * nothing rather than a quota the turn will not spend.
+ */
+export function featuredProviderUsageAccount(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+  preferredUpstreamProvider: string | null = "claude",
+): ProviderUsageAccount | null {
+  if (preferredUpstreamProvider === null) return null;
+  const ofProvider = accounts.filter((account) => account.provider === preferredUpstreamProvider);
+  const available = ofProvider.filter((account) => account.state === "available");
+  return (
+    sortProviderUsageAccountsByPriority(available.length > 0 ? available : ofProvider)[0] ?? null
+  );
+}
+
+/**
+ * Presentation fields shared by every surface that renders a pooled gateway
+ * account, so the two composers cannot drift apart on labelling.
+ */
+export function presentProviderUsageAccount(account: ProviderUsageAccount): {
+  readonly displayName: string;
+  readonly email: string | undefined;
+  readonly detail: string | null;
+} {
+  // Gateway account labels are often the upstream login email; route those
+  // through the email slot so the masking preference applies.
+  const emailLikeLabel = account.label.includes("@");
+  return {
+    displayName: emailLikeLabel ? account.id : account.label,
+    email: emailLikeLabel ? account.label : undefined,
+    detail:
+      [
+        account.priority !== null ? `tier ${account.priority}` : null,
+        account.state !== "available" ? account.state : null,
+        account.planType,
+        account.usage === null ? account.error : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null,
+  };
 }
 
 /**

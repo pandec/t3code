@@ -59,9 +59,13 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import {
   deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
+  featuredProviderUsageAccount,
+  presentProviderUsageAccount,
   providerUsageLabelForDriver,
   resolveProviderUsageInstanceId,
+  sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
 import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
@@ -428,46 +432,101 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       selectedThreadDetail,
     ],
   );
-  const providerUsage = serverProviderUsage ?? activityProviderUsage;
-  const providerUsageAccounts = useMemo(
+  // Gateway-backed instances (CLIProxyAPI) report a pool of upstream accounts
+  // in one snapshot. Mobile has no settings mirror, so gateway-ness is
+  // detected from the snapshot payload itself.
+  const gatewayUsageByInstance = useMemo(() => {
+    const pools = new Map<
+      string,
+      NonNullable<ReturnType<typeof deriveProviderUsageAccountsFromServerSnapshot>>
+    >();
+    for (const [instanceId, snapshot] of providerUsageSnapshotByInstance) {
+      const pool = deriveProviderUsageAccountsFromServerSnapshot(snapshot, {
+        now: providerUsageNowMs,
+      });
+      if (pool !== null) pools.set(instanceId, pool);
+    }
+    return pools;
+  }, [providerUsageNowMs, providerUsageSnapshotByInstance]);
+  const activeGatewayPool = useMemo(
     () =>
-      (props.serverConfig?.providers ?? [])
-        .filter(
-          (provider) =>
-            provider.enabled &&
-            selectedProviderStatus !== null &&
-            providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
-            provider.driver === selectedProviderStatus.driver,
-        )
-        .sort((left, right) => {
-          if (left.instanceId === providerUsageInstanceId) return -1;
-          if (right.instanceId === providerUsageInstanceId) return 1;
-          return 0;
-        })
-        .map((provider) => {
-          const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
-          return {
-            instanceId: provider.instanceId,
-            displayName: provider.displayName ?? provider.instanceId,
-            email: provider.auth.email,
-            isCurrent: provider.instanceId === providerUsageInstanceId,
-            snapshot: snapshot
-              ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
-                  provider: provider.driver,
-                  now: providerUsageNowMs,
-                })
-              : null,
-            observedAt: snapshot?.observedAt ?? null,
-          };
-        }),
-    [
-      props.serverConfig?.providers,
-      providerUsageInstanceId,
-      providerUsageNowMs,
-      providerUsageSnapshotByInstance,
-      selectedProviderStatus,
-    ],
+      providerUsageInstanceId !== null
+        ? (gatewayUsageByInstance.get(providerUsageInstanceId) ?? null)
+        : null,
+    [gatewayUsageByInstance, providerUsageInstanceId],
   );
+  /**
+   * Which upstream of a gateway pool serves this thread; a custom model is
+   * served by a non-Claude upstream, and nothing maps a model to a pooled
+   * account, so no account may be featured for it. Mirrors the web composer.
+   */
+  const activeUpstreamProvider = useMemo<string | null>(() => {
+    const model = props.selectedThread.modelSelection.model;
+    if (selectedProviderStatus === null) return "claude";
+    return selectedProviderStatus.models.find((entry) => entry.slug === model)?.isCustom === true
+      ? null
+      : "claude";
+  }, [props.selectedThread.modelSelection.model, selectedProviderStatus]);
+  const providerUsage =
+    serverProviderUsage ?? (activeGatewayPool === null ? activityProviderUsage : null);
+  const providerUsageAccounts = useMemo(() => {
+    if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
+      const featuredId =
+        featuredProviderUsageAccount(activeGatewayPool.accounts, activeUpstreamProvider)?.id ??
+        null;
+      const observedAt =
+        providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
+      return sortProviderUsageAccountsByPriority(activeGatewayPool.accounts).map((account) => ({
+        instanceId: providerUsageInstanceId,
+        accountKey: `${providerUsageInstanceId}:${account.id}`,
+        ...presentProviderUsageAccount(account),
+        isCurrent: account.id === featuredId,
+        snapshot: account.usage,
+        observedAt,
+      }));
+    }
+    return (props.serverConfig?.providers ?? [])
+      .filter(
+        (provider) =>
+          provider.enabled &&
+          selectedProviderStatus !== null &&
+          providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
+          provider.driver === selectedProviderStatus.driver &&
+          // A gateway sibling meters its own pool; it renders when a thread
+          // actually runs on it.
+          !gatewayUsageByInstance.has(provider.instanceId),
+      )
+      .sort((left, right) => {
+        if (left.instanceId === providerUsageInstanceId) return -1;
+        if (right.instanceId === providerUsageInstanceId) return 1;
+        return 0;
+      })
+      .map((provider) => {
+        const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+        return {
+          instanceId: provider.instanceId,
+          displayName: provider.displayName ?? provider.instanceId,
+          email: provider.auth.email,
+          isCurrent: provider.instanceId === providerUsageInstanceId,
+          snapshot: snapshot
+            ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+                provider: provider.driver,
+                now: providerUsageNowMs,
+              })
+            : null,
+          observedAt: snapshot?.observedAt ?? null,
+        };
+      });
+  }, [
+    activeGatewayPool,
+    activeUpstreamProvider,
+    gatewayUsageByInstance,
+    props.serverConfig?.providers,
+    providerUsageInstanceId,
+    providerUsageNowMs,
+    providerUsageSnapshotByInstance,
+    selectedProviderStatus,
+  ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
     () =>

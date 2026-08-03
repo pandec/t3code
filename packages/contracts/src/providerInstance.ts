@@ -113,6 +113,33 @@ export const ProviderInstanceEnvironment = Schema.Array(ProviderInstanceEnvironm
 export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Type;
 
 /**
+ * Optional per-instance subscription-usage source override.
+ *
+ * A gateway instance (e.g. CLIProxyAPI) pools several upstream
+ * subscriptions behind one endpoint, so the driver's own account probe has
+ * no quota to report — the meaningful usage data is the pool's per-account
+ * quota, which only the gateway's management API can serve. `kind` is an
+ * open slug for the same rolling-compatibility reason as
+ * `ProviderDriverKind`: builds that don't recognize a kind keep the
+ * envelope verbatim and simply don't probe.
+ *
+ * `managementKey` is sensitive: the server persists it to the secret store
+ * and blanks it (setting `managementKeyRedacted`) on the way to clients,
+ * mirroring sensitive environment variables. `managementUrl` is optional;
+ * when absent the server derives it from the instance's environment (for
+ * `cliproxyapi`, the origin of `ANTHROPIC_BASE_URL`).
+ */
+export const ProviderInstanceUsageSource = Schema.Struct({
+  kind: slugSchema,
+  managementUrl: Schema.optional(TrimmedNonEmptyString),
+  managementKey: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  managementKeyRedacted: Schema.optionalKey(Schema.Boolean),
+});
+export type ProviderInstanceUsageSource = typeof ProviderInstanceUsageSource.Type;
+
+export const PROVIDER_USAGE_SOURCE_CLIPROXYAPI = "cliproxyapi";
+
+/**
  * Envelope shape for a provider instance configuration in `ServerSettings`.
  *
  * `driver` is intentionally accepted as any well-formed slug (see module
@@ -133,6 +160,9 @@ export const ProviderInstanceConfig = Schema.Struct({
   // reference that fails those checks is ignored at routing time rather than
   // rejected here, keeping envelopes portable across builds.
   failoverInstanceId: Schema.optionalKey(ProviderInstanceId),
+  // Where the usage meter should read subscription quota from, when the
+  // driver's own account probe cannot see it (gateway instances).
+  usageSource: Schema.optionalKey(ProviderInstanceUsageSource),
   config: Schema.optionalKey(Schema.Unknown),
 });
 export type ProviderInstanceConfig = typeof ProviderInstanceConfig.Type;

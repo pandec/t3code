@@ -45,9 +45,10 @@ export interface ProviderInstanceRegistryShape {
    * part of the driver-created `ProviderInstance`.
    *
    * Optional so test doubles of this shape need not implement it; the live
-   * registry always provides it, and the sole consumer
-   * (`ProviderAdapterRegistry.getInstanceInfo`) treats an absent method as
-   * "no envelope hints".
+   * registry always provides it, and every consumer
+   * (`ProviderAdapterRegistry.getInstanceInfo`, the usage-refresh layer's
+   * gateway probe selection, and passive rate-limit ingestion) treats an
+   * absent method as "no envelope hints".
    */
   readonly getInstanceConfig?: (
     instanceId: ProviderInstanceId,

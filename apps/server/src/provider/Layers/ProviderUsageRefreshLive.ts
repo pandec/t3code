@@ -14,7 +14,14 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import { HttpClient } from "effect/unstable/http";
 
+import {
+  CLIPROXYAPI_USAGE_SOURCE_KIND,
+  makeCliProxyApiUsageProbe,
+  resolveCliProxyApiUsageProbeTarget,
+  type CliProxyApiUsageProbeTarget,
+} from "../cliProxyApiUsage.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
@@ -173,8 +180,85 @@ export const ProviderUsageRefreshLive = Layer.effect(
   Effect.gen(function* () {
     const registry = yield* ProviderInstanceRegistry;
     const health = yield* ProviderInstanceHealth;
+    const httpClient = yield* HttpClient.HttpClient;
+
+    // Gateway probes are memoized per instance: the coordinator's
+    // single-flight join compares adapters by identity, and the probe closure
+    // holds auth-failure cooldown state that must survive across refreshes.
+    const gatewayProbes = new Map<
+      ProviderInstanceId,
+      {
+        readonly target: CliProxyApiUsageProbeTarget;
+        readonly adapter: UsageRefreshProviderInstance["adapter"];
+      }
+    >();
+
+    const gatewayAdapterFor = (
+      instanceId: ProviderInstanceId,
+      target: CliProxyApiUsageProbeTarget,
+    ): UsageRefreshProviderInstance["adapter"] => {
+      const cached = gatewayProbes.get(instanceId);
+      if (
+        cached &&
+        cached.target.managementUrl === target.managementUrl &&
+        cached.target.managementKey === target.managementKey
+      ) {
+        return cached.adapter;
+      }
+      const probe = makeCliProxyApiUsageProbe(target);
+      const adapter: UsageRefreshProviderInstance["adapter"] = {
+        readAccountUsage: () =>
+          probe().pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
+      };
+      gatewayProbes.set(instanceId, { target, adapter });
+      return adapter;
+    };
+
+    const listInstances: Effect.Effect<ReadonlyArray<UsageRefreshProviderInstance>> = Effect.gen(
+      function* () {
+        const instances = yield* registry.listInstances;
+        const resolved: Array<UsageRefreshProviderInstance> = [];
+        const activeGatewayProbeIds = new Set<ProviderInstanceId>();
+        for (const instance of instances) {
+          const envelope = yield* (
+            registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
+          );
+          // Gate on the *recognized* kind, not mere presence: the contract
+          // promises a build that does not know a kind leaves the envelope
+          // alone and keeps the driver's own usage working.
+          if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) {
+            resolved.push(instance);
+            continue;
+          }
+          // An instance that declares a usage source never falls back to the
+          // driver's own probe: through a gateway that probe reports either
+          // nothing or, worse, whatever unrelated account the config home is
+          // logged into.
+          const target = resolveCliProxyApiUsageProbeTarget(envelope);
+          if (target) {
+            activeGatewayProbeIds.add(instance.instanceId);
+          }
+          resolved.push({
+            instanceId: instance.instanceId,
+            driverKind: instance.driverKind,
+            enabled: instance.enabled,
+            adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
+          });
+        }
+        // Sweeping by the active set subsumes any per-instance pruning above:
+        // an id only enters `gatewayProbes` via `gatewayAdapterFor`, which
+        // runs exactly for the ids in that set.
+        for (const instanceId of gatewayProbes.keys()) {
+          if (!activeGatewayProbeIds.has(instanceId)) {
+            gatewayProbes.delete(instanceId);
+          }
+        }
+        return resolved;
+      },
+    );
+
     return yield* makeProviderUsageRefresh({
-      listInstances: registry.listInstances,
+      listInstances,
       health,
     });
   }),

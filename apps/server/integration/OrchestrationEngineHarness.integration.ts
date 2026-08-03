@@ -7,6 +7,7 @@ import {
   ApprovalRequestId,
   CodexSettings,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
   type OrchestrationEvent,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -45,6 +46,8 @@ import {
   ProviderEventLoggers,
 } from "../src/provider/Layers/ProviderEventLoggers.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
+import { ProviderInstanceRegistry } from "../src/provider/Services/ProviderInstanceRegistry.ts";
+import type { ProviderInstance } from "../src/provider/ProviderDriver.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
@@ -378,6 +381,16 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(orchestrationReactorLayer),
       Layer.provideMerge(providerRegistryLayer),
+      Layer.provideMerge(
+        Layer.succeed(ProviderInstanceRegistry, {
+          getInstance: () => Effect.succeed<ProviderInstance | undefined>(undefined),
+          getInstanceConfig: () => Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+          listInstances: Effect.succeed([]),
+          listUnavailable: Effect.succeed([]),
+          streamChanges: Stream.empty,
+          subscribeChanges: Effect.never,
+        }),
+      ),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
