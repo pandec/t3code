@@ -660,6 +660,16 @@ export function resolveProviderUsageInstanceId<TInstanceId extends string>(input
   return input.liveSessionInstanceId ?? input.modelSelectionInstanceId ?? null;
 }
 
+export function resolveProviderUsageModel(input: {
+  readonly liveSessionInstanceId?: string | null | undefined;
+  readonly persistedModel?: string | null | undefined;
+  readonly selectedModel: string;
+}): string {
+  return input.liveSessionInstanceId === null || input.liveSessionInstanceId === undefined
+    ? input.selectedModel
+    : (input.persistedModel ?? input.selectedModel);
+}
+
 type ProviderUsagePayloadSource = {
   readonly payload: unknown;
   readonly createdAt: string;
@@ -726,11 +736,13 @@ export function resolveProviderUsageUpstreamProvider(input: {
   readonly model: string;
   readonly isCustom: boolean;
 }): string | null {
-  if (!input.isCustom) return "claude";
-
   const value = asRecord(input.payload)?.modelProviders;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return asString((value as Record<string, unknown>)[input.model]);
+  const mappedProvider =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? asString((value as Record<string, unknown>)[input.model])
+      : null;
+  if (mappedProvider !== null) return mappedProvider;
+  return input.isCustom ? null : "claude";
 }
 
 export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";

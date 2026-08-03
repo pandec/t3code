@@ -222,6 +222,7 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
+  resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
@@ -1065,6 +1066,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? deriveProviderUsageAccountsFromServerSnapshot(snapshot, { now: Date.now() })
       : null;
   }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
+  const activeProviderUsageModel = resolveProviderUsageModel({
+    liveSessionInstanceId: activeThread?.session?.providerInstanceId,
+    persistedModel: activeThreadModelSelection?.model,
+    selectedModel,
+  });
   /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
     if (activeProviderUsageInstanceId === null) return "claude";
@@ -1073,14 +1079,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     )?.models;
     return resolveProviderUsageUpstreamProvider({
       payload: providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
-      model: selectedModel,
-      isCustom: models?.find((entry) => entry.slug === selectedModel)?.isCustom === true,
+      model: activeProviderUsageModel,
+      isCustom: models?.find((entry) => entry.slug === activeProviderUsageModel)?.isCustom === true,
     });
   }, [
     activeProviderUsageInstanceId,
+    activeProviderUsageModel,
     providerStatuses,
     providerUsageSnapshotByInstance,
-    selectedModel,
   ]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;

@@ -17,6 +17,7 @@ import {
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
+  resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
 } from "./providerUsage.ts";
@@ -1059,6 +1060,13 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         isCustom: true,
       }),
     ).toBe("codex");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
+        model: "gpt-5.6-sol",
+        isCustom: false,
+      }),
+    ).toBe("codex");
   });
 
   it("returns null for an unknown custom model or malformed mapping", () => {
@@ -1219,6 +1227,28 @@ describe("resolveProviderUsageInstanceId", () => {
         modelSelectionInstanceId: "codex-work",
       }),
     ).toBe("codex-work");
+  });
+});
+
+describe("resolveProviderUsageModel", () => {
+  it("keeps the persisted model while a live session owns usage", () => {
+    expect(
+      resolveProviderUsageModel({
+        liveSessionInstanceId: "claude-proxy",
+        persistedModel: "claude-opus-5",
+        selectedModel: "gpt-5.6-sol",
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("uses the selected model before a live session exists", () => {
+    expect(
+      resolveProviderUsageModel({
+        liveSessionInstanceId: null,
+        persistedModel: "claude-opus-5",
+        selectedModel: "gpt-5.6-sol",
+      }),
+    ).toBe("gpt-5.6-sol");
   });
 });
 

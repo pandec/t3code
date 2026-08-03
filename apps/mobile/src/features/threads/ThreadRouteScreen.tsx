@@ -828,6 +828,7 @@ function ThreadRouteContent(
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
+          persistedModel={selectedThread.modelSelection.model}
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}

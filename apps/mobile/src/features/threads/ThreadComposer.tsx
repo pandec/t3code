@@ -64,6 +64,7 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
+  resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
@@ -139,6 +140,7 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
+  readonly persistedModel: string;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
   readonly environmentId: EnvironmentId;
@@ -443,8 +445,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
-    const model = props.selectedThread.modelSelection.model;
-    if (selectedProviderStatus === null) return "claude";
+    const model = resolveProviderUsageModel({
+      liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
+      persistedModel: props.persistedModel,
+      selectedModel: props.selectedThread.modelSelection.model,
+    });
     return resolveProviderUsageUpstreamProvider({
       payload:
         providerUsageInstanceId === null
@@ -452,10 +457,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           : providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.payload,
       model,
       isCustom:
-        selectedProviderStatus.models.find((entry) => entry.slug === model)?.isCustom === true,
+        selectedProviderStatus?.models.find((entry) => entry.slug === model)?.isCustom === true,
     });
   }, [
+    props.persistedModel,
     props.selectedThread.modelSelection.model,
+    props.selectedThread.session?.providerInstanceId,
     providerUsageInstanceId,
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
