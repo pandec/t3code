@@ -301,7 +301,7 @@ export function VoiceRecorderControl(props: {
 
     if (phase === "failed" && retained !== null) {
       return (
-        <View className="h-11 flex-row items-center gap-1 rounded-full bg-subtle px-2">
+        <View className="h-11 flex-row items-center gap-2 rounded-full bg-subtle px-2">
           <Text className="text-2xs text-foreground-muted">Transcription failed</Text>
           <ComposerToolbarButton
             accessibilityLabel="Retry transcription"

@@ -97,6 +97,11 @@ export function NewTaskDraftScreen(props: {
   const colorScheme = useColorScheme();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const controlsBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 10);
+  // The iOS branch carries the toolbar's whole bottom inset on the row itself,
+  // where the other surfaces split the same total across a container and the
+  // row (`controlsBottomPadding` + the row's own 8). Keeping the totals equal
+  // stops the identical toolbar from shifting between surfaces.
+  const iosControlsBottomPadding = controlsBottomPadding + 8;
   const { logicalProjects, selectedProject, setProject } = flow;
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
@@ -821,6 +826,9 @@ export function NewTaskDraftScreen(props: {
     if (result.images.length > 0) {
       flow.appendAttachments(result.images);
     }
+    if (result.error) {
+      Alert.alert("Could not attach images", result.error);
+    }
   }
 
   const handleNativePasteImages = useCallback(
@@ -1233,11 +1241,10 @@ export function NewTaskDraftScreen(props: {
     <View className="flex-1 bg-sheet">
       <NativeStackScreenOptions options={{ title: selectedProject.title }} />
 
-      {/* behavior="height" (not "padding"): only "height" freezes the measured
-          baseline frame while the keyboard is open. With "padding", any mid-open
-          relayout recaptures this form sheet's transiently keyboard-shifted
-          window frame, collapsing the padding and hiding the toolbar behind the
-          keyboard until the sheet is dragged or the keyboard is cycled. */}
+      {/* Only "height" freezes the measured baseline frame while the keyboard is
+          open. Any other behavior recaptures this form sheet's transiently
+          keyboard-shifted window frame on relayout and drops the toolbar behind
+          the keyboard. */}
       <KeyboardAvoidingView automaticOffset behavior="height" className="flex-1">
         <View className="relative min-h-0 flex-1 px-5 pt-2">
           {promptEditor}
@@ -1257,7 +1264,7 @@ export function NewTaskDraftScreen(props: {
               />
             </View>
           ) : null}
-          <ComposerToolbarRow paddingBottom={controlsBottomPadding} paddingHorizontal={6}>
+          <ComposerToolbarRow paddingBottom={iosControlsBottomPadding} paddingHorizontal={6}>
             <ComposerToolbarScroller
               fadeOpaque={sheetFadeOpaque}
               fadeTransparent={sheetFadeTransparent}
