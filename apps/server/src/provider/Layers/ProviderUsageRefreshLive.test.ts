@@ -17,8 +17,11 @@ import { resetCliProxyApiAuthFailuresForTest } from "../cliProxyApiUsage.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import {
+  DRIVER_USAGE_SOURCE_KEY,
+  makeUsageSourceKey,
   ProviderInstanceHealth,
   type UsageObservationToken,
+  type UsageSourceKey,
 } from "../Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderUsageRefresh } from "../Services/ProviderUsageRefresh.ts";
@@ -43,11 +46,13 @@ function instance(input: {
   readonly enabled?: boolean;
   readonly read?: Effect.Effect<unknown | undefined, ProviderAdapterError>;
   readonly onRead?: () => void;
+  readonly usageSourceKey?: UsageSourceKey;
 }): UsageRefreshProviderInstance {
   return {
     instanceId: ProviderInstanceId.make(input.id),
     driverKind: driver,
     enabled: input.enabled ?? true,
+    usageSourceKey: input.usageSourceKey ?? DRIVER_USAGE_SOURCE_KEY,
     adapter:
       input.read !== undefined || input.onRead !== undefined
         ? {
@@ -219,7 +224,17 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
       const httpLayer = Layer.succeed(
         HttpClient.HttpClient,
         HttpClient.make((request) =>
-          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({
+                  files: [{ auth_index: "pool", name: "pool.json", provider: "unknown" }],
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+            ),
+          ),
         ),
       );
       const layer = ProviderUsageRefreshLive.pipe(
@@ -232,73 +247,63 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
         const refresh = yield* ProviderUsageRefresh;
         const health = yield* ProviderInstanceHealth;
 
-        yield* health.reportUsageSnapshot(
-          target,
-          { pool: "gateway" },
-          1_000,
-          yield* health.beginUsageObservation(),
-        );
+        expect((yield* refresh.refresh([target])).refreshedInstanceIds).toEqual([target]);
         expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
-        // A probe against the old source is still in flight when the user
-        // turns the usage source off.
-        const lateToken = yield* health.beginUsageObservation();
+        // Passive ingestion can observe the new direct source before the
+        // registry watcher drains. Declaring the source at the write edge
+        // keeps that valid payload through the delayed notification.
         const removalObserved = yield* Deferred.make<void>();
         yield* Ref.set(nextConfigRead, removalObserved);
         yield* Ref.set(config, { driver, environment, config: {} });
+        const directToken = yield* health.beginUsageObservation();
+        yield* health.setUsageSource(target, DRIVER_USAGE_SOURCE_KEY, directToken);
+        expect(
+          yield* health.reportUsageSnapshot(
+            target,
+            { source: "direct" },
+            2_000,
+            directToken,
+            DRIVER_USAGE_SOURCE_KEY,
+          ),
+        ).toBe(true);
         yield* PubSub.publish(changes, undefined);
         yield* Deferred.await(removalObserved);
         // The refresh joins behind the watcher's reconciliation gate, giving
         // this test a receipt-like boundary without polling the snapshot.
         yield* refresh.refresh([target]);
-        expect(yield* health.listUsageSnapshots()).toEqual([]);
-
-        // The late probe must not resurrect the pooled payload…
-        expect(yield* health.reportUsageSnapshot(target, { pool: "stale" }, 2_000, lateToken)).toBe(
-          false,
-        );
-        expect(yield* health.listUsageSnapshots()).toEqual([]);
-
-        // …while an observation that begins after the clear reports normally.
-        expect(
-          yield* health.reportUsageSnapshot(
-            target,
-            { source: "direct" },
-            3_000,
-            yield* health.beginUsageObservation(),
-          ),
-        ).toBe(true);
         expect(yield* health.listUsageSnapshots()).toEqual([
-          { instanceId: target, payload: { source: "direct" }, observedAt: 3_000 },
+          { instanceId: target, payload: { source: "direct" }, observedAt: 2_000 },
         ]);
 
-        // A refresh can observe the new source before its registry event is
-        // drained. Reconciliation on the read path clears the direct payload
-        // first, and the delayed event must not later clear a valid new-source
-        // observation.
+        // Declaring an unresolved gateway still owns the slot and must clear
+        // the direct payload even though it has no adapter capable of probing.
+        yield* Ref.set(config, {
+          ...gatewayConfig,
+          usageSource: { kind: "cliproxyapi", managementKey: "" },
+        });
+        expect(yield* refresh.refresh([target])).toEqual({
+          refreshedInstanceIds: [],
+          failures: [],
+        });
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+        // A refresh can observe the replacement gateway before its registry
+        // event is drained. The delayed declaration is idempotent and must not
+        // later clear the valid replacement-source snapshot.
         yield* Ref.set(config, {
           ...gatewayConfig,
           usageSource: { kind: "cliproxyapi", managementKey: "replacement-key" },
         });
-        yield* refresh.refresh([target]);
-        expect(yield* health.listUsageSnapshots()).toEqual([]);
-        expect(
-          yield* health.reportUsageSnapshot(
-            target,
-            { pool: "replacement" },
-            4_000,
-            yield* health.beginUsageObservation(),
-          ),
-        ).toBe(true);
+        expect((yield* refresh.refresh([target])).refreshedInstanceIds).toEqual([target]);
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
         const additionObserved = yield* Deferred.make<void>();
         yield* Ref.set(nextConfigRead, additionObserved);
         yield* PubSub.publish(changes, undefined);
         yield* Deferred.await(additionObserved);
         yield* refresh.refresh([target]);
-        expect(yield* health.listUsageSnapshots()).toEqual([
-          { instanceId: target, payload: { pool: "replacement" }, observedAt: 4_000 },
-        ]);
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
       }).pipe(Effect.provide(layer));
     }),
   ),
@@ -560,6 +565,7 @@ it.effect("does not let a late probe overwrite a newer usage observation", () =>
         { source: "turn-boundary" },
         1_000,
         yield* health.beginUsageObservation(),
+        DRIVER_USAGE_SOURCE_KEY,
       );
       yield* Deferred.succeed(releaseRead, undefined);
       const outcome = yield* Fiber.join(probe);
@@ -620,7 +626,11 @@ it.effect("does not start an adapter that changed while queued behind the probe 
       yield* Effect.yieldNow;
 
       yield* Ref.set(instances, [...blockers, replacement]);
-      yield* health.clearUsageSnapshot(target, yield* health.beginUsageObservation());
+      yield* health.setUsageSource(
+        target,
+        makeUsageSourceKey(),
+        yield* health.beginUsageObservation(),
+      );
       yield* Deferred.succeed(releaseBlockers, undefined);
 
       yield* Fiber.join(blockerRefresh);
@@ -664,7 +674,17 @@ it.effect("starts a new probe when an instance is replaced under the same id", (
       const oldRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
       yield* Deferred.await(oldReadStarted);
       yield* Ref.set(instances, [replacementInstance]);
-      yield* coordinator.refresh([target]);
+      const replacementRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+
+      // A replacement waits for the probe already holding this instance's
+      // single-flight slot, then retries against its own adapter. Releasing
+      // the old read first keeps the slot tracked throughout the handoff.
+      yield* Deferred.succeed(releaseOldRead, undefined);
+      yield* Fiber.join(oldRefresh);
+      expect(yield* Fiber.join(replacementRefresh)).toEqual({
+        refreshedInstanceIds: [target],
+        failures: [],
+      });
 
       expect(yield* Ref.get(replacementReads)).toBe(1);
       expect(yield* health.listUsageSnapshots()).toEqual([
@@ -674,13 +694,74 @@ it.effect("starts a new probe when an instance is replaced under the same id", (
           observedAt: expect.any(Number),
         },
       ]);
+    }),
+  ),
+);
 
-      yield* Deferred.succeed(releaseOldRead, undefined);
-      yield* Fiber.join(oldRefresh);
+it.effect("keeps a replacement probe tracked when an older refresh registers late", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const oldListEntered = yield* Deferred.make<void>();
+      const releaseOldList = yield* Deferred.make<void>();
+      const oldListReturned = yield* Deferred.make<void>();
+      const currentReadStarted = yield* Deferred.make<void>();
+      const releaseCurrentRead = yield* Deferred.make<void>();
+      const listCalls = yield* Ref.make(0);
+      const oldReads = yield* Ref.make(0);
+      const currentReads = yield* Ref.make(0);
+      const target = ProviderInstanceId.make("claude_reverse_replacement");
+      const oldInstance = instance({
+        id: target,
+        read: Ref.update(oldReads, (count) => count + 1).pipe(Effect.as({ source: "old-account" })),
+      });
+      const currentInstance = instance({
+        id: target,
+        read: Deferred.succeed(currentReadStarted, undefined).pipe(
+          Effect.andThen(Ref.update(currentReads, (count) => count + 1)),
+          Effect.andThen(Deferred.await(releaseCurrentRead)),
+          Effect.as({ source: "current-account" }),
+        ),
+      });
+      const listInstances = Effect.gen(function* () {
+        const call = yield* Ref.updateAndGet(listCalls, (count) => count + 1);
+        if (call === 1) {
+          yield* Deferred.succeed(oldListEntered, undefined);
+          yield* Deferred.await(releaseOldList);
+          yield* Deferred.succeed(oldListReturned, undefined);
+          return [oldInstance];
+        }
+        return [currentInstance];
+      });
+      const health = yield* makeProviderInstanceHealth;
+      const coordinator = yield* makeProviderUsageRefresh({ listInstances, health });
+
+      // The old caller captures its adapter, but pauses before registering it.
+      const oldRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Deferred.await(oldListEntered);
+
+      // The replacement registers first and remains in flight.
+      const currentRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Deferred.await(currentReadStarted);
+      yield* Deferred.succeed(releaseOldList, undefined);
+      yield* Deferred.await(oldListReturned);
+      yield* Effect.yieldNow;
+
+      // The late old caller must wait instead of overwriting the replacement's
+      // single-flight entry and then deleting its tracking during cleanup.
+      expect(oldRefresh.pollUnsafe()).toBeUndefined();
+      expect(yield* Ref.get(oldReads)).toBe(0);
+      expect(yield* Ref.get(currentReads)).toBe(1);
+
+      yield* Deferred.succeed(releaseCurrentRead, undefined);
+      expect(yield* Fiber.join(currentRefresh)).toEqual({
+        refreshedInstanceIds: [target],
+        failures: [],
+      });
+      expect(yield* Fiber.join(oldRefresh)).toEqual({ refreshedInstanceIds: [], failures: [] });
       expect(yield* health.listUsageSnapshots()).toEqual([
         {
           instanceId: target,
-          payload: { source: "replacement-account" },
+          payload: { source: "current-account" },
           observedAt: expect.any(Number),
         },
       ]);

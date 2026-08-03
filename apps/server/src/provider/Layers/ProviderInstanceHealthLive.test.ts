@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { TestClock } from "effect/testing";
 
+import { DRIVER_USAGE_SOURCE_KEY, makeUsageSourceKey } from "../Services/ProviderInstanceHealth.ts";
 import {
   classifyRateLimitPayload,
   isRateLimitErrorMessage,
@@ -84,18 +85,21 @@ describe("ProviderInstanceHealth", () => {
         firstPayload,
         0,
         yield* health.beginUsageObservation(),
+        DRIVER_USAGE_SOURCE_KEY,
       );
       yield* health.reportUsageSnapshot(
         instanceId,
         replacementPayload,
         2_000,
         yield* health.beginUsageObservation(),
+        DRIVER_USAGE_SOURCE_KEY,
       );
       yield* health.reportUsageSnapshot(
         secondInstanceId,
         { secondary: { usedPercent: 7 } },
         2_000,
         yield* health.beginUsageObservation(),
+        DRIVER_USAGE_SOURCE_KEY,
       );
 
       expect(yield* health.listUsageSnapshots()).toEqual([
@@ -123,23 +127,107 @@ describe("ProviderInstanceHealth", () => {
 
       expect(secondToken).toBeGreaterThan(firstToken);
 
-      yield* health.reportUsageSnapshot(instanceId, newerPayload, 1_000, secondToken);
-      yield* health.reportUsageSnapshot(instanceId, olderPayload, 3_000, firstToken);
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        newerPayload,
+        1_000,
+        secondToken,
+        DRIVER_USAGE_SOURCE_KEY,
+      );
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        olderPayload,
+        3_000,
+        firstToken,
+        DRIVER_USAGE_SOURCE_KEY,
+      );
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: newerPayload, observedAt: 1_000 },
       ]);
 
       const thirdToken = yield* health.beginUsageObservation();
-      yield* health.reportUsageSnapshot(instanceId, equalTimestampPayload, 1_000, thirdToken);
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        equalTimestampPayload,
+        1_000,
+        thirdToken,
+        DRIVER_USAGE_SOURCE_KEY,
+      );
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: equalTimestampPayload, observedAt: 1_000 },
       ]);
 
       const fourthToken = yield* health.beginUsageObservation();
-      yield* health.reportUsageSnapshot(instanceId, backwardClockPayload, 500, fourthToken);
-      yield* health.reportUsageSnapshot(instanceId, replayPayload, 4_000, fourthToken);
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        backwardClockPayload,
+        500,
+        fourthToken,
+        DRIVER_USAGE_SOURCE_KEY,
+      );
+      yield* health.reportUsageSnapshot(
+        instanceId,
+        replayPayload,
+        4_000,
+        fourthToken,
+        DRIVER_USAGE_SOURCE_KEY,
+      );
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: backwardClockPayload, observedAt: 500 },
+      ]);
+    }),
+  );
+
+  it.effect("gates usage writes by the active source while preserving whole-payload LWW", () =>
+    Effect.gen(function* () {
+      const health = yield* makeProviderInstanceHealth;
+      const gatewaySource = makeUsageSourceKey();
+      const directToken = yield* health.beginUsageObservation();
+      expect(
+        yield* health.reportUsageSnapshot(
+          instanceId,
+          { source: "direct" },
+          1_000,
+          directToken,
+          DRIVER_USAGE_SOURCE_KEY,
+        ),
+      ).toBe(true);
+
+      const gatewayDeclaration = yield* health.beginUsageObservation();
+      yield* health.setUsageSource(instanceId, gatewaySource, gatewayDeclaration);
+      expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+      // A stale source declaration and a newer wrong-source payload both lose
+      // atomically to the gateway declaration.
+      yield* health.setUsageSource(instanceId, DRIVER_USAGE_SOURCE_KEY, directToken);
+      expect(
+        yield* health.reportUsageSnapshot(
+          instanceId,
+          { source: "stale-direct" },
+          2_000,
+          yield* health.beginUsageObservation(),
+          DRIVER_USAGE_SOURCE_KEY,
+        ),
+      ).toBe(false);
+
+      const gatewayToken = yield* health.beginUsageObservation();
+      expect(
+        yield* health.reportUsageSnapshot(
+          instanceId,
+          { source: "gateway" },
+          3_000,
+          gatewayToken,
+          gatewaySource,
+        ),
+      ).toBe(true);
+      // Re-declaring the same source after its report must preserve it.
+      yield* health.setUsageSource(
+        instanceId,
+        gatewaySource,
+        yield* health.beginUsageObservation(),
+      );
+      expect(yield* health.listUsageSnapshots()).toEqual([
+        { instanceId, payload: { source: "gateway" }, observedAt: 3_000 },
       ]);
     }),
   );

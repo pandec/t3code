@@ -38,6 +38,21 @@ export type UsageObservationToken = number & {
   readonly [UsageObservationTokenTypeId]: typeof UsageObservationTokenTypeId;
 };
 
+declare const UsageSourceKeyTypeId: unique symbol;
+
+/** Opaque, process-local identity for one source feeding a usage snapshot slot. */
+export interface UsageSourceKey {
+  readonly [UsageSourceKeyTypeId]: typeof UsageSourceKeyTypeId;
+}
+
+/** The provider driver's own account-usage stream. */
+export const DRIVER_USAGE_SOURCE_KEY = {} as UsageSourceKey;
+
+/** Allocate an identity-only key without retaining source credentials in health state. */
+export function makeUsageSourceKey(): UsageSourceKey {
+  return {} as UsageSourceKey;
+}
+
 export interface ProviderInstanceHealthShape {
   /**
    * Ingest a raw `account.rate-limits.updated` payload for an instance.
@@ -54,6 +69,16 @@ export interface ProviderInstanceHealthShape {
   readonly beginUsageObservation: () => Effect.Effect<UsageObservationToken>;
 
   /**
+   * Declare which source currently owns an instance's usage slot. Newer
+   * declarations win; changing the source drops a snapshot from the old one.
+   */
+  readonly setUsageSource: (
+    instanceId: ProviderInstanceId,
+    sourceKey: UsageSourceKey,
+    observationToken: UsageObservationToken,
+  ) => Effect.Effect<void>;
+
+  /**
    * Store the latest opaque provider usage payload for one instance.
    * Returns whether this observation won the token comparison and was stored.
    */
@@ -63,17 +88,8 @@ export interface ProviderInstanceHealthShape {
     /** Unix ms used only for client freshness rendering. */
     observedAt: number,
     observationToken: UsageObservationToken,
+    sourceKey: UsageSourceKey,
   ) => Effect.Effect<boolean>;
-
-  /**
-   * Drop the stored usage snapshot for one instance. The token orders the
-   * clear against in-flight observations: a probe that began before the
-   * clear cannot re-install the payload it read from the old source.
-   */
-  readonly clearUsageSnapshot: (
-    instanceId: ProviderInstanceId,
-    observationToken: UsageObservationToken,
-  ) => Effect.Effect<void>;
 
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 

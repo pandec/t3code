@@ -26,8 +26,11 @@ import {
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
+  DRIVER_USAGE_SOURCE_KEY,
+  makeUsageSourceKey,
   ProviderInstanceHealth,
   type ProviderInstanceHealthShape,
+  type UsageSourceKey,
 } from "../Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import {
@@ -40,6 +43,7 @@ export interface UsageRefreshProviderInstance {
   readonly driverKind: ProviderDriverKind;
   readonly enabled: boolean;
   readonly adapter: Pick<ProviderAdapterShape<ProviderAdapterError>, "readAccountUsage">;
+  readonly usageSourceKey: UsageSourceKey;
 }
 
 export interface ProviderUsageRefreshDependencies {
@@ -60,10 +64,17 @@ interface UsageProbeOutcome {
 interface InFlightUsageProbe {
   readonly adapter: UsageRefreshProviderInstance["adapter"];
   readonly completion: Deferred.Deferred<UsageProbeOutcome>;
+  readonly usageSourceKey: UsageSourceKey;
+}
+
+interface InFlightRegistration {
+  readonly completion: Deferred.Deferred<UsageProbeOutcome>;
+  readonly kind: "join" | "owner" | "wait";
 }
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
 const USAGE_PROBE_TIMEOUT = "30 seconds";
+const UNRESOLVED_GATEWAY_USAGE_SOURCE_KEY = makeUsageSourceKey();
 
 function sameGatewayTarget(
   left: CliProxyApiUsageProbeTarget | undefined,
@@ -104,20 +115,21 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
     probeGate
       .withPermits(1)(
         Effect.gen(function* () {
-          const observationToken = yield* dependencies.health.beginUsageObservation();
           // The adapter was selected before this probe entered the bounded
           // gate. Re-resolve after acquiring a permit so an adapter whose
-          // source changed while queued cannot observe with a post-clear token.
+          // source changed while queued cannot start against stale config.
           const current = (yield* dependencies.listInstances).find(
             (candidate) => candidate.instanceId === instance.instanceId,
           );
           if (
             current?.enabled !== true ||
             current.adapter !== instance.adapter ||
+            current.usageSourceKey !== instance.usageSourceKey ||
             current.adapter.readAccountUsage === undefined
           ) {
             return;
           }
+          const observationToken = yield* dependencies.health.beginUsageObservation();
           const observedAt = yield* Clock.currentTimeMillis;
           const payload = yield* instance.adapter.readAccountUsage!();
           if (payload !== undefined) {
@@ -126,6 +138,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               payload,
               observedAt,
               observationToken,
+              instance.usageSourceKey,
             );
             if (stored) {
               yield* Ref.set(outcome, { refreshed: true });
@@ -164,39 +177,55 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         ),
       );
 
-  const refreshInstance = (instance: UsageRefreshProviderInstance) =>
+  const refreshInstance = (
+    instance: UsageRefreshProviderInstance,
+  ): Effect.Effect<UsageProbeOutcome> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const candidate = yield* Deferred.make<UsageProbeOutcome>();
         const outcome = yield* Ref.make<UsageProbeOutcome>({ refreshed: false });
-        const registration = yield* Ref.modify(inFlight, (current) => {
-          const existing = current.get(instance.instanceId);
-          if (existing !== undefined && existing.adapter === instance.adapter) {
-            const joined: {
-              readonly completion: Deferred.Deferred<UsageProbeOutcome>;
-              readonly owner: boolean;
-            } = { completion: existing.completion, owner: false };
-            return [joined, current] as const;
-          }
-          const owned: {
-            readonly completion: Deferred.Deferred<UsageProbeOutcome>;
-            readonly owner: boolean;
-          } = { completion: candidate, owner: true };
-          return [
-            owned,
-            new Map(current).set(instance.instanceId, {
-              adapter: instance.adapter,
-              completion: candidate,
-            }),
-          ] as const;
-        });
+        const registration = yield* Ref.modify(
+          inFlight,
+          (
+            current,
+          ): readonly [
+            InFlightRegistration,
+            ReadonlyMap<ProviderInstanceId, InFlightUsageProbe>,
+          ] => {
+            const existing = current.get(instance.instanceId);
+            if (existing !== undefined) {
+              const joined: InFlightRegistration = {
+                completion: existing.completion,
+                kind:
+                  existing.adapter === instance.adapter &&
+                  existing.usageSourceKey === instance.usageSourceKey
+                    ? "join"
+                    : "wait",
+              };
+              return [joined, current] as const;
+            }
+            const owned: InFlightRegistration = { completion: candidate, kind: "owner" };
+            return [
+              owned,
+              new Map(current).set(instance.instanceId, {
+                adapter: instance.adapter,
+                completion: candidate,
+                usageSourceKey: instance.usageSourceKey,
+              }),
+            ] as const;
+          },
+        );
 
-        if (registration.owner) {
+        if (registration.kind === "owner") {
           yield* runProbe(instance, registration.completion, outcome).pipe(
             Effect.forkIn(serverScope),
           );
         }
-        return yield* restore(Deferred.await(registration.completion));
+        const completed = yield* restore(Deferred.await(registration.completion));
+        if (registration.kind === "wait") {
+          return yield* restore(Effect.suspend(() => refreshInstance(instance)));
+        }
+        return completed;
       }),
     );
 
@@ -252,32 +281,37 @@ export const ProviderUsageRefreshLive = Layer.effect(
       {
         readonly target: CliProxyApiUsageProbeTarget;
         readonly adapter: UsageRefreshProviderInstance["adapter"];
+        readonly sourceKey: UsageSourceKey;
       }
     >();
 
-    const gatewayAdapterFor = (
+    const gatewayProbeFor = (
       instanceId: ProviderInstanceId,
       target: CliProxyApiUsageProbeTarget,
-    ): UsageRefreshProviderInstance["adapter"] => {
+    ): {
+      readonly adapter: UsageRefreshProviderInstance["adapter"];
+      readonly sourceKey: UsageSourceKey;
+    } => {
       const cached = gatewayProbes.get(instanceId);
       if (cached && sameGatewayTarget(cached.target, target)) {
-        return cached.adapter;
+        return cached;
       }
       const probe = makeCliProxyApiUsageProbe(target);
       const adapter: UsageRefreshProviderInstance["adapter"] = {
         readAccountUsage: () =>
           probe().pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
       };
-      gatewayProbes.set(instanceId, { target, adapter });
-      return adapter;
+      const created = { target, adapter, sourceKey: makeUsageSourceKey() };
+      gatewayProbes.set(instanceId, created);
+      return created;
     };
 
     const resolveUsageInstances = Effect.gen(function* () {
       const instances = yield* registry.listInstances;
       const resolved: Array<UsageRefreshProviderInstance> = [];
       const activeGatewayProbeIds = new Set<ProviderInstanceId>();
-      const gatewayTargets = new Map<ProviderInstanceId, CliProxyApiUsageProbeTarget>();
       for (const instance of instances) {
+        const sourceObservationToken = yield* health.beginUsageObservation();
         const envelope = yield* (
           registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
         );
@@ -285,7 +319,18 @@ export const ProviderUsageRefreshLive = Layer.effect(
         // promises a build that does not know a kind leaves the envelope
         // alone and keeps the driver's own usage working.
         if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) {
-          resolved.push(instance);
+          yield* health.setUsageSource(
+            instance.instanceId,
+            DRIVER_USAGE_SOURCE_KEY,
+            sourceObservationToken,
+          );
+          resolved.push({
+            instanceId: instance.instanceId,
+            driverKind: instance.driverKind,
+            enabled: instance.enabled,
+            adapter: instance.adapter,
+            usageSourceKey: DRIVER_USAGE_SOURCE_KEY,
+          });
           continue;
         }
         // An instance that declares a usage source never falls back to the
@@ -293,15 +338,18 @@ export const ProviderUsageRefreshLive = Layer.effect(
         // nothing or, worse, whatever unrelated account the config home is
         // logged into.
         const target = resolveCliProxyApiUsageProbeTarget(envelope);
+        const gatewayProbe = target ? gatewayProbeFor(instance.instanceId, target) : undefined;
         if (target) {
           activeGatewayProbeIds.add(instance.instanceId);
-          gatewayTargets.set(instance.instanceId, target);
         }
+        const usageSourceKey = gatewayProbe?.sourceKey ?? UNRESOLVED_GATEWAY_USAGE_SOURCE_KEY;
+        yield* health.setUsageSource(instance.instanceId, usageSourceKey, sourceObservationToken);
         resolved.push({
           instanceId: instance.instanceId,
           driverKind: instance.driverKind,
           enabled: instance.enabled,
-          adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
+          adapter: gatewayProbe?.adapter ?? {},
+          usageSourceKey,
         });
       }
       // Sweeping by the active set subsumes any per-instance pruning above:
@@ -312,7 +360,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
           gatewayProbes.delete(instanceId);
         }
       }
-      return { gatewayTargets, instances: resolved };
+      return resolved;
     });
 
     // A gateway snapshot outlives its source: turning the usage source off
@@ -320,29 +368,15 @@ export const ProviderUsageRefreshLive = Layer.effect(
     // nothing through a gateway, so nothing would ever overwrite the pooled
     // payload. Watch registry reconciles and drop the snapshot the moment an
     // instance's resolved gateway target disappears or changes. The clear
-    // carries a fresh observation token so a probe already in flight against
-    // the old source cannot re-install what it read.
+    // is source-aware, so a delayed reconcile preserves a snapshot already
+    // reported by the new source while rejecting writes from the old one.
     // Subscribe before the initial read so a reconcile landing in between
-    // still produces an event that re-diffs.
+    // still produces an event that re-declares the current sources.
     const registryChanges = yield* registry.subscribeChanges;
-    const initial = yield* resolveUsageInstances;
-    const knownGatewayTargets = yield* Ref.make(initial.gatewayTargets);
+    yield* resolveUsageInstances;
     const targetReconcileGate = yield* Semaphore.make(1);
     const listInstances: Effect.Effect<ReadonlyArray<UsageRefreshProviderInstance>> =
-      targetReconcileGate.withPermits(1)(
-        Effect.gen(function* () {
-          const next = yield* resolveUsageInstances;
-          const previous = yield* Ref.get(knownGatewayTargets);
-          const changedIds = new Set([...previous.keys(), ...next.gatewayTargets.keys()]);
-          for (const instanceId of changedIds) {
-            if (!sameGatewayTarget(previous.get(instanceId), next.gatewayTargets.get(instanceId))) {
-              yield* health.clearUsageSnapshot(instanceId, yield* health.beginUsageObservation());
-            }
-          }
-          yield* Ref.set(knownGatewayTargets, next.gatewayTargets);
-          return next.instances;
-        }),
-      );
+      targetReconcileGate.withPermits(1)(resolveUsageInstances);
     yield* Stream.runForEach(Stream.fromSubscription(registryChanges), () =>
       listInstances.pipe(Effect.asVoid),
     ).pipe(Effect.forkScoped);

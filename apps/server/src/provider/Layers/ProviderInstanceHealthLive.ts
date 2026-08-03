@@ -9,7 +9,9 @@ import {
   type ProviderInstanceHealthShape,
   type ProviderInstanceRateLimitState,
   type ProviderInstanceUsageSnapshot,
+  DRIVER_USAGE_SOURCE_KEY,
   type UsageObservationToken,
+  type UsageSourceKey,
 } from "../Services/ProviderInstanceHealth.ts";
 
 /**
@@ -93,15 +95,18 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, ProviderInstanceRateLimitState>>
   >(new Map());
   const nextUsageObservationToken = yield* Ref.make(0);
-  // `snapshot: undefined` is a tombstone left by `clearUsageSnapshot`: its
-  // token must keep outranking any observation that began before the clear,
-  // or a slow probe would re-install the payload it read from the old source.
+  const initialUsageObservationToken = 0 as UsageObservationToken;
+  // One entry per instance holds both the active source and the whole-payload
+  // LWW tombstone. Source transitions retain the last snapshot token so an
+  // older observation from a source that later returns cannot replay.
   const usageSnapshots = yield* Ref.make<
     ReadonlyMap<
       ProviderInstanceId,
       {
+        readonly activeSourceKey: UsageSourceKey;
+        readonly sourceObservationToken: UsageObservationToken;
         readonly snapshot: ProviderInstanceUsageSnapshot | undefined;
-        readonly observationToken: UsageObservationToken;
+        readonly snapshotObservationToken: UsageObservationToken;
       }
     >
   >(new Map());
@@ -184,37 +189,48 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
       Effect.map((token) => token as UsageObservationToken),
     );
 
+  const setUsageSource: ProviderInstanceHealthShape["setUsageSource"] = Effect.fn(
+    "ProviderInstanceHealth.setUsageSource",
+  )(function* (instanceId, sourceKey, observationToken) {
+    yield* Ref.update(usageSnapshots, (snapshots) => {
+      const current = snapshots.get(instanceId);
+      if (current !== undefined && current.sourceObservationToken >= observationToken) {
+        return snapshots;
+      }
+      const activeSourceKey = current?.activeSourceKey ?? DRIVER_USAGE_SOURCE_KEY;
+      return new Map(snapshots).set(instanceId, {
+        activeSourceKey: sourceKey,
+        sourceObservationToken: observationToken,
+        snapshot: activeSourceKey === sourceKey ? current?.snapshot : undefined,
+        snapshotObservationToken: current?.snapshotObservationToken ?? initialUsageObservationToken,
+      });
+    });
+  });
+
   const reportUsageSnapshot: ProviderInstanceHealthShape["reportUsageSnapshot"] = Effect.fn(
     "ProviderInstanceHealth.reportUsageSnapshot",
-  )(function* (instanceId, payload, observedAt, observationToken) {
+  )(function* (instanceId, payload, observedAt, observationToken, sourceKey) {
     return yield* Ref.modify(usageSnapshots, (snapshots) => {
       const current = snapshots.get(instanceId);
-      if (current !== undefined && current.observationToken >= observationToken) {
+      const activeSourceKey = current?.activeSourceKey ?? DRIVER_USAGE_SOURCE_KEY;
+      const snapshotObservationToken =
+        current?.snapshotObservationToken ?? initialUsageObservationToken;
+      if (activeSourceKey !== sourceKey || snapshotObservationToken >= observationToken) {
         return [false, snapshots] as const;
       }
       return [
         true,
         new Map(snapshots).set(instanceId, {
-          observationToken,
+          activeSourceKey,
+          sourceObservationToken: current?.sourceObservationToken ?? initialUsageObservationToken,
           snapshot: {
             instanceId,
             payload,
             observedAt,
           },
+          snapshotObservationToken: observationToken,
         }),
       ] as const;
-    });
-  });
-
-  const clearUsageSnapshot: ProviderInstanceHealthShape["clearUsageSnapshot"] = Effect.fn(
-    "ProviderInstanceHealth.clearUsageSnapshot",
-  )(function* (instanceId, observationToken) {
-    yield* Ref.update(usageSnapshots, (snapshots) => {
-      const current = snapshots.get(instanceId);
-      if (current !== undefined && current.observationToken >= observationToken) {
-        return snapshots;
-      }
-      return new Map(snapshots).set(instanceId, { observationToken, snapshot: undefined });
     });
   });
 
@@ -296,8 +312,8 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
   return {
     reportRateLimitPayload,
     beginUsageObservation,
+    setUsageSource,
     reportUsageSnapshot,
-    clearUsageSnapshot,
     listUsageSnapshots,
     reportTurnOutcome,
     getRateLimitState,
