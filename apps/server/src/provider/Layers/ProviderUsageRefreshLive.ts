@@ -323,9 +323,13 @@ export const ProviderUsageRefreshLive = Layer.effect(
         const previous = yield* Ref.getAndSet(knownGatewayTargets, next);
         for (const [instanceId, previousTarget] of previous) {
           const nextTarget = next.get(instanceId);
+          // The client key only affects the model-catalog fetch, never the
+          // pooled account data, so rotating it must not blank the meter.
           if (
             nextTarget === undefined ||
-            !cliProxyApiUsageProbeTargetsEqual(nextTarget, previousTarget)
+            nextTarget.managementUrl !== previousTarget.managementUrl ||
+            nextTarget.managementKey !== previousTarget.managementKey ||
+            nextTarget.clientUrl !== previousTarget.clientUrl
           ) {
             yield* health.clearUsageSnapshot(instanceId, yield* health.beginUsageObservation());
           }

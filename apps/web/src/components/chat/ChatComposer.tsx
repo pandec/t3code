@@ -1073,12 +1073,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
-    if (activeProviderUsageInstanceId === null) return "claude";
     const models = providerStatuses.find(
       (provider) => provider.instanceId === activeProviderUsageInstanceId,
     )?.models;
     return resolveProviderUsageUpstreamProvider({
-      payload: providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
+      payload:
+        activeProviderUsageInstanceId === null
+          ? undefined
+          : providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
       model: activeProviderUsageModel,
       isCustom: models?.find((entry) => entry.slug === activeProviderUsageModel)?.isCustom === true,
     });

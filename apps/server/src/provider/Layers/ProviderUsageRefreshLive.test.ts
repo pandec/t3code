@@ -236,8 +236,9 @@ it.effect("drops the pooled snapshot when the gateway target changes or is remov
         );
         expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
-        // A probe against the old client target is still in flight when the
-        // user rotates the client key.
+        // Rotating the client key must NOT blank the meter: the key gates
+        // only the model-catalog fetch, and the catalog does not vary by
+        // key, so the pooled account data stays valid.
         const lateToken = yield* health.beginUsageObservation();
         yield* Ref.set(config, {
           ...gatewayConfig,
@@ -248,13 +249,19 @@ it.effect("drops the pooled snapshot when the gateway target changes or is remov
           ),
         });
         yield* PubSub.publish(changes, undefined);
-        while ((yield* health.listUsageSnapshots()).length > 0) {
+        for (let i = 0; i < 10; i += 1) {
           yield* Effect.yieldNow;
         }
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
-        // The old-key probe must not resurrect its model-provider mapping.
+        // An old-key probe still in flight remains a valid observation: its
+        // newer token wins, and the next new-key probe overwrites it. The
+        // accounts it carries are key-independent — only its model map can
+        // be momentarily stale, which is a flash, not a corruption.
         yield* health.reportUsageSnapshot(target, { pool: "stale-key" }, 2_000, lateToken);
-        expect(yield* health.listUsageSnapshots()).toEqual([]);
+        expect(yield* health.listUsageSnapshots()).toEqual([
+          { instanceId: target, payload: { pool: "stale-key" }, observedAt: 2_000 },
+        ]);
 
         yield* health.reportUsageSnapshot(
           target,

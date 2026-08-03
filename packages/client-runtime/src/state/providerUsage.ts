@@ -736,13 +736,8 @@ export function resolveProviderUsageUpstreamProvider(input: {
   readonly model: string;
   readonly isCustom: boolean;
 }): string | null {
-  const value = asRecord(input.payload)?.modelProviders;
-  const mappedProvider =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? asString((value as Record<string, unknown>)[input.model])
-      : null;
-  if (mappedProvider !== null) return mappedProvider;
-  return input.isCustom ? null : "claude";
+  const mapped = asString(asRecord(asRecord(input.payload)?.modelProviders)?.[input.model]);
+  return mapped ?? (input.isCustom ? null : "claude");
 }
 
 export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";

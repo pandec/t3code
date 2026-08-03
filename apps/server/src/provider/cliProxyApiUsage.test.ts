@@ -162,36 +162,51 @@ describe("makeCliProxyApiUsageProbe", () => {
     });
   });
 
-  it.effect("ignores models auth failures without spending management auth strikes", () => {
-    let authFilesRequests = 0;
-    let modelsRequests = 0;
-    const client = HttpClient.make((request) =>
-      Effect.sync(() => {
-        if (request.url.endsWith("/v1/models")) {
-          modelsRequests += 1;
-          return HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }));
-        }
-        authFilesRequests += 1;
-        return jsonResponse(request, {
-          files: [{ name: "unknown.json", provider: "unknown" }],
-        });
-      }),
-    );
-    const runProbe = makeCliProxyApiUsageProbe({
-      ...target,
-      clientUrl: target.managementUrl,
-      clientKey: "wrong-client-key",
-    })().pipe(Effect.provideService(HttpClient.HttpClient, client));
+  it.effect(
+    "suppresses catalog fetches after a rejected client key, without management strikes",
+    () => {
+      let authFilesRequests = 0;
+      let modelsRequests = 0;
+      const client = HttpClient.make((request) =>
+        Effect.sync(() => {
+          if (request.url.endsWith("/v1/models")) {
+            modelsRequests += 1;
+            return HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }));
+          }
+          authFilesRequests += 1;
+          return jsonResponse(request, {
+            files: [{ name: "unknown.json", provider: "unknown" }],
+          });
+        }),
+      );
+      const runProbe = makeCliProxyApiUsageProbe({
+        ...target,
+        clientUrl: target.managementUrl,
+        clientKey: "wrong-client-key",
+      })().pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    return Effect.gen(function* () {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        const payload = (yield* runProbe) as CliProxyApiUsagePayload;
-        expect(payload.modelProviders).toBeUndefined();
-      }
-      expect(authFilesRequests).toBe(4);
-      expect(modelsRequests).toBe(4);
-    });
-  });
+      return Effect.gen(function* () {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const payload = (yield* runProbe) as CliProxyApiUsagePayload;
+          expect(payload.modelProviders).toBeUndefined();
+        }
+        expect(authFilesRequests).toBe(4);
+        // One rejection suppresses the catalog fetch — the gateway's per-IP
+        // rejection budget may not be endpoint-scoped, and live agent traffic
+        // rides the same IP.
+        expect(modelsRequests).toBe(1);
+
+        // A corrected key probes again immediately.
+        const retried = (yield* makeCliProxyApiUsageProbe({
+          ...target,
+          clientUrl: target.managementUrl,
+          clientKey: "corrected-client-key",
+        })().pipe(Effect.provideService(HttpClient.HttpClient, client))) as CliProxyApiUsagePayload;
+        expect(retried.modelProviders).toBeUndefined();
+        expect(modelsRequests).toBe(2);
+      });
+    },
+  );
 
   it.effect("does not hold account probes behind a stalled models request", () =>
     Effect.gen(function* () {
