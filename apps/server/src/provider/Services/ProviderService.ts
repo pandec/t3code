@@ -34,6 +34,15 @@ import type { ProviderForkSessionResult } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 import type { ProviderRuntimeBindingWithMetadata } from "./ProviderSessionDirectory.ts";
 
+export interface ProviderSessionStartOptions {
+  /**
+   * `fail` makes an existing persisted cursor authoritative: the session may
+   * start only on the same continuation identity. The default `start-fresh`
+   * preserves direct-call behavior for intentional incompatible replacement.
+   */
+  readonly onIncompatiblePersistedState?: "start-fresh" | "fail";
+}
+
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
@@ -44,6 +53,7 @@ export interface ProviderServiceShape {
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    options?: ProviderSessionStartOptions,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   readonly forkConversation: (input: {

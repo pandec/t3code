@@ -180,7 +180,7 @@ describe("ProviderCommandReactor", () => {
       model: "gpt-5-codex",
     };
     const startSessionEffect = input?.startSessionEffect;
-    const startSession = vi.fn((_: unknown, input: unknown) => {
+    const startSession = vi.fn((_: unknown, input: unknown, _options?: unknown) => {
       const sessionIndex = nextSessionIndex++;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
@@ -2145,11 +2145,11 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
   });
 
-  it("starts a stopped thread on a compatible requested instance", async () => {
+  it("defers a stopped owner's live continuation-key drift to ProviderService", async () => {
     const harness = await createHarness({
       continuationKeys: {
-        codex: "codex:home:/shared-codex",
-        codex_work: "codex:home:/shared-codex",
+        codex: "codex:home:/drifted-owner",
+        codex_work: "codex:home:/persisted-owner",
       },
     });
     const now = "2026-01-01T00:00:00.000Z";
@@ -2202,6 +2202,9 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession).toHaveBeenCalledTimes(1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       providerInstanceId: ProviderInstanceId.make("codex_work"),
+    });
+    expect(harness.startSession.mock.calls[0]?.[2]).toEqual({
+      onIncompatiblePersistedState: "fail",
     });
   });
 
@@ -2344,6 +2347,16 @@ describe("ProviderCommandReactor", () => {
         codex: "codex:home:/personal",
         codex_work: "codex:home:/work",
       },
+      startSessionEffect: (session) =>
+        session.providerInstanceId === ProviderInstanceId.make("codex_work")
+          ? Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: ProviderDriverKind.make("codex"),
+                method: "thread.turn.start",
+                detail: "Starting here would discard the conversation context",
+              }),
+            )
+          : Effect.succeed(session),
     });
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -2400,7 +2413,10 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
-    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[2]).toEqual({
+      onIncompatiblePersistedState: "fail",
+    });
     expect(harness.sendTurn).not.toHaveBeenCalled();
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
@@ -2408,7 +2424,7 @@ describe("ProviderCommandReactor", () => {
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
     ).toMatchObject({
       payload: {
-        detail: expect.stringContaining("provider resume state is incompatible"),
+        detail: expect.stringContaining("discard the conversation context"),
       },
     });
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex"));
@@ -2442,8 +2458,8 @@ describe("ProviderCommandReactor", () => {
     });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.startSession).toHaveBeenCalledTimes(1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       providerInstanceId: ProviderInstanceId.make("codex"),
     });
   });

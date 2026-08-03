@@ -1893,6 +1893,28 @@ routing.layer("ProviderServiceLive routing", (it) => {
           threadId,
           runtimeMode: "full-access",
         });
+
+        const policyThreadId = asThreadId("thread-incompatible-instance-fail-closed");
+        yield* provider.startSession(policyThreadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: firstInstanceId,
+          threadId: policyThreadId,
+          runtimeMode: "full-access",
+        });
+        const policyFailure = yield* provider
+          .startSession(
+            policyThreadId,
+            {
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: secondInstanceId,
+              threadId: policyThreadId,
+              runtimeMode: "full-access",
+            },
+            { onIncompatiblePersistedState: "fail" },
+          )
+          .pipe(Effect.flip);
+        assert.instanceOf(policyFailure, ProviderValidationError);
+        assert.include(policyFailure.issue, "discard the conversation context");
       }).pipe(Effect.provide(providerLayer));
 
       yield* Effect.gen(function* () {
@@ -1903,6 +1925,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
           threadId,
           runtimeMode: "full-access",
         });
+
+        const explicitCursorFailure = yield* provider
+          .startSession(threadId, {
+            provider: CLAUDE_AGENT_DRIVER,
+            providerInstanceId: firstInstanceId,
+            threadId,
+            resumeCursor: { opaque: "cursor-from-isolated-owner" },
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(explicitCursorFailure, ProviderValidationError);
+        assert.include(explicitCursorFailure.issue, "discard the conversation context");
       }).pipe(Effect.provide(providerLayer));
 
       assert.equal(secondClaude.startSession.mock.calls.length, 1);
@@ -1964,20 +1998,28 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ),
       );
 
-      const failure = yield* Effect.flip(
-        Effect.gen(function* () {
+      const failures = yield* Effect.gen(function* () {
+        const results = [];
+        for (const resumeCursor of [undefined, { opaque: "explicit-persisted-session" }]) {
           const provider = yield* ProviderService.ProviderService;
-          return yield* provider.startSession(threadId, {
-            provider: CLAUDE_AGENT_DRIVER,
-            providerInstanceId: targetInstanceId,
-            threadId,
-            runtimeMode: "full-access",
-          });
-        }).pipe(Effect.provide(providerLayer)),
-      );
+          const failure = yield* provider
+            .startSession(threadId, {
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: targetInstanceId,
+              threadId,
+              ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.flip);
+          results.push(failure);
+        }
+        return results;
+      }).pipe(Effect.provide(providerLayer));
 
-      assert.instanceOf(failure, ProviderValidationError);
-      assert.include(failure.issue, "cannot be verified");
+      for (const failure of failures) {
+        assert.instanceOf(failure, ProviderValidationError);
+        assert.include(failure.issue, "cannot be verified");
+      }
       assert.equal(targetClaude.startSession.mock.calls.length, 0);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -1988,8 +2030,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(SqlitePersistenceMemory),
       );
       const targetInstanceId = ProviderInstanceId.make("claude_replacement");
+      const driftedOwnerInstanceId = ProviderInstanceId.make("claude_drifted_owner");
       const targetContinuationKey = "claude:home:/shared-home";
       const targetClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const driftedClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
       const providerLayer = makeProviderServiceLive().pipe(
         Layer.provide(
           Layer.succeed(
@@ -2000,6 +2044,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
                 driverKind: CLAUDE_AGENT_DRIVER,
                 continuationKey: targetContinuationKey,
                 adapter: targetClaude.adapter,
+              },
+              {
+                instanceId: driftedOwnerInstanceId,
+                driverKind: CLAUDE_AGENT_DRIVER,
+                continuationKey: "claude:home:/drifted-live-home",
+                adapter: driftedClaude.adapter,
               },
             ]),
           ),
@@ -2017,7 +2067,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const matchingThreadId = asThreadId("thread-removed-owner-matching-key");
       const differingThreadId = asThreadId("thread-removed-owner-differing-key");
       const changedSameIdThreadId = asThreadId("thread-same-owner-changed-key");
+      const driftedOwnerThreadId = asThreadId("thread-drifted-owner-matching-persisted-key");
       const matchingCursor = { opaque: "matching-persisted-session" };
+      const driftedOwnerCursor = { opaque: "drifted-owner-persisted-session" };
 
       yield* Effect.gen(function* () {
         const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
@@ -2039,6 +2091,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
             providerInstanceId: targetInstanceId,
             resumeCursor: { opaque: "same-id-old-home-session" },
             continuationKey: "claude:home:/old-home",
+          },
+          {
+            threadId: driftedOwnerThreadId,
+            providerInstanceId: driftedOwnerInstanceId,
+            resumeCursor: driftedOwnerCursor,
+            continuationKey: targetContinuationKey,
           },
         ] as const) {
           yield* repository.upsert({
@@ -2066,6 +2124,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
           threadId: matchingThreadId,
           runtimeMode: "full-access",
         });
+        yield* provider.startSession(
+          driftedOwnerThreadId,
+          {
+            provider: CLAUDE_AGENT_DRIVER,
+            providerInstanceId: targetInstanceId,
+            threadId: driftedOwnerThreadId,
+            runtimeMode: "full-access",
+          },
+          { onIncompatiblePersistedState: "fail" },
+        );
 
         for (const threadId of [differingThreadId, changedSameIdThreadId]) {
           const failure = yield* provider
@@ -2079,6 +2147,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.instanceOf(failure, ProviderValidationError);
           assert.include(failure.issue, "discard the conversation context");
         }
+
+        // Pin the active-session routing branch: an adapter claiming the
+        // thread is warm must not bypass the durable continuation identity.
+        yield* targetClaude.adapter.startSession({
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: targetInstanceId,
+          threadId: changedSameIdThreadId,
+          runtimeMode: "full-access",
+        });
 
         const recoveryFailure = yield* provider
           .sendTurn({
@@ -2100,11 +2177,17 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.include(forkFailure.issue, "no longer has the continuation identity");
       }).pipe(Effect.provide(providerLayer));
 
-      assert.equal(targetClaude.startSession.mock.calls.length, 1);
+      assert.equal(targetClaude.startSession.mock.calls.length, 3);
+      assert.equal(targetClaude.sendTurn.mock.calls.length, 0);
       assert.equal(targetClaude.forkSession.mock.calls.length, 0);
       assert.deepInclude(targetClaude.startSession.mock.calls[0]?.[0], {
         providerInstanceId: targetInstanceId,
         resumeCursor: matchingCursor,
+        cwd: "/tmp/project",
+      });
+      assert.deepInclude(targetClaude.startSession.mock.calls[1]?.[0], {
+        providerInstanceId: targetInstanceId,
+        resumeCursor: driftedOwnerCursor,
         cwd: "/tmp/project",
       });
     }).pipe(Effect.provide(NodeServices.layer)),

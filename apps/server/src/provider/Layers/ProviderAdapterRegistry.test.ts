@@ -1,6 +1,7 @@
 import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
+  ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { it, assert, vi } from "@effect/vitest";
@@ -138,6 +139,22 @@ const fakeInstances: ReadonlyArray<ProviderInstance> = [
 const fakeInstanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
   getInstance: (instanceId) =>
     Effect.succeed(fakeInstances.find((instance) => instance.instanceId === instanceId)),
+  getInstanceEntry: (instanceId) => {
+    const instance = fakeInstances.find((candidate) => candidate.instanceId === instanceId);
+    return Effect.succeed(
+      instance === undefined
+        ? undefined
+        : {
+            instance,
+            config: {
+              driver: instance.driverKind,
+              ...(instance.driverKind === CLAUDE_AGENT_DRIVER
+                ? { failoverInstanceId: ProviderInstanceId.make("claudeAgent_backup") }
+                : {}),
+            },
+          },
+    );
+  },
   listInstances: Effect.succeed(fakeInstances),
   listUnavailable: Effect.succeed([]),
   streamChanges: Stream.empty,
@@ -181,6 +198,7 @@ it.layer(layer)("ProviderAdapterRegistryLive", (it) => {
           driverKind: CLAUDE_AGENT_DRIVER,
           continuationKey: "claudeAgent:instance:claudeAgent",
         },
+        failoverInstanceId: ProviderInstanceId.make("claudeAgent_backup"),
       });
 
       const instances = yield* registry.listInstances();

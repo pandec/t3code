@@ -40,18 +40,21 @@ export interface ProviderInstanceRegistryShape {
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstance | undefined>;
   /**
-   * The raw settings envelope the instance was built from. Exposes
-   * envelope-level routing hints (e.g. `failoverInstanceId`) that are not
-   * part of the driver-created `ProviderInstance`.
+   * Atomically read an instance and the settings envelope it was built from.
+   * The envelope exposes routing hints (e.g. `failoverInstanceId`) that are
+   * not part of the driver-created instance. Reading both from one registry
+   * snapshot keeps routing metadata aligned across hot reloads.
    *
-   * Optional so test doubles of this shape need not implement it; the live
-   * registry always provides it, and the sole consumer
-   * (`ProviderAdapterRegistry.getInstanceInfo`) treats an absent method as
-   * "no envelope hints".
+   * Optional so existing test doubles can fall back to `getInstance` without
+   * envelope hints. The live registry always provides it.
    */
-  readonly getInstanceConfig?: (
-    instanceId: ProviderInstanceId,
-  ) => Effect.Effect<ProviderInstanceConfig | undefined>;
+  readonly getInstanceEntry?: (instanceId: ProviderInstanceId) => Effect.Effect<
+    | {
+        readonly instance: ProviderInstance;
+        readonly config: ProviderInstanceConfig;
+      }
+    | undefined
+  >;
   /**
    * Every available (driver-registered, successfully created) instance,
    * in stable settings-author order.
