@@ -796,19 +796,11 @@ export function featuredProviderUsageAccount(
 ): ProviderUsageAccount | null {
   const byPriority = (a: ProviderUsageAccount, b: ProviderUsageAccount) =>
     (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
-  const withUsage = accounts.filter((account) => account.usage !== null);
-  const candidates = [
-    withUsage.filter((account) => account.state === "available" && account.provider === "claude"),
-    withUsage.filter((account) => account.state === "available"),
-    withUsage,
-  ];
-  for (const pool of candidates) {
-    if (pool.length > 0) {
-      // Hermes lacks ES2023 change-by-copy methods; filter() copies already.
-      return pool.sort(byPriority)[0] ?? null;
-    }
-  }
-  return null;
+  const candidates = accounts.filter(
+    (account) => account.state === "available" && account.provider === "claude",
+  );
+  // Hermes lacks ES2023 change-by-copy methods; filter() copies already.
+  return candidates.sort(byPriority)[0] ?? null;
 }
 
 /**

@@ -1,15 +1,30 @@
 import { expect, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ProviderInstanceConfig,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import type { ProviderAdapterError } from "../Errors.ts";
-import type { UsageObservationToken } from "../Services/ProviderInstanceHealth.ts";
+import type { ProviderInstance } from "../ProviderDriver.ts";
+import {
+  ProviderInstanceHealth,
+  type UsageObservationToken,
+} from "../Services/ProviderInstanceHealth.ts";
+import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
+import { ProviderUsageRefresh } from "../Services/ProviderUsageRefresh.ts";
 import { makeProviderInstanceHealth } from "./ProviderInstanceHealthLive.ts";
 import {
   makeProviderUsageRefresh,
+  ProviderUsageRefreshLive,
   type ProviderUsageRefreshDependencies,
   type UsageRefreshProviderInstance,
 } from "./ProviderUsageRefreshLive.ts";
@@ -52,6 +67,91 @@ function usageHealth(
     reportUsageSnapshot,
   };
 }
+
+it.effect("reuses gateway cooldown state, prunes removed probes, and never falls back", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = ProviderInstanceId.make("claude_gateway");
+      const config = yield* Ref.make<ProviderInstanceConfig>({
+        driver,
+        environment: [
+          {
+            name: "ANTHROPIC_BASE_URL",
+            value: "https://gateway.example.test/v1",
+            sensitive: false,
+          },
+        ],
+        usageSource: { kind: "cliproxyapi", managementKey: "management-key" },
+        config: {},
+      });
+      const directReads = yield* Ref.make(0);
+      const gatewayRequests = yield* Ref.make(0);
+      const directInstance = {
+        instanceId: target,
+        driverKind: driver,
+        enabled: true,
+        adapter: {
+          readAccountUsage: () =>
+            Ref.update(directReads, (count) => count + 1).pipe(Effect.as({ source: "direct-sdk" })),
+        },
+      } as unknown as ProviderInstance;
+      const instances = yield* Ref.make<ReadonlyArray<ProviderInstance>>([directInstance]);
+      const registryLayer = Layer.succeed(ProviderInstanceRegistry, {
+        getInstance: (instanceId) =>
+          Effect.succeed(instanceId === target ? directInstance : undefined),
+        getInstanceConfig: (instanceId) =>
+          instanceId === target
+            ? Ref.get(config)
+            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+        listInstances: Ref.get(instances),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+        subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+      });
+      const healthLayer = Layer.effect(ProviderInstanceHealth, makeProviderInstanceHealth);
+      const httpLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Ref.update(gatewayRequests, (count) => count + 1).pipe(
+            Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
+          ),
+        ),
+      );
+      const layer = ProviderUsageRefreshLive.pipe(
+        Layer.provide(registryLayer),
+        Layer.provide(healthLayer),
+        Layer.provide(httpLayer),
+      );
+
+      yield* Effect.gen(function* () {
+        const refresh = yield* ProviderUsageRefresh;
+
+        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect(yield* Ref.get(gatewayRequests)).toBe(1);
+        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect(yield* Ref.get(gatewayRequests)).toBe(1);
+
+        // Removing an instance prunes the memoized key/cooldown closure. A
+        // later instance with the same id gets a fresh probe.
+        yield* Ref.set(instances, []);
+        yield* refresh.refresh();
+        yield* Ref.set(instances, [directInstance]);
+        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect(yield* Ref.get(gatewayRequests)).toBe(2);
+
+        // A declared but unresolved source owns the usage slot and must not
+        // silently restore the SDK adapter.
+        yield* Ref.update(config, (current) => ({
+          ...current,
+          usageSource: { kind: "cliproxyapi", managementKey: "" },
+        }));
+        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect(yield* Ref.get(directReads)).toBe(0);
+        expect(yield* Ref.get(gatewayRequests)).toBe(2);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
 
 it.effect("skips disabled and unsupported instances", () =>
   Effect.scoped(

@@ -430,7 +430,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       selectedThreadDetail,
     ],
   );
-  const providerUsage = serverProviderUsage ?? activityProviderUsage;
   // Gateway-backed instances (CLIProxyAPI) report a pool of upstream accounts
   // in one snapshot. Mobile has no settings mirror, so gateway-ness is
   // detected from the snapshot payload itself.
@@ -447,11 +446,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
     return pools;
   }, [providerUsageNowMs, providerUsageSnapshotByInstance]);
-  const providerUsageAccounts = useMemo(() => {
-    const activeGatewayPool =
+  const activeGatewayPool = useMemo(
+    () =>
       providerUsageInstanceId !== null
         ? (gatewayUsageByInstance.get(providerUsageInstanceId) ?? null)
-        : null;
+        : null,
+    [gatewayUsageByInstance, providerUsageInstanceId],
+  );
+  const providerUsage =
+    serverProviderUsage ?? (activeGatewayPool === null ? activityProviderUsage : null);
+  const providerUsageAccounts = useMemo(() => {
     if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
       const featuredId = featuredProviderUsageAccount(activeGatewayPool.accounts)?.id ?? null;
       const observedAt =
@@ -517,6 +521,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         };
       });
   }, [
+    activeGatewayPool,
     gatewayUsageByInstance,
     props.serverConfig?.providers,
     providerUsageInstanceId,

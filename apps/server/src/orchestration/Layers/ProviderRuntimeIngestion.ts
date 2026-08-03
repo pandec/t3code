@@ -29,6 +29,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
+import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -717,6 +718,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const providerInstanceHealth = yield* ProviderInstanceHealth;
+  const providerInstanceRegistry = yield* ProviderInstanceRegistry;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
@@ -1355,10 +1357,10 @@ const make = Effect.gen(function* () {
         // last-write-wins, so a passive single-window event forwarded through
         // the gateway must not overwrite the pooled-accounts snapshot.
         // Failover health above still sees the passive payload.
-        const settings = yield* serverSettingsService.getSettings.pipe(
-          Effect.orElseSucceed(() => undefined),
-        );
-        if (settings?.providerInstances[instanceId]?.usageSource !== undefined) {
+        const instanceConfig = providerInstanceRegistry.getInstanceConfig
+          ? yield* providerInstanceRegistry.getInstanceConfig(instanceId)
+          : undefined;
+        if (instanceConfig?.usageSource !== undefined) {
           return;
         }
         const observationToken = yield* providerInstanceHealth.beginUsageObservation();

@@ -39,7 +39,9 @@ export const CLIPROXYAPI_USAGE_SOURCE_KIND = "cliproxyapi";
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 
 const AUTH_FAILURE_COOLDOWN_MS = 10 * 60 * 1_000;
-const REQUEST_TIMEOUT_MS = 20_000;
+const AUTH_FILES_REQUEST_TIMEOUT_MS = 5_000;
+const ACCOUNT_REQUEST_BUDGET_MS = 22_000;
+const ACCOUNT_REQUEST_CONCURRENCY = 2;
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -250,6 +252,7 @@ export function makeCliProxyApiUsageProbe(
 
   const managementRequest = (
     request: HttpClientRequest.HttpClientRequest,
+    timeoutMs: number,
   ): Effect.Effect<
     unknown,
     CliProxyApiAuthRejectedError | CliProxyApiRequestFailedError,
@@ -264,7 +267,7 @@ export function makeCliProxyApiUsageProbe(
           ),
         )
         .pipe(
-          Effect.timeout(REQUEST_TIMEOUT_MS),
+          Effect.timeout(timeoutMs),
           Effect.mapError(
             (cause) =>
               new CliProxyApiRequestFailedError({
@@ -292,11 +295,18 @@ export function makeCliProxyApiUsageProbe(
       );
     });
 
-  const probeAccount = (entry: AuthFileEntry) =>
+  const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
     Effect.gen(function* () {
       const request = upstreamUsageRequest(entry.account.provider);
-      if (!request || entry.authIndex.length === 0) {
+      if (!request) {
         return { ...entry.account, usage: null } satisfies CliProxyApiUsageAccount;
+      }
+      if (entry.authIndex.length === 0) {
+        return {
+          ...entry.account,
+          usage: null,
+          error: "Gateway account has no auth index.",
+        } satisfies CliProxyApiUsageAccount;
       }
       // Auth rejection aborts the whole probe (ban-strike budget); any other
       // per-account failure degrades to an error row instead.
@@ -309,6 +319,7 @@ export function makeCliProxyApiUsageProbe(
             header: request.header,
           }),
         ),
+        timeoutMs,
       ).pipe(
         Effect.map((value) => ({ ok: true as const, value })),
         Effect.catchTag("CliProxyApiRequestFailedError", (error) =>
@@ -344,10 +355,24 @@ export function makeCliProxyApiUsageProbe(
 
       if (entry.account.provider === "codex") {
         const translated = translateCodexUsage(body);
+        if (Object.keys(asRecord(translated.usage) ?? {}).length === 0) {
+          return {
+            ...entry.account,
+            usage: null,
+            error: "Upstream usage body had no rate-limit windows.",
+          } satisfies CliProxyApiUsageAccount;
+        }
         return {
           ...entry.account,
           usage: translated.usage,
           ...(translated.planType !== null ? { planType: translated.planType } : {}),
+        } satisfies CliProxyApiUsageAccount;
+      }
+      if (Object.keys(body).length === 0) {
+        return {
+          ...entry.account,
+          usage: null,
+          error: "Upstream usage body had no rate-limit data.",
         } satisfies CliProxyApiUsageAccount;
       }
       return {
@@ -366,13 +391,28 @@ export function makeCliProxyApiUsageProbe(
 
       const authFiles = yield* managementRequest(
         HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
+        AUTH_FILES_REQUEST_TIMEOUT_MS,
       );
       const entries = parseAuthFiles(authFiles);
       if (entries.length === 0) {
         return undefined;
       }
 
-      const accounts = yield* Effect.forEach(entries, probeAccount, { concurrency: 2 });
+      // The refresh coordinator bounds a whole provider probe at 30 seconds.
+      // Share a smaller fixed budget across the two-wide account queue so any
+      // number of slow accounts still resolves to error rows before that outer
+      // deadline instead of discarding the entire pool snapshot.
+      const accountRequestTimeoutMs = Math.max(
+        1,
+        Math.floor(
+          ACCOUNT_REQUEST_BUDGET_MS / Math.ceil(entries.length / ACCOUNT_REQUEST_CONCURRENCY),
+        ),
+      );
+      const accounts = yield* Effect.forEach(
+        entries,
+        (entry) => probeAccount(entry, accountRequestTimeoutMs),
+        { concurrency: ACCOUNT_REQUEST_CONCURRENCY },
+      );
       const payload: CliProxyApiUsagePayload = {
         source: CLIPROXYAPI_USAGE_PAYLOAD_SOURCE,
         accounts,

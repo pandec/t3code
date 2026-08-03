@@ -1091,7 +1091,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerUsageNowMinute,
     ],
   );
-  const activeProviderUsage = activeServerProviderUsage ?? activityProviderUsage;
+  const activeUsageSourceOwned =
+    activeProviderUsageInstanceId !== null && isGatewayUsageInstance(activeProviderUsageInstanceId);
+  const activeProviderUsage =
+    activeServerProviderUsage ?? (activeUsageSourceOwned ? null : activityProviderUsage);
   const providerUsageLabel = providerUsageLabelForDriver(activeThreadProviderDriver);
   // A gateway pool's accounts header names the instance ("Proxy accounts"),
   // not the driver: the rows are upstream accounts of mixed providers.

@@ -764,6 +764,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         roundTripped.providerInstances[instanceId]?.usageSource?.managementKey,
         "mgmt-secret",
       );
+      assert.equal(roundTripped.providerInstances[instanceId]?.displayName, "Proxy");
 
       const redacted = ServerSettingsModule.redactServerSettingsForClient(roundTripped);
       assert.deepEqual(redacted.providerInstances[instanceId]?.usageSource, {
@@ -786,6 +787,35 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         kind: "cliproxyapi",
         managementKey: "",
       });
+
+      // Removing the whole usage source must also remove its stored secret.
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            usageSource: { kind: "cliproxyapi", managementKey: "replacement-secret" },
+            config: {},
+          },
+        },
+      });
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            config: {},
+          },
+        },
+      });
+      const staleReference = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            usageSource: { kind: "cliproxyapi", managementKey: "", managementKeyRedacted: true },
+            config: {},
+          },
+        },
+      });
+      assert.equal(staleReference.providerInstances[instanceId]?.usageSource?.managementKey, "");
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 });

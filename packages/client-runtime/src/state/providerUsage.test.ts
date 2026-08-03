@@ -1117,6 +1117,18 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
     expect(featuredProviderUsageAccount(pool?.accounts ?? [])?.id).toBe("claude-tier2.json");
   });
 
+  it("keeps the highest-priority available Claude account featured when its usage read failed", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    const base = pool?.accounts[0];
+    expect(base).toBeDefined();
+    expect(
+      featuredProviderUsageAccount([
+        ...(pool?.accounts ?? []),
+        { ...base!, id: "claude-featured-error.json", priority: 200, usage: null },
+      ])?.id,
+    ).toBe("claude-featured-error.json");
+  });
+
   it("collapses to the featured account for single-account surfaces", () => {
     const snapshot = deriveProviderUsageSnapshotFromServerSnapshot(gatewaySnapshot, {
       provider: ProviderDriverKind.make("claudeAgent"),

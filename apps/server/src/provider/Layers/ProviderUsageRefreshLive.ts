@@ -217,6 +217,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
       function* () {
         const instances = yield* registry.listInstances;
         const resolved: Array<UsageRefreshProviderInstance> = [];
+        const activeGatewayProbeIds = new Set<ProviderInstanceId>();
         for (const instance of instances) {
           const envelope = registry.getInstanceConfig
             ? yield* registry.getInstanceConfig(instance.instanceId)
@@ -231,12 +232,22 @@ export const ProviderUsageRefreshLive = Layer.effect(
           // nothing or, worse, whatever unrelated account the config home is
           // logged into.
           const target = resolveCliProxyApiUsageProbeTarget(envelope);
+          if (target) {
+            activeGatewayProbeIds.add(instance.instanceId);
+          } else {
+            gatewayProbes.delete(instance.instanceId);
+          }
           resolved.push({
             instanceId: instance.instanceId,
             driverKind: instance.driverKind,
             enabled: instance.enabled,
             adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
           });
+        }
+        for (const instanceId of gatewayProbes.keys()) {
+          if (!activeGatewayProbeIds.has(instanceId)) {
+            gatewayProbes.delete(instanceId);
+          }
         }
         return resolved;
       },
