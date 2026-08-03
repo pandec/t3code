@@ -44,6 +44,7 @@ import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
 import { listProviderSkillsForCwd } from "../providerSkills.ts";
+import { retainableProviderModels } from "../providerSnapshot.ts";
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
@@ -103,10 +104,6 @@ const mergeProviderModels = (
 ): ReadonlyArray<ServerProvider["models"][number]> => {
   const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
 
-  if (shouldRetainMissingModels && nextModels.length === 0 && previousModels.length > 0) {
-    return previousModels;
-  }
-
   const previousBySlug = new Map(previousModels.map((model) => [model.slug, model] as const));
   const mergedModels = nextModels.map((model) => {
     const previousModel = previousBySlug.get(model.slug);
@@ -118,10 +115,14 @@ const mergeProviderModels = (
       capabilities: previousModel.capabilities,
     };
   });
+  if (!shouldRetainMissingModels) {
+    return mergedModels;
+  }
+  // Retention covers probe-derived models only: a snapshot that reports no
+  // models at all (pending or failed probe) keeps the previous inventory, but
+  // custom models dropped from settings stay dropped.
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
-  return shouldRetainMissingModels
-    ? [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))]
-    : mergedModels;
+  return [...mergedModels, ...retainableProviderModels(previousModels, nextSlugs)];
 };
 
 export const mergeProviderSnapshot = (

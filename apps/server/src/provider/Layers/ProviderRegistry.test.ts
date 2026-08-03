@@ -600,6 +600,71 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
+      it("drops custom models a refresh no longer reports", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("claudeAgent_proxy"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-08-03T00:00:00.000Z",
+          version: "2.1.220",
+          models: [
+            {
+              slug: "claude-opus-5",
+              name: "Claude Opus 5",
+              isCustom: false,
+              capabilities: null,
+            },
+            {
+              slug: "gpt-5.6-sol",
+              name: "gpt-5.6-sol",
+              isCustom: true,
+              capabilities: null,
+            },
+            {
+              slug: "gpt-5.6-sol(high)",
+              name: "gpt-5.6-sol(high)",
+              isCustom: true,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        // The custom entry was renamed via a display label and the effort
+        // variant was deleted from settings; only the first should survive.
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-08-03T00:01:00.000Z",
+          models: [
+            {
+              slug: "claude-opus-5",
+              name: "Claude Opus 5",
+              isCustom: false,
+              capabilities: null,
+            },
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6-Sol",
+              isCustom: true,
+              capabilities: null,
+            },
+          ],
+        } satisfies ServerProvider;
+
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+          ...refreshedProvider.models,
+        ]);
+        // Retention of probe-derived models still applies when a snapshot
+        // reports nothing, but it never resurrects the removed custom models.
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, { ...refreshedProvider, models: [] }).models,
+          [previousProvider.models[0]],
+        );
+      });
+
       it("drops stale OpenCode models missing from a successful refresh", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("opencode"),
