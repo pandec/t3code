@@ -715,6 +715,31 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         roundTripped.providerInstances[instanceId]?.environment?.[0]?.value,
         "sk-or-secret",
       );
+
+      // A non-empty value wins over a stale `valueRedacted: true` flag: the
+      // replacement must reach the secret store, not be silently dropped.
+      const replaced = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            environment: [
+              {
+                name: "OPENROUTER_API_KEY",
+                value: "sk-or-replacement",
+                sensitive: true,
+                valueRedacted: true,
+              },
+            ],
+            config: {},
+          },
+        },
+      });
+      assert.equal(
+        replaced.providerInstances[instanceId]?.environment?.[0]?.value,
+        "sk-or-replacement",
+      );
+      const rawAfterReplace = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(rawAfterReplace, "sk-or-replacement");
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

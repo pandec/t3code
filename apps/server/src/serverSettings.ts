@@ -449,7 +449,11 @@ const make = Effect.gen(function* () {
           }
 
           nextSecretKeys.add(secretName);
-          if (!variable.valueRedacted) {
+          // The value decides, not the flag: a caller that sends a non-empty
+          // value alongside `valueRedacted: true` (hand-edited settings, a
+          // stale client envelope) must have that value stored, not silently
+          // dropped in favor of whatever the secret store already holds.
+          if (variable.value.length > 0 || !variable.valueRedacted) {
             if (variable.value.length > 0) {
               yield* secretStore.set(secretName, textEncoder.encode(variable.value)).pipe(
                 Effect.mapError(
