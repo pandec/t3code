@@ -17,6 +17,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient } from "effect/unstable/http";
 
 import {
+  CLIPROXYAPI_USAGE_SOURCE_KIND,
   makeCliProxyApiUsageProbe,
   resolveCliProxyApiUsageProbeTarget,
   type CliProxyApiUsageProbeTarget,
@@ -219,11 +220,13 @@ export const ProviderUsageRefreshLive = Layer.effect(
         const resolved: Array<UsageRefreshProviderInstance> = [];
         const activeGatewayProbeIds = new Set<ProviderInstanceId>();
         for (const instance of instances) {
-          const envelope = registry.getInstanceConfig
-            ? yield* registry.getInstanceConfig(instance.instanceId)
-            : undefined;
-          if (!envelope?.usageSource) {
-            gatewayProbes.delete(instance.instanceId);
+          const envelope = yield* (
+            registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
+          );
+          // Gate on the *recognized* kind, not mere presence: the contract
+          // promises a build that does not know a kind leaves the envelope
+          // alone and keeps the driver's own usage working.
+          if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) {
             resolved.push(instance);
             continue;
           }
@@ -234,8 +237,6 @@ export const ProviderUsageRefreshLive = Layer.effect(
           const target = resolveCliProxyApiUsageProbeTarget(envelope);
           if (target) {
             activeGatewayProbeIds.add(instance.instanceId);
-          } else {
-            gatewayProbes.delete(instance.instanceId);
           }
           resolved.push({
             instanceId: instance.instanceId,
@@ -244,6 +245,9 @@ export const ProviderUsageRefreshLive = Layer.effect(
             adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
           });
         }
+        // Sweeping by the active set subsumes any per-instance pruning above:
+        // an id only enters `gatewayProbes` via `gatewayAdapterFor`, which
+        // runs exactly for the ids in that set.
         for (const instanceId of gatewayProbes.keys()) {
           if (!activeGatewayProbeIds.has(instanceId)) {
             gatewayProbes.delete(instanceId);

@@ -489,7 +489,11 @@ const make = Effect.gen(function* () {
         let usageSource = instance.usageSource;
         if (usageSource) {
           const secretName = providerUsageSourceSecretName(instanceId);
-          if (!usageSource.managementKeyRedacted) {
+          // The value decides, not the flag: a caller that sends a non-empty
+          // key alongside `managementKeyRedacted: true` (hand-edited settings,
+          // a non-web client) must not have that key persisted verbatim —
+          // redaction on read would then hide the plaintext on disk forever.
+          if (usageSource.managementKey.length > 0 || !usageSource.managementKeyRedacted) {
             if (usageSource.managementKey.length > 0) {
               yield* secretStore
                 .set(secretName, textEncoder.encode(usageSource.managementKey))

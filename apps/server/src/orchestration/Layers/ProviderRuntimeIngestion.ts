@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { CLIPROXYAPI_USAGE_SOURCE_KIND } from "../../provider/cliProxyApiUsage.ts";
 import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -1357,10 +1358,13 @@ const make = Effect.gen(function* () {
         // last-write-wins, so a passive single-window event forwarded through
         // the gateway must not overwrite the pooled-accounts snapshot.
         // Failover health above still sees the passive payload.
-        const instanceConfig = providerInstanceRegistry.getInstanceConfig
-          ? yield* providerInstanceRegistry.getInstanceConfig(instanceId)
-          : undefined;
-        if (instanceConfig?.usageSource !== undefined) {
+        const instanceConfig = yield* (
+          providerInstanceRegistry.getInstanceConfig?.(instanceId) ?? Effect.succeed(undefined)
+        );
+        // Gate on the *recognized* kind: an unknown kind must not silently
+        // suppress the driver's own usage (the envelope round-trips across
+        // builds, so this can be a downgrade or a future kind).
+        if (instanceConfig?.usageSource?.kind === CLIPROXYAPI_USAGE_SOURCE_KIND) {
           return;
         }
         const observationToken = yield* providerInstanceHealth.beginUsageObservation();

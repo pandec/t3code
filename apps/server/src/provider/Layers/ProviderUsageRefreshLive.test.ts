@@ -131,13 +131,14 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
         expect(yield* refresh.refresh([target])).toEqual([]);
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
 
-        // Removing an instance prunes the memoized key/cooldown closure. A
-        // later instance with the same id gets a fresh probe.
+        // Removing an instance prunes the memoized probe, but the gateway's
+        // auth-failure cooldown is tracked per origin, not per closure: a
+        // rebuilt instance must not hand the user a fresh set of ban strikes.
         yield* Ref.set(instances, []);
         yield* refresh.refresh();
         yield* Ref.set(instances, [directInstance]);
         expect(yield* refresh.refresh([target])).toEqual([]);
-        expect(yield* Ref.get(gatewayRequests)).toBe(2);
+        expect(yield* Ref.get(gatewayRequests)).toBe(1);
 
         // A declared but unresolved source owns the usage slot and must not
         // silently restore the SDK adapter.
@@ -147,7 +148,7 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
         }));
         expect(yield* refresh.refresh([target])).toEqual([]);
         expect(yield* Ref.get(directReads)).toBe(0);
-        expect(yield* Ref.get(gatewayRequests)).toBe(2);
+        expect(yield* Ref.get(gatewayRequests)).toBe(1);
       }).pipe(Effect.provide(layer));
     }),
   ),

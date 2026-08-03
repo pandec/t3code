@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from "@effect/vitest";
+import { assert, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -6,6 +6,7 @@ import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/u
 
 import {
   makeCliProxyApiUsageProbe,
+  resetCliProxyApiAuthFailuresForTest,
   resolveCliProxyApiUsageProbeTarget,
   type CliProxyApiUsagePayload,
 } from "./cliProxyApiUsage.ts";
@@ -57,11 +58,17 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     });
   });
 
-  it("returns null without a key, without any URL, or for other source kinds", () => {
+  it("returns null without a key, without a usable URL, or for other source kinds", () => {
     expect(
       resolveCliProxyApiUsageProbeTarget({
         environment,
         usageSource: { kind: "cliproxyapi", managementKey: "" },
+      }),
+    ).toBeNull();
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment: [{ name: "ANTHROPIC_BASE_URL", value: "not a url", sensitive: false }],
+        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
       }),
     ).toBeNull();
     expect(
@@ -78,15 +85,6 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     ).toBeNull();
     expect(resolveCliProxyApiUsageProbeTarget({ environment })).toBeNull();
   });
-
-  it("rejects an unparseable base URL rather than probing a garbage origin", () => {
-    expect(
-      resolveCliProxyApiUsageProbeTarget({
-        environment: [{ name: "ANTHROPIC_BASE_URL", value: "not a url", sensitive: false }],
-        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
-      }),
-    ).toBeNull();
-  });
 });
 
 describe("makeCliProxyApiUsageProbe", () => {
@@ -94,6 +92,12 @@ describe("makeCliProxyApiUsageProbe", () => {
     managementUrl: "https://gateway.example.test",
     managementKey: "management-key",
   };
+
+  // Auth-failure strikes are tracked per gateway origin, process-wide, so
+  // cases would otherwise inherit each other's ledger.
+  beforeEach(() => {
+    resetCliProxyApiAuthFailuresForTest();
+  });
 
   it.effect("translates mixed upstream accounts and degrades account failures to rows", () => {
     const requests: HttpClientRequest.HttpClientRequest[] = [];
@@ -217,6 +221,45 @@ describe("makeCliProxyApiUsageProbe", () => {
       yield* TestClock.adjust("10 minutes");
       expect((yield* Effect.exit(runProbe))._tag).toBe("Failure");
       expect(requestCount).toBe(4);
+    });
+  });
+
+  it.effect("spends a per-gateway strike budget that re-typing the key cannot reset", () => {
+    let requestCount = 0;
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requestCount += 1;
+        if (request.url.endsWith("/auth-files")) {
+          return jsonResponse(request, {
+            files: [{ auth_index: "claude-auth", name: "claude.json", provider: "claude" }],
+          });
+        }
+        return HttpClientResponse.fromWeb(request, new Response(null, { status: 401 }));
+      }),
+    );
+    // Each attempt is a *fresh probe with a different key* — what a user does
+    // when the meter stays empty. The gateway bans this IP after five refused
+    // keys, so the budget has to survive the rebuild.
+    const attempt = (key: string) =>
+      makeCliProxyApiUsageProbe({ ...target, managementKey: key })().pipe(
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+
+    return Effect.gen(function* () {
+      expect((yield* Effect.exit(attempt("wrong-1")))._tag).toBe("Failure");
+      expect((yield* Effect.exit(attempt("wrong-2")))._tag).toBe("Failure");
+      expect((yield* Effect.exit(attempt("wrong-3")))._tag).toBe("Failure");
+      const spentRequests = requestCount;
+
+      // Budget spent: further keys are refused locally, without touching the
+      // gateway, until the 30-minute window elapses.
+      expect(yield* attempt("wrong-4")).toBeUndefined();
+      expect(yield* attempt("wrong-5")).toBeUndefined();
+      expect(requestCount).toBe(spentRequests);
+
+      yield* TestClock.adjust("30 minutes");
+      expect((yield* Effect.exit(attempt("wrong-6")))._tag).toBe("Failure");
+      expect(requestCount).toBeGreaterThan(spentRequests);
     });
   });
 });

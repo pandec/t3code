@@ -673,15 +673,26 @@ type ProviderUsagePayloadSource = {
  * A gateway snapshot (`cliproxyapi.management`) carries a pool of upstream
  * accounts rather than one; here it collapses to the featured account so
  * single-account surfaces (the ring, alerts) keep working — the full pool is
- * available through `deriveProviderUsageAccountsFromServerSnapshot`.
+ * available through `deriveProviderUsageAccountsFromServerSnapshot`. Pass
+ * `preferredUpstreamProvider` when the caller knows which upstream serves the
+ * thread; see `featuredProviderUsageAccount`.
  */
 export function deriveProviderUsageSnapshotFromServerSnapshot(
   snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
-  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> = {},
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> & {
+    readonly preferredUpstreamProvider?: string | null;
+  } = {},
 ): ProviderUsageSnapshot | null {
   const accounts = deriveProviderUsageAccountsFromServerSnapshot(snapshot, options);
   if (accounts !== null) {
-    return featuredProviderUsageAccount(accounts.accounts)?.usage ?? null;
+    return (
+      featuredProviderUsageAccount(
+        accounts.accounts,
+        options.preferredUpstreamProvider === undefined
+          ? "claude"
+          : options.preferredUpstreamProvider,
+      )?.usage ?? null
+    );
   }
   return deriveProviderUsageSnapshotFromSources(
     [
@@ -786,21 +797,72 @@ export function deriveProviderUsageAccountsFromServerSnapshot(
   };
 }
 
+const byProviderUsageAccountPriority = (a: ProviderUsageAccount, b: ProviderUsageAccount) =>
+  (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
+
+/** Highest priority first — the order the gateway's failover ladder serves. */
+export function sortProviderUsageAccountsByPriority(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+): ReadonlyArray<ProviderUsageAccount> {
+  // Hermes lacks ES2023 change-by-copy methods, so copy before sorting.
+  return [...accounts].sort(byProviderUsageAccountPriority);
+}
+
 /**
- * The pooled account a compact single-account surface should represent: the
- * highest-priority available Claude account — the one the gateway's failover
- * ladder serves next — falling back to any account that has usage to show.
+ * The pooled account a compact single-account surface (ring, alerts) should
+ * represent: the highest-priority account of `preferredUpstreamProvider` that
+ * the gateway can still serve — the one the next turn will actually spend.
+ *
+ * Two deliberate choices:
+ *   - An account whose own usage read failed is still featured. Substituting a
+ *     sibling's percentage would misreport the account being spent; the
+ *     popover shows that account's error instead.
+ *   - When every matching account is cooling down, the highest-priority
+ *     cooled-down one is featured rather than nothing: a fully exhausted pool
+ *     is exactly when the meter must be loudest, and returning null there
+ *     would make it go dark instead of red.
+ *
+ * `preferredUpstreamProvider` of null means the caller cannot tell which
+ * upstream serves this thread (e.g. a custom model on a mixed pool); feature
+ * nothing rather than a quota the turn will not spend.
  */
 export function featuredProviderUsageAccount(
   accounts: ReadonlyArray<ProviderUsageAccount>,
+  preferredUpstreamProvider: string | null = "claude",
 ): ProviderUsageAccount | null {
-  const byPriority = (a: ProviderUsageAccount, b: ProviderUsageAccount) =>
-    (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
-  const candidates = accounts.filter(
-    (account) => account.state === "available" && account.provider === "claude",
+  if (preferredUpstreamProvider === null) return null;
+  const ofProvider = accounts.filter((account) => account.provider === preferredUpstreamProvider);
+  const available = ofProvider.filter((account) => account.state === "available");
+  return (
+    sortProviderUsageAccountsByPriority(available.length > 0 ? available : ofProvider)[0] ?? null
   );
-  // Hermes lacks ES2023 change-by-copy methods; filter() copies already.
-  return candidates.sort(byPriority)[0] ?? null;
+}
+
+/**
+ * Presentation fields shared by every surface that renders a pooled gateway
+ * account, so the two composers cannot drift apart on labelling.
+ */
+export function presentProviderUsageAccount(account: ProviderUsageAccount): {
+  readonly displayName: string;
+  readonly email: string | undefined;
+  readonly detail: string | null;
+} {
+  // Gateway account labels are often the upstream login email; route those
+  // through the email slot so the masking preference applies.
+  const emailLikeLabel = account.label.includes("@");
+  return {
+    displayName: emailLikeLabel ? account.id : account.label,
+    email: emailLikeLabel ? account.label : undefined,
+    detail:
+      [
+        account.priority !== null ? `tier ${account.priority}` : null,
+        account.state !== "available" ? account.state : null,
+        account.planType,
+        account.usage === null ? account.error : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null,
+  };
 }
 
 /**

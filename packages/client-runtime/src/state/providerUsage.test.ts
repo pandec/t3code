@@ -1117,6 +1117,30 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
     expect(featuredProviderUsageAccount(pool?.accounts ?? [])?.id).toBe("claude-tier2.json");
   });
 
+  it("features the preferred upstream's account, and none when the upstream is unknown", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    expect(featuredProviderUsageAccount(pool?.accounts ?? [], "codex")?.id).toBe("codex.json");
+    // A custom model on a mixed pool: nothing maps it to an account, so no
+    // quota may be featured for it.
+    expect(featuredProviderUsageAccount(pool?.accounts ?? [], null)).toBeNull();
+  });
+
+  it("falls back to the highest-priority cooled-down account when the pool is exhausted", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot({
+      ...gatewaySnapshot,
+      payload: {
+        source: "cliproxyapi.management",
+        accounts: (gatewaySnapshot.payload.accounts as ReadonlyArray<Record<string, unknown>>).map(
+          (account) =>
+            account.provider === "claude" ? { ...account, state: "cooldown" } : account,
+        ),
+      },
+    });
+    // The meter must render the exhausted pool as red, not vanish: the
+    // highest-priority cooled-down account carries the closest reset time.
+    expect(featuredProviderUsageAccount(pool?.accounts ?? [])?.id).toBe("claude-tier1.json");
+  });
+
   it("keeps the highest-priority available Claude account featured when its usage read failed", () => {
     const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
     const base = pool?.accounts[0];

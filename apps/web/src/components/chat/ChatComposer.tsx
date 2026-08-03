@@ -220,8 +220,10 @@ import {
   deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
+  presentProviderUsageAccount,
   providerUsageLabelForDriver,
   resolveProviderUsageInstanceId,
+  sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import {
@@ -1062,6 +1064,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? deriveProviderUsageAccountsFromServerSnapshot(snapshot, { now: Date.now() })
       : null;
   }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
+  /**
+   * Which upstream of a gateway pool serves this thread. A custom model on a
+   * Claude-driver gateway instance is served by some other upstream (the
+   * `gpt-5.6-*` entries are Codex), and nothing maps a model to a pooled
+   * account, so featuring any account would misreport the quota being spent.
+   */
+  const activeUpstreamProvider = useMemo<string | null>(() => {
+    const model = activeThreadModelSelection?.model;
+    if (activeProviderUsageInstanceId === null || model === undefined) return "claude";
+    const models = providerStatuses.find(
+      (provider) => provider.instanceId === activeProviderUsageInstanceId,
+    )?.models;
+    return models?.find((entry) => entry.slug === model)?.isCustom === true ? null : "claude";
+  }, [activeProviderUsageInstanceId, activeThreadModelSelection?.model, providerStatuses]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;
     const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);
@@ -1069,11 +1085,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
           provider: activeThreadProviderDriver,
           now: Date.now(),
+          preferredUpstreamProvider: activeUpstreamProvider,
         })
       : null;
   }, [
     activeProviderUsageInstanceId,
     activeThreadProviderDriver,
+    activeUpstreamProvider,
     providerUsageNowMinute,
     providerUsageSnapshotByInstance,
   ]);
@@ -1139,38 +1157,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(() => {
     if (activeGatewayUsage !== null && activeProviderUsageInstanceId !== null) {
-      const featuredId = featuredProviderUsageAccount(activeGatewayUsage.accounts)?.id ?? null;
+      const featuredId =
+        featuredProviderUsageAccount(activeGatewayUsage.accounts, activeUpstreamProvider)?.id ??
+        null;
       const observedAt =
         providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
-      return [...activeGatewayUsage.accounts]
-        .sort(
-          (left, right) =>
-            (right.priority ?? Number.NEGATIVE_INFINITY) -
-            (left.priority ?? Number.NEGATIVE_INFINITY),
-        )
-        .map((account) => {
-          // Gateway account labels are often the upstream login email; route
-          // those through the email slot so the masking preference applies.
-          const emailLikeLabel = account.label.includes("@");
-          return {
-            instanceId: activeProviderUsageInstanceId,
-            accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
-            displayName: emailLikeLabel ? account.id : account.label,
-            email: emailLikeLabel ? account.label : undefined,
-            isCurrent: account.id === featuredId,
-            usage: account.usage,
-            observedAt,
-            detail:
-              [
-                account.priority !== null ? `tier ${account.priority}` : null,
-                account.state !== "available" ? account.state : null,
-                account.planType,
-                account.usage === null ? account.error : null,
-              ]
-                .filter(Boolean)
-                .join(" · ") || null,
-          };
-        });
+      return sortProviderUsageAccountsByPriority(activeGatewayUsage.accounts).map((account) => ({
+        instanceId: activeProviderUsageInstanceId,
+        accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
+        ...presentProviderUsageAccount(account),
+        isCurrent: account.id === featuredId,
+        usage: account.usage,
+        observedAt,
+      }));
     }
     return usageProviders.map((provider) => {
       const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
@@ -1191,6 +1190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     activeGatewayUsage,
     activeProviderUsageInstanceId,
+    activeUpstreamProvider,
     providerUsageNowMinute,
     providerUsageSnapshotByInstance,
     usageProviders,

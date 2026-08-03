@@ -62,8 +62,10 @@ import {
   deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
+  presentProviderUsageAccount,
   providerUsageLabelForDriver,
   resolveProviderUsageInstanceId,
+  sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
 import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
@@ -453,40 +455,35 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         : null,
     [gatewayUsageByInstance, providerUsageInstanceId],
   );
+  /**
+   * Which upstream of a gateway pool serves this thread; a custom model is
+   * served by a non-Claude upstream, and nothing maps a model to a pooled
+   * account, so no account may be featured for it. Mirrors the web composer.
+   */
+  const activeUpstreamProvider = useMemo<string | null>(() => {
+    const model = props.selectedThread.modelSelection.model;
+    if (selectedProviderStatus === null) return "claude";
+    return selectedProviderStatus.models.find((entry) => entry.slug === model)?.isCustom === true
+      ? null
+      : "claude";
+  }, [props.selectedThread.modelSelection.model, selectedProviderStatus]);
   const providerUsage =
     serverProviderUsage ?? (activeGatewayPool === null ? activityProviderUsage : null);
   const providerUsageAccounts = useMemo(() => {
     if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
-      const featuredId = featuredProviderUsageAccount(activeGatewayPool.accounts)?.id ?? null;
+      const featuredId =
+        featuredProviderUsageAccount(activeGatewayPool.accounts, activeUpstreamProvider)?.id ??
+        null;
       const observedAt =
         providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
-      return [...activeGatewayPool.accounts]
-        .sort(
-          (left, right) =>
-            (right.priority ?? Number.NEGATIVE_INFINITY) -
-            (left.priority ?? Number.NEGATIVE_INFINITY),
-        )
-        .map((account) => {
-          const emailLikeLabel = account.label.includes("@");
-          return {
-            instanceId: providerUsageInstanceId,
-            accountKey: `${providerUsageInstanceId}:${account.id}`,
-            displayName: emailLikeLabel ? account.id : account.label,
-            email: emailLikeLabel ? account.label : undefined,
-            isCurrent: account.id === featuredId,
-            snapshot: account.usage,
-            observedAt,
-            detail:
-              [
-                account.priority !== null ? `tier ${account.priority}` : null,
-                account.state !== "available" ? account.state : null,
-                account.planType,
-                account.usage === null ? account.error : null,
-              ]
-                .filter(Boolean)
-                .join(" · ") || null,
-          };
-        });
+      return sortProviderUsageAccountsByPriority(activeGatewayPool.accounts).map((account) => ({
+        instanceId: providerUsageInstanceId,
+        accountKey: `${providerUsageInstanceId}:${account.id}`,
+        ...presentProviderUsageAccount(account),
+        isCurrent: account.id === featuredId,
+        snapshot: account.usage,
+        observedAt,
+      }));
     }
     return (props.serverConfig?.providers ?? [])
       .filter(
@@ -522,6 +519,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       });
   }, [
     activeGatewayPool,
+    activeUpstreamProvider,
     gatewayUsageByInstance,
     props.serverConfig?.providers,
     providerUsageInstanceId,

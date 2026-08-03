@@ -862,17 +862,14 @@ export function ProviderInstanceCard({
       kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
       managementKey: "",
     };
-    const managementUrl =
-      "managementUrl" in patch ? patch.managementUrl : (base.managementUrl ?? undefined);
+    const managementUrl = "managementUrl" in patch ? patch.managementUrl : base.managementUrl;
     // A newly entered key is unredacted; the server redacts it on echo.
     const keyFields =
       patch.managementKey !== undefined
-        ? { managementKey: patch.managementKey, managementKeyRedacted: false }
+        ? { managementKey: patch.managementKey }
         : {
             managementKey: base.managementKey,
-            ...(base.managementKeyRedacted !== undefined
-              ? { managementKeyRedacted: base.managementKeyRedacted }
-              : {}),
+            ...(base.managementKeyRedacted ? { managementKeyRedacted: true } : {}),
           };
     commitInstance({
       ...rest,
