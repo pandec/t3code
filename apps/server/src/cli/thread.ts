@@ -13,6 +13,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -25,7 +26,9 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import { expandHomePath } from "../pathExpansion.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -192,30 +195,83 @@ export const resolveThreadCliWorkspaceSelection = (flags: {
   return Effect.succeed({ mode: "checkout" });
 };
 
-const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(function* (
-  rawPath: string,
-) {
+const WORKTREE_GIT_TIMEOUT = Duration.seconds(10);
+const WORKTREE_GIT_MAX_OUTPUT_BYTES = 64 * 1024;
+
+// Canonicalize and validate an existing worktree path before recording it on
+// the thread. Canonicalization matters: consumers compare worktreePath with
+// strict equality against git-reported paths (e.g. /tmp vs /private/tmp on
+// macOS), and the git-common-dir check rejects directories that are not a
+// worktree of the selected project's repository.
+const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(function* (input: {
+  readonly rawPath: string;
+  readonly projectWorkspaceRoot: string;
+}) {
   const path = yield* Path.Path;
   const fileSystem = yield* FileSystem.FileSystem;
-  const resolved = path.resolve(expandHomePath(rawPath));
-  const info = yield* fileSystem.stat(resolved).pipe(
-    Effect.mapError(
-      () =>
-        new ThreadCliWorktreePathError({
-          operation: "resolveWorktreePath",
-          worktreePath: resolved,
-          detail: "The worktree path does not exist on this machine.",
-        }),
-    ),
-  );
-  if (info.type !== "Directory") {
-    return yield* new ThreadCliWorktreePathError({
+  const processRunner = yield* ProcessRunner.make();
+  const resolved = path.resolve(expandHomePath(input.rawPath));
+  const invalidWorktree = (detail: string) =>
+    new ThreadCliWorktreePathError({
       operation: "resolveWorktreePath",
       worktreePath: resolved,
-      detail: "The worktree path is not a directory.",
+      detail,
     });
+  const info = yield* fileSystem
+    .stat(resolved)
+    .pipe(
+      Effect.mapError(() => invalidWorktree("The worktree path does not exist on this machine.")),
+    );
+  if (info.type !== "Directory") {
+    return yield* invalidWorktree("The worktree path is not a directory.");
   }
-  return resolved;
+  const canonical = yield* fileSystem
+    .realPath(resolved)
+    .pipe(Effect.mapError(() => invalidWorktree("Failed to canonicalize the worktree path.")));
+
+  const gitCommonDirectory = (cwd: string) =>
+    processRunner
+      .run({
+        command: "git",
+        args: ["rev-parse", "--git-common-dir"],
+        cwd,
+        env: {
+          ...sanitizeGitRepositoryEnvironment(),
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+        timeout: WORKTREE_GIT_TIMEOUT,
+        maxOutputBytes: WORKTREE_GIT_MAX_OUTPUT_BYTES,
+      })
+      .pipe(
+        Effect.flatMap((result) => {
+          const stdout = result.stdout.trim();
+          return result.code === 0 && stdout.length > 0
+            ? Effect.succeed(stdout)
+            : Effect.fail(result.stderr.trim() || `git exited with code ${result.code ?? -1}`);
+        }),
+        Effect.flatMap((raw) => {
+          const absolute = path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+          return fileSystem.realPath(absolute).pipe(Effect.orElseSucceed(() => absolute));
+        }),
+      );
+
+  const worktreeGitDirectory = yield* gitCommonDirectory(canonical).pipe(
+    Effect.mapError(() => invalidWorktree("The worktree path is not inside a git repository.")),
+  );
+  const projectGitDirectory = yield* gitCommonDirectory(input.projectWorkspaceRoot).pipe(
+    Effect.mapError(() =>
+      invalidWorktree(
+        "The project workspace root is not a git repository, so --worktree cannot be validated.",
+      ),
+    ),
+  );
+  if (worktreeGitDirectory !== projectGitDirectory) {
+    return yield* invalidWorktree(
+      "The worktree path belongs to a different git repository than the project.",
+    );
+  }
+  return canonical;
 });
 
 const randomUuid = Crypto.Crypto.pipe(
@@ -515,7 +571,10 @@ const threadNewCommand = Command.make("new", {
           ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
         const existingWorktreePath =
           workspace.mode === "existing-worktree"
-            ? yield* resolveExistingWorktreePath(workspace.worktreePath)
+            ? yield* resolveExistingWorktreePath({
+                rawPath: workspace.worktreePath,
+                projectWorkspaceRoot: projectShell.workspaceRoot,
+              })
             : null;
         const threadId = ThreadId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);

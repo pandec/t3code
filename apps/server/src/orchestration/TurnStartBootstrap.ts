@@ -158,6 +158,7 @@ export const make = Effect.gen(function* () {
       const bootstrap = command.bootstrap;
       const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
       let createdThread = false;
+      let createdWorktree: { readonly cwd: string; readonly path: string } | null = null;
       let targetProjectId = bootstrap?.createThread?.projectId;
       let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
       let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
@@ -174,6 +175,20 @@ export const make = Effect.gen(function* () {
               ),
               Effect.ignoreCause({ log: true }),
             )
+          : Effect.void;
+
+      // Only when this bootstrap also created the thread: a prepareWorktree-only
+      // bootstrap runs against a pre-existing thread whose metadata may already
+      // reference the new worktree, so it must survive a failed turn start.
+      const cleanupCreatedWorktree = () =>
+        createdThread && createdWorktree !== null
+          ? gitWorkflow
+              .removeWorktree({
+                cwd: createdWorktree.cwd,
+                path: createdWorktree.path,
+                force: true,
+              })
+              .pipe(Effect.ignoreCause({ log: true }))
           : Effect.void;
 
       const recordSetupScriptLaunchFailure = (input: {
@@ -334,6 +349,10 @@ export const make = Effect.gen(function* () {
             path: null,
           });
           targetWorktreePath = worktree.worktree.path;
+          createdWorktree = {
+            cwd: bootstrap.prepareWorktree.projectCwd,
+            path: worktree.worktree.path,
+          };
           yield* orchestrationEngine.dispatch({
             type: "thread.meta.update",
             commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
@@ -355,7 +374,10 @@ export const make = Effect.gen(function* () {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.fail(dispatchError);
           }
-          return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+          return cleanupCreatedThread().pipe(
+            Effect.flatMap(() => cleanupCreatedWorktree()),
+            Effect.flatMap(() => Effect.fail(dispatchError)),
+          );
         }),
       );
     });

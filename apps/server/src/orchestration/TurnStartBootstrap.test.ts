@@ -229,6 +229,53 @@ describe("TurnStartBootstrap", () => {
     }),
   );
 
+  it.effect("removes the created worktree when the turn start fails after preparation", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const removedWorktrees: Array<{ cwd: string; path: string; force: boolean | undefined }> = [];
+      const result = yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        return yield* bootstrap.dispatchTurnStart(
+          makeTurnStartCommand({
+            createThread: createThreadBootstrap,
+            prepareWorktree: {
+              projectCwd: "/tmp/project",
+              baseBranch: "main",
+              branch: "t3code/test-branch",
+            },
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            failTurnStart: true,
+            gitWorkflow: {
+              removeWorktree: (request) => {
+                removedWorktrees.push({
+                  cwd: request.cwd,
+                  path: request.path,
+                  force: request.force,
+                });
+                return Effect.void;
+              },
+            },
+          }),
+        ),
+        Effect.flip,
+      );
+
+      assert.equal(result._tag, "OrchestrationDispatchCommandError");
+      assert.deepEqual(
+        dispatched.map((command) => command.type),
+        ["thread.create", "thread.meta.update", "thread.turn.start", "thread.delete"],
+      );
+      assert.deepEqual(removedWorktrees, [
+        { cwd: "/tmp/project", path: "/tmp/worktrees/t3code/test-branch", force: true },
+      ]);
+    }),
+  );
+
   it.effect("fails without cleanup when the turn start was not bootstrapped with a thread", () =>
     Effect.gen(function* () {
       const dispatched: Array<OrchestrationCommand> = [];
