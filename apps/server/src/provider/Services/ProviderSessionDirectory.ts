@@ -30,6 +30,14 @@ export interface ProviderRuntimeBinding {
   readonly runtimeMode?: RuntimeMode;
 }
 
+export interface UpsertProviderRuntimeBindingInput extends ProviderRuntimeBinding {
+  /**
+   * Result of the caller's authoritative continuation-identity comparison
+   * when changing instance ids. Omit when the caller has no such proof.
+   */
+  readonly continuationCompatible?: boolean;
+}
+
 export interface ProviderRuntimeBindingWithMetadata extends ProviderRuntimeBinding {
   readonly lastSeenAt: string;
   readonly revision: number;
@@ -51,7 +59,7 @@ export type ProviderSessionDirectoryWriteError =
 
 export interface ProviderSessionDirectoryShape {
   readonly upsert: (
-    binding: ProviderRuntimeBinding,
+    binding: UpsertProviderRuntimeBindingInput,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
 
   readonly getProvider: (

@@ -167,6 +167,108 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("preserves resume state when a compatible move stamps a legacy binding", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-compatible-owner-change");
+      const firstInstanceId = ProviderInstanceId.make("claude-personal");
+      const secondInstanceId = ProviderInstanceId.make("claude-work");
+      const continuationKey = "claude:home:/shared-home";
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: firstInstanceId,
+        threadId,
+        resumeCursor: { claudeSessionId: "shared-session" },
+        runtimePayload: {
+          cwd: "/tmp/shared-project",
+          hasPendingWork: true,
+        },
+      });
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: secondInstanceId,
+        threadId,
+        continuationCompatible: true,
+        runtimePayload: {
+          continuationKey,
+          activeTurnId: null,
+        },
+      });
+
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(binding.providerInstanceId, secondInstanceId);
+      assert.deepEqual(binding.resumeCursor, { claudeSessionId: "shared-session" });
+      assert.deepEqual(binding.runtimePayload, {
+        continuationKey,
+        cwd: "/tmp/shared-project",
+        hasPendingWork: true,
+        activeTurnId: null,
+      });
+    }));
+
+  it("clears resume state when an instance switch changes continuation groups", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-incompatible-owner-change");
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-personal"),
+        threadId,
+        resumeCursor: { claudeSessionId: "personal-session" },
+        runtimePayload: {
+          cwd: "/tmp/personal-project",
+          cwdAuthority: "imported-session",
+        },
+      });
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-isolated"),
+        threadId,
+        continuationCompatible: false,
+        runtimePayload: {
+          continuationKey: "claude:home:/isolated",
+          cwd: "/tmp/isolated-project",
+        },
+      });
+
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(binding.resumeCursor, null);
+      assert.deepEqual(binding.runtimePayload, {
+        continuationKey: "claude:home:/isolated",
+        cwd: "/tmp/isolated-project",
+      });
+    }));
+
+  it("clears resume state when an instance switch omits the compatibility verdict", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-owner-change-without-verdict");
+      const continuationKey = "claude:home:/shared-home";
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-personal"),
+        threadId,
+        resumeCursor: { claudeSessionId: "shared-session" },
+        runtimePayload: { continuationKey, cwd: "/tmp/old-project" },
+      });
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-work"),
+        threadId,
+        runtimePayload: { continuationKey, cwd: "/tmp/new-project" },
+      });
+
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(binding.resumeCursor, null);
+      assert.deepEqual(binding.runtimePayload, {
+        continuationKey,
+        cwd: "/tmp/new-project",
+      });
+    }));
+
   it("refreshes legacy null-instance rows and rejects same-timestamp stale revisions", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

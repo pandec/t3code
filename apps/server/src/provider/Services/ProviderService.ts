@@ -34,6 +34,20 @@ import type { ProviderForkSessionResult } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 import type { ProviderRuntimeBindingWithMetadata } from "./ProviderSessionDirectory.ts";
 
+export interface ProviderSessionStartOptions {
+  /**
+   * `fail` makes an existing persisted cursor authoritative: the session may
+   * start only on a continuation-compatible identity, so a thread is never
+   * silently reset to an empty conversation. Thread-driven starts (the
+   * reactor) use it.
+   *
+   * The default `start-fresh` keeps direct-call behavior for an intentional
+   * provider replacement, where the caller has already decided to abandon the
+   * previous provider's conversation.
+   */
+  readonly onIncompatiblePersistedState?: "start-fresh" | "fail";
+}
+
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
@@ -44,6 +58,7 @@ export interface ProviderServiceShape {
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    options?: ProviderSessionStartOptions,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   readonly forkConversation: (input: {

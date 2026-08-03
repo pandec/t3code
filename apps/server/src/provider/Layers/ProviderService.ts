@@ -47,6 +47,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import { readPersistedContinuationKey } from "../runtimeBindingContinuation.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -203,6 +204,60 @@ function hasDurableImportedCwdAuthority(
   );
 }
 
+/**
+ * How a persisted binding's conversation state relates to the instance a
+ * session is starting on.
+ *
+ * `same-instance` and `continuation-group` are the reusable states. The
+ * distinction that matters is which key is authoritative: the key persisted
+ * with the binding wins over the live registry, because a renamed or deleted
+ * owner can no longer answer for itself. Driver identity always comes from the
+ * durable binding — an instance id is a user-authored slug and can be
+ * recreated on a different driver.
+ */
+type BindingCompatibility =
+  | "none"
+  | "same-instance"
+  | "continuation-group"
+  | "incompatible"
+  | "unprovable";
+
+function classifyBindingCompatibility(input: {
+  readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined;
+  readonly bindingInstanceId: ProviderInstanceId | undefined;
+  readonly bindingOwnerInfo: ProviderAdapterRegistry.ProviderInstanceRoutingInfo | undefined;
+  readonly targetInstanceId: ProviderInstanceId;
+  readonly targetProvider: ProviderDriverKind;
+  readonly targetContinuationKey: string;
+}): BindingCompatibility {
+  const { binding, targetContinuationKey } = input;
+  if (binding === undefined) return "none";
+  if (binding.provider !== input.targetProvider) return "incompatible";
+  if (input.bindingInstanceId === input.targetInstanceId) return "same-instance";
+  const ownerKey =
+    readPersistedContinuationKey(binding.runtimePayload) ??
+    input.bindingOwnerInfo?.continuationIdentity.continuationKey;
+  if (ownerKey === undefined) return "unprovable";
+  return ownerKey === targetContinuationKey ? "continuation-group" : "incompatible";
+}
+
+/**
+ * Where a session's resume cursor or cwd came from. `persisted-continuation-group`
+ * separates a cross-instance carry from a same-instance restart, so a silently
+ * dropped cursor can never be mistaken for "nothing was persisted".
+ */
+function describeStateSource(input: {
+  readonly fromRequest: boolean;
+  readonly fromPersisted: boolean;
+  readonly bindingCompatibility: BindingCompatibility;
+}): string {
+  if (input.fromRequest) return "request";
+  if (!input.fromPersisted) return "none";
+  return input.bindingCompatibility === "same-instance"
+    ? "persisted"
+    : "persisted-continuation-group";
+}
+
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -269,6 +324,42 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
   const withThreadLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     Effect.flatMap(getThreadLock(threadId), (lock) => lock.withPermit(effect));
+
+  // Upgrade pre-continuation-key bindings while their owning instances still
+  // resolve. This keeps a later rename/deletion recoverable without changing
+  // lastSeenAt (which would interfere with idle-session reaping).
+  yield* directory.listBindings().pipe(
+    Effect.flatMap((bindings) =>
+      Effect.forEach(
+        bindings,
+        (binding) =>
+          Effect.gen(function* () {
+            if (readPersistedContinuationKey(binding.runtimePayload) !== undefined) return;
+            const providerInstanceId = binding.providerInstanceId;
+            if (providerInstanceId === undefined) return;
+            const ownerInfo = Option.getOrUndefined(
+              yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+            );
+            // An instance id is a user-authored slug and can be recreated on a
+            // different driver. Only stamp when the live owner still matches
+            // the driver that produced the persisted cursor.
+            if (ownerInfo === undefined || ownerInfo.driverKind !== binding.provider) return;
+            yield* directory.refreshIfUnchanged({
+              binding,
+              touchLastSeenAt: false,
+              runtimePayloadPatch: {
+                continuationKey: ownerInfo.continuationIdentity.continuationKey,
+              },
+            });
+          }),
+        { concurrency: "unbounded", discard: true },
+      ),
+    ),
+    Effect.catch((error) =>
+      Effect.logWarning("provider.session.continuation-key-backfill-failed", { error }),
+    ),
+  );
+
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
@@ -391,21 +482,51 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         session,
       );
       const previousBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      // Stamp the owner's continuation key into the payload so compatibility
+      // can still be proven after the instance is renamed or deleted, when
+      // the registry can no longer answer for its id.
+      const previousInstanceId = previousBinding?.providerInstanceId;
+      const instanceChanged =
+        previousBinding !== undefined && previousInstanceId !== providerInstanceId;
+      const previousOwnerInfo =
+        instanceChanged && previousInstanceId !== undefined
+          ? Option.getOrUndefined(
+              yield* registry.getInstanceInfo(previousInstanceId).pipe(Effect.option),
+            )
+          : undefined;
+      const previousContinuationKey =
+        readPersistedContinuationKey(previousBinding?.runtimePayload) ??
+        previousOwnerInfo?.continuationIdentity.continuationKey;
+      const ownerContinuationKey =
+        (!instanceChanged ? previousContinuationKey : undefined) ??
+        Option.getOrUndefined(
+          yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+        )?.continuationIdentity.continuationKey;
+      const continuationCompatible =
+        instanceChanged &&
+        previousBinding?.provider === session.provider &&
+        ownerContinuationKey !== undefined &&
+        previousContinuationKey !== undefined &&
+        previousContinuationKey === ownerContinuationKey;
       const preserveImportedCwd =
         previousBinding?.provider === session.provider &&
-        previousBinding.providerInstanceId === providerInstanceId &&
+        (previousInstanceId === providerInstanceId || continuationCompatible) &&
         hasDurableImportedCwdAuthority(previousBinding.runtimePayload);
       yield* directory.upsert({
         threadId,
         provider: session.provider,
         providerInstanceId,
+        ...(instanceChanged ? { continuationCompatible } : {}),
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, {
-          ...extra,
-          preserveImportedCwd,
-        }),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session, {
+            ...extra,
+            preserveImportedCwd,
+          }),
+          ...(ownerContinuationKey !== undefined ? { continuationKey: ownerContinuationKey } : {}),
+        },
       });
     });
 
@@ -695,7 +816,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
-    function* (threadId, rawInput) {
+    function* (threadId, rawInput, options) {
       const parsed = yield* decodeInputOrValidationError({
         operation: "ProviderService.startSession",
         schema: ProviderSessionStartInput,
@@ -735,15 +856,72 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        const effectiveResumeCursor =
-          input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
-        const persistedCwd =
-          persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? readPersistedCwd(persistedBinding.runtimePayload)
+        const persistedBindingInstanceId =
+          persistedBinding === undefined
+            ? undefined
+            : yield* requireBindingInstanceId("ProviderService.startSession", persistedBinding);
+        // Continuation compatibility of the persisted binding's owner with
+        // the instance being started. Compatibility spans instance ids: two
+        // instances sharing a continuation key (e.g. Claude shadow accounts
+        // over one config dir) continue each other's conversations, so the
+        // persisted cursor must be gated on the key, not on exact-id
+        // equality. When the owner no longer resolves in the registry
+        // (renamed/deleted instance), fall back to the key persisted
+        // alongside the binding.
+        const persistedOwnerInfo =
+          persistedBinding !== undefined &&
+          persistedBindingInstanceId !== undefined &&
+          persistedBindingInstanceId !== resolvedInstanceId
+            ? Option.getOrUndefined(
+                yield* registry.getInstanceInfo(persistedBindingInstanceId).pipe(Effect.option),
+              )
             : undefined;
+        const bindingCompatibility = classifyBindingCompatibility({
+          binding: persistedBinding,
+          bindingInstanceId: persistedBindingInstanceId,
+          bindingOwnerInfo: persistedOwnerInfo,
+          targetInstanceId: resolvedInstanceId,
+          targetProvider: resolvedProvider,
+          targetContinuationKey: instanceInfo.continuationIdentity.continuationKey,
+        });
+        const reusePersistedState =
+          bindingCompatibility === "same-instance" || bindingCompatibility === "continuation-group";
+        const persistedCursorPresent =
+          persistedBinding?.resumeCursor !== null && persistedBinding?.resumeCursor !== undefined;
+        const persistedStateIncompatible = persistedCursorPresent && !reusePersistedState;
+        // A persisted cursor is the thread's conversation. When it cannot be
+        // carried, either the caller deliberately replaces the provider
+        // (`start-fresh`, only valid when incompatibility is provable) or the
+        // start must fail rather than silently reset the model's context
+        // behind a full history.
+        const rejectIncompatiblePersistedState =
+          persistedStateIncompatible &&
+          (input.resumeCursor !== undefined ||
+            options?.onIncompatiblePersistedState === "fail" ||
+            bindingCompatibility === "unprovable");
+        if (persistedStateIncompatible && persistedBinding !== undefined) {
+          yield* Effect.logWarning("provider.session.resume-state-not-carried", {
+            threadId,
+            requestedInstanceId: resolvedInstanceId,
+            bindingInstanceId: persistedBindingInstanceId,
+            bindingProvider: persistedBinding.provider,
+            bindingCompatibility,
+            rejected: rejectIncompatiblePersistedState,
+          });
+        }
+        if (rejectIncompatiblePersistedState && persistedBinding !== undefined) {
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            bindingCompatibility === "unprovable"
+              ? `Thread '${threadId}' has persisted conversation state owned by unavailable provider instance '${persistedBindingInstanceId}', and its continuation compatibility with instance '${resolvedInstanceId}' cannot be verified. Starting here would discard the conversation context; restore or re-add instance '${persistedBindingInstanceId}' with the same account/config to continue this thread, or start a new thread.`
+              : `Thread '${threadId}' has persisted conversation state owned by provider instance '${persistedBindingInstanceId}' and is not continuation-compatible with instance '${resolvedInstanceId}'. Starting here would discard the conversation context; switch the thread to a compatible instance or start a new thread.`,
+          );
+        }
+        const effectiveResumeCursor =
+          input.resumeCursor ?? (reusePersistedState ? persistedBinding?.resumeCursor : undefined);
+        const persistedCwd = reusePersistedState
+          ? readPersistedCwd(persistedBinding?.runtimePayload)
+          : undefined;
         const effectiveCwd =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
@@ -752,21 +930,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
-          "provider.resume_cursor.source":
-            input.resumeCursor !== undefined
-              ? "request"
-              : effectiveResumeCursor !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
-                : "none",
+          "provider.resume_cursor.source": describeStateSource({
+            fromRequest: input.resumeCursor !== undefined,
+            fromPersisted: effectiveResumeCursor !== undefined,
+            bindingCompatibility,
+          }),
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
-          "provider.cwd.source":
-            input.cwd !== undefined
-              ? "request"
-              : effectiveCwd !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
-                : "none",
+          "provider.cwd.source": describeStateSource({
+            fromRequest: input.cwd !== undefined,
+            fromPersisted: effectiveCwd !== undefined,
+            bindingCompatibility,
+          }),
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
@@ -863,6 +1037,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const modelSelection = readPersistedModelSelection(binding.runtimePayload);
       const cwd = readPersistedCwd(binding.runtimePayload);
+      // The destination continues the same native conversation store as the
+      // source, so it inherits the source binding's continuation key.
+      const sourceContinuationKey =
+        readPersistedContinuationKey(binding.runtimePayload) ??
+        Option.getOrUndefined(
+          yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+        )?.continuationIdentity.continuationKey;
       const result = yield* adapter.forkSession({
         sourceThreadId: input.sourceThreadId,
         destinationThreadId: input.destinationThreadId,
@@ -885,6 +1066,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           activeTurnId: null,
           lastRuntimeEvent: "provider.forkConversation",
           lastRuntimeEventAt: yield* nowIso,
+          ...(sourceContinuationKey !== undefined
+            ? { continuationKey: sourceContinuationKey }
+            : {}),
         },
       });
       return result;
@@ -1423,7 +1607,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   return {
-    startSession: (threadId, input) => withThreadLock(threadId, startSession(threadId, input)),
+    startSession: (threadId, input, options) =>
+      withThreadLock(threadId, startSession(threadId, input, options)),
     // Forks read the source binding's resume cursor; lock the source thread so
     // a concurrent stop/start cannot swap the session out mid-fork.
     forkConversation: (input) => withThreadLock(input.sourceThreadId, forkConversation(input)),
