@@ -32,6 +32,12 @@ Accent colors live in `<base-dir>/userdata/settings.json` under `projectAccentCo
 - Install path: `vp run ios:local:release` = production, Release, `--no-bundler`. Embedded JS bundle; Metro and dev-client URLs do not apply.
 - Signing: team `2BY9VZMTHG` must be signed into Xcode once per machine, interactively (never over SSH). `No Account for Team` means this machine's Xcode account state, not a source problem.
 
+## Which machine runs simulators
+
+- **SpaceMac is the build host.** Run simulator, emulator, and native-build work there by default, reaching it over the `space-mac` SSH alias (tailnet) and driving it through its own T3 server.
+- **GreyMac (`GreyMac.local`) is memory-constrained relative to SpaceMac.** A simulator plus a native build starves the apps the user is actively working in. Do not boot a simulator or start a native build here unless the user asks for it on this machine in the current conversation — not even to "quickly check" something.
+- A physical iPhone attached to the local machine is unaffected by this rule; it costs no host memory beyond the build itself, which still belongs on the build host.
+
 ## Host quirks
 
 - `vp run lint:mobile` detekt exits 126: the Homebrew detekt wrapper points at a removed JDK 17. Run `JAVA_HOME=$(/usr/libexec/java_home -v 21) vp run lint:mobile`.

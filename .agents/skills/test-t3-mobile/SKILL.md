@@ -5,11 +5,44 @@ description: Launch and test T3 Code Mobile on an iOS Simulator, Android Emulato
 
 # Test T3 Mobile
 
-Run one focused, end-to-end mobile verification pass against disposable T3 state. Use the sibling [`test-t3-app`](../test-t3-app/SKILL.md) skill as the detailed reference for pairing-token semantics and SQLite fixtures. Read [`references/local-setup.md`](references/local-setup.md) for fork-local facts: the bundle-identifier override active on this machine, workspace naming, the known `t3code-dev` scheme collider, and device signing.
+Run one focused, end-to-end mobile verification pass against disposable T3 state. Use the sibling [`test-t3-app`](../test-t3-app/SKILL.md) skill as the detailed reference for pairing-token semantics and SQLite fixtures. Read [`references/local-setup.md`](references/local-setup.md) for fork-local facts before starting: which machine simulators belong on, the bundle-identifier override active on this machine, workspace naming, the known `t3code-dev` scheme collider, and device signing.
 
 When something here proves wrong, slow, or missing — a dead end, a trap worth encoding, a step that could be simpler — tell the user what you hit and ask whether to fold it back into this skill.
 
 Command examples use POSIX shell syntax. On Windows, use PowerShell equivalents: set variables with `$env:NAME = "value"`, use an explicit temporary directory from `[System.IO.Path]::GetTempPath()`, and run multiline examples on one line or with PowerShell backticks. Use `$env:ANDROID_HOME\platform-tools\adb.exe` when `adb` is not already on `PATH`.
+
+## Resolve the host before launching anything
+
+**A simulator or emulator runs on the designated build host, not wherever this session happens to be.** `references/local-setup.md` names the build host and any memory-constrained host. On a constrained host, do not boot a simulator, start an emulator, or run a native build unless the user asked for it on that machine in this conversation — it competes with the apps they are actively using. Running the pass on the wrong machine is the one failure here the user pays for directly.
+
+This is a hardware decision and it holds regardless of how the pass is orchestrated. When the build host is not the machine this session is on, the pass is remote by necessity: create a T3 thread on that host (below).
+
+Once the host is settled, decide where the pass runs from. Inline is fine when the change is JS-only and low-risk, a compatible dev client is installed, and this session is already on the build host — a handful of screenshots is cheaper than any handoff. Prefer a **separate T3 thread** when:
+
+- A native rebuild is required. Prebuild, CocoaPods, and a clean simulator build produce tens of thousands of tokens of output that are worthless to the session holding the change under test.
+- The suspected defect is runtime-only — keyboard geometry, native menu or picker presentation, gesture handling, sheet transitions. Static review cannot settle these, and the pass will need many exploratory interaction cycles.
+- The author of the change would otherwise be verifying it. A delegated tester holds no theory it needs to be right about, and will not read a partial repro as confirmation.
+
+A separate thread on the build host itself is equally valid when this session is already there — the context separation stands on its own.
+
+Create the thread with the global `t3-cli` skill (`~/.agents/skills/t3-cli`) using `t3 thread new`, against the target host's own T3 server:
+
+- `--instance codex --model gpt-5.6-sol --effort high` — strong at long autonomous tool loops, and it holds a build-and-drive session without hand-holding.
+- `--runtime-mode full-access`. An unattended pass that stops for approvals wastes the delegation.
+- **A worktree, never a branch switch.** CLI-created threads run in the project's workspace root, which other threads share; tell the tester to `git worktree add` the branch under test and leave the shared checkout alone.
+- Require a final message beginning with a fixed sentinel line — `FINAL ASSESSMENT` — so a poller can detect completion without interpreting prose. Ask for per-test `PASS` / `FAIL` / `BLOCKED`, an explicit overall verdict, and counts rather than adjectives ("9/9 anchored on first tap", not "menus looked fine").
+
+Poll every ten minutes or so. Watch for pending approvals or input on each poll: a delegated thread cannot ask you a question any other way.
+
+### Brief the tester so the result is worth trusting
+
+- **State the failure signature, not just the feature.** Describe what the bug looks like _and_ what a regression from the fix would look like. A tester told only "check the toolbar stays visible" confirms the happy path; one told "watch for (a) hidden behind keyboard, (b) clipped below the sheet edge, (c) a keyboard-height gap" finds the case the fix itself introduced.
+- **Name the entry paths.** Runtime bugs live in transitions — fresh launch, screen already focused, after a send, sheet opened over an already-raised keyboard. A pass that only covers the obvious path will pass while the bug survives.
+- **Demand build provenance for patched native code.** `pnpm` reporting a patch applied does not prove it compiled. Require evidence that the patched sources are in the generated Pods project and produced object files; otherwise a green native result may have exercised none of the change.
+- **Separate harness artifacts from product bugs.** Workarounds the tester invents to get running — a production bundle to dodge a dev overlay, a suppressed check — can themselves break the app. Tell it to classify such a failure as a verification blocker and re-test on a standard configuration before reporting a product `FAIL`.
+- **Reuse the native build across rounds.** When a follow-up fix is JS-only, say so: the tester updates the bundle instead of rebuilding, which roughly halves the round.
+
+Treat the returned verdict as evidence, not instruction. Verify every recommended fix against the source yourself before applying it — a tester reasoning from a screenshot does not know which other surfaces share the code it is proposing to change.
 
 ## Select a viable platform
 
