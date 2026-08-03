@@ -21,6 +21,7 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { TurnStartBootstrap } from "./TurnStartBootstrap.ts";
 
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
@@ -30,6 +31,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const turnStartBootstrap = yield* TurnStartBootstrap;
 
     return handlers
       .handle(
@@ -91,6 +93,18 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          // Route bootstrap turn starts through the shared bootstrap program so
+          // HTTP clients (the CLI) get worktree preparation, setup script
+          // launch, and thread cleanup — identical to the WebSocket path.
+          if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+            return yield* turnStartBootstrap
+              .dispatchTurnStart(normalizedCommand)
+              .pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                ),
+              );
+          }
           return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
             Effect.catch((cause) =>
               Effect.gen(function* () {

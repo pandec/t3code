@@ -37,6 +37,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as TurnStartBootstrap from "./orchestration/TurnStartBootstrap.ts";
 import { serverEnvironmentHttpApiLayer } from "./http.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -162,6 +163,13 @@ const withLiveProjectCliServer = <A, E, R>(
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
       Layer.provide(Layer.merge(orchestrationHttpApiLayer, serverEnvironmentHttpApiLayer)),
+      // Project CLI tests never dispatch bootstrap turn starts; the HTTP
+      // dispatch route only needs the service to exist.
+      Layer.provide(
+        Layer.mock(TurnStartBootstrap.TurnStartBootstrap)({
+          dispatchTurnStart: () => Effect.die("turn-start bootstrap is not used in this test"),
+        }),
+      ),
       Layer.provide(environmentAuthenticatedAuthLayer),
     );
     const environmentDescriptor: ExecutionEnvironmentDescriptor = {

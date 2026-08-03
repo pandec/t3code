@@ -9,12 +9,15 @@ import {
   type ClientOrchestrationCommand,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
@@ -22,6 +25,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -33,6 +37,7 @@ import {
   type CliLiveServerReadTimeouts,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
+  fetchLiveOrchestrationShell,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
@@ -100,6 +105,119 @@ export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
+export class ThreadCliWorkspaceFlagError extends Schema.TaggedErrorClass<ThreadCliWorkspaceFlagError>()(
+  "ThreadCliWorkspaceFlagError",
+  {
+    operation: Schema.Literal("resolveWorkspaceFlags"),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+export class ThreadCliWorktreePathError extends Schema.TaggedErrorClass<ThreadCliWorktreePathError>()(
+  "ThreadCliWorktreePathError",
+  {
+    operation: Schema.Literal("resolveWorktreePath"),
+    worktreePath: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `${this.detail} (${this.worktreePath})`;
+  }
+}
+
+/** Where `t3 thread new` starts the thread: the project checkout as-is, a
+    fresh server-created worktree, or an existing worktree by path. */
+export type ThreadCliWorkspaceSelection =
+  | { readonly mode: "checkout" }
+  | {
+      readonly mode: "new-worktree";
+      readonly base: string | null;
+      readonly branch: string | null;
+      readonly startFromOrigin: boolean;
+    }
+  | {
+      readonly mode: "existing-worktree";
+      readonly worktreePath: string;
+      readonly branch: string | null;
+    };
+
+export const resolveThreadCliWorkspaceSelection = (flags: {
+  readonly newWorktree: boolean;
+  readonly worktree: Option.Option<string>;
+  readonly branch: Option.Option<string>;
+  readonly base: Option.Option<string>;
+  readonly startFromOrigin: boolean;
+}): Effect.Effect<ThreadCliWorkspaceSelection, ThreadCliWorkspaceFlagError> => {
+  const fail = (detail: string) =>
+    Effect.fail(new ThreadCliWorkspaceFlagError({ operation: "resolveWorkspaceFlags", detail }));
+  const worktree = flags.worktree.pipe(Option.map((value) => value.trim()));
+  const branch = Option.getOrNull(flags.branch)?.trim() ?? null;
+  if (branch !== null && branch.length === 0) {
+    return fail("--branch cannot be empty.");
+  }
+  const base = Option.getOrNull(flags.base)?.trim() ?? null;
+  if (base !== null && base.length === 0) {
+    return fail("--base cannot be empty.");
+  }
+  if (flags.newWorktree && Option.isSome(worktree)) {
+    return fail("--new-worktree and --worktree cannot be combined.");
+  }
+  if (flags.newWorktree) {
+    return Effect.succeed({
+      mode: "new-worktree",
+      base,
+      branch,
+      startFromOrigin: flags.startFromOrigin,
+    });
+  }
+  if (base !== null) {
+    return fail("--base requires --new-worktree.");
+  }
+  if (flags.startFromOrigin) {
+    return fail("--start-from-origin requires --new-worktree.");
+  }
+  if (Option.isSome(worktree)) {
+    return worktree.value.length === 0
+      ? fail("--worktree cannot be empty.")
+      : Effect.succeed({ mode: "existing-worktree", worktreePath: worktree.value, branch });
+  }
+  if (branch !== null) {
+    return fail("--branch requires --new-worktree or --worktree.");
+  }
+  return Effect.succeed({ mode: "checkout" });
+};
+
+const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(function* (
+  rawPath: string,
+) {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const resolved = path.resolve(expandHomePath(rawPath));
+  const info = yield* fileSystem.stat(resolved).pipe(
+    Effect.mapError(
+      () =>
+        new ThreadCliWorktreePathError({
+          operation: "resolveWorktreePath",
+          worktreePath: resolved,
+          detail: "The worktree path does not exist on this machine.",
+        }),
+    ),
+  );
+  if (info.type !== "Directory") {
+    return yield* new ThreadCliWorktreePathError({
+      operation: "resolveWorktreePath",
+      worktreePath: resolved,
+      detail: "The worktree path is not a directory.",
+    });
+  }
+  return resolved;
+});
+
 const randomUuid = Crypto.Crypto.pipe(
   Effect.flatMap((crypto) => crypto.randomUUIDv4),
   Effect.orDie,
@@ -144,6 +262,8 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   projectId: thread.projectId,
   title: thread.title,
   state: threadCliState(thread),
+  branch: thread.branch ?? null,
+  worktreePath: thread.worktreePath ?? null,
   sessionStatus: thread.session?.status ?? null,
   activeTurnId: thread.session?.activeTurnId ?? null,
   snoozedUntil: thread.snoozedUntil ?? null,
@@ -194,13 +314,21 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
   }).pipe(withCliJsonErrorOutput(json));
 });
 
+// Bootstrap turn starts include a git worktree creation (and optionally a
+// remote fetch) before the server acknowledges, which can far exceed the
+// default dispatch acknowledgement timeout on large repositories.
+const BOOTSTRAP_DISPATCH_TIMEOUT_MS = 180_000;
+
 const dispatchThreadCommand = (
   input: {
     readonly live: CliLiveOrchestrationServer;
     readonly token: string;
   },
   command: ClientOrchestrationCommand,
-) => dispatchLiveOrchestrationCommand(input.live.origin, input.token, command);
+  options?: {
+    readonly timeoutMilliseconds?: number;
+  },
+) => dispatchLiveOrchestrationCommand(input.live.origin, input.token, command, options);
 
 export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStart")(function* <
   OriginalError,
@@ -286,6 +414,32 @@ const threadNewCommand = Command.make("new", {
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
+  newWorktree: Flag.boolean("new-worktree").pipe(
+    Flag.withDescription(
+      "Start the thread in a fresh worktree created by the server (with the project setup script).",
+    ),
+    Flag.withDefault(false),
+  ),
+  worktree: Flag.string("worktree").pipe(
+    Flag.withDescription(
+      "Start the thread in an existing worktree at this path (see `git worktree list`).",
+    ),
+    Flag.optional,
+  ),
+  branch: Flag.string("branch").pipe(
+    Flag.withDescription(
+      "With --new-worktree: name for the new branch (default: temporary name, auto-renamed from the thread title). With --worktree: record the worktree's branch on the thread.",
+    ),
+    Flag.optional,
+  ),
+  base: Flag.string("base").pipe(
+    Flag.withDescription("Base ref for --new-worktree (default: the project's current branch)."),
+    Flag.optional,
+  ),
+  startFromOrigin: Flag.boolean("start-from-origin").pipe(
+    Flag.withDescription("Base the new worktree on origin/<base> instead of the local ref."),
+    Flag.withDefault(false),
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Create a thread and start its first turn."),
@@ -293,6 +447,7 @@ const threadNewCommand = Command.make("new", {
     runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const message = yield* requireTrimmedMessage(flags.message);
+        const workspace = yield* resolveThreadCliWorkspaceSelection(flags);
         const project = yield* findActiveProjectTarget({
           projects: input.live.shell.projects,
           identifier: flags.project,
@@ -318,15 +473,24 @@ const threadNewCommand = Command.make("new", {
             detail: "--instance requires --model for t3 thread new.",
           });
         }
+        const descriptor =
+          hasModelFlags || workspace.mode === "new-worktree"
+            ? yield* fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts)
+            : null;
+        if (
+          workspace.mode === "new-worktree" &&
+          descriptor?.capabilities.turnStartBootstrap !== true
+        ) {
+          return yield* new SessionCliServerUnsupportedError({
+            serverVersion: descriptor?.serverVersion ?? "unknown",
+            capability: "turnStartBootstrap",
+          });
+        }
         const explicitModelSelection = hasModelFlags
           ? yield* Effect.gen(function* () {
-              const descriptor = yield* fetchLiveEnvironmentDescriptor(
-                input.live.origin,
-                input.timeouts,
-              );
-              if (descriptor.capabilities.providerCatalog !== true) {
+              if (descriptor === null || descriptor.capabilities.providerCatalog !== true) {
                 return yield* new SessionCliServerUnsupportedError({
-                  serverVersion: descriptor.serverVersion,
+                  serverVersion: descriptor?.serverVersion ?? "unknown",
                   capability: "providerCatalog",
                 });
               }
@@ -349,11 +513,94 @@ const threadNewCommand = Command.make("new", {
           explicitModelSelection ??
           projectShell.defaultModelSelection ??
           ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
+        const existingWorktreePath =
+          workspace.mode === "existing-worktree"
+            ? yield* resolveExistingWorktreePath(workspace.worktreePath)
+            : null;
         const threadId = ThreadId.make(yield* randomUuid);
-        const createCommandId = CommandId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);
         const messageId = MessageId.make(yield* randomUuid);
         const createdAt = DateTime.formatIso(yield* DateTime.now);
+
+        if (workspace.mode === "new-worktree") {
+          // One bootstrap command: the server creates the thread, prepares the
+          // worktree, runs the setup script, and starts the turn — deleting the
+          // thread itself if a later step fails.
+          const worktreeBranchToken = (yield* randomUuid).replaceAll("-", "");
+          const worktreeBranch =
+            workspace.branch ??
+            buildTemporaryWorktreeBranchName((byteLength) =>
+              worktreeBranchToken.slice(0, byteLength * 2),
+            );
+          const result = yield* dispatchThreadCommand(
+            input,
+            {
+              type: "thread.turn.start",
+              commandId,
+              threadId,
+              message: { messageId, role: "user", text: message, attachments: [] },
+              modelSelection,
+              ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
+              runtimeMode: flags.runtimeMode,
+              interactionMode: flags.interactionMode,
+              bootstrap: {
+                createThread: {
+                  projectId: project.id,
+                  title,
+                  modelSelection,
+                  runtimeMode: flags.runtimeMode,
+                  interactionMode: flags.interactionMode,
+                  branch: null,
+                  worktreePath: null,
+                  createdAt,
+                },
+                prepareWorktree: {
+                  projectCwd: projectShell.workspaceRoot,
+                  ...(workspace.base !== null ? { baseBranch: workspace.base } : {}),
+                  branch: worktreeBranch,
+                  ...(workspace.startFromOrigin ? { startFromOrigin: true } : {}),
+                },
+                runSetupScript: true,
+              },
+              createdAt,
+            },
+            { timeoutMilliseconds: BOOTSTRAP_DISPATCH_TIMEOUT_MS },
+          );
+          // Resolve the created worktree from a fresh shell snapshot; the
+          // thread started either way, so a failed read only degrades output.
+          const startedThread = yield* fetchLiveOrchestrationShell(
+            input.live.origin,
+            input.token,
+            input.timeouts,
+          ).pipe(
+            Effect.map((shell) => shell.threads.find((thread) => thread.id === threadId) ?? null),
+            Effect.orElseSucceed(() => null),
+          );
+          yield* Console.log(
+            flags.json
+              ? jsonOutput({
+                  threadId,
+                  projectId: project.id,
+                  createCommandId: null,
+                  commandId,
+                  messageId,
+                  sequence: result.sequence,
+                  workspace: {
+                    mode: "new-worktree",
+                    branch: startedThread?.branch ?? null,
+                    worktreePath: startedThread?.worktreePath ?? null,
+                  },
+                })
+              : `Created thread ${threadId} (${title}) in a new worktree${
+                  startedThread?.worktreePath ? ` at ${startedThread.worktreePath}` : ""
+                }${
+                  startedThread?.branch ? ` on branch ${startedThread.branch}` : ""
+                } and started its first turn.`,
+          );
+          return;
+        }
+
+        const createCommandId = CommandId.make(yield* randomUuid);
         yield* dispatchThreadCommand(input, {
           type: "thread.create",
           commandId: createCommandId,
@@ -363,8 +610,8 @@ const threadNewCommand = Command.make("new", {
           modelSelection,
           runtimeMode: flags.runtimeMode,
           interactionMode: flags.interactionMode,
-          branch: null,
-          worktreePath: null,
+          branch: workspace.mode === "existing-worktree" ? workspace.branch : null,
+          worktreePath: existingWorktreePath,
           createdAt,
         });
         const result = yield* dispatchThreadCommand(input, {
@@ -404,8 +651,19 @@ const threadNewCommand = Command.make("new", {
                 commandId,
                 messageId,
                 sequence: result.sequence,
+                ...(existingWorktreePath !== null
+                  ? {
+                      workspace: {
+                        mode: "existing-worktree",
+                        branch: workspace.mode === "existing-worktree" ? workspace.branch : null,
+                        worktreePath: existingWorktreePath,
+                      },
+                    }
+                  : {}),
               })
-            : `Created thread ${threadId} (${title}) and started its first turn.`,
+            : existingWorktreePath !== null
+              ? `Created thread ${threadId} (${title}) in worktree ${existingWorktreePath} and started its first turn.`
+              : `Created thread ${threadId} (${title}) and started its first turn.`,
         );
       }),
     ),
@@ -552,6 +810,8 @@ const threadStatusCommand = Command.make("status", {
             : [
                 `${summary.id}\t${summary.state}\t${summary.title}`,
                 `Project: ${summary.projectId}`,
+                ...(summary.worktreePath ? [`Worktree: ${summary.worktreePath}`] : []),
+                ...(summary.branch ? [`Branch: ${summary.branch}`] : []),
                 `Session: ${summary.sessionStatus ?? "not started"}`,
                 `Snoozed: ${
                   summary.snoozedUntil

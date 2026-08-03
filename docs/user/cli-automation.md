@@ -98,6 +98,8 @@ human and JSON output.
 t3 thread list --json
 t3 thread list --project /absolute/path/to/repository --state running --json
 t3 thread new --project /absolute/path/to/repository --message "Inspect the failing tests" --json
+t3 thread new --project /absolute/path/to/repository --message "Fix the flaky test" --new-worktree --json
+t3 thread new --project /absolute/path/to/repository --message "Continue the refactor" --worktree /absolute/path/to/worktree --json
 t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
@@ -124,9 +126,25 @@ trust. `--runtime-mode auto` runs with AI-reviewed approvals: the agent requests
 and an automated reviewer decides, which is not suitable for fully unattended runs.
 `thread send` inherits the mode the thread was created with and cannot change it.
 
-Threads created through the CLI run directly in the project workspace root. Unlike the desktop and
-web clients, the CLI does not provision a per-thread git worktree, so concurrent CLI threads on the
-same project share one working tree.
+### Workspaces
+
+By default `thread new` runs the thread directly in the project workspace root, so concurrent CLI
+threads on the same project share one working tree. Two flags select a different workspace, matching
+the desktop workspace picker:
+
+- `--new-worktree` asks the server to create a fresh git worktree for the thread (running the
+  project's setup action, the same as "New worktree" in the UI). `--base <ref>` picks the base ref
+  (default: the project's current branch), `--branch <name>` names the new branch (default: a
+  temporary name that is auto-renamed from the thread title), and `--start-from-origin` bases the
+  worktree on `origin/<base>` instead of the local ref. Requires a server that advertises the
+  `turnStartBootstrap` capability; older servers are rejected with an update hint. On success the
+  human and JSON output report the created branch and worktree path.
+- `--worktree <path>` starts the thread in an existing worktree at that path (see
+  `git worktree list`). Optionally pass `--branch <ref>` to record the worktree's branch on the
+  thread. The path must exist on the server machine.
+
+Thread list and status summaries include `branch` and `worktreePath` (both `null` for plain
+checkout threads), so automation can discover where a thread runs.
 
 ## Environment Status
 

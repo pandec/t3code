@@ -3,13 +3,18 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 
 import {
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationOutcomeUnknownError,
   CliOrchestrationRequestError,
 } from "./orchestration.ts";
-import { compensateFailedThreadStart, threadSummary } from "./thread.ts";
+import {
+  compensateFailedThreadStart,
+  resolveThreadCliWorkspaceSelection,
+  threadSummary,
+} from "./thread.ts";
 
 const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThreadShell =>
   ({
@@ -98,3 +103,103 @@ it.effect("finishes compensation when interrupted after cleanup starts", () =>
     assert.isTrue(cleanupFinished);
   }),
 );
+
+const workspaceFlags = (input: {
+  newWorktree?: boolean;
+  worktree?: string;
+  branch?: string;
+  base?: string;
+  startFromOrigin?: boolean;
+}) => ({
+  newWorktree: input.newWorktree ?? false,
+  worktree: Option.fromNullishOr(input.worktree),
+  branch: Option.fromNullishOr(input.branch),
+  base: Option.fromNullishOr(input.base),
+  startFromOrigin: input.startFromOrigin ?? false,
+});
+
+it.effect("defaults to the current checkout without workspace flags", () =>
+  Effect.gen(function* () {
+    const selection = yield* resolveThreadCliWorkspaceSelection(workspaceFlags({}));
+    assert.deepEqual(selection, { mode: "checkout" });
+  }),
+);
+
+it.effect("resolves --new-worktree with base, branch, and origin options", () =>
+  Effect.gen(function* () {
+    const selection = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({
+        newWorktree: true,
+        base: "main",
+        branch: "t3code/feature",
+        startFromOrigin: true,
+      }),
+    );
+    assert.deepEqual(selection, {
+      mode: "new-worktree",
+      base: "main",
+      branch: "t3code/feature",
+      startFromOrigin: true,
+    });
+  }),
+);
+
+it.effect("resolves --worktree with an optional branch", () =>
+  Effect.gen(function* () {
+    const selection = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({ worktree: "/tmp/worktrees/feature", branch: "t3code/feature" }),
+    );
+    assert.deepEqual(selection, {
+      mode: "existing-worktree",
+      worktreePath: "/tmp/worktrees/feature",
+      branch: "t3code/feature",
+    });
+  }),
+);
+
+it.effect("rejects combining --new-worktree with --worktree", () =>
+  Effect.gen(function* () {
+    const error = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({ newWorktree: true, worktree: "/tmp/worktrees/feature" }),
+    ).pipe(Effect.flip);
+    assert.equal(error._tag, "ThreadCliWorkspaceFlagError");
+  }),
+);
+
+it.effect("rejects worktree-only options without their mode flag", () =>
+  Effect.gen(function* () {
+    const baseError = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({ base: "main" }),
+    ).pipe(Effect.flip);
+    assert.include(baseError.detail, "--base");
+
+    const originError = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({ startFromOrigin: true }),
+    ).pipe(Effect.flip);
+    assert.include(originError.detail, "--start-from-origin");
+
+    const branchError = yield* resolveThreadCliWorkspaceSelection(
+      workspaceFlags({ branch: "t3code/feature" }),
+    ).pipe(Effect.flip);
+    assert.include(branchError.detail, "--branch");
+  }),
+);
+
+it("includes branch and worktree path in thread summaries", () => {
+  const summary = threadSummary(
+    threadWith({
+      branch: "t3code/feature",
+      worktreePath: "/tmp/worktrees/feature",
+    }),
+  );
+
+  assert.equal(summary.branch, "t3code/feature");
+  assert.equal(summary.worktreePath, "/tmp/worktrees/feature");
+});
+
+it("normalizes missing branch and worktree path to null in thread summaries", () => {
+  const summary = threadSummary(threadWith({}));
+
+  assert.isNull(summary.branch);
+  assert.isNull(summary.worktreePath);
+});
