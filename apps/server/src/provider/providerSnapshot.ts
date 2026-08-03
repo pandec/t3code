@@ -164,6 +164,24 @@ export function providerModelsFromSettings(
   return [...resolvedBuiltInModels, ...customEntries];
 }
 
+/**
+ * Filter previously-seen models down to the ones a newer snapshot may carry
+ * forward, given the slugs that snapshot already reports.
+ *
+ * Probe-derived models are retained: a snapshot that omits them may simply
+ * have failed to establish the current inventory. Custom models are not —
+ * they are derived from settings (see {@link providerModelsFromSettings}), so
+ * a snapshot that omits one means the user deleted it. Retaining those would
+ * resurrect them permanently: the union is persisted to the provider status
+ * cache and re-hydrated on the next boot.
+ */
+export function retainableProviderModels(
+  previousModels: ReadonlyArray<ServerProviderModel>,
+  presentSlugs: ReadonlySet<string>,
+): ReadonlyArray<ServerProviderModel> {
+  return previousModels.filter((model) => !model.isCustom && !presentSlugs.has(model.slug));
+}
+
 export function buildSelectOptionDescriptor(input: {
   readonly id: string;
   readonly label: string;

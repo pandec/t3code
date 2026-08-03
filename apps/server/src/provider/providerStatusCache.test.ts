@@ -182,6 +182,44 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     );
   });
 
+  it("does not hydrate custom models the current settings no longer declare", () => {
+    const cachedClaude = makeProvider(CLAUDE_AGENT_DRIVER, {
+      checkedAt: "2026-08-03T12:00:00.000Z",
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          name: "gpt-5.6-sol",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+        {
+          slug: "gpt-5.6-sol(high)",
+          name: "gpt-5.6-sol(high)",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+      ],
+    });
+    const fallbackClaude = makeProvider(CLAUDE_AGENT_DRIVER, {
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6-Sol",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+      ],
+    });
+
+    assert.deepStrictEqual(
+      hydrateCachedProvider({
+        cachedProvider: cachedClaude,
+        fallbackProvider: fallbackClaude,
+      }).models,
+      fallbackClaude.models,
+    );
+  });
+
   it("ignores stale cached enabled state when the provider is now disabled", () => {
     const cachedCodex = makeProvider(CODEX_DRIVER, {
       checkedAt: "2026-04-10T12:00:00.000Z",

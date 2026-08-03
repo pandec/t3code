@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { retainableProviderModels } from "./providerSnapshot.ts";
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderSchema),
@@ -21,7 +22,9 @@ const mergeProviderModels = (
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
   const fallbackSlugs = new Set(fallbackModels.map((model) => model.slug));
-  return [...fallbackModels, ...cachedModels.filter((model) => !fallbackSlugs.has(model.slug))];
+  // The fallback is built from the current settings, so its custom models are
+  // authoritative: cached ones it omits were deleted and must not come back.
+  return [...fallbackModels, ...retainableProviderModels(cachedModels, fallbackSlugs)];
 };
 
 export const orderProviderSnapshots = (
