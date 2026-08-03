@@ -87,6 +87,7 @@ const decodeJsonBody = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
 export interface CliProxyApiUsageProbeTarget {
   readonly managementUrl: string;
   readonly managementKey: string;
+  readonly clientKey?: string;
 }
 
 export type CliProxyApiAccountState = "available" | "disabled" | "cooldown";
@@ -111,6 +112,7 @@ export interface CliProxyApiUsageAccount {
 export interface CliProxyApiUsagePayload {
   readonly source: typeof CLIPROXYAPI_USAGE_PAYLOAD_SOURCE;
   readonly accounts: ReadonlyArray<CliProxyApiUsageAccount>;
+  readonly modelProviders?: Readonly<Record<string, string>>;
 }
 
 class CliProxyApiAuthRejectedError extends Data.TaggedError("CliProxyApiAuthRejectedError")<{
@@ -167,9 +169,13 @@ export function resolveCliProxyApiUsageProbeTarget(
     envelope.environment?.find((variable) => variable.name === "ANTHROPIC_BASE_URL")?.value;
   if (!configuredUrl) return null;
   try {
+    const clientKey = envelope.environment?.find(
+      (variable) => variable.name === "ANTHROPIC_AUTH_TOKEN",
+    )?.value;
     return {
       managementUrl: new URL(configuredUrl).origin,
       managementKey: usageSource.managementKey,
+      ...(clientKey ? { clientKey } : {}),
     };
   } catch {
     return null;
@@ -208,6 +214,21 @@ function parseAuthFiles(payload: unknown): AuthFileEntry[] {
     });
   }
   return entries;
+}
+
+function parseModelProviders(payload: unknown): Record<string, string> {
+  const models = asRecord(payload)?.data;
+  if (!Array.isArray(models)) return {};
+  const providers: Record<string, string> = {};
+  for (const value of models) {
+    const model = asRecord(value);
+    const id = asString(model?.id);
+    const ownedBy = asString(model?.owned_by);
+    if (id === null) continue;
+    if (ownedBy === "anthropic") providers[id] = "claude";
+    if (ownedBy === "openai") providers[id] = "codex";
+  }
+  return providers;
 }
 
 /**
@@ -333,6 +354,28 @@ export function makeCliProxyApiUsageProbe(
       ),
     );
 
+  const fetchModelProviders = (): Effect.Effect<
+    Record<string, string> | null,
+    never,
+    HttpClient.HttpClient
+  > => {
+    if (!target.clientKey) return Effect.succeed(null);
+    return Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`${target.managementUrl}/v1/models`).pipe(
+          HttpClientRequest.setHeader("Authorization", `Bearer ${target.clientKey}`),
+        ),
+      );
+      if (response.status < 200 || response.status >= 300) return null;
+      const providers = parseModelProviders(yield* response.json);
+      return Object.keys(providers).length > 0 ? providers : null;
+    }).pipe(
+      Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
+      Effect.orElseSucceed(() => null),
+    );
+  };
+
   const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
     Effect.gen(function* () {
       const failed = (error: string): CliProxyApiUsageAccount => ({
@@ -427,9 +470,15 @@ export function makeCliProxyApiUsageProbe(
         }
       }
 
-      const authFiles = yield* managementRequest(
-        HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
-        AUTH_FILES_REQUEST_TIMEOUT_MS,
+      const [authFiles, modelProviders] = yield* Effect.all(
+        [
+          managementRequest(
+            HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
+            AUTH_FILES_REQUEST_TIMEOUT_MS,
+          ),
+          fetchModelProviders(),
+        ],
+        { concurrency: "unbounded" },
       );
       const entries = parseAuthFiles(authFiles);
       if (entries.length === 0) {
@@ -444,6 +493,7 @@ export function makeCliProxyApiUsageProbe(
       const payload: CliProxyApiUsagePayload = {
         source: CLIPROXYAPI_USAGE_PAYLOAD_SOURCE,
         accounts,
+        ...(modelProviders !== null ? { modelProviders } : {}),
       };
       return payload as unknown;
     }).pipe(

@@ -222,6 +222,7 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
+  providerUsageModelProviders,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -1064,20 +1065,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? deriveProviderUsageAccountsFromServerSnapshot(snapshot, { now: Date.now() })
       : null;
   }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
-  /**
-   * Which upstream of a gateway pool serves this thread. A custom model on a
-   * Claude-driver gateway instance is served by some other upstream (the
-   * `gpt-5.6-*` entries are Codex), and nothing maps a model to a pooled
-   * account, so featuring any account would misreport the quota being spent.
-   */
+  /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
     const model = activeThreadModelSelection?.model;
     if (activeProviderUsageInstanceId === null || model === undefined) return "claude";
     const models = providerStatuses.find(
       (provider) => provider.instanceId === activeProviderUsageInstanceId,
     )?.models;
-    return models?.find((entry) => entry.slug === model)?.isCustom === true ? null : "claude";
-  }, [activeProviderUsageInstanceId, activeThreadModelSelection?.model, providerStatuses]);
+    if (models?.find((entry) => entry.slug === model)?.isCustom !== true) return "claude";
+    return (
+      providerUsageModelProviders(
+        providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
+      )?.[model] ?? null
+    );
+  }, [
+    activeProviderUsageInstanceId,
+    activeThreadModelSelection?.model,
+    providerStatuses,
+    providerUsageSnapshotByInstance,
+  ]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;
     const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);

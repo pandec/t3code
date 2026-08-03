@@ -17,6 +17,7 @@ import {
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
+  providerUsageModelProviders,
   resolveProviderUsageInstanceId,
 } from "./providerUsage.ts";
 
@@ -1039,6 +1040,28 @@ describe("server-owned provider usage snapshots", () => {
     );
     expect(fromServer?.windows[0]?.usedPercent).toBe(42);
     expect(fromServer).toEqual(fromActivity);
+  });
+});
+
+describe("providerUsageModelProviders", () => {
+  it("returns a defensively parsed model mapping", () => {
+    expect(
+      providerUsageModelProviders({
+        modelProviders: {
+          "claude-opus-5": "claude",
+          "gpt-5.6-sol": "codex",
+          empty: "",
+          invalid: 42,
+        },
+      }),
+    ).toEqual({ "claude-opus-5": "claude", "gpt-5.6-sol": "codex" });
+  });
+
+  it("returns null when the mapping is absent or malformed", () => {
+    expect(providerUsageModelProviders({})).toBeNull();
+    expect(providerUsageModelProviders({ modelProviders: [] })).toBeNull();
+    expect(providerUsageModelProviders({ modelProviders: { model: 42 } })).toBeNull();
+    expect(providerUsageModelProviders(null)).toBeNull();
   });
 });
 

@@ -40,6 +40,7 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     ).toEqual({
       managementUrl: "https://gateway.example.ts.net",
       managementKey: "mgmt",
+      clientKey: "client-key",
     });
   });
 
@@ -56,6 +57,7 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     ).toEqual({
       managementUrl: "https://mgmt.example.ts.net:8446",
       managementKey: "mgmt",
+      clientKey: "client-key",
     });
   });
 
@@ -98,6 +100,89 @@ describe("makeCliProxyApiUsageProbe", () => {
   // cases would otherwise inherit each other's ledger.
   beforeEach(() => {
     resetCliProxyApiAuthFailuresForTest();
+  });
+
+  it.effect("emits the model-to-upstream mapping from the client models endpoint", () => {
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        if (request.url.endsWith("/v1/models")) {
+          expect(request.headers.authorization).toBe("Bearer client-key");
+          return jsonResponse(request, {
+            data: [
+              { id: "claude-opus-5", owned_by: "anthropic" },
+              { id: "gpt-5.6-sol", owned_by: "openai" },
+              { id: "future-model", owned_by: "other" },
+              { owned_by: "openai" },
+            ],
+          });
+        }
+        return jsonResponse(request, {
+          files: [{ name: "unknown.json", provider: "unknown" }],
+        });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const payload = (yield* makeCliProxyApiUsageProbe({
+        ...target,
+        clientKey: "client-key",
+      })().pipe(Effect.provideService(HttpClient.HttpClient, client))) as CliProxyApiUsagePayload;
+
+      expect(payload.modelProviders).toEqual({
+        "claude-opus-5": "claude",
+        "gpt-5.6-sol": "codex",
+      });
+    });
+  });
+
+  it.effect("skips the models endpoint when the client key is absent", () => {
+    const requests: string[] = [];
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requests.push(request.url);
+        return jsonResponse(request, {
+          files: [{ name: "unknown.json", provider: "unknown" }],
+        });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const payload = (yield* makeCliProxyApiUsageProbe(target)().pipe(
+        Effect.provideService(HttpClient.HttpClient, client),
+      )) as CliProxyApiUsagePayload;
+
+      expect(payload.modelProviders).toBeUndefined();
+      expect(requests).toEqual([`${target.managementUrl}/v0/management/auth-files`]);
+    });
+  });
+
+  it.effect("ignores models auth failures without spending management auth strikes", () => {
+    let authFilesRequests = 0;
+    let modelsRequests = 0;
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        if (request.url.endsWith("/v1/models")) {
+          modelsRequests += 1;
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }));
+        }
+        authFilesRequests += 1;
+        return jsonResponse(request, {
+          files: [{ name: "unknown.json", provider: "unknown" }],
+        });
+      }),
+    );
+    const runProbe = makeCliProxyApiUsageProbe({ ...target, clientKey: "wrong-client-key" })().pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+    );
+
+    return Effect.gen(function* () {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const payload = (yield* runProbe) as CliProxyApiUsagePayload;
+        expect(payload.modelProviders).toBeUndefined();
+      }
+      expect(authFilesRequests).toBe(4);
+      expect(modelsRequests).toBe(4);
+    });
   });
 
   it.effect("translates mixed upstream accounts and degrades account failures to rows", () => {
