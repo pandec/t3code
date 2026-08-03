@@ -742,7 +742,10 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
 
 const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
-  baseBranch: TrimmedNonEmptyString,
+  // Optional under the turnStartBootstrap capability: when absent the server
+  // defaults to the project's current branch. Older servers require it, so
+  // clients only omit it against servers advertising the capability.
+  baseBranch: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
   startFromOrigin: Schema.optional(Schema.Boolean),
 });

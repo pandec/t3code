@@ -31,7 +31,9 @@ seconds, and further data reads (full snapshot, capability descriptor) default t
 Override with `--timeout-ms <n>` or `T3CODE_CLI_TIMEOUT_MS`; an explicit override applies to every
 live read, discovery included, so raising it also helps thread and status commands on a busy
 server. Invalid or non-positive overrides are ignored with a warning on stderr. Timeout errors name
-the phase that expired. Mutations use a separate fixed 30-second acknowledgement bound.
+the phase that expired. Mutations use a separate fixed 30-second acknowledgement bound, except
+`thread new --new-worktree`, which waits up to 3 minutes because the server prepares the worktree
+before acknowledging; `--timeout-ms` does not change either mutation bound.
 
 Read-only listings (`project list`, `project action list`) fall back to reading local state when the
 server is alive but slower than the timeout (or its database is briefly locked); a warning on
@@ -98,6 +100,8 @@ human and JSON output.
 t3 thread list --json
 t3 thread list --project /absolute/path/to/repository --state running --json
 t3 thread new --project /absolute/path/to/repository --message "Inspect the failing tests" --json
+t3 thread new --project /absolute/path/to/repository --message "Fix the flaky test" --new-worktree --json
+t3 thread new --project /absolute/path/to/repository --message "Continue the refactor" --worktree /absolute/path/to/worktree --json
 t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
@@ -124,9 +128,30 @@ trust. `--runtime-mode auto` runs with AI-reviewed approvals: the agent requests
 and an automated reviewer decides, which is not suitable for fully unattended runs.
 `thread send` inherits the mode the thread was created with and cannot change it.
 
-Threads created through the CLI run directly in the project workspace root. Unlike the desktop and
-web clients, the CLI does not provision a per-thread git worktree, so concurrent CLI threads on the
-same project share one working tree.
+### Workspaces
+
+By default `thread new` runs the thread directly in the project workspace root, so concurrent CLI
+threads on the same project share one working tree. Two flags select a different workspace, matching
+the workspace picker in the app:
+
+- `--new-worktree` asks the server to create a fresh git worktree for the thread (running the
+  project's setup action, the same as "New worktree" in the UI). `--base <ref>` picks the base ref
+  (default: the project's current branch), `--branch <name>` names the new branch (default: a
+  temporary name that is auto-renamed from the thread title), and `--start-from-origin` bases the
+  worktree on `origin/<base>` instead of the local ref. The CLI verifies that the running server
+  supports worktree bootstrap before dispatching; update and restart T3 Code if it reports an
+  incompatible server. On success the human and JSON output report the created branch and worktree
+  path.
+- `--worktree <path>` starts the thread in an existing worktree at that path (see
+  `git worktree list`). The path must exist on the server machine, is canonicalized, and must be a
+  worktree of the project's repository; the worktree's checked-out branch is recorded on the thread
+  automatically, and an explicit `--branch <ref>` fails the command when it does not match.
+
+`thread new --json` always includes a `workspace` object (`mode` plus `branch`/`worktreePath`,
+both `null` for the plain checkout mode). In `--new-worktree` mode the server creates the thread
+as part of the turn start, so `createCommandId` is `null`. Thread list and status summaries also
+include `branch` and `worktreePath` (both `null` for plain checkout threads), so automation can
+discover where a thread runs.
 
 ## Environment Status
 
