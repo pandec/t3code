@@ -17,6 +17,8 @@ import {
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
+  resolveProviderUsageModel,
+  resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
 } from "./providerUsage.ts";
 
@@ -1042,6 +1044,42 @@ describe("server-owned provider usage snapshots", () => {
   });
 });
 
+describe("resolveProviderUsageUpstreamProvider", () => {
+  it("resolves built-in and mapped custom models", () => {
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: null,
+        model: "claude-opus-5",
+        isCustom: false,
+      }),
+    ).toBe("claude");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
+        model: "gpt-5.6-sol",
+        isCustom: true,
+      }),
+    ).toBe("codex");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
+        model: "gpt-5.6-sol",
+        isCustom: false,
+      }),
+    ).toBe("codex");
+  });
+
+  it("returns null for an unknown custom model or malformed mapping", () => {
+    const resolve = (payload: unknown) =>
+      resolveProviderUsageUpstreamProvider({ payload, model: "gpt-5.6-sol", isCustom: true });
+    expect(resolve({})).toBeNull();
+    expect(resolve({ modelProviders: [] })).toBeNull();
+    expect(resolve({ modelProviders: { "gpt-5.6-sol": 42 } })).toBeNull();
+    expect(resolve({ modelProviders: { other: "codex" } })).toBeNull();
+    expect(resolve(null)).toBeNull();
+  });
+});
+
 describe("CLIProxyAPI gateway pool snapshots", () => {
   const gatewaySnapshot = {
     instanceId: ProviderInstanceId.make("claudeAgent_proxy"),
@@ -1189,6 +1227,28 @@ describe("resolveProviderUsageInstanceId", () => {
         modelSelectionInstanceId: "codex-work",
       }),
     ).toBe("codex-work");
+  });
+});
+
+describe("resolveProviderUsageModel", () => {
+  it("keeps the persisted model while a live session owns usage", () => {
+    expect(
+      resolveProviderUsageModel({
+        liveSessionInstanceId: "claude-proxy",
+        persistedModel: "claude-opus-5",
+        selectedModel: "gpt-5.6-sol",
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("uses the selected model before a live session exists", () => {
+    expect(
+      resolveProviderUsageModel({
+        liveSessionInstanceId: null,
+        persistedModel: "claude-opus-5",
+        selectedModel: "gpt-5.6-sol",
+      }),
+    ).toBe("gpt-5.6-sol");
   });
 });
 

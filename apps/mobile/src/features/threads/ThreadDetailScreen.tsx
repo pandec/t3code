@@ -49,6 +49,7 @@ import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
+  readonly persistedModel: string;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
@@ -456,6 +457,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               environmentLabel={props.environmentLabel}
               threadSyncPhase={threadSyncPhase}
               selectedThread={props.selectedThread}
+              persistedModel={props.persistedModel}
               serverConfig={props.serverConfig}
               queueCount={props.selectedThreadQueueCount}
               environmentId={props.environmentId}

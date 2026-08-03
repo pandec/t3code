@@ -182,6 +182,11 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
           value: "https://gateway.example.test/v1",
           sensitive: false,
         },
+        {
+          name: "ANTHROPIC_AUTH_TOKEN",
+          value: "old-client-key",
+          sensitive: true,
+        },
       ];
       const gatewayConfig: ProviderInstanceConfig = {
         driver,
@@ -246,6 +251,23 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
         const health = yield* ProviderInstanceHealth;
 
         expect((yield* refresh.refresh([target])).refreshedInstanceIds).toEqual([target]);
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
+
+        // Rotating the client key must not disturb the pooled snapshot: the
+        // key gates only the model-catalog fetch, and the slot keeps the same
+        // owning source class.
+        const rotationObserved = yield* Deferred.make<void>();
+        yield* Ref.set(nextConfigRead, rotationObserved);
+        yield* Ref.set(config, {
+          ...gatewayConfig,
+          environment: environment.map((variable) =>
+            variable.name === "ANTHROPIC_AUTH_TOKEN"
+              ? { ...variable, value: "new-client-key" }
+              : variable,
+          ),
+        });
+        yield* PubSub.publish(changes, undefined);
+        yield* Deferred.await(rotationObserved);
         expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
         // Passive ingestion can observe the new direct source before the

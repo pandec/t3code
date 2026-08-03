@@ -30,6 +30,7 @@ import type { ProviderInstanceEnvironment, ProviderInstanceUsageSource } from "@
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
@@ -74,9 +75,19 @@ interface GatewayAuthFailureState {
 
 const gatewayAuthFailures = new Map<string, GatewayAuthFailureState>();
 
-/** Test-only: drop the process-wide strike ledger between cases. */
+/**
+ * A rejected *client* key must not be retried on every probe either: the
+ * gateway's per-IP rejection budget is only documented for management keys,
+ * but nothing guarantees it is endpoint-scoped, and this machine's live agent
+ * traffic rides the same IP. One 401/403 suppresses the models fetch for that
+ * origin until the configured key changes.
+ */
+const rejectedModelCatalogKeys = new Map<string, string>();
+
+/** Test-only: drop the process-wide strike ledgers between cases. */
 export function resetCliProxyApiAuthFailuresForTest(): void {
   gatewayAuthFailures.clear();
+  rejectedModelCatalogKeys.clear();
 }
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -87,6 +98,20 @@ const decodeJsonBody = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
 export interface CliProxyApiUsageProbeTarget {
   readonly managementUrl: string;
   readonly managementKey: string;
+  readonly clientUrl?: string;
+  readonly clientKey?: string;
+}
+
+export function cliProxyApiUsageProbeTargetsEqual(
+  left: CliProxyApiUsageProbeTarget,
+  right: CliProxyApiUsageProbeTarget,
+): boolean {
+  return (
+    left.managementUrl === right.managementUrl &&
+    left.managementKey === right.managementKey &&
+    left.clientUrl === right.clientUrl &&
+    left.clientKey === right.clientKey
+  );
 }
 
 export type CliProxyApiAccountState = "available" | "disabled" | "cooldown";
@@ -111,6 +136,7 @@ export interface CliProxyApiUsageAccount {
 export interface CliProxyApiUsagePayload {
   readonly source: typeof CLIPROXYAPI_USAGE_PAYLOAD_SOURCE;
   readonly accounts: ReadonlyArray<CliProxyApiUsageAccount>;
+  readonly modelProviders?: Readonly<Record<string, string>>;
 }
 
 class CliProxyApiAuthRejectedError extends Data.TaggedError("CliProxyApiAuthRejectedError")<{
@@ -162,18 +188,25 @@ export function resolveCliProxyApiUsageProbeTarget(
   if (usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) return null;
   if (usageSource.managementKey.length === 0) return null;
 
-  const configuredUrl =
-    usageSource.managementUrl ??
-    envelope.environment?.find((variable) => variable.name === "ANTHROPIC_BASE_URL")?.value;
-  if (!configuredUrl) return null;
-  try {
-    return {
-      managementUrl: new URL(configuredUrl).origin,
-      managementKey: usageSource.managementKey,
-    };
-  } catch {
-    return null;
-  }
+  const origin = (value: string | undefined): string | null => {
+    if (!value) return null;
+    try {
+      return new URL(value).origin;
+    } catch {
+      return null;
+    }
+  };
+  const clientBase = envelope.environment?.find(
+    (variable) => variable.name === "ANTHROPIC_BASE_URL",
+  )?.value;
+  const managementUrl = origin(usageSource.managementUrl ?? clientBase);
+  if (!managementUrl) return null;
+  const clientUrl = origin(clientBase);
+  const clientKey = envelope.environment?.find(
+    (variable) => variable.name === "ANTHROPIC_AUTH_TOKEN",
+  )?.value;
+  const base = { managementUrl, managementKey: usageSource.managementKey };
+  return clientUrl && clientKey ? { ...base, clientUrl, clientKey } : base;
 }
 
 interface AuthFileEntry {
@@ -208,6 +241,21 @@ function parseAuthFiles(payload: unknown): AuthFileEntry[] {
     });
   }
   return entries;
+}
+
+function parseModelProviders(payload: unknown): Record<string, string> | null {
+  const models = asRecord(payload)?.data;
+  if (!Array.isArray(models)) return null;
+  const providers: Record<string, string> = {};
+  for (const value of models) {
+    const model = asRecord(value);
+    const id = asString(model?.id);
+    const ownedBy = asString(model?.owned_by);
+    if (id === null) continue;
+    if (ownedBy === "anthropic") providers[id] = "claude";
+    if (ownedBy === "openai") providers[id] = "codex";
+  }
+  return Object.keys(providers).length > 0 ? providers : null;
 }
 
 /**
@@ -333,6 +381,29 @@ export function makeCliProxyApiUsageProbe(
       ),
     );
 
+  const modelProvidersEffect = (() => {
+    const { clientUrl, clientKey } = target;
+    if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
+    return Effect.gen(function* () {
+      if (rejectedModelCatalogKeys.get(clientUrl) === clientKey) return null;
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`${clientUrl}/v1/models`).pipe(
+          HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+        ),
+      );
+      if (response.status === 401 || response.status === 403) {
+        rejectedModelCatalogKeys.set(clientUrl, clientKey);
+        return null;
+      }
+      if (response.status < 200 || response.status >= 300) return null;
+      return parseModelProviders(yield* response.json);
+    }).pipe(
+      Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
+      Effect.orElseSucceed(() => null),
+    );
+  })();
+
   const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
     Effect.gen(function* () {
       const failed = (error: string): CliProxyApiUsageAccount => ({
@@ -427,6 +498,9 @@ export function makeCliProxyApiUsageProbe(
         }
       }
 
+      const modelProvidersFiber = yield* modelProvidersEffect.pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
       const authFiles = yield* managementRequest(
         HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
         AUTH_FILES_REQUEST_TIMEOUT_MS,
@@ -441,9 +515,11 @@ export function makeCliProxyApiUsageProbe(
         (entry) => probeAccount(entry, ACCOUNT_REQUEST_TIMEOUT_MS),
         { concurrency: ACCOUNT_REQUEST_CONCURRENCY },
       );
+      const modelProviders = yield* Fiber.join(modelProvidersFiber);
       const payload: CliProxyApiUsagePayload = {
         source: CLIPROXYAPI_USAGE_PAYLOAD_SOURCE,
         accounts,
+        ...(modelProviders !== null ? { modelProviders } : {}),
       };
       return payload as unknown;
     }).pipe(

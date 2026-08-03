@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 
 import {
+  cliProxyApiUsageProbeTargetsEqual,
   CLIPROXYAPI_USAGE_SOURCE_KIND,
   makeCliProxyApiUsageProbe,
   resolveCliProxyApiUsageProbeTarget,
@@ -73,15 +74,6 @@ interface InFlightUsageProbe {
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
 const USAGE_PROBE_TIMEOUT = "30 seconds";
-
-function sameGatewayTarget(
-  left: CliProxyApiUsageProbeTarget | undefined,
-  right: CliProxyApiUsageProbeTarget | undefined,
-): boolean {
-  return (
-    left?.managementUrl === right?.managementUrl && left?.managementKey === right?.managementKey
-  );
-}
 
 /** Best user-facing sentence hiding in a probe's failure cause. */
 function probeFailureReason(cause: Cause.Cause<unknown>): string {
@@ -297,7 +289,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
       target: CliProxyApiUsageProbeTarget,
     ): UsageRefreshProviderInstance["adapter"] => {
       const cached = gatewayProbes.get(instanceId);
-      if (cached && sameGatewayTarget(cached.target, target)) {
+      if (cached && cliProxyApiUsageProbeTargetsEqual(cached.target, target)) {
         return cached.adapter;
       }
       const probe = makeCliProxyApiUsageProbe(target);

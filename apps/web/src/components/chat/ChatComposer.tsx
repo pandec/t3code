@@ -222,6 +222,8 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
+  resolveProviderUsageModel,
+  resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -1023,7 +1025,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const activeProviderUsageInstanceId = resolveProviderUsageInstanceId({
     liveSessionInstanceId: activeThread?.session?.providerInstanceId,
-    modelSelectionInstanceId: activeThreadModelSelection?.instanceId,
+    modelSelectionInstanceId: selectedInstanceId,
   });
   const activeThreadProviderDriver = useMemo(
     () =>
@@ -1064,20 +1066,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? deriveProviderUsageAccountsFromServerSnapshot(snapshot, { now: Date.now() })
       : null;
   }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
-  /**
-   * Which upstream of a gateway pool serves this thread. A custom model on a
-   * Claude-driver gateway instance is served by some other upstream (the
-   * `gpt-5.6-*` entries are Codex), and nothing maps a model to a pooled
-   * account, so featuring any account would misreport the quota being spent.
-   */
+  const activeProviderUsageModel = resolveProviderUsageModel({
+    liveSessionInstanceId: activeThread?.session?.providerInstanceId,
+    persistedModel: activeThreadModelSelection?.model,
+    selectedModel,
+  });
+  /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
-    const model = activeThreadModelSelection?.model;
-    if (activeProviderUsageInstanceId === null || model === undefined) return "claude";
     const models = providerStatuses.find(
       (provider) => provider.instanceId === activeProviderUsageInstanceId,
     )?.models;
-    return models?.find((entry) => entry.slug === model)?.isCustom === true ? null : "claude";
-  }, [activeProviderUsageInstanceId, activeThreadModelSelection?.model, providerStatuses]);
+    return resolveProviderUsageUpstreamProvider({
+      payload:
+        activeProviderUsageInstanceId === null
+          ? undefined
+          : providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
+      model: activeProviderUsageModel,
+      isCustom: models?.find((entry) => entry.slug === activeProviderUsageModel)?.isCustom === true,
+    });
+  }, [
+    activeProviderUsageInstanceId,
+    activeProviderUsageModel,
+    providerStatuses,
+    providerUsageSnapshotByInstance,
+  ]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;
     const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);

@@ -660,6 +660,16 @@ export function resolveProviderUsageInstanceId<TInstanceId extends string>(input
   return input.liveSessionInstanceId ?? input.modelSelectionInstanceId ?? null;
 }
 
+export function resolveProviderUsageModel(input: {
+  readonly liveSessionInstanceId?: string | null | undefined;
+  readonly persistedModel?: string | null | undefined;
+  readonly selectedModel: string;
+}): string {
+  return input.liveSessionInstanceId === null || input.liveSessionInstanceId === undefined
+    ? input.selectedModel
+    : (input.persistedModel ?? input.selectedModel);
+}
+
 type ProviderUsagePayloadSource = {
   readonly payload: unknown;
   readonly createdAt: string;
@@ -720,6 +730,15 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
 // ---------------------------------------------------------------------------
 
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
+
+export function resolveProviderUsageUpstreamProvider(input: {
+  readonly payload: unknown;
+  readonly model: string;
+  readonly isCustom: boolean;
+}): string | null {
+  const mapped = asString(asRecord(asRecord(input.payload)?.modelProviders)?.[input.model]);
+  return mapped ?? (input.isCustom ? null : "claude");
+}
 
 export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";
 
