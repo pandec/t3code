@@ -57,7 +57,13 @@ export async function pickComposerImages(input: { readonly existingCount: number
     allowsMultipleSelection: true,
     selectionLimit: remainingSlots,
     base64: true,
-    quality: 1,
+    // Below 1 the picker re-encodes to JPEG at full resolution. Full-quality
+    // screenshots are several MB each and the whole message ships as one
+    // WebSocket frame, so a multi-screenshot send must stay well under the
+    // frame budget. 0.9 is visually lossless for screenshots (the web
+    // compression ladder in apps/web/src/lib/imageCompression.ts tops out
+    // at 0.92) while still shrinking a PNG screenshot several-fold.
+    quality: 0.9,
   });
 
   if (result.canceled) {
@@ -83,7 +89,9 @@ export async function pickComposerImages(input: { readonly existingCount: number
       continue;
     }
 
-    const sizeBytes = asset.fileSize ?? estimateBase64ByteSize(base64);
+    // asset.fileSize describes the original library file, not the re-encoded
+    // payload we actually send — size the base64 we ship instead.
+    const sizeBytes = estimateBase64ByteSize(base64);
     if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
       error = `'${asset.fileName ?? "image"}' exceeds the 10 MB attachment limit.`;
       continue;

@@ -950,7 +950,17 @@ export function NewTaskDraftScreen(props: {
     flow.setSubmitting(false);
 
     if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
+      if (isAtomCommandInterrupted(result)) {
+        // The start command rides a single WebSocket frame; a connection drop
+        // mid-send surfaces as a pure interrupt with no error value. The
+        // server may or may not have processed the command before the drop,
+        // so don't claim a definite outcome — and don't navigate, so the
+        // preserved draft stays available for a retry.
+        Alert.alert(
+          "Connection interrupted",
+          "The connection dropped while starting the task. If it doesn't appear in the task list, your draft is still here — try again.",
+        );
+      } else {
         const error = squashAtomCommandFailure(result);
         Alert.alert(
           "Could not start task",
