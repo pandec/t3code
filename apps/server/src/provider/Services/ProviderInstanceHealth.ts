@@ -38,6 +38,19 @@ export type UsageObservationToken = number & {
   readonly [UsageObservationTokenTypeId]: typeof UsageObservationTokenTypeId;
 };
 
+/**
+ * Which class of source owns an instance's usage slot: the provider driver's
+ * own account-usage stream, or a configured external usage source.
+ *
+ * Two values suffice. Distinguishing one gateway target from another is the
+ * observation token's job — a target change is always observed at reconcile,
+ * which allocates a newer token than any probe still running against the old
+ * target. Only the driver-versus-gateway distinction needs to be enforced at
+ * the write edge, because passive driver events arrive from a different fiber
+ * with no reconcile of their own to order them.
+ */
+export type UsageSourceKind = "driver" | "gateway";
+
 export interface ProviderInstanceHealthShape {
   /**
    * Ingest a raw `account.rate-limits.updated` payload for an instance.
@@ -53,14 +66,28 @@ export interface ProviderInstanceHealthShape {
   /** Allocate a total-order token immediately before observing provider usage. */
   readonly beginUsageObservation: () => Effect.Effect<UsageObservationToken>;
 
-  /** Store the latest opaque provider usage payload for one instance. */
+  /**
+   * Declare which source currently owns an instance's usage slot. Newer
+   * declarations win; changing the source drops a snapshot from the old one.
+   */
+  readonly setUsageSource: (
+    instanceId: ProviderInstanceId,
+    sourceKind: UsageSourceKind,
+    observationToken: UsageObservationToken,
+  ) => Effect.Effect<void>;
+
+  /**
+   * Store the latest opaque provider usage payload for one instance.
+   * Returns whether this observation won the token comparison and was stored.
+   */
   readonly reportUsageSnapshot: (
     instanceId: ProviderInstanceId,
     payload: unknown,
     /** Unix ms used only for client freshness rendering. */
     observedAt: number,
     observationToken: UsageObservationToken,
-  ) => Effect.Effect<void>;
+    sourceKind: UsageSourceKind,
+  ) => Effect.Effect<boolean>;
 
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 

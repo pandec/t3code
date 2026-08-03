@@ -593,7 +593,7 @@ const buildAppUnderTest = (options?: {
           }),
           ProviderInstanceHealthLive,
           Layer.mock(ProviderUsageRefresh.ProviderUsageRefresh)({
-            refresh: () => Effect.succeed([]),
+            refresh: () => Effect.succeed({ refreshedInstanceIds: [], failures: [] }),
             ...options?.layers?.providerUsageRefresh,
           }),
           Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
@@ -3396,7 +3396,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             refresh: () =>
               Effect.sync(() => {
                 refreshCalls += 1;
-                return [];
+                return { refreshedInstanceIds: [], failures: [] };
               }),
           },
         },

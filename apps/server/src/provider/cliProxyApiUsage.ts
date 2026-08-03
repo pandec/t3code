@@ -413,7 +413,17 @@ export function makeCliProxyApiUsageProbe(
           (failures.lastKey === target.managementKey &&
             now - failures.lastFailureAtMs < AUTH_FAILURE_COOLDOWN_MS)
         ) {
-          return undefined;
+          // Fail without touching the gateway: a silent skip would leave a
+          // manual refresh looking like a signed-out account, when the real
+          // story is the rejected-key pause.
+          return yield* new ProviderAdapterRequestError({
+            provider: "cliproxyapi",
+            method: "account/usage",
+            detail:
+              "The gateway rejected the management key earlier; probes are " +
+              "paused to avoid the gateway's 30-minute IP ban. Fix the key " +
+              "or wait for the pause to lapse.",
+          });
         }
       }
 

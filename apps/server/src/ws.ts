@@ -1171,9 +1171,9 @@ const makeWsRpcLayer = (
             providerUsageRefresh
               .refresh(input.instanceIds)
               .pipe(
-                Effect.flatMap((refreshedInstanceIds) =>
+                Effect.flatMap(({ refreshedInstanceIds, failures }) =>
                   readProviderUsageSnapshots.pipe(
-                    Effect.map((result) => ({ ...result, refreshedInstanceIds })),
+                    Effect.map((result) => ({ ...result, refreshedInstanceIds, failures })),
                   ),
                 ),
               ),

@@ -1231,11 +1231,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const refreshed = result.value.refreshedInstanceIds;
       providerUsageQuery.refresh();
       if (refreshed !== undefined && !refreshed.some((id) => instanceIds.includes(id))) {
+        // Prefer the server's own words for why a probe failed: "check the
+        // account is signed in" points a rejected management key at exactly
+        // the wrong remedy.
+        const reasons = [
+          ...new Set(
+            (result.value.failures ?? [])
+              .filter((failure) => instanceIds.includes(failure.instanceId))
+              .map((failure) => failure.reason),
+          ),
+        ];
         toastManager.add({
           type: "warning",
           title: "No new usage data",
           description:
-            "The provider did not return usage for any account. Check the account is still signed in.",
+            reasons.length > 0
+              ? reasons.join(" ")
+              : "The provider did not return usage for any account. Check the account is still signed in.",
         });
       }
     } finally {
