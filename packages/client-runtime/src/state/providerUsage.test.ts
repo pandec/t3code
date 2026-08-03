@@ -17,7 +17,7 @@ import {
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
-  providerUsageModelProviders,
+  resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
 } from "./providerUsage.ts";
 
@@ -1043,25 +1043,32 @@ describe("server-owned provider usage snapshots", () => {
   });
 });
 
-describe("providerUsageModelProviders", () => {
-  it("returns a defensively parsed model mapping", () => {
+describe("resolveProviderUsageUpstreamProvider", () => {
+  it("resolves built-in and mapped custom models", () => {
     expect(
-      providerUsageModelProviders({
-        modelProviders: {
-          "claude-opus-5": "claude",
-          "gpt-5.6-sol": "codex",
-          empty: "",
-          invalid: 42,
-        },
+      resolveProviderUsageUpstreamProvider({
+        payload: null,
+        model: "claude-opus-5",
+        isCustom: false,
       }),
-    ).toEqual({ "claude-opus-5": "claude", "gpt-5.6-sol": "codex" });
+    ).toBe("claude");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
+        model: "gpt-5.6-sol",
+        isCustom: true,
+      }),
+    ).toBe("codex");
   });
 
-  it("returns null when the mapping is absent or malformed", () => {
-    expect(providerUsageModelProviders({})).toBeNull();
-    expect(providerUsageModelProviders({ modelProviders: [] })).toBeNull();
-    expect(providerUsageModelProviders({ modelProviders: { model: 42 } })).toBeNull();
-    expect(providerUsageModelProviders(null)).toBeNull();
+  it("returns null for an unknown custom model or malformed mapping", () => {
+    const resolve = (payload: unknown) =>
+      resolveProviderUsageUpstreamProvider({ payload, model: "gpt-5.6-sol", isCustom: true });
+    expect(resolve({})).toBeNull();
+    expect(resolve({ modelProviders: [] })).toBeNull();
+    expect(resolve({ modelProviders: { "gpt-5.6-sol": 42 } })).toBeNull();
+    expect(resolve({ modelProviders: { other: "codex" } })).toBeNull();
+    expect(resolve(null)).toBeNull();
   });
 });
 

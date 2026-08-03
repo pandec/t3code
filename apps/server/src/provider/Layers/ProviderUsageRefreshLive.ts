@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 
 import {
+  cliProxyApiUsageProbeTargetsEqual,
   CLIPROXYAPI_USAGE_SOURCE_KIND,
   makeCliProxyApiUsageProbe,
   resolveCliProxyApiUsageProbeTarget,
@@ -236,12 +237,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
       target: CliProxyApiUsageProbeTarget,
     ): UsageRefreshProviderInstance["adapter"] => {
       const cached = gatewayProbes.get(instanceId);
-      if (
-        cached &&
-        cached.target.managementUrl === target.managementUrl &&
-        cached.target.managementKey === target.managementKey &&
-        cached.target.clientKey === target.clientKey
-      ) {
+      if (cached && cliProxyApiUsageProbeTargetsEqual(cached.target, target)) {
         return cached.adapter;
       }
       const probe = makeCliProxyApiUsageProbe(target);
@@ -304,7 +300,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
     // carries a fresh observation token so a probe already in flight against
     // the old source cannot re-install what it read.
     const resolveGatewayTargets = Effect.gen(function* () {
-      const targets = new Map<ProviderInstanceId, string>();
+      const targets = new Map<ProviderInstanceId, CliProxyApiUsageProbeTarget>();
       for (const instance of yield* registry.listInstances) {
         const envelope = yield* (
           registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
@@ -312,7 +308,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
         if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) continue;
         const target = resolveCliProxyApiUsageProbeTarget(envelope);
         if (target) {
-          targets.set(instance.instanceId, `${target.managementUrl} ${target.managementKey}`);
+          targets.set(instance.instanceId, target);
         }
       }
       return targets;
@@ -325,8 +321,12 @@ export const ProviderUsageRefreshLive = Layer.effect(
       Effect.gen(function* () {
         const next = yield* resolveGatewayTargets;
         const previous = yield* Ref.getAndSet(knownGatewayTargets, next);
-        for (const [instanceId, targetKey] of previous) {
-          if (next.get(instanceId) !== targetKey) {
+        for (const [instanceId, previousTarget] of previous) {
+          const nextTarget = next.get(instanceId);
+          if (
+            nextTarget === undefined ||
+            !cliProxyApiUsageProbeTargetsEqual(nextTarget, previousTarget)
+          ) {
             yield* health.clearUsageSnapshot(instanceId, yield* health.beginUsageObservation());
           }
         }

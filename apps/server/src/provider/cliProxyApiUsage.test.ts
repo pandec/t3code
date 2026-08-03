@@ -1,6 +1,8 @@
 import { assert, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -40,6 +42,7 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     ).toEqual({
       managementUrl: "https://gateway.example.ts.net",
       managementKey: "mgmt",
+      clientUrl: "https://gateway.example.ts.net",
       clientKey: "client-key",
     });
   });
@@ -57,6 +60,7 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     ).toEqual({
       managementUrl: "https://mgmt.example.ts.net:8446",
       managementKey: "mgmt",
+      clientUrl: "https://gateway.example.ts.net",
       clientKey: "client-key",
     });
   });
@@ -106,6 +110,7 @@ describe("makeCliProxyApiUsageProbe", () => {
     const client = HttpClient.make((request) =>
       Effect.sync(() => {
         if (request.url.endsWith("/v1/models")) {
+          expect(request.url).toBe("https://client.example.test/v1/models");
           expect(request.headers.authorization).toBe("Bearer client-key");
           return jsonResponse(request, {
             data: [
@@ -125,6 +130,7 @@ describe("makeCliProxyApiUsageProbe", () => {
     return Effect.gen(function* () {
       const payload = (yield* makeCliProxyApiUsageProbe({
         ...target,
+        clientUrl: "https://client.example.test",
         clientKey: "client-key",
       })().pipe(Effect.provideService(HttpClient.HttpClient, client))) as CliProxyApiUsagePayload;
 
@@ -171,9 +177,11 @@ describe("makeCliProxyApiUsageProbe", () => {
         });
       }),
     );
-    const runProbe = makeCliProxyApiUsageProbe({ ...target, clientKey: "wrong-client-key" })().pipe(
-      Effect.provideService(HttpClient.HttpClient, client),
-    );
+    const runProbe = makeCliProxyApiUsageProbe({
+      ...target,
+      clientUrl: target.managementUrl,
+      clientKey: "wrong-client-key",
+    })().pipe(Effect.provideService(HttpClient.HttpClient, client));
 
     return Effect.gen(function* () {
       for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -184,6 +192,42 @@ describe("makeCliProxyApiUsageProbe", () => {
       expect(modelsRequests).toBe(4);
     });
   });
+
+  it.effect("does not hold account probes behind a stalled models request", () =>
+    Effect.gen(function* () {
+      const modelsStarted = yield* Deferred.make<void>();
+      const accountStarted = yield* Deferred.make<void>();
+      const client = HttpClient.make((request) => {
+        if (request.url.endsWith("/v1/models")) {
+          return Deferred.succeed(modelsStarted, undefined).pipe(Effect.andThen(Effect.never));
+        }
+        if (request.url.endsWith("/auth-files")) {
+          return Effect.succeed(
+            jsonResponse(request, {
+              files: [{ auth_index: "claude-auth", name: "claude.json", provider: "claude" }],
+            }),
+          );
+        }
+        return Deferred.succeed(accountStarted, undefined).pipe(
+          Effect.as(jsonResponse(request, { status_code: 500, body: "" })),
+        );
+      });
+      const probe = yield* makeCliProxyApiUsageProbe({
+        ...target,
+        clientUrl: target.managementUrl,
+        clientKey: "client-key",
+      })().pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.forkChild);
+
+      yield* Deferred.await(modelsStarted);
+      yield* Effect.yieldNow;
+      expect(yield* Deferred.isDone(accountStarted)).toBe(true);
+
+      yield* TestClock.adjust("5 seconds");
+      const payload = (yield* Fiber.join(probe)) as CliProxyApiUsagePayload;
+      expect(payload.modelProviders).toBeUndefined();
+      expect(payload.accounts).toHaveLength(1);
+    }),
+  );
 
   it.effect("translates mixed upstream accounts and degrades account failures to rows", () => {
     const requests: HttpClientRequest.HttpClientRequest[] = [];

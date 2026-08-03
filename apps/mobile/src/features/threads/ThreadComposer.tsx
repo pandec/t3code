@@ -64,7 +64,7 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
-  providerUsageModelProviders,
+  resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -445,15 +445,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const activeUpstreamProvider = useMemo<string | null>(() => {
     const model = props.selectedThread.modelSelection.model;
     if (selectedProviderStatus === null) return "claude";
-    if (selectedProviderStatus.models.find((entry) => entry.slug === model)?.isCustom !== true) {
-      return "claude";
-    }
-    if (providerUsageInstanceId === null) return null;
-    return (
-      providerUsageModelProviders(
-        providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.payload,
-      )?.[model] ?? null
-    );
+    return resolveProviderUsageUpstreamProvider({
+      payload:
+        providerUsageInstanceId === null
+          ? undefined
+          : providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.payload,
+      model,
+      isCustom:
+        selectedProviderStatus.models.find((entry) => entry.slug === model)?.isCustom === true,
+    });
   }, [
     props.selectedThread.modelSelection.model,
     providerUsageInstanceId,

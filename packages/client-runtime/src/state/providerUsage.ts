@@ -721,16 +721,16 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
 
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 
-export function providerUsageModelProviders(payload: unknown): Record<string, string> | null {
-  const value = asRecord(payload)?.modelProviders;
+export function resolveProviderUsageUpstreamProvider(input: {
+  readonly payload: unknown;
+  readonly model: string;
+  readonly isCustom: boolean;
+}): string | null {
+  if (!input.isCustom) return "claude";
+
+  const value = asRecord(input.payload)?.modelProviders;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const rawProviders = value as Record<string, unknown>;
-  const providers: Record<string, string> = {};
-  for (const [model, value] of Object.entries(rawProviders)) {
-    const provider = asString(value);
-    if (model.length > 0 && provider !== null) providers[model] = provider;
-  }
-  return Object.keys(providers).length > 0 ? providers : null;
+  return asString((value as Record<string, unknown>)[input.model]);
 }
 
 export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";

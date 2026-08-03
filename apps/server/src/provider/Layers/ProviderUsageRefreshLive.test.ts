@@ -169,7 +169,7 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
   ),
 );
 
-it.effect("drops the pooled snapshot when the usage source is removed", () =>
+it.effect("drops the pooled snapshot when the gateway target changes or is removed", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = ProviderInstanceId.make("claude_gateway");
@@ -178,6 +178,11 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
           name: "ANTHROPIC_BASE_URL",
           value: "https://gateway.example.test/v1",
           sensitive: false,
+        },
+        {
+          name: "ANTHROPIC_AUTH_TOKEN",
+          value: "old-client-key",
+          sensitive: true,
         },
       ];
       const gatewayConfig: ProviderInstanceConfig = {
@@ -231,28 +236,50 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
         );
         expect(yield* health.listUsageSnapshots()).toHaveLength(1);
 
-        // A probe against the old source is still in flight when the user
-        // turns the usage source off.
+        // A probe against the old client target is still in flight when the
+        // user rotates the client key.
         const lateToken = yield* health.beginUsageObservation();
+        yield* Ref.set(config, {
+          ...gatewayConfig,
+          environment: environment.map((variable) =>
+            variable.name === "ANTHROPIC_AUTH_TOKEN"
+              ? { ...variable, value: "new-client-key" }
+              : variable,
+          ),
+        });
+        yield* PubSub.publish(changes, undefined);
+        while ((yield* health.listUsageSnapshots()).length > 0) {
+          yield* Effect.yieldNow;
+        }
+
+        // The old-key probe must not resurrect its model-provider mapping.
+        yield* health.reportUsageSnapshot(target, { pool: "stale-key" }, 2_000, lateToken);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+        yield* health.reportUsageSnapshot(
+          target,
+          { pool: "new-key" },
+          3_000,
+          yield* health.beginUsageObservation(),
+        );
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
+
+        // Removing the source also clears the current pooled snapshot.
         yield* Ref.set(config, { driver, environment, config: {} });
         yield* PubSub.publish(changes, undefined);
         while ((yield* health.listUsageSnapshots()).length > 0) {
           yield* Effect.yieldNow;
         }
 
-        // The late probe must not resurrect the pooled payload…
-        yield* health.reportUsageSnapshot(target, { pool: "stale" }, 2_000, lateToken);
-        expect(yield* health.listUsageSnapshots()).toEqual([]);
-
-        // …while an observation that begins after the clear reports normally.
+        // An observation that begins after the clear reports normally.
         yield* health.reportUsageSnapshot(
           target,
           { source: "direct" },
-          3_000,
+          4_000,
           yield* health.beginUsageObservation(),
         );
         expect(yield* health.listUsageSnapshots()).toEqual([
-          { instanceId: target, payload: { source: "direct" }, observedAt: 3_000 },
+          { instanceId: target, payload: { source: "direct" }, observedAt: 4_000 },
         ]);
       }).pipe(Effect.provide(layer));
     }),

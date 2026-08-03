@@ -222,7 +222,7 @@ import {
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
-  providerUsageModelProviders,
+  resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
   sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -1024,7 +1024,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const activeProviderUsageInstanceId = resolveProviderUsageInstanceId({
     liveSessionInstanceId: activeThread?.session?.providerInstanceId,
-    modelSelectionInstanceId: activeThreadModelSelection?.instanceId,
+    modelSelectionInstanceId: selectedInstanceId,
   });
   const activeThreadProviderDriver = useMemo(
     () =>
@@ -1067,22 +1067,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
   /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
-    const model = activeThreadModelSelection?.model;
-    if (activeProviderUsageInstanceId === null || model === undefined) return "claude";
+    if (activeProviderUsageInstanceId === null) return "claude";
     const models = providerStatuses.find(
       (provider) => provider.instanceId === activeProviderUsageInstanceId,
     )?.models;
-    if (models?.find((entry) => entry.slug === model)?.isCustom !== true) return "claude";
-    return (
-      providerUsageModelProviders(
-        providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
-      )?.[model] ?? null
-    );
+    return resolveProviderUsageUpstreamProvider({
+      payload: providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
+      model: selectedModel,
+      isCustom: models?.find((entry) => entry.slug === selectedModel)?.isCustom === true,
+    });
   }, [
     activeProviderUsageInstanceId,
-    activeThreadModelSelection?.model,
     providerStatuses,
     providerUsageSnapshotByInstance,
+    selectedModel,
   ]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;
