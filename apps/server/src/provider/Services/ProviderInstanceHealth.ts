@@ -38,20 +38,18 @@ export type UsageObservationToken = number & {
   readonly [UsageObservationTokenTypeId]: typeof UsageObservationTokenTypeId;
 };
 
-declare const UsageSourceKeyTypeId: unique symbol;
-
-/** Opaque, process-local identity for one source feeding a usage snapshot slot. */
-export interface UsageSourceKey {
-  readonly [UsageSourceKeyTypeId]: typeof UsageSourceKeyTypeId;
-}
-
-/** The provider driver's own account-usage stream. */
-export const DRIVER_USAGE_SOURCE_KEY = {} as UsageSourceKey;
-
-/** Allocate an identity-only key without retaining source credentials in health state. */
-export function makeUsageSourceKey(): UsageSourceKey {
-  return {} as UsageSourceKey;
-}
+/**
+ * Which class of source owns an instance's usage slot: the provider driver's
+ * own account-usage stream, or a configured external usage source.
+ *
+ * Two values suffice. Distinguishing one gateway target from another is the
+ * observation token's job — a target change is always observed at reconcile,
+ * which allocates a newer token than any probe still running against the old
+ * target. Only the driver-versus-gateway distinction needs to be enforced at
+ * the write edge, because passive driver events arrive from a different fiber
+ * with no reconcile of their own to order them.
+ */
+export type UsageSourceKind = "driver" | "gateway";
 
 export interface ProviderInstanceHealthShape {
   /**
@@ -74,7 +72,7 @@ export interface ProviderInstanceHealthShape {
    */
   readonly setUsageSource: (
     instanceId: ProviderInstanceId,
-    sourceKey: UsageSourceKey,
+    sourceKind: UsageSourceKind,
     observationToken: UsageObservationToken,
   ) => Effect.Effect<void>;
 
@@ -88,7 +86,7 @@ export interface ProviderInstanceHealthShape {
     /** Unix ms used only for client freshness rendering. */
     observedAt: number,
     observationToken: UsageObservationToken,
-    sourceKey: UsageSourceKey,
+    sourceKind: UsageSourceKind,
   ) => Effect.Effect<boolean>;
 
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;

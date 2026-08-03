@@ -17,11 +17,9 @@ import { resetCliProxyApiAuthFailuresForTest } from "../cliProxyApiUsage.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import {
-  DRIVER_USAGE_SOURCE_KEY,
-  makeUsageSourceKey,
   ProviderInstanceHealth,
   type UsageObservationToken,
-  type UsageSourceKey,
+  type UsageSourceKind,
 } from "../Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderUsageRefresh } from "../Services/ProviderUsageRefresh.ts";
@@ -46,13 +44,13 @@ function instance(input: {
   readonly enabled?: boolean;
   readonly read?: Effect.Effect<unknown | undefined, ProviderAdapterError>;
   readonly onRead?: () => void;
-  readonly usageSourceKey?: UsageSourceKey;
+  readonly usageSourceKind?: UsageSourceKind;
 }): UsageRefreshProviderInstance {
   return {
     instanceId: ProviderInstanceId.make(input.id),
     driverKind: driver,
     enabled: input.enabled ?? true,
-    usageSourceKey: input.usageSourceKey ?? DRIVER_USAGE_SOURCE_KEY,
+    usageSourceKind: input.usageSourceKind ?? "driver",
     adapter:
       input.read !== undefined || input.onRead !== undefined
         ? {
@@ -158,15 +156,15 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
 
         // A declared but unresolved source owns the usage slot and must not
-        // silently restore the SDK adapter.
+        // silently restore the SDK adapter — and must say why nothing came
+        // back, rather than leaving the client to blame the account's login.
         yield* Ref.update(config, (current) => ({
           ...current,
           usageSource: { kind: "cliproxyapi", managementKey: "" },
         }));
-        expect(yield* refresh.refresh([target])).toEqual({
-          refreshedInstanceIds: [],
-          failures: [],
-        });
+        const unresolved = yield* refresh.refresh([target]);
+        expect(unresolved.refreshedInstanceIds).toEqual([]);
+        expect(unresolved.failures[0]?.reason).toContain("management key or URL");
         expect(yield* Ref.get(directReads)).toBe(0);
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
       }).pipe(Effect.provide(layer));
@@ -257,14 +255,14 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
         yield* Ref.set(nextConfigRead, removalObserved);
         yield* Ref.set(config, { driver, environment, config: {} });
         const directToken = yield* health.beginUsageObservation();
-        yield* health.setUsageSource(target, DRIVER_USAGE_SOURCE_KEY, directToken);
+        yield* health.setUsageSource(target, "driver", directToken);
         expect(
           yield* health.reportUsageSnapshot(
             target,
             { source: "direct" },
             2_000,
             directToken,
-            DRIVER_USAGE_SOURCE_KEY,
+            "driver",
           ),
         ).toBe(true);
         yield* PubSub.publish(changes, undefined);
@@ -282,10 +280,9 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
           ...gatewayConfig,
           usageSource: { kind: "cliproxyapi", managementKey: "" },
         });
-        expect(yield* refresh.refresh([target])).toEqual({
-          refreshedInstanceIds: [],
-          failures: [],
-        });
+        const unresolvedRefresh = yield* refresh.refresh([target]);
+        expect(unresolvedRefresh.refreshedInstanceIds).toEqual([]);
+        expect(unresolvedRefresh.failures[0]?.reason).toContain("management key or URL");
         expect(yield* health.listUsageSnapshots()).toEqual([]);
 
         // A refresh can observe the replacement gateway before its registry
@@ -565,7 +562,7 @@ it.effect("does not let a late probe overwrite a newer usage observation", () =>
         { source: "turn-boundary" },
         1_000,
         yield* health.beginUsageObservation(),
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
       yield* Deferred.succeed(releaseRead, undefined);
       const outcome = yield* Fiber.join(probe);
@@ -626,18 +623,15 @@ it.effect("does not start an adapter that changed while queued behind the probe 
       yield* Effect.yieldNow;
 
       yield* Ref.set(instances, [...blockers, replacement]);
-      yield* health.setUsageSource(
-        target,
-        makeUsageSourceKey(),
-        yield* health.beginUsageObservation(),
-      );
+      yield* health.setUsageSource(target, "gateway", yield* health.beginUsageObservation());
       yield* Deferred.succeed(releaseBlockers, undefined);
 
       yield* Fiber.join(blockerRefresh);
-      expect(yield* Fiber.join(queuedRefresh)).toEqual({
-        refreshedInstanceIds: [],
-        failures: [],
-      });
+      // The queued probe bails without spending an HTTP call, and says why —
+      // "just changed, try again" beats the client's sign-in guess.
+      const queued = yield* Fiber.join(queuedRefresh);
+      expect(queued.refreshedInstanceIds).toEqual([]);
+      expect(queued.failures[0]?.reason).toContain("usage source just changed");
       expect(yield* Ref.get(staleReads)).toBe(0);
       expect(yield* health.listUsageSnapshots()).toEqual([]);
     }),
@@ -757,7 +751,14 @@ it.effect("keeps a replacement probe tracked when an older refresh registers lat
         refreshedInstanceIds: [target],
         failures: [],
       });
-      expect(yield* Fiber.join(oldRefresh)).toEqual({ refreshedInstanceIds: [], failures: [] });
+      // The late caller inherits the replacement's outcome rather than running
+      // its own stale probe: a fresh snapshot did land for the instance it
+      // asked about, so reporting "not refreshed" would raise the false "no
+      // new usage data" warning `refreshedInstanceIds` exists to prevent.
+      expect(yield* Fiber.join(oldRefresh)).toEqual({
+        refreshedInstanceIds: [target],
+        failures: [],
+      });
       expect(yield* health.listUsageSnapshots()).toEqual([
         {
           instanceId: target,

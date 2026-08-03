@@ -9,9 +9,8 @@ import {
   type ProviderInstanceHealthShape,
   type ProviderInstanceRateLimitState,
   type ProviderInstanceUsageSnapshot,
-  DRIVER_USAGE_SOURCE_KEY,
   type UsageObservationToken,
-  type UsageSourceKey,
+  type UsageSourceKind,
 } from "../Services/ProviderInstanceHealth.ts";
 
 /**
@@ -103,7 +102,7 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     ReadonlyMap<
       ProviderInstanceId,
       {
-        readonly activeSourceKey: UsageSourceKey;
+        readonly activeSourceKind: UsageSourceKind;
         readonly sourceObservationToken: UsageObservationToken;
         readonly snapshot: ProviderInstanceUsageSnapshot | undefined;
         readonly snapshotObservationToken: UsageObservationToken;
@@ -191,17 +190,17 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
 
   const setUsageSource: ProviderInstanceHealthShape["setUsageSource"] = Effect.fn(
     "ProviderInstanceHealth.setUsageSource",
-  )(function* (instanceId, sourceKey, observationToken) {
+  )(function* (instanceId, sourceKind, observationToken) {
     yield* Ref.update(usageSnapshots, (snapshots) => {
       const current = snapshots.get(instanceId);
       if (current !== undefined && current.sourceObservationToken >= observationToken) {
         return snapshots;
       }
-      const activeSourceKey = current?.activeSourceKey ?? DRIVER_USAGE_SOURCE_KEY;
+      const activeSourceKind = current?.activeSourceKind ?? "driver";
       return new Map(snapshots).set(instanceId, {
-        activeSourceKey: sourceKey,
+        activeSourceKind: sourceKind,
         sourceObservationToken: observationToken,
-        snapshot: activeSourceKey === sourceKey ? current?.snapshot : undefined,
+        snapshot: activeSourceKind === sourceKind ? current?.snapshot : undefined,
         snapshotObservationToken: current?.snapshotObservationToken ?? initialUsageObservationToken,
       });
     });
@@ -209,19 +208,19 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
 
   const reportUsageSnapshot: ProviderInstanceHealthShape["reportUsageSnapshot"] = Effect.fn(
     "ProviderInstanceHealth.reportUsageSnapshot",
-  )(function* (instanceId, payload, observedAt, observationToken, sourceKey) {
+  )(function* (instanceId, payload, observedAt, observationToken, sourceKind) {
     return yield* Ref.modify(usageSnapshots, (snapshots) => {
       const current = snapshots.get(instanceId);
-      const activeSourceKey = current?.activeSourceKey ?? DRIVER_USAGE_SOURCE_KEY;
+      const activeSourceKind = current?.activeSourceKind ?? "driver";
       const snapshotObservationToken =
         current?.snapshotObservationToken ?? initialUsageObservationToken;
-      if (activeSourceKey !== sourceKey || snapshotObservationToken >= observationToken) {
+      if (activeSourceKind !== sourceKind || snapshotObservationToken >= observationToken) {
         return [false, snapshots] as const;
       }
       return [
         true,
         new Map(snapshots).set(instanceId, {
-          activeSourceKey,
+          activeSourceKind,
           sourceObservationToken: current?.sourceObservationToken ?? initialUsageObservationToken,
           snapshot: {
             instanceId,

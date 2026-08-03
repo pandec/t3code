@@ -4,7 +4,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { TestClock } from "effect/testing";
 
-import { DRIVER_USAGE_SOURCE_KEY, makeUsageSourceKey } from "../Services/ProviderInstanceHealth.ts";
 import {
   classifyRateLimitPayload,
   isRateLimitErrorMessage,
@@ -85,21 +84,21 @@ describe("ProviderInstanceHealth", () => {
         firstPayload,
         0,
         yield* health.beginUsageObservation(),
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
       yield* health.reportUsageSnapshot(
         instanceId,
         replacementPayload,
         2_000,
         yield* health.beginUsageObservation(),
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
       yield* health.reportUsageSnapshot(
         secondInstanceId,
         { secondary: { usedPercent: 7 } },
         2_000,
         yield* health.beginUsageObservation(),
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
 
       expect(yield* health.listUsageSnapshots()).toEqual([
@@ -127,20 +126,8 @@ describe("ProviderInstanceHealth", () => {
 
       expect(secondToken).toBeGreaterThan(firstToken);
 
-      yield* health.reportUsageSnapshot(
-        instanceId,
-        newerPayload,
-        1_000,
-        secondToken,
-        DRIVER_USAGE_SOURCE_KEY,
-      );
-      yield* health.reportUsageSnapshot(
-        instanceId,
-        olderPayload,
-        3_000,
-        firstToken,
-        DRIVER_USAGE_SOURCE_KEY,
-      );
+      yield* health.reportUsageSnapshot(instanceId, newerPayload, 1_000, secondToken, "driver");
+      yield* health.reportUsageSnapshot(instanceId, olderPayload, 3_000, firstToken, "driver");
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: newerPayload, observedAt: 1_000 },
       ]);
@@ -151,7 +138,7 @@ describe("ProviderInstanceHealth", () => {
         equalTimestampPayload,
         1_000,
         thirdToken,
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: equalTimestampPayload, observedAt: 1_000 },
@@ -163,15 +150,9 @@ describe("ProviderInstanceHealth", () => {
         backwardClockPayload,
         500,
         fourthToken,
-        DRIVER_USAGE_SOURCE_KEY,
+        "driver",
       );
-      yield* health.reportUsageSnapshot(
-        instanceId,
-        replayPayload,
-        4_000,
-        fourthToken,
-        DRIVER_USAGE_SOURCE_KEY,
-      );
+      yield* health.reportUsageSnapshot(instanceId, replayPayload, 4_000, fourthToken, "driver");
       expect(yield* health.listUsageSnapshots()).toEqual([
         { instanceId, payload: backwardClockPayload, observedAt: 500 },
       ]);
@@ -181,7 +162,7 @@ describe("ProviderInstanceHealth", () => {
   it.effect("gates usage writes by the active source while preserving whole-payload LWW", () =>
     Effect.gen(function* () {
       const health = yield* makeProviderInstanceHealth;
-      const gatewaySource = makeUsageSourceKey();
+      const gatewaySource = "gateway" as const;
       const directToken = yield* health.beginUsageObservation();
       expect(
         yield* health.reportUsageSnapshot(
@@ -189,7 +170,7 @@ describe("ProviderInstanceHealth", () => {
           { source: "direct" },
           1_000,
           directToken,
-          DRIVER_USAGE_SOURCE_KEY,
+          "driver",
         ),
       ).toBe(true);
 
@@ -199,14 +180,14 @@ describe("ProviderInstanceHealth", () => {
 
       // A stale source declaration and a newer wrong-source payload both lose
       // atomically to the gateway declaration.
-      yield* health.setUsageSource(instanceId, DRIVER_USAGE_SOURCE_KEY, directToken);
+      yield* health.setUsageSource(instanceId, "driver", directToken);
       expect(
         yield* health.reportUsageSnapshot(
           instanceId,
           { source: "stale-direct" },
           2_000,
           yield* health.beginUsageObservation(),
-          DRIVER_USAGE_SOURCE_KEY,
+          "driver",
         ),
       ).toBe(false);
 

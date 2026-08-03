@@ -26,11 +26,9 @@ import {
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
-  DRIVER_USAGE_SOURCE_KEY,
-  makeUsageSourceKey,
   ProviderInstanceHealth,
   type ProviderInstanceHealthShape,
-  type UsageSourceKey,
+  type UsageSourceKind,
 } from "../Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import {
@@ -43,7 +41,14 @@ export interface UsageRefreshProviderInstance {
   readonly driverKind: ProviderDriverKind;
   readonly enabled: boolean;
   readonly adapter: Pick<ProviderAdapterShape<ProviderAdapterError>, "readAccountUsage">;
-  readonly usageSourceKey: UsageSourceKey;
+  readonly usageSourceKind: UsageSourceKind;
+  /**
+   * Set when the instance declares a usage source that could not be resolved
+   * into a probe target (missing key, missing or unparseable management URL).
+   * The slot stays gateway-owned — the driver's probe would report the wrong
+   * account — but the refresh reports why nothing came back.
+   */
+  readonly unresolvedUsageSourceReason?: string;
 }
 
 export interface ProviderUsageRefreshDependencies {
@@ -64,17 +69,10 @@ interface UsageProbeOutcome {
 interface InFlightUsageProbe {
   readonly adapter: UsageRefreshProviderInstance["adapter"];
   readonly completion: Deferred.Deferred<UsageProbeOutcome>;
-  readonly usageSourceKey: UsageSourceKey;
-}
-
-interface InFlightRegistration {
-  readonly completion: Deferred.Deferred<UsageProbeOutcome>;
-  readonly kind: "join" | "owner" | "wait";
 }
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
 const USAGE_PROBE_TIMEOUT = "30 seconds";
-const UNRESOLVED_GATEWAY_USAGE_SOURCE_KEY = makeUsageSourceKey();
 
 function sameGatewayTarget(
   left: CliProxyApiUsageProbeTarget | undefined,
@@ -115,21 +113,28 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
     probeGate
       .withPermits(1)(
         Effect.gen(function* () {
+          // Allocate before revalidating: the token must predate any source
+          // declaration this probe could race, so a reconcile that lands
+          // afterward always outranks whatever this probe goes on to report.
+          const observationToken = yield* dependencies.health.beginUsageObservation();
           // The adapter was selected before this probe entered the bounded
           // gate. Re-resolve after acquiring a permit so an adapter whose
-          // source changed while queued cannot start against stale config.
+          // source changed while queued does not spend an HTTP call on a
+          // result the health store will reject anyway.
           const current = (yield* dependencies.listInstances).find(
             (candidate) => candidate.instanceId === instance.instanceId,
           );
           if (
             current?.enabled !== true ||
             current.adapter !== instance.adapter ||
-            current.usageSourceKey !== instance.usageSourceKey ||
             current.adapter.readAccountUsage === undefined
           ) {
+            yield* Ref.set(outcome, {
+              refreshed: false,
+              failureReason: "The account's usage source just changed — try again.",
+            });
             return;
           }
-          const observationToken = yield* dependencies.health.beginUsageObservation();
           const observedAt = yield* Clock.currentTimeMillis;
           const payload = yield* instance.adapter.readAccountUsage!();
           if (payload !== undefined) {
@@ -138,7 +143,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               payload,
               observedAt,
               observationToken,
-              instance.usageSourceKey,
+              instance.usageSourceKind,
             );
             if (stored) {
               yield* Ref.set(outcome, { refreshed: true });
@@ -184,48 +189,37 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
       Effect.gen(function* () {
         const candidate = yield* Deferred.make<UsageProbeOutcome>();
         const outcome = yield* Ref.make<UsageProbeOutcome>({ refreshed: false });
+        // A probe already in flight is never displaced: whichever adapter it
+        // holds, the health store's source and token checks decide whether its
+        // result may land, so a caller can simply await it.
         const registration = yield* Ref.modify(
           inFlight,
           (
             current,
           ): readonly [
-            InFlightRegistration,
+            { readonly completion: Deferred.Deferred<UsageProbeOutcome>; readonly owner: boolean },
             ReadonlyMap<ProviderInstanceId, InFlightUsageProbe>,
           ] => {
             const existing = current.get(instance.instanceId);
             if (existing !== undefined) {
-              const joined: InFlightRegistration = {
-                completion: existing.completion,
-                kind:
-                  existing.adapter === instance.adapter &&
-                  existing.usageSourceKey === instance.usageSourceKey
-                    ? "join"
-                    : "wait",
-              };
-              return [joined, current] as const;
+              return [{ completion: existing.completion, owner: false }, current] as const;
             }
-            const owned: InFlightRegistration = { completion: candidate, kind: "owner" };
             return [
-              owned,
+              { completion: candidate, owner: true },
               new Map(current).set(instance.instanceId, {
                 adapter: instance.adapter,
                 completion: candidate,
-                usageSourceKey: instance.usageSourceKey,
               }),
             ] as const;
           },
         );
 
-        if (registration.kind === "owner") {
+        if (registration.owner) {
           yield* runProbe(instance, registration.completion, outcome).pipe(
             Effect.forkIn(serverScope),
           );
         }
-        const completed = yield* restore(Deferred.await(registration.completion));
-        if (registration.kind === "wait") {
-          return yield* restore(Effect.suspend(() => refreshInstance(instance)));
-        }
-        return completed;
+        return yield* restore(Deferred.await(registration.completion));
       }),
     );
 
@@ -235,19 +229,33 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         requestedInstanceIds === undefined
           ? undefined
           : new Set<ProviderInstanceId>(requestedInstanceIds);
-      const instances = (yield* dependencies.listInstances).filter(
+      const candidates = (yield* dependencies.listInstances).filter(
         (instance) =>
-          instance.enabled &&
-          instance.adapter.readAccountUsage !== undefined &&
-          (requested === undefined || requested.has(instance.instanceId)),
+          instance.enabled && (requested === undefined || requested.has(instance.instanceId)),
       );
 
       const outcomes = yield* Effect.forEach(
-        instances,
-        (instance) =>
-          refreshInstance(instance).pipe(
+        candidates,
+        (
+          instance,
+        ): Effect.Effect<{ readonly instanceId: ProviderInstanceId } & UsageProbeOutcome> => {
+          // A declared-but-unresolved usage source has no probe to run, but
+          // reporting nothing would surface as "check the account is still
+          // signed in" — the wrong remedy for a settings typo.
+          if (instance.unresolvedUsageSourceReason !== undefined) {
+            return Effect.succeed({
+              instanceId: instance.instanceId,
+              refreshed: false,
+              failureReason: instance.unresolvedUsageSourceReason,
+            });
+          }
+          if (instance.adapter.readAccountUsage === undefined) {
+            return Effect.succeed({ instanceId: instance.instanceId, refreshed: false });
+          }
+          return refreshInstance(instance).pipe(
             Effect.map((outcome) => ({ instanceId: instance.instanceId, ...outcome })),
-          ),
+          );
+        },
         { concurrency: "unbounded" },
       );
       return {
@@ -281,29 +289,24 @@ export const ProviderUsageRefreshLive = Layer.effect(
       {
         readonly target: CliProxyApiUsageProbeTarget;
         readonly adapter: UsageRefreshProviderInstance["adapter"];
-        readonly sourceKey: UsageSourceKey;
       }
     >();
 
-    const gatewayProbeFor = (
+    const gatewayAdapterFor = (
       instanceId: ProviderInstanceId,
       target: CliProxyApiUsageProbeTarget,
-    ): {
-      readonly adapter: UsageRefreshProviderInstance["adapter"];
-      readonly sourceKey: UsageSourceKey;
-    } => {
+    ): UsageRefreshProviderInstance["adapter"] => {
       const cached = gatewayProbes.get(instanceId);
       if (cached && sameGatewayTarget(cached.target, target)) {
-        return cached;
+        return cached.adapter;
       }
       const probe = makeCliProxyApiUsageProbe(target);
       const adapter: UsageRefreshProviderInstance["adapter"] = {
         readAccountUsage: () =>
           probe().pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
       };
-      const created = { target, adapter, sourceKey: makeUsageSourceKey() };
-      gatewayProbes.set(instanceId, created);
-      return created;
+      gatewayProbes.set(instanceId, { target, adapter });
+      return adapter;
     };
 
     const resolveUsageInstances = Effect.gen(function* () {
@@ -319,17 +322,13 @@ export const ProviderUsageRefreshLive = Layer.effect(
         // promises a build that does not know a kind leaves the envelope
         // alone and keeps the driver's own usage working.
         if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) {
-          yield* health.setUsageSource(
-            instance.instanceId,
-            DRIVER_USAGE_SOURCE_KEY,
-            sourceObservationToken,
-          );
+          yield* health.setUsageSource(instance.instanceId, "driver", sourceObservationToken);
           resolved.push({
             instanceId: instance.instanceId,
             driverKind: instance.driverKind,
             enabled: instance.enabled,
             adapter: instance.adapter,
-            usageSourceKey: DRIVER_USAGE_SOURCE_KEY,
+            usageSourceKind: "driver",
           });
           continue;
         }
@@ -338,23 +337,28 @@ export const ProviderUsageRefreshLive = Layer.effect(
         // nothing or, worse, whatever unrelated account the config home is
         // logged into.
         const target = resolveCliProxyApiUsageProbeTarget(envelope);
-        const gatewayProbe = target ? gatewayProbeFor(instance.instanceId, target) : undefined;
         if (target) {
           activeGatewayProbeIds.add(instance.instanceId);
         }
-        const usageSourceKey = gatewayProbe?.sourceKey ?? UNRESOLVED_GATEWAY_USAGE_SOURCE_KEY;
-        yield* health.setUsageSource(instance.instanceId, usageSourceKey, sourceObservationToken);
+        yield* health.setUsageSource(instance.instanceId, "gateway", sourceObservationToken);
         resolved.push({
           instanceId: instance.instanceId,
           driverKind: instance.driverKind,
           enabled: instance.enabled,
-          adapter: gatewayProbe?.adapter ?? {},
-          usageSourceKey,
+          adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
+          usageSourceKind: "gateway",
+          ...(target
+            ? {}
+            : {
+                unresolvedUsageSourceReason:
+                  "This account's usage source is configured, but its management key or " +
+                  "URL is missing or invalid.",
+              }),
         });
       }
       // Sweeping by the active set subsumes any per-instance pruning above:
-      // an id only enters `gatewayProbes` via `gatewayAdapterFor`, which
-      // runs exactly for the ids in that set.
+      // an id only enters `gatewayProbes` via `gatewayAdapterFor`, which runs
+      // exactly for the ids in that set.
       for (const instanceId of gatewayProbes.keys()) {
         if (!activeGatewayProbeIds.has(instanceId)) {
           gatewayProbes.delete(instanceId);

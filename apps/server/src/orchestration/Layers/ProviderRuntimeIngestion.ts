@@ -29,10 +29,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { CLIPROXYAPI_USAGE_SOURCE_KIND } from "../../provider/cliProxyApiUsage.ts";
-import {
-  DRIVER_USAGE_SOURCE_KEY,
-  ProviderInstanceHealth,
-} from "../../provider/Services/ProviderInstanceHealth.ts";
+import { ProviderInstanceHealth } from "../../provider/Services/ProviderInstanceHealth.ts";
 import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -1374,17 +1371,13 @@ const make = Effect.gen(function* () {
         if (instanceConfig?.usageSource?.kind === CLIPROXYAPI_USAGE_SOURCE_KIND) {
           return;
         }
-        yield* providerInstanceHealth.setUsageSource(
-          instanceId,
-          DRIVER_USAGE_SOURCE_KEY,
-          observationToken,
-        );
+        yield* providerInstanceHealth.setUsageSource(instanceId, "driver", observationToken);
         yield* providerInstanceHealth.reportUsageSnapshot(
           instanceId,
           event.payload.rateLimits,
           observedAt,
           observationToken,
-          DRIVER_USAGE_SOURCE_KEY,
+          "driver",
         );
       }),
     );
