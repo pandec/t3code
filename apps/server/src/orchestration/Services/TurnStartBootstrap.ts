@@ -13,10 +13,10 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
-import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
-import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
+import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -68,7 +68,7 @@ export class TurnStartBootstrap extends Context.Service<
       command: ThreadTurnStartCommand,
     ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
   }
->()("t3/orchestration/TurnStartBootstrap") {}
+>()("t3/orchestration/Services/TurnStartBootstrap") {}
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -159,8 +159,8 @@ export const make = Effect.gen(function* () {
       const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
       let createdThread = false;
       let createdWorktree: { readonly cwd: string; readonly path: string } | null = null;
-      let targetProjectId = bootstrap?.createThread?.projectId;
-      let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
+      const targetProjectId = bootstrap?.createThread?.projectId;
+      const targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
       let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
 
       const cleanupCreatedThread = () =>

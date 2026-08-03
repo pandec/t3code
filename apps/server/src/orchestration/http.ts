@@ -21,7 +21,7 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import { TurnStartBootstrap } from "./TurnStartBootstrap.ts";
+import { TurnStartBootstrap } from "./Services/TurnStartBootstrap.ts";
 
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 

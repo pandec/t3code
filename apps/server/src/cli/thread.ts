@@ -7,13 +7,15 @@ import {
   RuntimeMode,
   ThreadId,
   type ClientOrchestrationCommand,
+  type ModelSelection,
+  type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ThreadTurnStartBootstrap,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,9 +28,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import { expandHomePath } from "../pathExpansion.ts";
-import * as ProcessRunner from "../processRunner.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -48,7 +48,9 @@ import { findActiveProjectTarget } from "./projectTarget.ts";
 import {
   fetchProviderCatalog,
   resolveCliModelSelection,
+  resolveGitCommonDirectory,
   resolveThreadModelInstance,
+  runGitCommand,
   SessionCliError,
   SessionCliServerUnsupportedError,
 } from "./session.ts";
@@ -195,21 +197,52 @@ export const resolveThreadCliWorkspaceSelection = (flags: {
   return Effect.succeed({ mode: "checkout" });
 };
 
-const WORKTREE_GIT_TIMEOUT = Duration.seconds(10);
-const WORKTREE_GIT_MAX_OUTPUT_BYTES = 64 * 1024;
+// The bootstrap payload for --new-worktree: the server creates the thread,
+// prepares the worktree (defaulting the base to the project's current branch
+// when omitted), runs the setup script, and starts the turn — deleting the
+// thread and worktree itself if a later step fails.
+export const buildNewWorktreeBootstrap = (input: {
+  readonly project: Pick<OrchestrationProjectShell, "id" | "workspaceRoot">;
+  readonly title: string;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly workspace: Extract<ThreadCliWorkspaceSelection, { mode: "new-worktree" }>;
+  readonly worktreeBranch: string;
+  readonly createdAt: string;
+}): ThreadTurnStartBootstrap => ({
+  createThread: {
+    projectId: input.project.id,
+    title: input.title,
+    modelSelection: input.modelSelection,
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
+    branch: null,
+    worktreePath: null,
+    createdAt: input.createdAt,
+  },
+  prepareWorktree: {
+    projectCwd: input.project.workspaceRoot,
+    ...(input.workspace.base !== null ? { baseBranch: input.workspace.base } : {}),
+    branch: input.worktreeBranch,
+    ...(input.workspace.startFromOrigin ? { startFromOrigin: true } : {}),
+  },
+  runSetupScript: true,
+});
 
-// Canonicalize and validate an existing worktree path before recording it on
-// the thread. Canonicalization matters: consumers compare worktreePath with
-// strict equality against git-reported paths (e.g. /tmp vs /private/tmp on
-// macOS), and the git-common-dir check rejects directories that are not a
-// worktree of the selected project's repository.
-const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(function* (input: {
+// Canonicalize and validate an existing worktree before recording it on the
+// thread. Canonicalization matters: consumers compare worktreePath with strict
+// equality against git-reported paths (e.g. /tmp vs /private/tmp on macOS),
+// the git-common-dir check rejects directories that are not a worktree of the
+// selected project's repository, and the checked-out branch is recorded on the
+// thread (null for a detached HEAD) — an explicit --branch must match it.
+const resolveExistingWorktree = Effect.fn("resolveExistingWorktree")(function* (input: {
   readonly rawPath: string;
   readonly projectWorkspaceRoot: string;
+  readonly expectedBranch: string | null;
 }) {
   const path = yield* Path.Path;
   const fileSystem = yield* FileSystem.FileSystem;
-  const processRunner = yield* ProcessRunner.make();
   const resolved = path.resolve(expandHomePath(input.rawPath));
   const invalidWorktree = (detail: string) =>
     new ThreadCliWorktreePathError({
@@ -228,38 +261,10 @@ const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(fun
   const canonical = yield* fileSystem
     .realPath(resolved)
     .pipe(Effect.mapError(() => invalidWorktree("Failed to canonicalize the worktree path.")));
-
-  const gitCommonDirectory = (cwd: string) =>
-    processRunner
-      .run({
-        command: "git",
-        args: ["rev-parse", "--git-common-dir"],
-        cwd,
-        env: {
-          ...sanitizeGitRepositoryEnvironment(),
-          GIT_OPTIONAL_LOCKS: "0",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-        timeout: WORKTREE_GIT_TIMEOUT,
-        maxOutputBytes: WORKTREE_GIT_MAX_OUTPUT_BYTES,
-      })
-      .pipe(
-        Effect.flatMap((result) => {
-          const stdout = result.stdout.trim();
-          return result.code === 0 && stdout.length > 0
-            ? Effect.succeed(stdout)
-            : Effect.fail(result.stderr.trim() || `git exited with code ${result.code ?? -1}`);
-        }),
-        Effect.flatMap((raw) => {
-          const absolute = path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
-          return fileSystem.realPath(absolute).pipe(Effect.orElseSucceed(() => absolute));
-        }),
-      );
-
-  const worktreeGitDirectory = yield* gitCommonDirectory(canonical).pipe(
+  const worktreeGitDirectory = yield* resolveGitCommonDirectory(canonical).pipe(
     Effect.mapError(() => invalidWorktree("The worktree path is not inside a git repository.")),
   );
-  const projectGitDirectory = yield* gitCommonDirectory(input.projectWorkspaceRoot).pipe(
+  const projectGitDirectory = yield* resolveGitCommonDirectory(input.projectWorkspaceRoot).pipe(
     Effect.mapError(() =>
       invalidWorktree(
         "The project workspace root is not a git repository, so --worktree cannot be validated.",
@@ -271,7 +276,16 @@ const resolveExistingWorktreePath = Effect.fn("resolveExistingWorktreePath")(fun
       "The worktree path belongs to a different git repository than the project.",
     );
   }
-  return canonical;
+  const head = yield* runGitCommand(canonical, ["symbolic-ref", "--quiet", "--short", "HEAD"]).pipe(
+    Effect.mapError(() => invalidWorktree("Failed to read the worktree's checked-out branch.")),
+  );
+  const branch = head.exitCode === 0 && head.stdout.length > 0 ? head.stdout : null;
+  if (input.expectedBranch !== null && branch !== input.expectedBranch) {
+    return yield* invalidWorktree(
+      `The worktree is on ${branch === null ? "a detached HEAD" : `branch '${branch}'`}, not '${input.expectedBranch}'.`,
+    );
+  }
+  return { worktreePath: canonical, branch };
 });
 
 const randomUuid = Crypto.Crypto.pipe(
@@ -484,7 +498,7 @@ const threadNewCommand = Command.make("new", {
   ),
   branch: Flag.string("branch").pipe(
     Flag.withDescription(
-      "With --new-worktree: name for the new branch (default: temporary name, auto-renamed from the thread title). With --worktree: record the worktree's branch on the thread.",
+      "With --new-worktree: name for the new branch (default: temporary name, auto-renamed from the thread title). With --worktree: assert the worktree's checked-out branch (detected automatically when omitted).",
     ),
     Flag.optional,
   ),
@@ -509,6 +523,16 @@ const threadNewCommand = Command.make("new", {
           identifier: flags.project,
         });
         const projectShell = input.live.shell.projects.find((item) => item.id === project.id)!;
+        // Validate the worktree before any further server round-trips so a
+        // mistyped path fails fast.
+        const existingWorktree =
+          workspace.mode === "existing-worktree"
+            ? yield* resolveExistingWorktree({
+                rawPath: workspace.worktreePath,
+                projectWorkspaceRoot: projectShell.workspaceRoot,
+                expectedBranch: workspace.branch,
+              })
+            : null;
         const hasExplicitTitle = Option.isSome(flags.title);
         const title = hasExplicitTitle
           ? yield* requireTrimmedTitle(flags.title.value)
@@ -569,28 +593,15 @@ const threadNewCommand = Command.make("new", {
           explicitModelSelection ??
           projectShell.defaultModelSelection ??
           ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
-        const existingWorktreePath =
-          workspace.mode === "existing-worktree"
-            ? yield* resolveExistingWorktreePath({
-                rawPath: workspace.worktreePath,
-                projectWorkspaceRoot: projectShell.workspaceRoot,
-              })
-            : null;
         const threadId = ThreadId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);
         const messageId = MessageId.make(yield* randomUuid);
         const createdAt = DateTime.formatIso(yield* DateTime.now);
 
         if (workspace.mode === "new-worktree") {
-          // One bootstrap command: the server creates the thread, prepares the
-          // worktree, runs the setup script, and starts the turn — deleting the
-          // thread itself if a later step fails.
-          const worktreeBranchToken = (yield* randomUuid).replaceAll("-", "");
+          const worktreeBranchToken = yield* randomUuid;
           const worktreeBranch =
-            workspace.branch ??
-            buildTemporaryWorktreeBranchName((byteLength) =>
-              worktreeBranchToken.slice(0, byteLength * 2),
-            );
+            workspace.branch ?? buildTemporaryWorktreeBranchName(() => worktreeBranchToken);
           const result = yield* dispatchThreadCommand(
             input,
             {
@@ -602,25 +613,16 @@ const threadNewCommand = Command.make("new", {
               ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
               runtimeMode: flags.runtimeMode,
               interactionMode: flags.interactionMode,
-              bootstrap: {
-                createThread: {
-                  projectId: project.id,
-                  title,
-                  modelSelection,
-                  runtimeMode: flags.runtimeMode,
-                  interactionMode: flags.interactionMode,
-                  branch: null,
-                  worktreePath: null,
-                  createdAt,
-                },
-                prepareWorktree: {
-                  projectCwd: projectShell.workspaceRoot,
-                  ...(workspace.base !== null ? { baseBranch: workspace.base } : {}),
-                  branch: worktreeBranch,
-                  ...(workspace.startFromOrigin ? { startFromOrigin: true } : {}),
-                },
-                runSetupScript: true,
-              },
+              bootstrap: buildNewWorktreeBootstrap({
+                project: projectShell,
+                title,
+                modelSelection,
+                runtimeMode: flags.runtimeMode,
+                interactionMode: flags.interactionMode,
+                workspace,
+                worktreeBranch,
+                createdAt,
+              }),
               createdAt,
             },
             { timeoutMilliseconds: BOOTSTRAP_DISPATCH_TIMEOUT_MS },
@@ -669,8 +671,8 @@ const threadNewCommand = Command.make("new", {
           modelSelection,
           runtimeMode: flags.runtimeMode,
           interactionMode: flags.interactionMode,
-          branch: workspace.mode === "existing-worktree" ? workspace.branch : null,
-          worktreePath: existingWorktreePath,
+          branch: existingWorktree?.branch ?? null,
+          worktreePath: existingWorktree?.worktreePath ?? null,
           createdAt,
         });
         const result = yield* dispatchThreadCommand(input, {
@@ -710,18 +712,19 @@ const threadNewCommand = Command.make("new", {
                 commandId,
                 messageId,
                 sequence: result.sequence,
-                ...(existingWorktreePath !== null
-                  ? {
-                      workspace: {
+                workspace:
+                  existingWorktree !== null
+                    ? {
                         mode: "existing-worktree",
-                        branch: workspace.mode === "existing-worktree" ? workspace.branch : null,
-                        worktreePath: existingWorktreePath,
-                      },
-                    }
-                  : {}),
+                        branch: existingWorktree.branch,
+                        worktreePath: existingWorktree.worktreePath,
+                      }
+                    : { mode: "checkout", branch: null, worktreePath: null },
               })
-            : existingWorktreePath !== null
-              ? `Created thread ${threadId} (${title}) in worktree ${existingWorktreePath} and started its first turn.`
+            : existingWorktree !== null
+              ? `Created thread ${threadId} (${title}) in worktree ${existingWorktree.worktreePath}${
+                  existingWorktree.branch ? ` on branch ${existingWorktree.branch}` : ""
+                } and started its first turn.`
               : `Created thread ${threadId} (${title}) and started its first turn.`,
         );
       }),

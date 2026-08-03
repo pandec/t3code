@@ -70,7 +70,7 @@ import {
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
-import * as TurnStartBootstrap from "./orchestration/TurnStartBootstrap.ts";
+import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,

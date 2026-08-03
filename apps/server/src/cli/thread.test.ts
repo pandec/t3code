@@ -1,4 +1,4 @@
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, type OrchestrationThreadShell } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,6 +11,7 @@ import {
   CliOrchestrationRequestError,
 } from "./orchestration.ts";
 import {
+  buildNewWorktreeBootstrap,
   compensateFailedThreadStart,
   resolveThreadCliWorkspaceSelection,
   threadSummary,
@@ -202,4 +203,52 @@ it("normalizes missing branch and worktree path to null in thread summaries", ()
 
   assert.isNull(summary.branch);
   assert.isNull(summary.worktreePath);
+});
+
+const newWorktreeSelection = (input: {
+  base?: string | null;
+  branch?: string | null;
+  startFromOrigin?: boolean;
+}) =>
+  ({
+    mode: "new-worktree",
+    base: input.base ?? null,
+    branch: input.branch ?? null,
+    startFromOrigin: input.startFromOrigin ?? false,
+  }) as const;
+
+const bootstrapInput = (workspace: ReturnType<typeof newWorktreeSelection>) => ({
+  project: { id: ProjectId.make("project-1"), workspaceRoot: "/tmp/project" },
+  title: "Start working",
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+  runtimeMode: "full-access" as const,
+  interactionMode: "default" as const,
+  workspace,
+  worktreeBranch: "t3code/feature",
+  createdAt: "2026-08-03T00:00:00.000Z",
+});
+
+it("omits baseBranch and startFromOrigin from the bootstrap when not requested", () => {
+  const bootstrap = buildNewWorktreeBootstrap(bootstrapInput(newWorktreeSelection({})));
+
+  assert.deepEqual(bootstrap.prepareWorktree, {
+    projectCwd: "/tmp/project",
+    branch: "t3code/feature",
+  });
+  assert.isTrue(bootstrap.runSetupScript);
+  assert.isNull(bootstrap.createThread?.branch);
+  assert.isNull(bootstrap.createThread?.worktreePath);
+});
+
+it("includes baseBranch and startFromOrigin in the bootstrap when requested", () => {
+  const bootstrap = buildNewWorktreeBootstrap(
+    bootstrapInput(newWorktreeSelection({ base: "main", startFromOrigin: true })),
+  );
+
+  assert.deepEqual(bootstrap.prepareWorktree, {
+    projectCwd: "/tmp/project",
+    baseBranch: "main",
+    branch: "t3code/feature",
+    startFromOrigin: true,
+  });
 });

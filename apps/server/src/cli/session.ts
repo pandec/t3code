@@ -689,7 +689,7 @@ interface GitCommandResult {
   readonly exitCode: number;
 }
 
-const runGitCommand = Effect.fn("session.runGitCommand")(function* (
+export const runGitCommand = Effect.fn("session.runGitCommand")(function* (
   cwd: string,
   args: ReadonlyArray<string>,
 ) {
@@ -808,7 +808,7 @@ const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
   return { project, shell };
 });
 
-const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
+export const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
   cwd: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;

@@ -11,10 +11,10 @@ import {
   ProjectId,
 } from "@t3tools/contracts";
 
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
-import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
-import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
+import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./TurnStartBootstrap.ts";
 
 type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
