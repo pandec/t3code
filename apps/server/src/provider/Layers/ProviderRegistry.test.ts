@@ -713,7 +713,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
-      it("retains stale OpenCode models when a refresh fails", () => {
+      it("retains stale OpenCode models when a refresh fails, minus deleted custom models", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("opencode"),
           driver: ProviderDriverKind.make("opencode"),
@@ -731,21 +731,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               isCustom: false,
               capabilities: null,
             },
+            {
+              slug: "local/kept",
+              name: "Local Kept",
+              isCustom: true,
+              capabilities: null,
+            },
+            {
+              slug: "local/deleted",
+              name: "Local Deleted",
+              isCustom: true,
+              capabilities: null,
+            },
           ],
           slashCommands: [],
           skills: [],
         } as const satisfies ServerProvider;
+        // A failed probe cannot report upstream inventory, but it still
+        // expands the custom models from settings — so the entry the user
+        // deleted is absent even though the refresh is non-authoritative.
         const refreshedProvider = {
           ...previousProvider,
           status: "error",
           auth: { status: "unknown" },
           checkedAt: "2026-07-17T00:01:00.000Z",
-          models: [],
+          models: [
+            {
+              slug: "local/kept",
+              name: "Local Kept",
+              isCustom: true,
+              capabilities: null,
+            },
+          ],
           message: "Failed to refresh OpenCode models.",
         } satisfies ServerProvider;
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
-          ...previousProvider.models,
+          ...refreshedProvider.models,
+          previousProvider.models[0],
         ]);
       });
 
