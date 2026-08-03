@@ -13,17 +13,19 @@ Command examples use POSIX shell syntax. On Windows, use PowerShell equivalents:
 
 ## Resolve the host before launching anything
 
-**A simulator or emulator runs on the designated build host, not wherever this session happens to be.** `references/local-setup.md` names the build host and any memory-constrained host. On a constrained host, do not boot a simulator, start an emulator, or run a native build unless the user asked for it on that machine in this conversation — it competes with the apps they are actively using. Running the pass on the wrong machine is the one failure here the user pays for directly.
+**A simulator or emulator runs on the designated simulator host, not wherever this session happens to be.** `references/local-setup.md` names that host and any memory-constrained one. On a constrained host, do not boot a simulator or start an emulator unless the user asked for it on that machine in this conversation — a running virtual device competes for memory with the apps they are actively using.
 
-This is a hardware decision and it holds regardless of how the pass is orchestrated. When the build host is not the machine this session is on, the pass is remote by necessity: create a T3 thread on that host (below).
+**This gate covers running virtual devices only. Builds are not restricted** — clean prebuild, full native build, and Expo/EAS builds all run wherever the user asked, including a constrained host. Never redirect a build to another machine to be helpful: someone asking to build here has usually already concluded the other machine is not an option right now, and rerouting them wastes the request.
 
-Once the host is settled, decide where the pass runs from. Inline is fine when the change is JS-only and low-risk, a compatible dev client is installed, and this session is already on the build host — a handful of screenshots is cheaper than any handoff. Prefer a **separate T3 thread** when:
+Host choice is a hardware decision and holds regardless of how the pass is orchestrated. When the simulator host is not the machine this session is on, the pass is remote by necessity: create a T3 thread on that host (below).
+
+Once the host is settled, decide where the pass runs from. Inline is fine when the change is JS-only and low-risk, a compatible dev client is installed, and this session is already on the simulator host — a handful of screenshots is cheaper than any handoff. Prefer a **separate T3 thread** when:
 
 - A native rebuild is required. Prebuild, CocoaPods, and a clean simulator build produce tens of thousands of tokens of output that are worthless to the session holding the change under test.
 - The suspected defect is runtime-only — keyboard geometry, native menu or picker presentation, gesture handling, sheet transitions. Static review cannot settle these, and the pass will need many exploratory interaction cycles.
 - The author of the change would otherwise be verifying it. A delegated tester holds no theory it needs to be right about, and will not read a partial repro as confirmation.
 
-A separate thread on the build host itself is equally valid when this session is already there — the context separation stands on its own.
+A separate thread on the simulator host itself is equally valid when this session is already there — the context separation stands on its own.
 
 Create the thread with the global `t3-cli` skill (`~/.agents/skills/t3-cli`) using `t3 thread new`, against the target host's own T3 server:
 

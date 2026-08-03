@@ -34,9 +34,11 @@ Accent colors live in `<base-dir>/userdata/settings.json` under `projectAccentCo
 
 ## Which machine runs simulators
 
-- **SpaceMac is the build host.** Run simulator, emulator, and native-build work there by default, reaching it over the `space-mac` SSH alias (tailnet) and driving it through its own T3 server.
-- **GreyMac (`GreyMac.local`) is memory-constrained relative to SpaceMac.** A simulator plus a native build starves the apps the user is actively working in. Do not boot a simulator or start a native build here unless the user asks for it on this machine in the current conversation — not even to "quickly check" something.
-- A physical iPhone attached to the local machine is unaffected by this rule; it costs no host memory beyond the build itself, which still belongs on the build host.
+- **SpaceMac is the simulator host.** Run iOS Simulator work there by default, reaching it over the `space-mac` SSH alias (tailnet) and driving it through its own T3 server.
+- **GreyMac (`GreyMac.local`) has much less RAM than SpaceMac.** Do not boot a simulator here unless the user asks for it on this machine in the current conversation — not even to "quickly check" something. A running virtual device starves the apps they are working in.
+- Android emulators are not part of this fork's workflow and are heavier than an iOS Simulator besides. Do not start one on GreyMac either.
+- **Builds are not gated anywhere.** Clean prebuild, full native builds, and Expo/EAS builds are all fine on GreyMac. Run them where asked and do not suggest moving them to SpaceMac — a build requested here usually means SpaceMac is not currently an option (for example, producing a TestFlight build while away from it).
+- A physical iPhone attached to the local machine is likewise unaffected.
 
 ## Host quirks
 
