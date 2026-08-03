@@ -166,25 +166,39 @@ function configsEqual(a: unknown, b: unknown): boolean {
 
 /**
  * Project an envelope to the shape the server echoes back. The server
- * normalizes environment entries on write — a sensitive value is stored out
- * of band and echoed as `value: ""` with `valueRedacted: true`, and a
- * client-sent `valueRedacted: false` is dropped — so a pending envelope can
- * never match its echo byte-for-byte after an environment write, which
- * would leave it pending forever and let later local edits overwrite newer
- * remote changes. Masking `value`/`valueRedacted` on both sides lets such
- * echoes acknowledge the pending write. A concurrent foreign edit differing
- * only in masked fields can acknowledge one write early; that merely
- * reverts this card to prop-based behavior, and the local write's own echo
- * still lands.
+ * normalizes secret-bearing fields on write — a sensitive environment value
+ * is stored out of band and echoed as `value: ""` with `valueRedacted: true`
+ * (and a client-sent `valueRedacted: false` is dropped), and a usage
+ * source's `managementKey` is redacted the same way — so a pending envelope
+ * can never match its echo byte-for-byte after such a write, which would
+ * leave it pending forever and let later local edits overwrite newer remote
+ * changes. Masking those fields on both sides lets such echoes acknowledge
+ * the pending write. A concurrent foreign edit differing only in masked
+ * fields can acknowledge one write early; that merely reverts this card to
+ * prop-based behavior, and the local write's own echo still lands.
  */
-function withComparableEnvironment(envelope: ProviderInstanceConfig): unknown {
-  if (envelope.environment === undefined) return envelope;
+function withComparableSecrets(envelope: ProviderInstanceConfig): unknown {
+  if (envelope.environment === undefined && envelope.usageSource === undefined) return envelope;
   return {
     ...envelope,
-    environment: envelope.environment.map((variable) => ({
-      name: variable.name,
-      sensitive: variable.sensitive,
-    })),
+    ...(envelope.environment !== undefined
+      ? {
+          environment: envelope.environment.map((variable) => ({
+            name: variable.name,
+            sensitive: variable.sensitive,
+          })),
+        }
+      : {}),
+    ...(envelope.usageSource !== undefined
+      ? {
+          usageSource: {
+            kind: envelope.usageSource.kind,
+            ...(envelope.usageSource.managementUrl !== undefined
+              ? { managementUrl: envelope.usageSource.managementUrl }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -423,9 +437,23 @@ function ProviderEnvironmentSection(props: {
   );
 }
 
+/**
+ * Emits field-level intent rather than a whole `usageSource`: the card owns
+ * merging against the last written envelope, so an edit made while an
+ * earlier write is still in flight cannot resurrect a stale sibling field
+ * from this section's props.
+ */
+type ProviderUsageSourcePatch =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly managementUrl?: string | undefined;
+      readonly managementKey?: string;
+    };
+
 function ProviderUsageSourceSection(props: {
   readonly usageSource: ProviderInstanceUsageSource | undefined;
-  readonly onChange: (usageSource: ProviderInstanceUsageSource | undefined) => void;
+  readonly onChange: (patch: ProviderUsageSourcePatch) => void;
 }) {
   const usageSource = props.usageSource;
   const enabled = usageSource?.kind === PROVIDER_USAGE_SOURCE_CLIPROXYAPI;
@@ -436,11 +464,7 @@ function ProviderUsageSourceSection(props: {
         <span className="text-xs font-medium text-foreground">Usage source</span>
         <Switch
           checked={enabled}
-          onCheckedChange={(checked) =>
-            props.onChange(
-              checked ? { kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI, managementKey: "" } : undefined,
-            )
-          }
+          onCheckedChange={(checked) => props.onChange({ enabled: Boolean(checked) })}
           aria-label="Meter usage from a CLIProxyAPI gateway"
         />
       </div>
@@ -455,8 +479,10 @@ function ProviderUsageSourceSection(props: {
             value={usageSource.managementUrl ?? ""}
             onCommit={(value) => {
               const trimmed = value.trim();
-              const { managementUrl: _omit, ...rest } = usageSource;
-              props.onChange(trimmed.length > 0 ? { ...rest, managementUrl: trimmed } : rest);
+              props.onChange({
+                enabled: true,
+                managementUrl: trimmed.length > 0 ? trimmed : undefined,
+              });
             }}
             placeholder="Management URL — defaults to the ANTHROPIC_BASE_URL origin"
             spellCheck={false}
@@ -464,13 +490,7 @@ function ProviderUsageSourceSection(props: {
           />
           <DraftInput
             value={usageSource.managementKeyRedacted ? "" : usageSource.managementKey}
-            onCommit={(value) =>
-              props.onChange({
-                ...usageSource,
-                managementKey: value,
-                managementKeyRedacted: false,
-              })
-            }
+            onCommit={(value) => props.onChange({ enabled: true, managementKey: value })}
             type="password"
             autoComplete="off"
             placeholder={
@@ -650,7 +670,7 @@ export function ProviderInstanceCard({
   // only cleared when an echo structurally matches it: an intermediate echo
   // (of an older write, or a foreign edit) must not make a newer in-flight
   // write invisible to the next edit. Environment writes are compared with
-  // the server-normalized fields masked (see withComparableEnvironment) so
+  // the server-normalized fields masked (see withComparableSecrets) so
   // their redacted echoes still acknowledge. Remaining caveat, bounded to
   // this card's mount lifetime: a server-rejected write (abnormal —
   // payloads are schema-valid) keeps serving as the base, resubmitted by
@@ -660,8 +680,8 @@ export function ProviderInstanceCard({
     if (
       pendingInstanceRef.current !== null &&
       configsEqual(
-        withComparableEnvironment(pendingInstanceRef.current),
-        withComparableEnvironment(instance),
+        withComparableSecrets(pendingInstanceRef.current),
+        withComparableSecrets(instance),
       )
     ) {
       pendingInstanceRef.current = null;
@@ -832,13 +852,36 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateUsageSource = (usageSource: ProviderInstanceUsageSource | undefined) => {
-    const { usageSource: _omit, ...rest } = instance;
-    onUpdate(
-      usageSource !== undefined
-        ? ({ ...rest, usageSource } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
+  const updateUsageSource = (patch: ProviderUsageSourcePatch) => {
+    const { usageSource: current, ...rest } = baseInstance();
+    if (!patch.enabled) {
+      commitInstance(rest as ProviderInstanceConfig);
+      return;
+    }
+    const base: ProviderInstanceUsageSource = current ?? {
+      kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
+      managementKey: "",
+    };
+    const managementUrl =
+      "managementUrl" in patch ? patch.managementUrl : (base.managementUrl ?? undefined);
+    // A newly entered key is unredacted; the server redacts it on echo.
+    const keyFields =
+      patch.managementKey !== undefined
+        ? { managementKey: patch.managementKey, managementKeyRedacted: false }
+        : {
+            managementKey: base.managementKey,
+            ...(base.managementKeyRedacted !== undefined
+              ? { managementKeyRedacted: base.managementKeyRedacted }
+              : {}),
+          };
+    commitInstance({
+      ...rest,
+      usageSource: {
+        kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
+        ...(managementUrl !== undefined ? { managementUrl } : {}),
+        ...keyFields,
+      },
+    } as ProviderInstanceConfig);
   };
 
   const titleIconNode = driverKind ? (
