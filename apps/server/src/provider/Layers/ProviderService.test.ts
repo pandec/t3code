@@ -82,26 +82,31 @@ function makeInstanceRegistry(
   const byInstanceId = new Map(entries.map((entry) => [entry.instanceId, entry] as const));
   const unsupported = (instanceId: ProviderInstanceId) =>
     new ProviderUnsupportedError({ provider: ProviderDriverKind.make(instanceId) });
-  return {
-    getByInstance: (instanceId) => {
-      const entry = byInstanceId.get(instanceId);
-      return entry ? Effect.succeed(entry.adapter) : Effect.fail(unsupported(instanceId));
-    },
-    getInstanceInfo: (instanceId) => {
+  const resolveInstance: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]["resolveInstance"] =
+    (instanceId) => {
       const entry = byInstanceId.get(instanceId);
       return entry
         ? Effect.succeed({
-            instanceId,
-            driverKind: entry.driverKind,
-            displayName: undefined,
-            enabled: true,
-            continuationIdentity: {
+            adapter: entry.adapter,
+            info: {
+              instanceId,
               driverKind: entry.driverKind,
-              continuationKey: entry.continuationKey,
+              displayName: undefined,
+              enabled: true,
+              continuationIdentity: {
+                driverKind: entry.driverKind,
+                continuationKey: entry.continuationKey,
+              },
             },
           })
         : Effect.fail(unsupported(instanceId));
-    },
+    };
+  return {
+    resolveInstance,
+    getByInstance: (instanceId) =>
+      resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.adapter)),
+    getInstanceInfo: (instanceId) =>
+      resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.info)),
     listInstances: () => Effect.succeed(entries.map((entry) => entry.instanceId)),
     listProviders: () =>
       Effect.succeed(Array.from(new Set(entries.map((entry) => entry.driverKind)))),
@@ -506,6 +511,16 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
     });
     const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
       ...registryBase,
+      resolveInstance: (instanceId) =>
+        registryBase
+          .resolveInstance(instanceId)
+          .pipe(
+            Effect.map((resolved) =>
+              instanceId === claudeAgentInstanceId
+                ? { ...resolved, info: { ...resolved.info, enabled: false } }
+                : resolved,
+            ),
+          ),
       getInstanceInfo: (instanceId) =>
         instanceId === claudeAgentInstanceId
           ? Effect.succeed({
@@ -570,24 +585,29 @@ it.effect(
         new ProviderUnsupportedError({
           provider: driverKind,
         });
-      const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
-        getByInstance: (requestedInstanceId) =>
-          requestedInstanceId === instanceId
-            ? Effect.succeed(codex.adapter)
-            : Effect.fail(unsupported()),
-        getInstanceInfo: (requestedInstanceId) =>
+      const resolveInstance: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]["resolveInstance"] =
+        (requestedInstanceId) =>
           requestedInstanceId === instanceId
             ? Effect.succeed({
-                instanceId,
-                driverKind,
-                displayName: "Codex Personal",
-                enabled: true,
-                continuationIdentity: {
+                adapter: codex.adapter,
+                info: {
+                  instanceId,
                   driverKind,
-                  continuationKey: "codex:/Users/example/.codex",
+                  displayName: "Codex Personal",
+                  enabled: true,
+                  continuationIdentity: {
+                    driverKind,
+                    continuationKey: "codex:/Users/example/.codex",
+                  },
                 },
               })
-            : Effect.fail(unsupported()),
+            : Effect.fail(unsupported());
+      const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+        resolveInstance,
+        getByInstance: (requestedInstanceId) =>
+          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.adapter)),
+        getInstanceInfo: (requestedInstanceId) =>
+          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.info)),
         listInstances: () => Effect.succeed([instanceId]),
         listProviders: () => Effect.succeed([driverKind] as const),
         streamChanges: Stream.empty,
@@ -649,24 +669,29 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
       new ProviderUnsupportedError({
         provider: ProviderDriverKind.make("codex"),
       });
-    const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
-      getByInstance: (requestedInstanceId) =>
-        requestedInstanceId === instanceId
-          ? Effect.succeed(codex.adapter)
-          : Effect.fail(unsupported()),
-      getInstanceInfo: (requestedInstanceId) =>
+    const resolveInstance: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]["resolveInstance"] =
+      (requestedInstanceId) =>
         requestedInstanceId === instanceId
           ? Effect.succeed({
-              instanceId,
-              driverKind,
-              displayName: "Codex Personal",
-              enabled: false,
-              continuationIdentity: {
+              adapter: codex.adapter,
+              info: {
+                instanceId,
                 driverKind,
-                continuationKey: "codex:/Users/example/.codex",
+                displayName: "Codex Personal",
+                enabled: false,
+                continuationIdentity: {
+                  driverKind,
+                  continuationKey: "codex:/Users/example/.codex",
+                },
               },
             })
-          : Effect.fail(unsupported()),
+          : Effect.fail(unsupported());
+    const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+      resolveInstance,
+      getByInstance: (requestedInstanceId) =>
+        resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.adapter)),
+      getInstanceInfo: (requestedInstanceId) =>
+        resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.info)),
       listInstances: () => Effect.succeed([instanceId]),
       listProviders: () => Effect.succeed([CODEX_DRIVER] as const),
       streamChanges: Stream.empty,
@@ -996,6 +1021,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(destination.resumeCursor, { opaque: "fork-fork-destination" });
       assert.equal(destination.status, "stopped");
       assert.equal(destination.providerInstanceId, source.providerInstanceId);
+      assert.equal(
+        (destination.runtimePayload as { readonly continuationKey?: unknown } | null)
+          ?.continuationKey,
+        "codex:instance:codex",
+      );
       assert.equal(routing.codex.forkSession.mock.calls.length, 1);
       yield* provider.stopSession({ threadId: sourceThreadId });
     }),
@@ -1949,6 +1979,235 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.instanceOf(failure, ProviderValidationError);
       assert.include(failure.issue, "cannot be verified");
       assert.equal(targetClaude.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses persisted keys for removed owners and rejects changed same-id identities", () =>
+    Effect.gen(function* () {
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const targetInstanceId = ProviderInstanceId.make("claude_replacement");
+      const targetContinuationKey = "claude:home:/shared-home";
+      const targetClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(
+          Layer.succeed(
+            ProviderAdapterRegistry.ProviderAdapterRegistry,
+            makeInstanceRegistry([
+              {
+                instanceId: targetInstanceId,
+                driverKind: CLAUDE_AGENT_DRIVER,
+                continuationKey: targetContinuationKey,
+                adapter: targetClaude.adapter,
+              },
+            ]),
+          ),
+        ),
+        Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+      const matchingThreadId = asThreadId("thread-removed-owner-matching-key");
+      const differingThreadId = asThreadId("thread-removed-owner-differing-key");
+      const changedSameIdThreadId = asThreadId("thread-same-owner-changed-key");
+      const matchingCursor = { opaque: "matching-persisted-session" };
+
+      yield* Effect.gen(function* () {
+        const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        for (const binding of [
+          {
+            threadId: matchingThreadId,
+            providerInstanceId: ProviderInstanceId.make("claude_removed_matching"),
+            resumeCursor: matchingCursor,
+            continuationKey: targetContinuationKey,
+          },
+          {
+            threadId: differingThreadId,
+            providerInstanceId: ProviderInstanceId.make("claude_removed_differing"),
+            resumeCursor: { opaque: "differing-persisted-session" },
+            continuationKey: "claude:home:/different-home",
+          },
+          {
+            threadId: changedSameIdThreadId,
+            providerInstanceId: targetInstanceId,
+            resumeCursor: { opaque: "same-id-old-home-session" },
+            continuationKey: "claude:home:/old-home",
+          },
+        ] as const) {
+          yield* repository.upsert({
+            threadId: binding.threadId,
+            providerName: "claudeAgent",
+            providerInstanceId: binding.providerInstanceId,
+            adapterKey: "claudeAgent",
+            runtimeMode: "full-access",
+            status: "stopped",
+            lastSeenAt: "2026-01-01T00:00:00.000Z",
+            resumeCursor: binding.resumeCursor,
+            runtimePayload: {
+              cwd: "/tmp/project",
+              continuationKey: binding.continuationKey,
+            },
+          });
+        }
+      }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(matchingThreadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: targetInstanceId,
+          threadId: matchingThreadId,
+          runtimeMode: "full-access",
+        });
+
+        for (const threadId of [differingThreadId, changedSameIdThreadId]) {
+          const failure = yield* provider
+            .startSession(threadId, {
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: targetInstanceId,
+              threadId,
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.flip);
+          assert.instanceOf(failure, ProviderValidationError);
+          assert.include(failure.issue, "discard the conversation context");
+        }
+
+        const recoveryFailure = yield* provider
+          .sendTurn({
+            threadId: changedSameIdThreadId,
+            input: "do not recover with the changed home",
+            attachments: [],
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(recoveryFailure, ProviderValidationError);
+        assert.include(recoveryFailure.issue, "no longer has the continuation identity");
+
+        const forkFailure = yield* provider
+          .forkConversation({
+            sourceThreadId: changedSameIdThreadId,
+            destinationThreadId: asThreadId("thread-changed-identity-fork"),
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(forkFailure, ProviderValidationError);
+        assert.include(forkFailure.issue, "no longer has the continuation identity");
+      }).pipe(Effect.provide(providerLayer));
+
+      assert.equal(targetClaude.startSession.mock.calls.length, 1);
+      assert.equal(targetClaude.forkSession.mock.calls.length, 0);
+      assert.deepInclude(targetClaude.startSession.mock.calls[0]?.[0], {
+        providerInstanceId: targetInstanceId,
+        resumeCursor: matchingCursor,
+        cwd: "/tmp/project",
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("persists the continuation key from the adapter's resolved instance snapshot", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claude_mutable");
+      const oldContinuationKey = "claude:home:/old-home";
+      const newContinuationKey = "claude:home:/new-home";
+      const oldClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const newClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      let currentResolved: ProviderAdapterRegistry.ResolvedProviderInstance;
+      const oldAdapter: ProviderAdapterShape<ProviderAdapterError> = {
+        ...oldClaude.adapter,
+        startSession: (input) =>
+          Effect.sync(() => {
+            currentResolved = {
+              adapter: newClaude.adapter,
+              info: {
+                instanceId,
+                driverKind: CLAUDE_AGENT_DRIVER,
+                displayName: undefined,
+                enabled: true,
+                continuationIdentity: {
+                  driverKind: CLAUDE_AGENT_DRIVER,
+                  continuationKey: newContinuationKey,
+                },
+              },
+            };
+          }).pipe(Effect.andThen(oldClaude.adapter.startSession(input))),
+      };
+      currentResolved = {
+        adapter: oldAdapter,
+        info: {
+          instanceId,
+          driverKind: CLAUDE_AGENT_DRIVER,
+          displayName: undefined,
+          enabled: true,
+          continuationIdentity: {
+            driverKind: CLAUDE_AGENT_DRIVER,
+            continuationKey: oldContinuationKey,
+          },
+        },
+      };
+      const unsupported = () => new ProviderUnsupportedError({ provider: CLAUDE_AGENT_DRIVER });
+      const resolveInstance: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]["resolveInstance"] =
+        (requestedInstanceId) =>
+          requestedInstanceId === instanceId
+            ? Effect.succeed(currentResolved)
+            : Effect.fail(unsupported());
+      const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+        resolveInstance,
+        getByInstance: (requestedInstanceId) =>
+          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.adapter)),
+        getInstanceInfo: (requestedInstanceId) =>
+          resolveInstance(requestedInstanceId).pipe(Effect.map((resolved) => resolved.info)),
+        listInstances: () => Effect.succeed([instanceId]),
+        listProviders: () => Effect.succeed([CLAUDE_AGENT_DRIVER]),
+        streamChanges: Stream.empty,
+        subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+          PubSub.subscribe(pubsub),
+        ),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+      const threadId = asThreadId("thread-mutable-instance-snapshot");
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: instanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(providerLayer));
+
+      const persisted = yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        return Option.getOrThrow(yield* directory.getBinding(threadId));
+      }).pipe(Effect.provide(directoryLayer));
+      assert.equal(
+        (persisted.runtimePayload as { readonly continuationKey?: unknown } | null)
+          ?.continuationKey,
+        oldContinuationKey,
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

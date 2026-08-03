@@ -2262,6 +2262,82 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("keeps the prior owner projected when a deferred cold switch is rejected", async () => {
+    const harness = await createHarness({
+      unavailableInstanceIds: new Set(["codex"]),
+      startSessionEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: ProviderDriverKind.make("codex"),
+            method: "thread.turn.start",
+            detail: "persisted owner compatibility cannot be verified",
+          }),
+        ),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-set-rejected-unavailable-owner"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
+        threadId: ThreadId.make("thread-1"),
+        status: "stopped",
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.make("cmd-meta-rejected-unavailable-owner"),
+      threadId: ThreadId.make("thread-1"),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex_work"),
+        model: "gpt-5-codex",
+      },
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-rejected-unavailable-owner"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-rejected-unavailable-owner"),
+        role: "user",
+        text: "do not lose the old owner",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex_work"),
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "error";
+    });
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session).toMatchObject({
+      status: "error",
+      providerName: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      lastError: "persisted owner compatibility cannot be verified",
+    });
+  });
+
   it("rejects a stopped-thread switch across incompatible continuation groups", async () => {
     const harness = await createHarness({
       continuationKeys: {

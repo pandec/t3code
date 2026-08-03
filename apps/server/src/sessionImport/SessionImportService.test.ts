@@ -566,6 +566,10 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       state.bindings.set(existing.threadId, {
         ...existingBinding!,
         providerInstanceId: ProviderInstanceId.make("claude-secondary"),
+        runtimePayload: {
+          ...(existingBinding?.runtimePayload as Record<string, unknown>),
+          continuationKey: "claude:home:/tmp/.claude-secondary",
+        },
       });
 
       const candidates = yield* service.listCandidates({ projectId });
@@ -605,6 +609,34 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       state.bindings.set(existing.threadId, {
         ...existingBinding!,
         providerInstanceId: secondaryInstanceId,
+      });
+
+      expect(yield* service.listCandidates({ projectId })).toHaveLength(0);
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "already-imported",
+        existingThreadId: existing.threadId,
+      });
+    }),
+  );
+
+  it.effect("deduplicates a binding whose removed owner left a persisted continuation key", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const existingBinding = state.bindings.get(existing.threadId);
+      expect(existingBinding).toBeDefined();
+      state.bindings.set(existing.threadId, {
+        ...existingBinding!,
+        providerInstanceId: ProviderInstanceId.make("claude-removed"),
       });
 
       expect(yield* service.listCandidates({ projectId })).toHaveLength(0);

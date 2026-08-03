@@ -7,7 +7,6 @@ import * as Schema from "effect/Schema";
 
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderSessionDirectoryPersistenceError, ProviderValidationError } from "../Errors.ts";
-import { readPersistedContinuationKey } from "../runtimeBindingContinuation.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBindingWithMetadata,
@@ -135,15 +134,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         : undefined);
     const instanceChanged =
       existingRuntime !== undefined && existingProviderInstanceId !== providerInstanceId;
-    const existingContinuationKey = readPersistedContinuationKey(existingRuntime?.runtimePayload);
-    const nextContinuationKey = readPersistedContinuationKey(binding.runtimePayload);
-    const continuationGroupChanged =
-      instanceChanged &&
-      (binding.continuationCompatible === false ||
-        (binding.continuationCompatible !== true &&
-          (existingContinuationKey === undefined ||
-            nextContinuationKey === undefined ||
-            existingContinuationKey !== nextContinuationKey)));
+    const continuationGroupChanged = instanceChanged && binding.continuationCompatible !== true;
     const ownerChanged =
       existingRuntime !== undefined && (providerChanged || continuationGroupChanged);
 

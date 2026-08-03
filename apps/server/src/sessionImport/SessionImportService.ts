@@ -44,6 +44,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import { readPersistedContinuationKey } from "../provider/runtimeBindingContinuation.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 
@@ -185,7 +186,9 @@ export const makeSessionImportService = Effect.gen(function* () {
       // instance, whose id is the provider/driver name.
       const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
       const continuationKey =
-        continuationKeyByInstance.get(ownerInstanceId) ?? `provider-instance:${ownerInstanceId}`;
+        readPersistedContinuationKey(binding.runtimePayload) ??
+        continuationKeyByInstance.get(ownerInstanceId) ??
+        `provider-instance:${ownerInstanceId}`;
       const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ThreadId>();
       for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
         if (!ids.has(id)) ids.set(id, binding.threadId);

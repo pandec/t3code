@@ -41,10 +41,25 @@ export interface ProviderInstanceRoutingInfo {
   readonly failoverInstanceId?: ProviderInstanceId | undefined;
 }
 
+export interface ResolvedProviderInstance {
+  readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+  readonly info: ProviderInstanceRoutingInfo;
+}
+
 /**
  * ProviderAdapterRegistryShape - Service API for adapter lookup.
  */
 export interface ProviderAdapterRegistryShape {
+  /**
+   * Resolve the adapter and routing identity from one provider-instance
+   * snapshot. Session lifecycle callers that persist continuation identity
+   * must use this handle rather than re-reading the dynamic registry after an
+   * adapter operation.
+   */
+  readonly resolveInstance: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ResolvedProviderInstance, ProviderUnsupportedError>;
+
   /**
    * Resolve the adapter for a specific instance id. Returns
    * `ProviderUnsupportedError` if no such instance is currently registered

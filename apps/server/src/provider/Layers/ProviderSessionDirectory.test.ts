@@ -241,6 +241,34 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       });
     }));
 
+  it("clears resume state when an instance switch omits the compatibility verdict", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-owner-change-without-verdict");
+      const continuationKey = "claude:home:/shared-home";
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-personal"),
+        threadId,
+        resumeCursor: { claudeSessionId: "shared-session" },
+        runtimePayload: { continuationKey, cwd: "/tmp/old-project" },
+      });
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-work"),
+        threadId,
+        runtimePayload: { continuationKey, cwd: "/tmp/new-project" },
+      });
+
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(binding.resumeCursor, null);
+      assert.deepEqual(binding.runtimePayload, {
+        continuationKey,
+        cwd: "/tmp/new-project",
+      });
+    }));
+
   it("refreshes legacy null-instance rows and rejects same-timestamp stale revisions", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

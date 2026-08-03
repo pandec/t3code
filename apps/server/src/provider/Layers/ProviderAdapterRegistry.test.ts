@@ -160,6 +160,13 @@ it.layer(layer)("ProviderAdapterRegistryLive", (it) => {
       const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
       const claudeInstanceId = defaultInstanceIdForDriver(CLAUDE_AGENT_DRIVER);
 
+      const resolved = yield* registry.resolveInstance(claudeInstanceId);
+      assert.strictEqual(resolved.adapter, fakeClaudeAdapter);
+      assert.equal(
+        resolved.info.continuationIdentity.continuationKey,
+        "claudeAgent:instance:claudeAgent",
+      );
+
       const adapter = yield* registry.getByInstance(claudeInstanceId);
       assert.strictEqual(adapter, fakeClaudeAdapter);
 

@@ -33,20 +33,7 @@ import {
 const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(function* () {
   const registry = yield* ProviderInstanceRegistry;
 
-  const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) =>
-    registry.getInstance(instanceId).pipe(
-      Effect.flatMap((instance) =>
-        instance === undefined
-          ? Effect.fail(
-              new ProviderUnsupportedError({
-                provider: instanceId,
-              }),
-            )
-          : Effect.succeed(instance.adapter),
-      ),
-    );
-
-  const getInstanceInfo: ProviderAdapterRegistryShape["getInstanceInfo"] = (instanceId) =>
+  const resolveInstance: ProviderAdapterRegistryShape["resolveInstance"] = (instanceId) =>
     Effect.all([
       registry.getInstance(instanceId),
       registry.getInstanceConfig?.(instanceId) ?? Effect.succeed(undefined),
@@ -59,16 +46,25 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
               }),
             )
           : Effect.succeed({
-              instanceId: instance.instanceId,
-              driverKind: instance.driverKind,
-              displayName: instance.displayName,
-              accentColor: instance.accentColor,
-              enabled: instance.enabled,
-              continuationIdentity: instance.continuationIdentity,
-              failoverInstanceId: config?.failoverInstanceId,
+              adapter: instance.adapter,
+              info: {
+                instanceId: instance.instanceId,
+                driverKind: instance.driverKind,
+                displayName: instance.displayName,
+                accentColor: instance.accentColor,
+                enabled: instance.enabled,
+                continuationIdentity: instance.continuationIdentity,
+                failoverInstanceId: config?.failoverInstanceId,
+              },
             }),
       ),
     );
+
+  const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) =>
+    resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.adapter));
+
+  const getInstanceInfo: ProviderAdapterRegistryShape["getInstanceInfo"] = (instanceId) =>
+    resolveInstance(instanceId).pipe(Effect.map((resolved) => resolved.info));
 
   const listInstances: ProviderAdapterRegistryShape["listInstances"] = () =>
     registry.listInstances.pipe(
@@ -93,6 +89,7 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
     );
 
   return {
+    resolveInstance,
     getByInstance,
     getInstanceInfo,
     listInstances,
