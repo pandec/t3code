@@ -132,9 +132,11 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       (existingRuntime?.providerName === binding.provider
         ? defaultInstanceIdForDriver(binding.provider)
         : undefined);
+    const instanceChanged =
+      existingRuntime !== undefined && existingProviderInstanceId !== providerInstanceId;
+    const continuationGroupChanged = instanceChanged && binding.continuationCompatible !== true;
     const ownerChanged =
-      existingRuntime !== undefined &&
-      (providerChanged || existingProviderInstanceId !== providerInstanceId);
+      existingRuntime !== undefined && (providerChanged || continuationGroupChanged);
 
     yield* repository
       .upsert({
