@@ -11,7 +11,9 @@ import {
   applyProviderUsageThresholds,
   collectProviderUsageAlerts,
   deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
+  featuredProviderUsageAccount,
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
@@ -1037,6 +1039,100 @@ describe("server-owned provider usage snapshots", () => {
     );
     expect(fromServer?.windows[0]?.usedPercent).toBe(42);
     expect(fromServer).toEqual(fromActivity);
+  });
+});
+
+describe("CLIProxyAPI gateway pool snapshots", () => {
+  const gatewaySnapshot = {
+    instanceId: ProviderInstanceId.make("claudeAgent_proxy"),
+    payload: {
+      source: "cliproxyapi.management",
+      accounts: [
+        {
+          id: "claude-tier2.json",
+          label: "second@example.com",
+          provider: "claude",
+          priority: 75,
+          state: "available",
+          usage: {
+            source: "claude.usage-api",
+            rateLimits: {
+              limits: [{ kind: "session", percent: 12, resets_at: "2026-07-25T09:00:00.000Z" }],
+            },
+          },
+        },
+        {
+          id: "claude-tier1.json",
+          label: "first@example.com",
+          provider: "claude",
+          priority: 100,
+          state: "cooldown",
+          usage: {
+            source: "claude.usage-api",
+            rateLimits: {
+              limits: [{ kind: "session", percent: 97, resets_at: "2026-07-25T09:00:00.000Z" }],
+            },
+          },
+        },
+        {
+          id: "codex.json",
+          label: "codex@example.com",
+          provider: "codex",
+          priority: 50,
+          state: "available",
+          planType: "pro",
+          usage: {
+            primary: { usedPercent: 33, windowDurationMins: 10_080, resetsAt: 1_784_970_000 },
+          },
+        },
+        {
+          id: "broken.json",
+          label: "broken@example.com",
+          provider: "claude",
+          priority: 25,
+          state: "available",
+          usage: null,
+          error: "auth token refresh failed",
+        },
+      ],
+    },
+    observedAt: Date.parse("2026-07-25T00:00:00.000Z"),
+  };
+
+  it("derives per-account usage across mixed upstream providers", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    expect(pool?.providerInstanceId).toBe("claudeAgent_proxy");
+    expect(pool?.accounts).toHaveLength(4);
+    const byId = new Map(pool?.accounts.map((account) => [account.id, account]));
+    expect(byId.get("claude-tier2.json")?.usage?.windows[0]?.usedPercent).toBe(12);
+    expect(byId.get("claude-tier1.json")?.state).toBe("cooldown");
+    expect(byId.get("codex.json")?.usage?.providerLabel).toBe("Codex");
+    expect(byId.get("codex.json")?.planType).toBe("pro");
+    expect(byId.get("broken.json")?.usage).toBeNull();
+    expect(byId.get("broken.json")?.error).toBe("auth token refresh failed");
+  });
+
+  it("features the highest-priority available Claude account, skipping cooldowns", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    expect(featuredProviderUsageAccount(pool?.accounts ?? [])?.id).toBe("claude-tier2.json");
+  });
+
+  it("collapses to the featured account for single-account surfaces", () => {
+    const snapshot = deriveProviderUsageSnapshotFromServerSnapshot(gatewaySnapshot, {
+      provider: ProviderDriverKind.make("claudeAgent"),
+    });
+    expect(snapshot?.providerLabel).toBe("Claude");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(12);
+  });
+
+  it("returns null for non-gateway payloads", () => {
+    expect(
+      deriveProviderUsageAccountsFromServerSnapshot({
+        instanceId: ProviderInstanceId.make("claude-work"),
+        payload: { source: "claude.usage-api", rateLimits: { limits: [] } },
+        observedAt: Date.parse("2026-07-25T00:00:00.000Z"),
+      }),
+    ).toBeNull();
   });
 });
 

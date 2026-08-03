@@ -669,11 +669,20 @@ type ProviderUsagePayloadSource = {
  * Normalize one server-owned per-instance usage snapshot. The caller supplies
  * the instance's driver via `options.provider` (it already has it from the
  * provider list).
+ *
+ * A gateway snapshot (`cliproxyapi.management`) carries a pool of upstream
+ * accounts rather than one; here it collapses to the featured account so
+ * single-account surfaces (the ring, alerts) keep working — the full pool is
+ * available through `deriveProviderUsageAccountsFromServerSnapshot`.
  */
 export function deriveProviderUsageSnapshotFromServerSnapshot(
   snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
   options: Omit<DeriveProviderUsageOptions, "providerInstanceId"> = {},
 ): ProviderUsageSnapshot | null {
+  const accounts = deriveProviderUsageAccountsFromServerSnapshot(snapshot, options);
+  if (accounts !== null) {
+    return featuredProviderUsageAccount(accounts.accounts)?.usage ?? null;
+  }
   return deriveProviderUsageSnapshotFromSources(
     [
       {
@@ -686,6 +695,120 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
       providerInstanceId: snapshot.instanceId,
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// CLIProxyAPI gateway pools
+//
+// A provider instance backed by a CLIProxyAPI gateway reports one snapshot
+// carrying every pooled upstream account: `{ source: "cliproxyapi.management",
+// accounts: [{ id, label, provider, priority, state, planType?, usage,
+// error? }] }`. Each account's `usage` arrives in the matching direct
+// provider's payload shape, so per-account normalization reuses the dispatch
+// above verbatim.
+// ---------------------------------------------------------------------------
+
+export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
+
+export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";
+
+export type ProviderUsageAccount = {
+  /** Stable identity within the pool (the gateway's auth-file name). */
+  readonly id: string;
+  readonly label: string;
+  /** Upstream provider slug as the gateway reports it ("claude", "codex"). */
+  readonly provider: string;
+  /** Failover-ladder tier; higher serves first. Null when unreported. */
+  readonly priority: number | null;
+  readonly state: ProviderUsageAccountState;
+  /** Plan tier when the upstream reports one (Codex only today). */
+  readonly planType: string | null;
+  /** Why this account's usage is missing, when the gateway said so. */
+  readonly error: string | null;
+  readonly usage: ProviderUsageSnapshot | null;
+};
+
+export type ProviderUsageAccountsSnapshot = {
+  readonly providerInstanceId: string;
+  readonly accounts: ReadonlyArray<ProviderUsageAccount>;
+  readonly updatedAt: string;
+};
+
+function asAccountState(value: unknown): ProviderUsageAccountState {
+  return value === "disabled" || value === "cooldown" ? value : "available";
+}
+
+/**
+ * Normalize a gateway pool snapshot into per-account usage. Returns null for
+ * snapshots from any other source, which is how callers detect that an
+ * instance is gateway-backed in the first place.
+ */
+export function deriveProviderUsageAccountsFromServerSnapshot(
+  snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
+  options: Omit<DeriveProviderUsageOptions, "providerInstanceId" | "provider"> = {},
+): ProviderUsageAccountsSnapshot | null {
+  const payload = asRecord(snapshot.payload);
+  if (asString(payload?.source) !== CLIPROXYAPI_USAGE_PAYLOAD_SOURCE) return null;
+  const rawAccounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  const observedAtIso = DateTime.formatIso(DateTime.makeUnsafe(snapshot.observedAt));
+
+  const accounts: ProviderUsageAccount[] = [];
+  for (const [index, value] of rawAccounts.entries()) {
+    const account = asRecord(value);
+    if (!account) continue;
+    accounts.push({
+      id: asString(account.id) ?? `account-${index}`,
+      label: asString(account.label) ?? `Account ${index + 1}`,
+      provider: asString(account.provider) ?? "unknown",
+      priority: asFiniteNumber(account.priority),
+      state: asAccountState(account.state),
+      planType: asString(account.planType),
+      error: asString(account.error),
+      // No driver filter (deliberately not spreading caller options): a
+      // Claude-driver gateway instance legitimately pools Codex accounts for
+      // its custom models.
+      usage: deriveProviderUsageSnapshotFromSources(
+        [{ payload: account.usage, createdAt: observedAtIso }],
+        {
+          ...(options.now !== undefined ? { now: options.now } : {}),
+          ...(options.thresholds !== undefined ? { thresholds: options.thresholds } : {}),
+          providerInstanceId: snapshot.instanceId,
+        },
+      ),
+    });
+  }
+  if (accounts.length === 0) return null;
+
+  return {
+    providerInstanceId: snapshot.instanceId,
+    accounts,
+    updatedAt: observedAtIso,
+  };
+}
+
+/**
+ * The pooled account a compact single-account surface should represent: the
+ * highest-priority available Claude account — the one the gateway's failover
+ * ladder serves next — falling back to any account that has usage to show.
+ */
+export function featuredProviderUsageAccount(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+): ProviderUsageAccount | null {
+  const byPriority = (a: ProviderUsageAccount, b: ProviderUsageAccount) =>
+    (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
+  const withUsage = accounts.filter((account) => account.usage !== null);
+  const candidates = [
+    withUsage.filter((account) => account.state === "available" && account.provider === "claude"),
+    withUsage.filter((account) => account.state === "available"),
+    withUsage,
+  ];
+  for (const pool of candidates) {
+    if (pool.length > 0) {
+      // Hermes lacks ES2023 change-by-copy methods; filter() copies already.
+      return pool.sort(byPriority)[0] ?? null;
+    }
+  }
+  return null;
 }
 
 /**

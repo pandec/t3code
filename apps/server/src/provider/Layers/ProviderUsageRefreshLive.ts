@@ -14,7 +14,13 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import { HttpClient } from "effect/unstable/http";
 
+import {
+  makeCliProxyApiUsageProbe,
+  resolveCliProxyApiUsageProbeTarget,
+  type CliProxyApiUsageProbeTarget,
+} from "../cliProxyApiUsage.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
@@ -173,8 +179,71 @@ export const ProviderUsageRefreshLive = Layer.effect(
   Effect.gen(function* () {
     const registry = yield* ProviderInstanceRegistry;
     const health = yield* ProviderInstanceHealth;
+    const httpClient = yield* HttpClient.HttpClient;
+
+    // Gateway probes are memoized per instance: the coordinator's
+    // single-flight join compares adapters by identity, and the probe closure
+    // holds auth-failure cooldown state that must survive across refreshes.
+    const gatewayProbes = new Map<
+      ProviderInstanceId,
+      {
+        readonly target: CliProxyApiUsageProbeTarget;
+        readonly adapter: UsageRefreshProviderInstance["adapter"];
+      }
+    >();
+
+    const gatewayAdapterFor = (
+      instanceId: ProviderInstanceId,
+      target: CliProxyApiUsageProbeTarget,
+    ): UsageRefreshProviderInstance["adapter"] => {
+      const cached = gatewayProbes.get(instanceId);
+      if (
+        cached &&
+        cached.target.managementUrl === target.managementUrl &&
+        cached.target.managementKey === target.managementKey
+      ) {
+        return cached.adapter;
+      }
+      const probe = makeCliProxyApiUsageProbe(target);
+      const adapter: UsageRefreshProviderInstance["adapter"] = {
+        readAccountUsage: () =>
+          probe().pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
+      };
+      gatewayProbes.set(instanceId, { target, adapter });
+      return adapter;
+    };
+
+    const listInstances: Effect.Effect<ReadonlyArray<UsageRefreshProviderInstance>> = Effect.gen(
+      function* () {
+        const instances = yield* registry.listInstances;
+        const resolved: Array<UsageRefreshProviderInstance> = [];
+        for (const instance of instances) {
+          const envelope = registry.getInstanceConfig
+            ? yield* registry.getInstanceConfig(instance.instanceId)
+            : undefined;
+          if (!envelope?.usageSource) {
+            gatewayProbes.delete(instance.instanceId);
+            resolved.push(instance);
+            continue;
+          }
+          // An instance that declares a usage source never falls back to the
+          // driver's own probe: through a gateway that probe reports either
+          // nothing or, worse, whatever unrelated account the config home is
+          // logged into.
+          const target = resolveCliProxyApiUsageProbeTarget(envelope);
+          resolved.push({
+            instanceId: instance.instanceId,
+            driverKind: instance.driverKind,
+            enabled: instance.enabled,
+            adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
+          });
+        }
+        return resolved;
+      },
+    );
+
     return yield* makeProviderUsageRefresh({
-      listInstances: registry.listInstances,
+      listInstances,
       health,
     });
   }),

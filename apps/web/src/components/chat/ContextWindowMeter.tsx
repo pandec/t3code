@@ -139,12 +139,19 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
 
 export interface ProviderUsageAccountRow {
   readonly instanceId: ProviderInstanceId;
+  /**
+   * Distinguishes pooled gateway accounts that share one instance id; rows
+   * for regular instances omit it and key on the instance id alone.
+   */
+  readonly accountKey?: string;
   readonly displayName: string;
   readonly email: string | undefined;
   /** Whether the thread's live session is currently spending this account. */
   readonly isCurrent: boolean;
   readonly usage: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
+  /** Secondary metadata line, e.g. a gateway account's tier and cooldown. */
+  readonly detail?: string | null;
 }
 
 function formatRelativeAge(observedAt: number | null, nowMs: number): string {
@@ -342,7 +349,7 @@ export function ContextWindowMeter(props: {
                   account.observedAt === null || nowMs - account.observedAt > 5 * 60_000;
                 return (
                   <div
-                    key={account.instanceId}
+                    key={account.accountKey ?? account.instanceId}
                     className={cn("flex flex-col gap-2", stale && "opacity-55")}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -360,6 +367,11 @@ export function ContextWindowMeter(props: {
                         {account.email ? (
                           <span className="max-w-44 truncate text-left text-[11px] text-muted-foreground/60">
                             {formatProviderUsageEmail(account.email, props.maskProviderUsageEmails)}
+                          </span>
+                        ) : null}
+                        {account.detail ? (
+                          <span className="max-w-44 truncate text-left text-[11px] text-muted-foreground/60">
+                            {account.detail}
                           </span>
                         ) : null}
                       </div>

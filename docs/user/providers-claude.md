@@ -219,6 +219,26 @@ You can also check the OpenRouter activity dashboard for requests from your API 
 OpenRouter's setup can change over time. Use its upstream Claude Code guide for the current details:
 <https://openrouter.ai/docs/guides/guides/claude-code-integration>.
 
+## I Route Claude Through A Gateway And Want The Usage Meter To Work
+
+A Claude instance that talks to a gateway authenticates with a bearer token, so Claude Code reports
+no subscription quota and the usage meter stays empty. If the gateway is
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), enable the instance's **Usage source**
+section instead:
+
+- **Management URL** — usually left empty; it defaults to the origin of the instance's
+  `ANTHROPIC_BASE_URL`.
+- **Management key** — the gateway's management API key. Stored as a server secret, like sensitive
+  environment variables.
+
+The meter then lists the gateway's pooled upstream accounts (Claude and Codex) with their priority
+tier and cooldown state, and features the account the gateway will serve next. While a thread runs
+on the gateway instance, accounts of your direct Claude instances are not shown — they cannot serve
+that thread — and gateway instances are likewise hidden from direct threads.
+
+A rejected management key pauses further probes for 10 minutes: CLIProxyAPI bans an IP for 30
+minutes after five rejected keys.
+
 ## I Want To Use Claude Code Router
 
 Claude Code Router is useful when you want a local routing layer with more control than a direct

@@ -15,9 +15,11 @@ import * as Result from "effect/Result";
 import { useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
+  type ProviderInstanceUsageSource,
   type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
@@ -319,6 +321,70 @@ function ProviderEnvironmentSection(props: {
   );
 }
 
+function ProviderUsageSourceSection(props: {
+  readonly usageSource: ProviderInstanceUsageSource | undefined;
+  readonly onChange: (usageSource: ProviderInstanceUsageSource | undefined) => void;
+}) {
+  const usageSource = props.usageSource;
+  const enabled = usageSource?.kind === PROVIDER_USAGE_SOURCE_CLIPROXYAPI;
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium text-foreground">Usage source</span>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(checked) =>
+            props.onChange(
+              checked ? { kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI, managementKey: "" } : undefined,
+            )
+          }
+          aria-label="Meter usage from a CLIProxyAPI gateway"
+        />
+      </div>
+      <span className="text-xs text-muted-foreground">
+        For instances routed through a CLIProxyAPI gateway: read subscription quota for the
+        gateway&apos;s pooled accounts from its management API instead of this instance&apos;s own
+        login.
+      </span>
+      {enabled && usageSource ? (
+        <div className="grid gap-2">
+          <DraftInput
+            value={usageSource.managementUrl ?? ""}
+            onCommit={(value) => {
+              const trimmed = value.trim();
+              const { managementUrl: _omit, ...rest } = usageSource;
+              props.onChange(trimmed.length > 0 ? { ...rest, managementUrl: trimmed } : rest);
+            }}
+            placeholder="Management URL — defaults to the ANTHROPIC_BASE_URL origin"
+            spellCheck={false}
+            aria-label="CLIProxyAPI management URL"
+          />
+          <DraftInput
+            value={usageSource.managementKeyRedacted ? "" : usageSource.managementKey}
+            onCommit={(value) =>
+              props.onChange({
+                ...usageSource,
+                managementKey: value,
+                managementKeyRedacted: false,
+              })
+            }
+            type="password"
+            autoComplete="off"
+            placeholder={
+              usageSource.managementKeyRedacted
+                ? "Stored management key - enter a new value to replace"
+                : "Management key"
+            }
+            spellCheck={false}
+            aria-label="CLIProxyAPI management key"
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 interface ProviderInstanceCardProps {
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
@@ -544,6 +610,15 @@ export function ProviderInstanceCard({
     onUpdate(
       cleaned.length > 0
         ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  const updateUsageSource = (usageSource: ProviderInstanceUsageSource | undefined) => {
+    const { usageSource: _omit, ...rest } = instance;
+    onUpdate(
+      usageSource !== undefined
+        ? ({ ...rest, usageSource } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
   };
@@ -848,6 +923,13 @@ export function ProviderInstanceCard({
               <ProviderEnvironmentSection
                 environment={instance.environment ?? []}
                 onChange={updateEnvironment}
+              />
+            </div>
+
+            <div>
+              <ProviderUsageSourceSection
+                usageSource={instance.usageSource}
+                onChange={updateUsageSource}
               />
             </div>
 

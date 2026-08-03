@@ -1350,6 +1350,17 @@ const make = Effect.gen(function* () {
     yield* reportHealthSafely(
       event,
       Effect.gen(function* () {
+        // An instance with an external usage source (gateway pool) owns its
+        // usage snapshot slot: the snapshot storage is whole-payload
+        // last-write-wins, so a passive single-window event forwarded through
+        // the gateway must not overwrite the pooled-accounts snapshot.
+        // Failover health above still sees the passive payload.
+        const settings = yield* serverSettingsService.getSettings.pipe(
+          Effect.orElseSucceed(() => undefined),
+        );
+        if (settings?.providerInstances[instanceId]?.usageSource !== undefined) {
+          return;
+        }
         const observationToken = yield* providerInstanceHealth.beginUsageObservation();
         yield* providerInstanceHealth.reportUsageSnapshot(
           instanceId,

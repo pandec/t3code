@@ -46,12 +46,19 @@ function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
 
 export interface ProviderUsageMenuAccount {
   readonly instanceId: string;
+  /**
+   * Distinguishes pooled gateway accounts that share one instance id; rows
+   * for regular instances omit it and key on the instance id alone.
+   */
+  readonly accountKey?: string;
   readonly displayName: string;
   readonly email: string | undefined;
   /** Whether the thread's live session is currently spending this account. */
   readonly isCurrent: boolean;
   readonly snapshot: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
+  /** Secondary metadata, e.g. a gateway account's tier and cooldown. */
+  readonly detail?: string | null;
 }
 
 function formatRelativeAge(observedAt: number | null, nowMs: number): string {
@@ -97,14 +104,19 @@ export function providerUsageAccountMenuActions(
       account.snapshot?.windows.map((window) => describeWindow(window, nowMs)).join(", ") ??
       "No usage data";
     return {
-      id: `usage-account:${account.instanceId}`,
+      id: `usage-account:${account.accountKey ?? account.instanceId}`,
       // Mark the account the session is spending, but only when there is a
       // sibling to distinguish it from.
       title:
         account.isCurrent && accounts.length > 1
           ? `${account.displayName} (current)`
           : account.displayName,
-      subtitle: [account.email, windows, formatRelativeAge(account.observedAt, nowMs)]
+      subtitle: [
+        account.email,
+        account.detail ?? undefined,
+        windows,
+        formatRelativeAge(account.observedAt, nowMs),
+      ]
         .filter((value): value is string => Boolean(value))
         .join(" · "),
     };

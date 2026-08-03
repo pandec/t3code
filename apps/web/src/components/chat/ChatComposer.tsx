@@ -217,7 +217,9 @@ import {
 } from "../../lib/contextWindow";
 import {
   deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
+  featuredProviderUsageAccount,
   providerUsageLabelForDriver,
   resolveProviderUsageInstanceId,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -227,7 +229,7 @@ import {
   resolveEffectiveProviderSkills,
 } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
-import { useClientSettingsHydrated } from "../../hooks/useSettings";
+import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -1041,6 +1043,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [providerUsageQuery.data?.snapshots],
   );
+  // Instances backed by a gateway usage source (CLIProxyAPI) meter a pool of
+  // upstream accounts rather than their own login; the settings envelope's
+  // `usageSource` marks them even before their first snapshot arrives.
+  const providerInstanceSettings = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.providerInstances,
+  );
+  const isGatewayUsageInstance = useCallback(
+    (instanceId: ProviderInstanceId) =>
+      providerInstanceSettings[instanceId]?.usageSource !== undefined,
+    [providerInstanceSettings],
+  );
+  const activeGatewayUsage = useMemo(() => {
+    if (activeProviderUsageInstanceId === null) return null;
+    const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);
+    return snapshot
+      ? deriveProviderUsageAccountsFromServerSnapshot(snapshot, { now: Date.now() })
+      : null;
+  }, [activeProviderUsageInstanceId, providerUsageNowMinute, providerUsageSnapshotByInstance]);
   const activeServerProviderUsage = useMemo(() => {
     if (activeProviderUsageInstanceId === null) return null;
     const snapshot = providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId);
@@ -1072,52 +1093,105 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const activeProviderUsage = activeServerProviderUsage ?? activityProviderUsage;
   const providerUsageLabel = providerUsageLabelForDriver(activeThreadProviderDriver);
-  const usageProviders = useMemo(
-    () =>
-      activeThreadProviderDriver === null || providerUsageLabel === null
-        ? []
-        : providerStatuses
-            .filter(
-              (provider) => provider.enabled && provider.driver === activeThreadProviderDriver,
-            )
-            .sort((left, right) => {
-              if (left.instanceId === activeProviderUsageInstanceId) return -1;
-              if (right.instanceId === activeProviderUsageInstanceId) return 1;
-              return 0;
-            }),
-    [
-      activeProviderUsageInstanceId,
-      activeThreadProviderDriver,
-      providerStatuses,
-      providerUsageLabel,
-    ],
-  );
+  // A gateway pool's accounts header names the instance ("Proxy accounts"),
+  // not the driver: the rows are upstream accounts of mixed providers.
+  const effectiveProviderUsageLabel = useMemo(() => {
+    if (activeGatewayUsage === null || activeProviderUsageInstanceId === null) {
+      return providerUsageLabel;
+    }
+    const instance = providerStatuses.find(
+      (provider) => provider.instanceId === activeProviderUsageInstanceId,
+    );
+    return instance?.displayName ?? formatProviderDisplayName(activeProviderUsageInstanceId);
+  }, [activeGatewayUsage, activeProviderUsageInstanceId, providerStatuses, providerUsageLabel]);
+  const usageProviders = useMemo(() => {
+    if (activeThreadProviderDriver === null || providerUsageLabel === null) return [];
+    const activeIsGateway =
+      activeProviderUsageInstanceId !== null &&
+      isGatewayUsageInstance(activeProviderUsageInstanceId);
+    return providerStatuses
+      .filter((provider) => {
+        if (!provider.enabled) return false;
+        // A gateway thread meters the gateway's own account pool: sibling
+        // subscriptions cannot serve it. Conversely a direct thread hides
+        // gateway instances, whose pool only renders when a thread runs there.
+        if (activeIsGateway) return provider.instanceId === activeProviderUsageInstanceId;
+        return (
+          provider.driver === activeThreadProviderDriver &&
+          !isGatewayUsageInstance(provider.instanceId)
+        );
+      })
+      .sort((left, right) => {
+        if (left.instanceId === activeProviderUsageInstanceId) return -1;
+        if (right.instanceId === activeProviderUsageInstanceId) return 1;
+        return 0;
+      });
+  }, [
+    activeProviderUsageInstanceId,
+    activeThreadProviderDriver,
+    isGatewayUsageInstance,
+    providerStatuses,
+    providerUsageLabel,
+  ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
-  const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(
-    () =>
-      usageProviders.map((provider) => {
-        const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
-        return {
-          instanceId: provider.instanceId,
-          displayName: provider.displayName ?? formatProviderDisplayName(provider.instanceId),
-          email: provider.auth.email,
-          isCurrent: provider.instanceId === activeProviderUsageInstanceId,
-          usage: snapshot
-            ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
-                provider: provider.driver,
-                now: Date.now(),
-              })
-            : null,
-          observedAt: snapshot?.observedAt ?? null,
-        };
-      }),
-    [
-      activeProviderUsageInstanceId,
-      providerUsageNowMinute,
-      providerUsageSnapshotByInstance,
-      usageProviders,
-    ],
-  );
+  const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(() => {
+    if (activeGatewayUsage !== null && activeProviderUsageInstanceId !== null) {
+      const featuredId = featuredProviderUsageAccount(activeGatewayUsage.accounts)?.id ?? null;
+      const observedAt =
+        providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
+      return [...activeGatewayUsage.accounts]
+        .sort(
+          (left, right) =>
+            (right.priority ?? Number.NEGATIVE_INFINITY) -
+            (left.priority ?? Number.NEGATIVE_INFINITY),
+        )
+        .map((account) => {
+          // Gateway account labels are often the upstream login email; route
+          // those through the email slot so the masking preference applies.
+          const emailLikeLabel = account.label.includes("@");
+          return {
+            instanceId: activeProviderUsageInstanceId,
+            accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
+            displayName: emailLikeLabel ? account.id : account.label,
+            email: emailLikeLabel ? account.label : undefined,
+            isCurrent: account.id === featuredId,
+            usage: account.usage,
+            observedAt,
+            detail:
+              [
+                account.priority !== null ? `tier ${account.priority}` : null,
+                account.state !== "available" ? account.state : null,
+                account.planType,
+                account.usage === null ? account.error : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || null,
+          };
+        });
+    }
+    return usageProviders.map((provider) => {
+      const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+      return {
+        instanceId: provider.instanceId,
+        displayName: provider.displayName ?? formatProviderDisplayName(provider.instanceId),
+        email: provider.auth.email,
+        isCurrent: provider.instanceId === activeProviderUsageInstanceId,
+        usage: snapshot
+          ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+              provider: provider.driver,
+              now: Date.now(),
+            })
+          : null,
+        observedAt: snapshot?.observedAt ?? null,
+      };
+    });
+  }, [
+    activeGatewayUsage,
+    activeProviderUsageInstanceId,
+    providerUsageNowMinute,
+    providerUsageSnapshotByInstance,
+    usageProviders,
+  ]);
   const lastProviderUsageRefreshAtRef = useRef(0);
   const refreshProviderUsage = useCallback(async () => {
     const refreshAt = Date.now();
@@ -3571,7 +3645,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   maskProviderUsageEmails={
                     !providerUsageSettingsHydrated || settings.maskProviderUsageEmails
                   }
-                  providerUsageLabel={providerUsageLabel}
+                  providerUsageLabel={effectiveProviderUsageLabel}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   onRefreshProviderUsage={refreshProviderUsage}
                   pendingAction={pendingPrimaryAction}

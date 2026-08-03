@@ -717,4 +717,75 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("stores the usage-source management key outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const instanceId = ProviderInstanceId.make("claudeAgent_proxy");
+
+      const next = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            usageSource: { kind: "cliproxyapi", managementKey: "mgmt-secret" },
+            config: {},
+          },
+        },
+      });
+
+      assert.deepEqual(next.providerInstances[instanceId]?.usageSource, {
+        kind: "cliproxyapi",
+        managementKey: "mgmt-secret",
+        managementKeyRedacted: true,
+      });
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "mgmt-secret");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(raw).providerInstances.claudeAgent_proxy.usageSource, {
+        kind: "cliproxyapi",
+        managementKey: "",
+        managementKeyRedacted: true,
+      });
+
+      const roundTripped = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            displayName: "Proxy",
+            usageSource: { kind: "cliproxyapi", managementKey: "", managementKeyRedacted: true },
+            config: {},
+          },
+        },
+      });
+      assert.equal(
+        roundTripped.providerInstances[instanceId]?.usageSource?.managementKey,
+        "mgmt-secret",
+      );
+
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(roundTripped);
+      assert.deepEqual(redacted.providerInstances[instanceId]?.usageSource, {
+        kind: "cliproxyapi",
+        managementKey: "",
+        managementKeyRedacted: true,
+      });
+
+      // Clearing the key (empty, unredacted) removes the stored secret.
+      const cleared = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            usageSource: { kind: "cliproxyapi", managementKey: "" },
+            config: {},
+          },
+        },
+      });
+      assert.deepEqual(cleared.providerInstances[instanceId]?.usageSource, {
+        kind: "cliproxyapi",
+        managementKey: "",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });

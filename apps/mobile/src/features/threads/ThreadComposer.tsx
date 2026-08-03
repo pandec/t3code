@@ -59,7 +59,9 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import {
   deriveLatestProviderUsageSnapshot,
+  deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
+  featuredProviderUsageAccount,
   providerUsageLabelForDriver,
   resolveProviderUsageInstanceId,
 } from "@t3tools/client-runtime/state/provider-usage";
@@ -429,45 +431,99 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     ],
   );
   const providerUsage = serverProviderUsage ?? activityProviderUsage;
-  const providerUsageAccounts = useMemo(
-    () =>
-      (props.serverConfig?.providers ?? [])
-        .filter(
-          (provider) =>
-            provider.enabled &&
-            selectedProviderStatus !== null &&
-            providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
-            provider.driver === selectedProviderStatus.driver,
+  // Gateway-backed instances (CLIProxyAPI) report a pool of upstream accounts
+  // in one snapshot. Mobile has no settings mirror, so gateway-ness is
+  // detected from the snapshot payload itself.
+  const gatewayUsageByInstance = useMemo(() => {
+    const pools = new Map<
+      string,
+      NonNullable<ReturnType<typeof deriveProviderUsageAccountsFromServerSnapshot>>
+    >();
+    for (const [instanceId, snapshot] of providerUsageSnapshotByInstance) {
+      const pool = deriveProviderUsageAccountsFromServerSnapshot(snapshot, {
+        now: providerUsageNowMs,
+      });
+      if (pool !== null) pools.set(instanceId, pool);
+    }
+    return pools;
+  }, [providerUsageNowMs, providerUsageSnapshotByInstance]);
+  const providerUsageAccounts = useMemo(() => {
+    const activeGatewayPool =
+      providerUsageInstanceId !== null
+        ? (gatewayUsageByInstance.get(providerUsageInstanceId) ?? null)
+        : null;
+    if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
+      const featuredId = featuredProviderUsageAccount(activeGatewayPool.accounts)?.id ?? null;
+      const observedAt =
+        providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
+      return [...activeGatewayPool.accounts]
+        .sort(
+          (left, right) =>
+            (right.priority ?? Number.NEGATIVE_INFINITY) -
+            (left.priority ?? Number.NEGATIVE_INFINITY),
         )
-        .sort((left, right) => {
-          if (left.instanceId === providerUsageInstanceId) return -1;
-          if (right.instanceId === providerUsageInstanceId) return 1;
-          return 0;
-        })
-        .map((provider) => {
-          const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+        .map((account) => {
+          const emailLikeLabel = account.label.includes("@");
           return {
-            instanceId: provider.instanceId,
-            displayName: provider.displayName ?? provider.instanceId,
-            email: provider.auth.email,
-            isCurrent: provider.instanceId === providerUsageInstanceId,
-            snapshot: snapshot
-              ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
-                  provider: provider.driver,
-                  now: providerUsageNowMs,
-                })
-              : null,
-            observedAt: snapshot?.observedAt ?? null,
+            instanceId: providerUsageInstanceId,
+            accountKey: `${providerUsageInstanceId}:${account.id}`,
+            displayName: emailLikeLabel ? account.id : account.label,
+            email: emailLikeLabel ? account.label : undefined,
+            isCurrent: account.id === featuredId,
+            snapshot: account.usage,
+            observedAt,
+            detail:
+              [
+                account.priority !== null ? `tier ${account.priority}` : null,
+                account.state !== "available" ? account.state : null,
+                account.planType,
+                account.usage === null ? account.error : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || null,
           };
-        }),
-    [
-      props.serverConfig?.providers,
-      providerUsageInstanceId,
-      providerUsageNowMs,
-      providerUsageSnapshotByInstance,
-      selectedProviderStatus,
-    ],
-  );
+        });
+    }
+    return (props.serverConfig?.providers ?? [])
+      .filter(
+        (provider) =>
+          provider.enabled &&
+          selectedProviderStatus !== null &&
+          providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
+          provider.driver === selectedProviderStatus.driver &&
+          // A gateway sibling meters its own pool; it renders when a thread
+          // actually runs on it.
+          !gatewayUsageByInstance.has(provider.instanceId),
+      )
+      .sort((left, right) => {
+        if (left.instanceId === providerUsageInstanceId) return -1;
+        if (right.instanceId === providerUsageInstanceId) return 1;
+        return 0;
+      })
+      .map((provider) => {
+        const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
+        return {
+          instanceId: provider.instanceId,
+          displayName: provider.displayName ?? provider.instanceId,
+          email: provider.auth.email,
+          isCurrent: provider.instanceId === providerUsageInstanceId,
+          snapshot: snapshot
+            ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
+                provider: provider.driver,
+                now: providerUsageNowMs,
+              })
+            : null,
+          observedAt: snapshot?.observedAt ?? null,
+        };
+      });
+  }, [
+    gatewayUsageByInstance,
+    props.serverConfig?.providers,
+    providerUsageInstanceId,
+    providerUsageNowMs,
+    providerUsageSnapshotByInstance,
+    selectedProviderStatus,
+  ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
     () =>
