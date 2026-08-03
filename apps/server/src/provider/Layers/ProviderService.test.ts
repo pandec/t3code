@@ -2077,24 +2077,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
           runtimeMode: "full-access",
         });
 
+        // A thread-driven start must fail loudly on a provably incompatible
+        // removed owner…
         const failure = yield* provider
-          .startSession(differingThreadId, {
-            provider: CLAUDE_AGENT_DRIVER,
-            providerInstanceId: targetInstanceId,
-            threadId: differingThreadId,
-            runtimeMode: "full-access",
-          })
+          .startSession(
+            differingThreadId,
+            {
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: targetInstanceId,
+              threadId: differingThreadId,
+              runtimeMode: "full-access",
+            },
+            { onIncompatiblePersistedState: "fail" },
+          )
           .pipe(Effect.flip);
         assert.instanceOf(failure, ProviderValidationError);
         assert.include(failure.issue, "discard the conversation context");
+
+        // …while a direct call keeps the intentional-replacement contract and
+        // starts fresh without carrying the incompatible cursor.
+        yield* provider.startSession(differingThreadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: targetInstanceId,
+          threadId: differingThreadId,
+          runtimeMode: "full-access",
+        });
       }).pipe(Effect.provide(providerLayer));
 
-      assert.equal(targetClaude.startSession.mock.calls.length, 1);
+      assert.equal(targetClaude.startSession.mock.calls.length, 2);
       assert.deepInclude(targetClaude.startSession.mock.calls[0]?.[0], {
         providerInstanceId: targetInstanceId,
         resumeCursor: matchingCursor,
         cwd: "/tmp/project",
       });
+      const freshStartInput = targetClaude.startSession.mock.calls[1]?.[0];
+      assert.equal(
+        typeof freshStartInput === "object" &&
+          freshStartInput !== null &&
+          "resumeCursor" in freshStartInput,
+        false,
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

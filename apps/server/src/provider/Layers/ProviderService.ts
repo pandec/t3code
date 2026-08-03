@@ -891,18 +891,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const persistedStateIncompatible = persistedCursorPresent && !reusePersistedState;
         // A persisted cursor is the thread's conversation. When it cannot be
         // carried, either the caller deliberately replaces the provider
-        // (`start-fresh`) or the start must fail rather than silently reset
-        // the model's context behind a full history. A removed owner is never
-        // an intentional replacement, so it always fails.
-        const persistedOwnerMissing =
-          persistedBindingInstanceId !== undefined &&
-          persistedBindingInstanceId !== resolvedInstanceId &&
-          persistedOwnerInfo === undefined;
+        // (`start-fresh`, only valid when incompatibility is provable) or the
+        // start must fail rather than silently reset the model's context
+        // behind a full history.
         const rejectIncompatiblePersistedState =
           persistedStateIncompatible &&
           (input.resumeCursor !== undefined ||
             options?.onIncompatiblePersistedState === "fail" ||
-            persistedOwnerMissing);
+            bindingCompatibility === "unprovable");
         if (persistedStateIncompatible && persistedBinding !== undefined) {
           yield* Effect.logWarning("provider.session.resume-state-not-carried", {
             threadId,
