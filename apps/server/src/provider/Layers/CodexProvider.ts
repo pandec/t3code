@@ -24,7 +24,7 @@ import type {
 } from "@t3tools/contracts";
 import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/contracts";
 
-import { createModelCapabilities } from "@t3tools/shared/model";
+import { createModelCapabilities, parseCustomModelEntry } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
@@ -237,14 +237,14 @@ function appendCustomCodexModels(
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
   for (const rawModel of customModels) {
-    const slug = rawModel.trim();
-    if (!slug || seen.has(slug)) {
+    const parsed = parseCustomModelEntry(rawModel);
+    if (!parsed || seen.has(parsed.slug)) {
       continue;
     }
-    seen.add(slug);
+    seen.add(parsed.slug);
     customEntries.push({
-      slug,
-      name: slug,
+      slug: parsed.slug,
+      name: parsed.name,
       isCustom: true,
       capabilities: fallbackCapabilities,
     });
@@ -416,19 +416,22 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
-  const models = new Set<string>();
+  const seen = new Set<string>();
+  const models: Array<ServerProvider["models"][number]> = [];
   for (const model of codexSettings.customModels) {
-    const trimmed = model.trim();
-    if (trimmed.length > 0) {
-      models.add(trimmed);
+    const parsed = parseCustomModelEntry(model);
+    if (!parsed || seen.has(parsed.slug)) {
+      continue;
     }
+    seen.add(parsed.slug);
+    models.push({
+      slug: parsed.slug,
+      name: parsed.name,
+      isCustom: true,
+      capabilities: null,
+    });
   }
-  return Array.from(models, (model) => ({
-    slug: model,
-    name: model,
-    isCustom: true,
-    capabilities: null,
-  }));
+  return models;
 };
 
 const makePendingCodexProvider = (

@@ -314,6 +314,37 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
   return model.trim() || null;
 }
 
+/**
+ * Parse a custom-model settings entry. An entry is either the model slug
+ * itself, or `slug=Label` to pair the slug with a display-only label. The
+ * slug is what reaches the provider and is persisted in model selections;
+ * the label only changes how the model is presented. Whitespace around
+ * either part is trimmed, an entry with an empty slug is invalid, and an
+ * empty label falls back to the slug.
+ *
+ * `=` is reserved as the separator, so a model id that itself contains `=`
+ * can no longer be expressed as a bare entry — an accepted trade-off, since
+ * no known provider uses `=` in model identifiers.
+ */
+export function parseCustomModelEntry(
+  entry: string | null | undefined,
+): { readonly slug: string; readonly name: string } | null {
+  const trimmed = normalizeCustomModelSlug(entry);
+  if (!trimmed) {
+    return null;
+  }
+  const separatorIndex = trimmed.indexOf("=");
+  if (separatorIndex === -1) {
+    return { slug: trimmed, name: trimmed };
+  }
+  const slug = trimmed.slice(0, separatorIndex).trim();
+  if (!slug) {
+    return null;
+  }
+  const name = trimmed.slice(separatorIndex + 1).trim();
+  return { slug, name: name || slug };
+}
+
 export function resolveSelectableModel(
   provider: ProviderDriverKind,
   value: string | null | undefined,

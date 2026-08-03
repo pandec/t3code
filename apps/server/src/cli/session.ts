@@ -85,11 +85,17 @@ export class SessionCliServerUnsupportedError extends Schema.TaggedErrorClass<Se
   "SessionCliServerUnsupportedError",
   {
     serverVersion: Schema.String,
-    capability: Schema.Literals(["sessionImport", "providerCatalog"]),
+    capability: Schema.Literals(["sessionImport", "providerCatalog", "turnStartBootstrap"]),
   },
 ) {
   override get message(): string {
-    return `The running T3 Code server (${this.serverVersion}) does not support ${this.capability === "sessionImport" ? "session import" : "the provider catalog"}. Update and restart T3 Code, then retry.`;
+    const capabilityLabel =
+      this.capability === "sessionImport"
+        ? "session import"
+        : this.capability === "providerCatalog"
+          ? "the provider catalog"
+          : "creating threads in a new worktree";
+    return `The running T3 Code server (${this.serverVersion}) does not support ${capabilityLabel}. Update and restart T3 Code, then retry.`;
   }
 }
 const isSessionCliError = Schema.is(SessionCliError);
@@ -683,7 +689,7 @@ interface GitCommandResult {
   readonly exitCode: number;
 }
 
-const runGitCommand = Effect.fn("session.runGitCommand")(function* (
+export const runGitCommand = Effect.fn("session.runGitCommand")(function* (
   cwd: string,
   args: ReadonlyArray<string>,
 ) {
@@ -802,7 +808,7 @@ const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
   return { project, shell };
 });
 
-const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
+export const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
   cwd: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;

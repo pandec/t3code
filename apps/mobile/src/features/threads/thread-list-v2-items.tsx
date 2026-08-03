@@ -92,8 +92,11 @@ function menuActionsForRow(input: {
 const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
 const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
 const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
+// Archive rides along so the swipe-right gesture keeps a menu (and
+// VoiceOver) twin on the snoozed shelf.
 const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "unsnooze", title: "Wake thread", image: "clock" },
+  MENU_ACTION_BY_ID.archive,
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -592,10 +595,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  const swipeAccessibilityHint =
+  const archiveLeftAction = useMemo(
+    () =>
+      swipeActions.left === "archive"
+        ? {
+            accessibilityLabel: `Archive ${thread.title}`,
+            icon: "archivebox" as const,
+            label: "Archive",
+            onPress: handleArchive,
+          }
+        : undefined,
+    [handleArchive, swipeActions.left, thread.title],
+  );
+  const swipeAccessibilityHint = [
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
-      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
+      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
+    ...(archiveLeftAction === undefined ? [] : ["Swipe right to archive."]),
+  ].join(" ");
 
   // The sidebar pane fills selected rows with the accent color (matching the
   // v1 sidebar), so every piece of row text needs a white-on-accent variant.
@@ -860,6 +877,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+        leftAction={archiveLeftAction}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}

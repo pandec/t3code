@@ -52,6 +52,34 @@ describe("providerModelsFromSettings", () => {
     ]);
   });
 
+  it("maps a labeled entry to its slug and display name", () => {
+    const models = providerModelsFromSettings(
+      [],
+      ["gpt-5.6-sol=GPT-5.6-Sol"],
+      OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+    );
+
+    expect(models).toEqual([
+      {
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6-Sol",
+        isCustom: true,
+        capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+      },
+    ]);
+  });
+
+  it("dedupes labeled and bare entries that share a slug", () => {
+    const models = providerModelsFromSettings(
+      [],
+      ["gpt-5.6-sol=GPT-5.6-Sol", "gpt-5.6-sol"],
+      OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+    );
+
+    expect(models.map((model) => model.slug)).toEqual(["gpt-5.6-sol"]);
+    expect(models[0]?.name).toBe("GPT-5.6-Sol");
+  });
+
   it("preserves a custom slug that collides with a provider alias", () => {
     const capabilities = createModelCapabilities({ optionDescriptors: [] });
     const models = providerModelsFromSettings(

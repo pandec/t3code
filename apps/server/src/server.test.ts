@@ -89,6 +89,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -572,6 +573,9 @@ const buildAppUnderTest = (options?: {
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
+          // The real bootstrap program, fed by the mocked engine, git, and
+          // setup script services provided below.
+          TurnStartBootstrap.layer,
           Layer.mock(MessageSpeech.MessageSpeech)({
             available: false,
             synthesize: () => Effect.die("message speech is not configured for this test"),

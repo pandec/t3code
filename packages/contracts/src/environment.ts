@@ -73,6 +73,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
+  /** The HTTP dispatch route honors thread.turn.start bootstrap payloads
+      (worktree preparation, setup script, thread creation with cleanup), and
+      prepareWorktree.baseBranch may be omitted to default to the project's
+      current branch. Absent on servers whose HTTP route forwards the command
+      to the engine untouched, silently skipping worktree creation — HTTP
+      clients (the CLI) must not send bootstrap payloads without this. */
+  turnStartBootstrap: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

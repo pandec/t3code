@@ -90,8 +90,8 @@ function MeterRing(props: {
         strokeWidth="2.5"
         strokeLinecap="round"
         strokeDasharray={circumference}
-        strokeDashoffset={circumference - (props.percentage / 100) * circumference}
-        className="transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none"
+        strokeDashoffset={circumference * (1 - props.percentage / 100)}
+        className="transition-[stroke-dashoffset,stroke] duration-500 ease-out motion-reduce:transition-none"
       />
     </>
   );
@@ -310,9 +310,10 @@ export function ContextWindowMeter(props: {
         tooltipStyle
         side="top"
         align="end"
-        className="dropdown-glass w-64 max-w-none border-0! bg-secondary! p-0 shadow-none! before:hidden"
+        viewportClassName="p-0"
+        className="w-64 max-w-none text-left whitespace-normal"
       >
-        <div className="flex flex-col gap-3 p-3">
+        <div className="flex flex-col gap-3 p-[var(--floating-content-inset)]">
           {providerUsage && providerUsageAccounts.length === 0 ? (
             <div className="flex flex-col gap-2">
               <div className="font-medium text-muted-foreground text-xs">

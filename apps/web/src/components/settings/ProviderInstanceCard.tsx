@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
@@ -24,6 +24,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -94,6 +95,100 @@ function readConfigStringArray(config: unknown, key: string): ReadonlyArray<stri
 }
 
 /**
+ * Read a string-to-string record at `key` from the opaque config blob,
+ * filtering out non-string values and trimming keys and values. Used for
+ * `customModelIcons` (custom model slug → driver-kind icon id). Returns a
+ * null-prototype record so user-authored keys like "constructor" miss
+ * cleanly instead of resolving to `Object.prototype` members.
+ */
+const EMPTY_STRING_RECORD: Readonly<Record<string, string>> = Object.freeze(Object.create(null));
+
+function readConfigStringRecord(config: unknown, key: string): Readonly<Record<string, string>> {
+  if (config === null || typeof config !== "object") return EMPTY_STRING_RECORD;
+  const value = (config as Record<string, unknown>)[key];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_STRING_RECORD;
+  }
+  const record: Record<string, string> = Object.create(null);
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (typeof entryValue !== "string") continue;
+    const trimmedKey = entryKey.trim();
+    const trimmedValue = entryValue.trim();
+    if (trimmedKey.length > 0 && trimmedValue.length > 0) {
+      record[trimmedKey] = trimmedValue;
+    }
+  }
+  return record;
+}
+
+/**
+ * Read the custom-model entry list (`slug` or `slug=Label`) from the config
+ * blob: entries are trimmed, invalid ones dropped, and duplicates (by
+ * parsed slug) collapse to the first occurrence. Keying everything by the
+ * parsed slug keeps Settings-side consumers (display rows, icon lookups,
+ * pruning) consistent with the trimmed `customModelIcons` record and with
+ * the normalized slugs the model picker resolves — a hand-edited
+ * `" gpt-5.6-sol "` heals to its trimmed form on the next write instead of
+ * splitting into two identities.
+ */
+function readConfigCustomModels(config: unknown): ReadonlyArray<string> {
+  const entriesBySlug = new Map<string, string>();
+  for (const rawEntry of readConfigStringArray(config, "customModels")) {
+    const parsed = parseCustomModelEntry(rawEntry);
+    if (parsed !== null && !entriesBySlug.has(parsed.slug)) {
+      entriesBySlug.set(parsed.slug, rawEntry.trim());
+    }
+  }
+  return [...entriesBySlug.values()];
+}
+
+/**
+ * Structural equality for config blobs (JSON-shaped data, key order
+ * ignored). Used to decide whether a server echo corresponds to the latest
+ * pending local write.
+ */
+function configsEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((entry, index) => configsEqual(entry, b[index]));
+  }
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key, index) =>
+      key === bKeys[index] &&
+      configsEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+  );
+}
+
+/**
+ * Project an envelope to the shape the server echoes back. The server
+ * normalizes environment entries on write — a sensitive value is stored out
+ * of band and echoed as `value: ""` with `valueRedacted: true`, and a
+ * client-sent `valueRedacted: false` is dropped — so a pending envelope can
+ * never match its echo byte-for-byte after an environment write, which
+ * would leave it pending forever and let later local edits overwrite newer
+ * remote changes. Masking `value`/`valueRedacted` on both sides lets such
+ * echoes acknowledge the pending write. A concurrent foreign edit differing
+ * only in masked fields can acknowledge one write early; that merely
+ * reverts this card to prop-based behavior, and the local write's own echo
+ * still lands.
+ */
+function withComparableEnvironment(envelope: ProviderInstanceConfig): unknown {
+  if (envelope.environment === undefined) return envelope;
+  return {
+    ...envelope,
+    environment: envelope.environment.map((variable) => ({
+      name: variable.name,
+      sensitive: variable.sensitive,
+    })),
+  };
+}
+
+/**
  * Set `key` to an arbitrary value on the opaque config blob. Unlike
  * provider settings field updates, does not drop empty-looking values — the
  * caller is responsible for deciding whether an empty array / empty
@@ -122,15 +217,22 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
+  const seen = new Set<string>();
+  const customModels = Arr.filterMap(input.customModels, (entry) => {
+    const parsed = parseCustomModelEntry(entry);
+    if (!parsed || seen.has(parsed.slug)) {
+      return Result.failVoid;
+    }
+    seen.add(parsed.slug);
+    return Result.succeed(
+      liveCustomModelsBySlug.get(parsed.slug) ?? {
+        slug: parsed.slug,
+        name: parsed.name,
         isCustom: true,
         capabilities: null,
       },
-  );
+    );
+  });
   return [...serverModels, ...customModels];
 }
 
@@ -527,7 +629,8 @@ export function ProviderInstanceCard({
     ? instance.driver
     : null;
 
-  const customModels = readConfigStringArray(instance.config, "customModels");
+  const customModels = readConfigCustomModels(instance.config);
+  const customModelIcons = readConfigStringRecord(instance.config, "customModelIcons");
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -536,10 +639,45 @@ export function ProviderInstanceCard({
     customModels,
   });
 
+  // Settings writes have no optimistic local patch (the `instance` prop only
+  // updates once the server echoes the new envelope back), and the whole
+  // `providerInstances` map is replaced per write. A second edit computed
+  // from the still-stale prop would therefore silently drop an in-flight
+  // first one — add two models back to back, add a model and immediately
+  // pick its icon, or pick an icon and then toggle Enabled (the envelope
+  // spread carries the stale config, and vice versa). Every mutator in this
+  // card therefore bases on the last *written* envelope. The pending ref is
+  // only cleared when an echo structurally matches it: an intermediate echo
+  // (of an older write, or a foreign edit) must not make a newer in-flight
+  // write invisible to the next edit. Environment writes are compared with
+  // the server-normalized fields masked (see withComparableEnvironment) so
+  // their redacted echoes still acknowledge. Remaining caveat, bounded to
+  // this card's mount lifetime: a server-rejected write (abnormal —
+  // payloads are schema-valid) keeps serving as the base, resubmitted by
+  // the next write.
+  const pendingInstanceRef = useRef<ProviderInstanceConfig | null>(null);
+  useEffect(() => {
+    if (
+      pendingInstanceRef.current !== null &&
+      configsEqual(
+        withComparableEnvironment(pendingInstanceRef.current),
+        withComparableEnvironment(instance),
+      )
+    ) {
+      pendingInstanceRef.current = null;
+    }
+  }, [instance]);
+  const baseInstance = () => pendingInstanceRef.current ?? instance;
+  const baseConfig = () => baseInstance().config;
+  const commitInstance = (next: ProviderInstanceConfig) => {
+    pendingInstanceRef.current = next;
+    onUpdate(next);
+  };
+
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
-    const { displayName: _omit, ...rest } = instance;
-    onUpdate(
+    const { displayName: _omit, ...rest } = baseInstance();
+    commitInstance(
       trimmed.length > 0
         ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -547,32 +685,112 @@ export function ProviderInstanceCard({
   };
 
   const updateEnabled = (value: boolean) => {
-    onUpdate({ ...instance, enabled: value });
+    commitInstance({ ...baseInstance(), enabled: value });
   };
 
   const updateAccentColor = (value: string) => {
     const normalized = normalizeProviderAccentColor(value);
-    const { accentColor: _omit, ...rest } = instance;
-    onUpdate(
+    const { accentColor: _omit, ...rest } = baseInstance();
+    commitInstance(
       normalized
         ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
   };
 
-  const updateConfig = (nextConfig: Record<string, unknown> | undefined) => {
-    const { config: _omit, ...rest } = instance;
-    onUpdate(
+  const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
+    const { config: _omit, ...rest } = baseInstance();
+    commitInstance(
       nextConfig !== undefined
         ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
   };
 
-  const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
-    const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  // Keys owned by the models section below, not by ProviderSettingsForm.
+  const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
+
+  const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
+    // The form computes a complete replacement blob from its rendered
+    // `value` prop, which may predate an in-flight models/icons write. The
+    // form never edits the models-section keys, so re-overlay those from
+    // the latest base instead of letting the stale form snapshot clobber
+    // them (or resurrect ones the base deleted).
+    const base = baseConfig();
+    const baseObject =
+      base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;
+    let next = formConfig;
+    for (const key of MODEL_SECTION_CONFIG_KEYS) {
+      const baseValue = baseObject?.[key];
+      if (baseValue !== undefined) {
+        next = { ...(next ?? {}), [key]: baseValue };
+      } else if (next !== undefined && Object.hasOwn(next, key)) {
+        const { [key]: _drop, ...rest } = next;
+        next = rest;
+      }
+    }
+    commitConfig(next);
+  };
+
+  const addCustomModel = (entry: string) => {
+    const base = baseConfig();
+    const entries = readConfigCustomModels(base);
+    const slug = parseCustomModelEntry(entry)?.slug;
+    if (slug === undefined) return;
+    // Authoritative dedupe by parsed slug: the section validates against
+    // its rendered list, which may lag behind an in-flight add of the same
+    // slug (possibly under a different label).
+    if (entries.some((existing) => parseCustomModelEntry(existing)?.slug === slug)) return;
+    commitConfig(nextConfigBlobWithValue(base, "customModels", [...entries, entry.trim()]));
+  };
+
+  const removeCustomModel = (slug: string) => {
+    const base = baseConfig();
+    const entries = readConfigCustomModels(base).filter(
+      (entry) => parseCustomModelEntry(entry)?.slug !== slug,
+    );
+    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...entries]);
+    // Prune icon overrides for removed slugs in the same write — a separate
+    // icons write here would start from the same base and lose the
+    // model-list change. Icons are keyed by the parsed slug, not the raw
+    // labeled entry.
+    const remainingSlugs = new Set(
+      Arr.filterMap(entries, (entry) => {
+        const parsed = parseCustomModelEntry(entry);
+        return parsed !== null ? Result.succeed(parsed.slug) : Result.failVoid;
+      }),
+    );
+    const keptIcons = Object.fromEntries(
+      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([iconSlug]) =>
+        remainingSlugs.has(iconSlug),
+      ),
+    );
+    if (Object.keys(keptIcons).length > 0) {
+      nextConfig.customModelIcons = keptIcons;
+    } else {
+      delete nextConfig.customModelIcons;
+    }
+    commitConfig(nextConfig);
+  };
+
+  const updateCustomModelIcon = (slug: string, icon: string | null) => {
+    const base = baseConfig();
+    // Null prototype so a slug like "__proto__" becomes an own data
+    // property instead of silently vanishing into the inherited setter.
+    const icons: Record<string, string> = Object.assign(
+      Object.create(null),
+      readConfigStringRecord(base, "customModelIcons"),
+    );
+    if (icon === null) {
+      delete icons[slug];
+    } else {
+      icons[slug] = icon;
+    }
+    const nextConfig = nextConfigBlobWithValue(base, "customModelIcons", icons);
+    if (Object.keys(icons).length === 0) {
+      delete nextConfig.customModelIcons;
+    }
+    commitConfig(nextConfig);
   };
 
   const failoverInstanceId = instance.failoverInstanceId;
@@ -596,8 +814,8 @@ export function ProviderInstanceCard({
     // Map the select's string back to the branded id; "None" and stale
     // values both clear the field.
     const target = failoverOptions?.find((option) => String(option.id) === value)?.id;
-    const { failoverInstanceId: _omit, ...rest } = instance;
-    onUpdate(
+    const { failoverInstanceId: _omit, ...rest } = baseInstance();
+    commitInstance(
       target !== undefined
         ? ({ ...rest, failoverInstanceId: target } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -606,8 +824,8 @@ export function ProviderInstanceCard({
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
-    const { environment: _omit, ...rest } = instance;
-    onUpdate(
+    const { environment: _omit, ...rest } = baseInstance();
+    commitInstance(
       cleaned.length > 0
         ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
@@ -949,10 +1167,13 @@ export function ProviderInstanceCard({
                 driverKind={driverKind}
                 models={modelsForDisplay}
                 customModels={customModels}
+                customModelIcons={customModelIcons}
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
-                onChange={updateCustomModels}
+                onAddCustomModel={addCustomModel}
+                onRemoveCustomModel={removeCustomModel}
+                onCustomModelIconChange={updateCustomModelIcon}
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}
                 onModelOrderChange={onModelOrderChange}

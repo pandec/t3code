@@ -121,6 +121,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
@@ -393,7 +394,10 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
       CheckpointingLayerLive,
     ),
   ),
-  Layer.provideMerge(ServerSettingsLayerLive),
+  // Shared bootstrap program for thread.turn.start commands, consumed by both
+  // the WebSocket dispatch path and the HTTP dispatch route. Its git, setup
+  // script, and orchestration engine dependencies are provided below.
+  Layer.provideMerge(Layer.mergeAll(TurnStartBootstrap.layer, ServerSettingsLayerLive)),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),

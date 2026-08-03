@@ -3,6 +3,7 @@ import { memo } from "react";
 import { StarIcon } from "lucide-react";
 import {
   getDisplayModelName,
+  getModelIconComponent,
   getTriggerDisplayModelLabel,
   type ModelEsque,
   PROVIDER_ICON_BY_PROVIDER,
@@ -38,7 +39,8 @@ export const ModelListRow = memo(function ModelListRow(props: {
   disabledReason?: string | null;
   onToggleFavorite: () => void;
 }) {
-  const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  const ProviderIcon =
+    getModelIconComponent(props.model.icon) ?? PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
   const providerLabel = props.model.subProvider
     ? `${props.providerDisplayName} · ${props.model.subProvider}`
     : props.providerDisplayName;

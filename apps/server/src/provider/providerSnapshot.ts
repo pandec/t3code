@@ -13,7 +13,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import { parseCustomModelEntry } from "@t3tools/shared/model";
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
@@ -148,14 +148,14 @@ export function providerModelsFromSettings(
   const customEntries: ServerProviderModel[] = [];
 
   for (const candidate of customModels) {
-    const normalized = normalizeCustomModelSlug(candidate);
-    if (!normalized || seen.has(normalized)) {
+    const parsed = parseCustomModelEntry(candidate);
+    if (!parsed || seen.has(parsed.slug)) {
       continue;
     }
-    seen.add(normalized);
+    seen.add(parsed.slug);
     customEntries.push({
-      slug: normalized,
-      name: normalized,
+      slug: parsed.slug,
+      name: parsed.name,
       isCustom: true,
       capabilities: customModelCapabilities,
     });

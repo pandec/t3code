@@ -319,6 +319,31 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   }),
 );
 
+it.effect("accepts prepareWorktree without a base branch under turnStartBootstrap", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-bootstrap-default-base",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-bootstrap-default-base",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      bootstrap: {
+        prepareWorktree: {
+          projectCwd: "/tmp/workspace",
+          branch: "t3code/example",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.bootstrap?.prepareWorktree?.projectCwd, "/tmp/workspace");
+    assert.strictEqual(parsed.bootstrap?.prepareWorktree?.baseBranch, undefined);
+  }),
+);
+
 it.effect("decodes thread.created runtime mode for historical events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({
