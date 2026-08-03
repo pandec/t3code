@@ -17,6 +17,9 @@ async function loadImagePicker() {
   try {
     return await import("expo-image-picker");
   } catch (error) {
+    // Keep the raw failure observable: the user-facing message hides the
+    // cause, and an import failure here otherwise leaves no trace at all.
+    console.warn("expo-image-picker failed to load", error);
     throw new Error("Image attachments are unavailable right now.", { cause: error });
   }
 }
