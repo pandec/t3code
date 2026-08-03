@@ -62,7 +62,7 @@ function instance(input: {
 
 function usageHealth(
   reportUsageSnapshot: ProviderUsageRefreshDependencies["health"]["reportUsageSnapshot"] = () =>
-    Effect.void,
+    Effect.succeed(true),
 ): ProviderUsageRefreshDependencies["health"] {
   let nextToken = 0;
   return {
@@ -169,7 +169,7 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
   ),
 );
 
-it.effect("drops the pooled snapshot when the usage source is removed", () =>
+it.effect("reconciles usage-source transitions before refreshes and registry events", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = ProviderInstanceId.make("claude_gateway");
@@ -187,6 +187,7 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
         config: {},
       };
       const config = yield* Ref.make<ProviderInstanceConfig>(gatewayConfig);
+      const nextConfigRead = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
       const changes = yield* PubSub.unbounded<void>();
       const gatewayInstance = {
         instanceId: target,
@@ -199,7 +200,15 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
           Effect.succeed(instanceId === target ? gatewayInstance : undefined),
         getInstanceConfig: (instanceId) =>
           instanceId === target
-            ? Ref.get(config)
+            ? Ref.get(config).pipe(
+                Effect.tap(() =>
+                  Ref.getAndSet(nextConfigRead, undefined).pipe(
+                    Effect.flatMap((waiter) =>
+                      waiter === undefined ? Effect.void : Deferred.succeed(waiter, undefined),
+                    ),
+                  ),
+                ),
+              )
             : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
         listInstances: Effect.succeed([gatewayInstance]),
         listUnavailable: Effect.succeed([]),
@@ -220,7 +229,7 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
       );
 
       yield* Effect.gen(function* () {
-        yield* ProviderUsageRefresh;
+        const refresh = yield* ProviderUsageRefresh;
         const health = yield* ProviderInstanceHealth;
 
         yield* health.reportUsageSnapshot(
@@ -234,25 +243,61 @@ it.effect("drops the pooled snapshot when the usage source is removed", () =>
         // A probe against the old source is still in flight when the user
         // turns the usage source off.
         const lateToken = yield* health.beginUsageObservation();
+        const removalObserved = yield* Deferred.make<void>();
+        yield* Ref.set(nextConfigRead, removalObserved);
         yield* Ref.set(config, { driver, environment, config: {} });
         yield* PubSub.publish(changes, undefined);
-        while ((yield* health.listUsageSnapshots()).length > 0) {
-          yield* Effect.yieldNow;
-        }
+        yield* Deferred.await(removalObserved);
+        // The refresh joins behind the watcher's reconciliation gate, giving
+        // this test a receipt-like boundary without polling the snapshot.
+        yield* refresh.refresh([target]);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
 
         // The late probe must not resurrect the pooled payload…
-        yield* health.reportUsageSnapshot(target, { pool: "stale" }, 2_000, lateToken);
+        expect(yield* health.reportUsageSnapshot(target, { pool: "stale" }, 2_000, lateToken)).toBe(
+          false,
+        );
         expect(yield* health.listUsageSnapshots()).toEqual([]);
 
         // …while an observation that begins after the clear reports normally.
-        yield* health.reportUsageSnapshot(
-          target,
-          { source: "direct" },
-          3_000,
-          yield* health.beginUsageObservation(),
-        );
+        expect(
+          yield* health.reportUsageSnapshot(
+            target,
+            { source: "direct" },
+            3_000,
+            yield* health.beginUsageObservation(),
+          ),
+        ).toBe(true);
         expect(yield* health.listUsageSnapshots()).toEqual([
           { instanceId: target, payload: { source: "direct" }, observedAt: 3_000 },
+        ]);
+
+        // A refresh can observe the new source before its registry event is
+        // drained. Reconciliation on the read path clears the direct payload
+        // first, and the delayed event must not later clear a valid new-source
+        // observation.
+        yield* Ref.set(config, {
+          ...gatewayConfig,
+          usageSource: { kind: "cliproxyapi", managementKey: "replacement-key" },
+        });
+        yield* refresh.refresh([target]);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+        expect(
+          yield* health.reportUsageSnapshot(
+            target,
+            { pool: "replacement" },
+            4_000,
+            yield* health.beginUsageObservation(),
+          ),
+        ).toBe(true);
+
+        const additionObserved = yield* Deferred.make<void>();
+        yield* Ref.set(nextConfigRead, additionObserved);
+        yield* PubSub.publish(changes, undefined);
+        yield* Deferred.await(additionObserved);
+        yield* refresh.refresh([target]);
+        expect(yield* health.listUsageSnapshots()).toEqual([
+          { instanceId: target, payload: { pool: "replacement" }, observedAt: 4_000 },
         ]);
       }).pipe(Effect.provide(layer));
     }),
@@ -272,7 +317,7 @@ it.effect("skips disabled and unsupported instances", () =>
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed(instances),
         health: usageHealth((instanceId) =>
-          Ref.update(reports, (current) => [...current, instanceId]),
+          Ref.update(reports, (current) => [...current, instanceId]).pipe(Effect.as(true)),
         ),
       });
 
@@ -291,7 +336,7 @@ it.effect("skips reporting when the adapter has no usage payload", () =>
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed([instance({ id: "claude_empty", read: Effect.void })]),
         health: usageHealth((instanceId) =>
-          Ref.update(reports, (current) => [...current, instanceId]),
+          Ref.update(reports, (current) => [...current, instanceId]).pipe(Effect.as(true)),
         ),
       });
 
@@ -317,7 +362,7 @@ it.effect("isolates one instance failure and continues refreshing siblings", () 
       const coordinator = yield* makeProviderUsageRefresh({
         listInstances: Effect.succeed(instances),
         health: usageHealth((instanceId) =>
-          Ref.update(reports, (current) => [...current, instanceId]),
+          Ref.update(reports, (current) => [...current, instanceId]).pipe(Effect.as(true)),
         ),
       });
 
@@ -349,7 +394,7 @@ it.effect("clears a failed probe so a later refresh can retry", () =>
             ),
           }),
         ]),
-        health: usageHealth(() => Ref.update(reports, (count) => count + 1)),
+        health: usageHealth(() => Ref.update(reports, (count) => count + 1).pipe(Effect.as(true))),
       });
 
       yield* coordinator.refresh([target]);
@@ -517,7 +562,7 @@ it.effect("does not let a late probe overwrite a newer usage observation", () =>
         yield* health.beginUsageObservation(),
       );
       yield* Deferred.succeed(releaseRead, undefined);
-      yield* Fiber.join(probe);
+      const outcome = yield* Fiber.join(probe);
 
       expect(yield* health.listUsageSnapshots()).toEqual([
         {
@@ -526,6 +571,65 @@ it.effect("does not let a late probe overwrite a newer usage observation", () =>
           observedAt: 1_000,
         },
       ]);
+      expect(outcome).toEqual({ refreshedInstanceIds: [], failures: [] });
+    }),
+  ),
+);
+
+it.effect("does not start an adapter that changed while queued behind the probe gate", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const blockersStarted = yield* Deferred.make<void>();
+      const releaseBlockers = yield* Deferred.make<void>();
+      const startedCount = yield* Ref.make(0);
+      const staleReads = yield* Ref.make(0);
+      const target = ProviderInstanceId.make("claude_queued_stale");
+      const blockerCount = 3;
+      const blockers = ["one", "two", "three"].map((suffix) =>
+        instance({
+          id: `claude_blocker_${suffix}`,
+          read: Ref.updateAndGet(startedCount, (count) => count + 1).pipe(
+            Effect.tap((count) =>
+              count === blockerCount ? Deferred.succeed(blockersStarted, undefined) : Effect.void,
+            ),
+            Effect.andThen(Deferred.await(releaseBlockers)),
+            Effect.as(undefined),
+          ),
+        }),
+      );
+      const stale = instance({
+        id: target,
+        read: Ref.update(staleReads, (count) => count + 1).pipe(Effect.as({ pool: "stale" })),
+      });
+      const replacement = instance({ id: target, read: Effect.succeed({ pool: "current" }) });
+      const instances = yield* Ref.make<ReadonlyArray<UsageRefreshProviderInstance>>([
+        ...blockers,
+        stale,
+      ]);
+      const health = yield* makeProviderInstanceHealth;
+      const coordinator = yield* makeProviderUsageRefresh({
+        listInstances: Ref.get(instances),
+        health,
+      });
+
+      const blockerRefresh = yield* coordinator
+        .refresh(blockers.map((blocker) => blocker.instanceId))
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(blockersStarted);
+      const queuedRefresh = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      yield* Ref.set(instances, [...blockers, replacement]);
+      yield* health.clearUsageSnapshot(target, yield* health.beginUsageObservation());
+      yield* Deferred.succeed(releaseBlockers, undefined);
+
+      yield* Fiber.join(blockerRefresh);
+      expect(yield* Fiber.join(queuedRefresh)).toEqual({
+        refreshedInstanceIds: [],
+        failures: [],
+      });
+      expect(yield* Ref.get(staleReads)).toBe(0);
+      expect(yield* health.listUsageSnapshots()).toEqual([]);
     }),
   ),
 );

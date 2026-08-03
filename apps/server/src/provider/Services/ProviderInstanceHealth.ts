@@ -53,14 +53,17 @@ export interface ProviderInstanceHealthShape {
   /** Allocate a total-order token immediately before observing provider usage. */
   readonly beginUsageObservation: () => Effect.Effect<UsageObservationToken>;
 
-  /** Store the latest opaque provider usage payload for one instance. */
+  /**
+   * Store the latest opaque provider usage payload for one instance.
+   * Returns whether this observation won the token comparison and was stored.
+   */
   readonly reportUsageSnapshot: (
     instanceId: ProviderInstanceId,
     payload: unknown,
     /** Unix ms used only for client freshness rendering. */
     observedAt: number,
     observationToken: UsageObservationToken,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<boolean>;
 
   /**
    * Drop the stored usage snapshot for one instance. The token orders the

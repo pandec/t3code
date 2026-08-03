@@ -187,19 +187,22 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
   const reportUsageSnapshot: ProviderInstanceHealthShape["reportUsageSnapshot"] = Effect.fn(
     "ProviderInstanceHealth.reportUsageSnapshot",
   )(function* (instanceId, payload, observedAt, observationToken) {
-    yield* Ref.update(usageSnapshots, (snapshots) => {
+    return yield* Ref.modify(usageSnapshots, (snapshots) => {
       const current = snapshots.get(instanceId);
       if (current !== undefined && current.observationToken >= observationToken) {
-        return snapshots;
+        return [false, snapshots] as const;
       }
-      return new Map(snapshots).set(instanceId, {
-        observationToken,
-        snapshot: {
-          instanceId,
-          payload,
-          observedAt,
-        },
-      });
+      return [
+        true,
+        new Map(snapshots).set(instanceId, {
+          observationToken,
+          snapshot: {
+            instanceId,
+            payload,
+            observedAt,
+          },
+        }),
+      ] as const;
     });
   });
 
