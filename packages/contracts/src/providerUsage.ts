@@ -43,8 +43,21 @@ export type ProviderUsageSnapshotsResult = typeof ProviderUsageSnapshotsResult.T
  * field: absent means "this server cannot tell us", which callers must treat
  * as inconclusive rather than as an all-probes-failed refresh.
  */
+/** Why one instance's probe produced nothing on this refresh. */
+export const ProviderUsageRefreshFailure = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  /** Human-readable, already safe to render verbatim in a client warning. */
+  reason: Schema.String,
+});
+export type ProviderUsageRefreshFailure = typeof ProviderUsageRefreshFailure.Type;
+
 export const ProviderUsageRefreshResult = Schema.Struct({
   snapshots: ProviderInstanceUsageSnapshots,
   refreshedInstanceIds: Schema.optional(Schema.Array(ProviderInstanceId)),
+  /**
+   * Optional like `refreshedInstanceIds`, and for the same rolling-compat
+   * reason: absent means "this server cannot say why", not "nothing failed".
+   */
+  failures: Schema.optional(Schema.Array(ProviderUsageRefreshFailure)),
 });
 export type ProviderUsageRefreshResult = typeof ProviderUsageRefreshResult.Type;

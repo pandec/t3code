@@ -1,4 +1,5 @@
 import { assert, beforeEach, describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -215,7 +216,11 @@ describe("makeCliProxyApiUsageProbe", () => {
     return Effect.gen(function* () {
       expect((yield* Effect.exit(runProbe))._tag).toBe("Failure");
       expect(requestCount).toBe(2);
-      expect(yield* runProbe).toBeUndefined();
+      // The cooled-down probe fails locally — naming the pause, not touching
+      // the gateway.
+      const cooled = yield* Effect.exit(runProbe);
+      assert(cooled._tag === "Failure");
+      expect(String(Cause.squash(cooled.cause))).toContain("paused");
       expect(requestCount).toBe(2);
 
       yield* TestClock.adjust("10 minutes");
@@ -253,8 +258,8 @@ describe("makeCliProxyApiUsageProbe", () => {
 
       // Budget spent: further keys are refused locally, without touching the
       // gateway, until the 30-minute window elapses.
-      expect(yield* attempt("wrong-4")).toBeUndefined();
-      expect(yield* attempt("wrong-5")).toBeUndefined();
+      expect((yield* Effect.exit(attempt("wrong-4")))._tag).toBe("Failure");
+      expect((yield* Effect.exit(attempt("wrong-5")))._tag).toBe("Failure");
       expect(requestCount).toBe(spentRequests);
 
       yield* TestClock.adjust("30 minutes");

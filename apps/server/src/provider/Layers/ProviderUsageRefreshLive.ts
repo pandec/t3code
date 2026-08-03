@@ -50,14 +50,35 @@ export interface ProviderUsageRefreshDependencies {
   >;
 }
 
+interface UsageProbeOutcome {
+  /** Whether the probe reported a fresh payload. */
+  readonly refreshed: boolean;
+  /** Present when the probe errored with a message worth showing a user. */
+  readonly failureReason?: string;
+}
+
 interface InFlightUsageProbe {
   readonly adapter: UsageRefreshProviderInstance["adapter"];
-  /** Resolves to `true` when the probe reported a fresh payload. */
-  readonly completion: Deferred.Deferred<boolean>;
+  readonly completion: Deferred.Deferred<UsageProbeOutcome>;
 }
 
 const MAX_CONCURRENT_USAGE_PROBES = 3;
 const USAGE_PROBE_TIMEOUT = "30 seconds";
+
+/** Best user-facing sentence hiding in a probe's failure cause. */
+function probeFailureReason(cause: Cause.Cause<unknown>): string {
+  const squashed = Cause.squash(cause);
+  if (Cause.isTimeoutError(squashed)) return "The usage probe timed out.";
+  if (typeof squashed === "object" && squashed !== null) {
+    // Adapter errors carry their human-readable sentence in `detail`; the
+    // `message` getter prefixes it with provider/method plumbing.
+    const detail = (squashed as { readonly detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.length > 0) return detail;
+    const message = (squashed as { readonly message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return "The usage probe failed.";
+}
 
 export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(function* (
   dependencies: ProviderUsageRefreshDependencies,
@@ -68,8 +89,8 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
 
   const runProbe = (
     instance: UsageRefreshProviderInstance,
-    completion: Deferred.Deferred<boolean>,
-    reported: Ref.Ref<boolean>,
+    completion: Deferred.Deferred<UsageProbeOutcome>,
+    outcome: Ref.Ref<UsageProbeOutcome>,
   ) =>
     probeGate
       .withPermits(1)(
@@ -84,7 +105,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               observedAt,
               observationToken,
             );
-            yield* Ref.set(reported, true);
+            yield* Ref.set(outcome, { refreshed: true });
           }
         }).pipe(Effect.timeout(USAGE_PROBE_TIMEOUT)),
       )
@@ -93,11 +114,18 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.interrupt;
           }
-          return Effect.logWarning("Failed to refresh provider usage for instance.", {
-            instanceId: instance.instanceId,
-            driver: instance.driverKind,
-            cause: Cause.pretty(cause),
-          });
+          return Ref.set(outcome, {
+            refreshed: false,
+            failureReason: probeFailureReason(cause),
+          }).pipe(
+            Effect.andThen(
+              Effect.logWarning("Failed to refresh provider usage for instance.", {
+                instanceId: instance.instanceId,
+                driver: instance.driverKind,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
         }),
         Effect.ensuring(
           Effect.gen(function* () {
@@ -107,7 +135,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               next.delete(instance.instanceId);
               return next;
             });
-            yield* Deferred.succeed(completion, yield* Ref.get(reported));
+            yield* Deferred.succeed(completion, yield* Ref.get(outcome));
           }),
         ),
       );
@@ -115,19 +143,19 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
   const refreshInstance = (instance: UsageRefreshProviderInstance) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const candidate = yield* Deferred.make<boolean>();
-        const reported = yield* Ref.make(false);
+        const candidate = yield* Deferred.make<UsageProbeOutcome>();
+        const outcome = yield* Ref.make<UsageProbeOutcome>({ refreshed: false });
         const registration = yield* Ref.modify(inFlight, (current) => {
           const existing = current.get(instance.instanceId);
           if (existing !== undefined && existing.adapter === instance.adapter) {
             const joined: {
-              readonly completion: Deferred.Deferred<boolean>;
+              readonly completion: Deferred.Deferred<UsageProbeOutcome>;
               readonly owner: boolean;
             } = { completion: existing.completion, owner: false };
             return [joined, current] as const;
           }
           const owned: {
-            readonly completion: Deferred.Deferred<boolean>;
+            readonly completion: Deferred.Deferred<UsageProbeOutcome>;
             readonly owner: boolean;
           } = { completion: candidate, owner: true };
           return [
@@ -140,7 +168,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         });
 
         if (registration.owner) {
-          yield* runProbe(instance, registration.completion, reported).pipe(
+          yield* runProbe(instance, registration.completion, outcome).pipe(
             Effect.forkIn(serverScope),
           );
         }
@@ -165,11 +193,20 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
         instances,
         (instance) =>
           refreshInstance(instance).pipe(
-            Effect.map((refreshed) => ({ instanceId: instance.instanceId, refreshed })),
+            Effect.map((outcome) => ({ instanceId: instance.instanceId, ...outcome })),
           ),
         { concurrency: "unbounded" },
       );
-      return outcomes.filter((outcome) => outcome.refreshed).map((outcome) => outcome.instanceId);
+      return {
+        refreshedInstanceIds: outcomes
+          .filter((outcome) => outcome.refreshed)
+          .map((outcome) => outcome.instanceId),
+        failures: outcomes.flatMap((outcome) =>
+          outcome.failureReason !== undefined
+            ? [{ instanceId: outcome.instanceId, reason: outcome.failureReason }]
+            : [],
+        ),
+      };
     },
   );
 

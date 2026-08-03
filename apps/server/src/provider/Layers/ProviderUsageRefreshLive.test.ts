@@ -1,4 +1,4 @@
-import { expect, it } from "@effect/vitest";
+import { beforeEach, expect, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
@@ -13,6 +13,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { resetCliProxyApiAuthFailuresForTest } from "../cliProxyApiUsage.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import {
@@ -30,6 +31,12 @@ import {
 } from "./ProviderUsageRefreshLive.ts";
 
 const driver = ProviderDriverKind.make("claudeAgent");
+
+// The auth-failure strike ledger is process-wide and keyed by gateway origin;
+// without a reset the gateway tests would inherit each other's strikes.
+beforeEach(() => {
+  resetCliProxyApiAuthFailuresForTest();
+});
 
 function instance(input: {
   readonly id: string;
@@ -126,9 +133,14 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
       yield* Effect.gen(function* () {
         const refresh = yield* ProviderUsageRefresh;
 
-        expect(yield* refresh.refresh([target])).toEqual([]);
+        const rejected = yield* refresh.refresh([target]);
+        expect(rejected.refreshedInstanceIds).toEqual([]);
+        expect(rejected.failures[0]?.reason).toContain("authentication rejected");
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
-        expect(yield* refresh.refresh([target])).toEqual([]);
+        // The cooled-down probe fails locally, with the pause as the reason.
+        const cooled = yield* refresh.refresh([target]);
+        expect(cooled.refreshedInstanceIds).toEqual([]);
+        expect(cooled.failures[0]?.reason).toContain("paused");
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
 
         // Removing an instance prunes the memoized probe, but the gateway's
@@ -137,7 +149,7 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
         yield* Ref.set(instances, []);
         yield* refresh.refresh();
         yield* Ref.set(instances, [directInstance]);
-        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect((yield* refresh.refresh([target])).refreshedInstanceIds).toEqual([]);
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
 
         // A declared but unresolved source owns the usage slot and must not
@@ -146,7 +158,10 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
           ...current,
           usageSource: { kind: "cliproxyapi", managementKey: "" },
         }));
-        expect(yield* refresh.refresh([target])).toEqual([]);
+        expect(yield* refresh.refresh([target])).toEqual({
+          refreshedInstanceIds: [],
+          failures: [],
+        });
         expect(yield* Ref.get(directReads)).toBe(0);
         expect(yield* Ref.get(gatewayRequests)).toBe(1);
       }).pipe(Effect.provide(layer));
@@ -590,13 +605,18 @@ it.effect("reports only the instances that answered on this call", () =>
         health: usageHealth(),
       });
 
-      expect(yield* coordinator.refresh()).toEqual([ProviderInstanceId.make("claude_ok")]);
+      const outcome = yield* coordinator.refresh();
+      expect(outcome.refreshedInstanceIds).toEqual([ProviderInstanceId.make("claude_ok")]);
+      // The dead probe carries its reason; the empty one is not a failure.
+      expect(outcome.failures).toEqual([
+        { instanceId: ProviderInstanceId.make("claude_broken"), reason: "probe exploded" },
+      ]);
       expect(
         yield* coordinator.refresh([
           ProviderInstanceId.make("claude_empty"),
           ProviderInstanceId.make("claude_broken"),
         ]),
-      ).toEqual([]);
+      ).toMatchObject({ refreshedInstanceIds: [] });
     }),
   ),
 );
@@ -629,8 +649,8 @@ it.effect("a joined caller receives the shared probe's own outcome", () =>
       const joiner = yield* coordinator.refresh([target]).pipe(Effect.forkChild);
       yield* Effect.yieldNow;
       yield* Deferred.succeed(releaseRead, undefined);
-      expect(yield* Fiber.join(owner)).toEqual([target]);
-      expect(yield* Fiber.join(joiner)).toEqual([target]);
+      expect((yield* Fiber.join(owner)).refreshedInstanceIds).toEqual([target]);
+      expect((yield* Fiber.join(joiner)).refreshedInstanceIds).toEqual([target]);
     }),
   ),
 );
