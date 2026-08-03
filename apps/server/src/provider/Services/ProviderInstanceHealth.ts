@@ -62,6 +62,16 @@ export interface ProviderInstanceHealthShape {
     observationToken: UsageObservationToken,
   ) => Effect.Effect<void>;
 
+  /**
+   * Drop the stored usage snapshot for one instance. The token orders the
+   * clear against in-flight observations: a probe that began before the
+   * clear cannot re-install the payload it read from the old source.
+   */
+  readonly clearUsageSnapshot: (
+    instanceId: ProviderInstanceId,
+    observationToken: UsageObservationToken,
+  ) => Effect.Effect<void>;
+
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;
 
   /**

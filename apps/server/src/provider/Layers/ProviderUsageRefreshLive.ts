@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 
 import {
@@ -256,6 +257,43 @@ export const ProviderUsageRefreshLive = Layer.effect(
         return resolved;
       },
     );
+
+    // A gateway snapshot outlives its source: turning the usage source off
+    // makes the instance fall back to the driver's SDK probe, which reports
+    // nothing through a gateway, so nothing would ever overwrite the pooled
+    // payload. Watch registry reconciles and drop the snapshot the moment an
+    // instance's resolved gateway target disappears or changes. The clear
+    // carries a fresh observation token so a probe already in flight against
+    // the old source cannot re-install what it read.
+    const resolveGatewayTargets = Effect.gen(function* () {
+      const targets = new Map<ProviderInstanceId, string>();
+      for (const instance of yield* registry.listInstances) {
+        const envelope = yield* (
+          registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
+        );
+        if (envelope?.usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) continue;
+        const target = resolveCliProxyApiUsageProbeTarget(envelope);
+        if (target) {
+          targets.set(instance.instanceId, `${target.managementUrl} ${target.managementKey}`);
+        }
+      }
+      return targets;
+    });
+    // Subscribe before the initial read so a reconcile landing in between
+    // still produces an event that re-diffs.
+    const registryChanges = yield* registry.subscribeChanges;
+    const knownGatewayTargets = yield* Ref.make(yield* resolveGatewayTargets);
+    yield* Stream.runForEach(Stream.fromSubscription(registryChanges), () =>
+      Effect.gen(function* () {
+        const next = yield* resolveGatewayTargets;
+        const previous = yield* Ref.getAndSet(knownGatewayTargets, next);
+        for (const [instanceId, targetKey] of previous) {
+          if (next.get(instanceId) !== targetKey) {
+            yield* health.clearUsageSnapshot(instanceId, yield* health.beginUsageObservation());
+          }
+        }
+      }),
+    ).pipe(Effect.forkScoped);
 
     return yield* makeProviderUsageRefresh({
       listInstances,

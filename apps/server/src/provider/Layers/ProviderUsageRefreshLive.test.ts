@@ -154,6 +154,96 @@ it.effect("reuses gateway cooldown state, prunes removed probes, and never falls
   ),
 );
 
+it.effect("drops the pooled snapshot when the usage source is removed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = ProviderInstanceId.make("claude_gateway");
+      const environment = [
+        {
+          name: "ANTHROPIC_BASE_URL",
+          value: "https://gateway.example.test/v1",
+          sensitive: false,
+        },
+      ];
+      const gatewayConfig: ProviderInstanceConfig = {
+        driver,
+        environment,
+        usageSource: { kind: "cliproxyapi", managementKey: "management-key" },
+        config: {},
+      };
+      const config = yield* Ref.make<ProviderInstanceConfig>(gatewayConfig);
+      const changes = yield* PubSub.unbounded<void>();
+      const gatewayInstance = {
+        instanceId: target,
+        driverKind: driver,
+        enabled: true,
+        adapter: {},
+      } as unknown as ProviderInstance;
+      const registryLayer = Layer.succeed(ProviderInstanceRegistry, {
+        getInstance: (instanceId) =>
+          Effect.succeed(instanceId === target ? gatewayInstance : undefined),
+        getInstanceConfig: (instanceId) =>
+          instanceId === target
+            ? Ref.get(config)
+            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+        listInstances: Effect.succeed([gatewayInstance]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.fromPubSub(changes),
+        subscribeChanges: PubSub.subscribe(changes),
+      });
+      const healthLayer = Layer.effect(ProviderInstanceHealth, makeProviderInstanceHealth);
+      const httpLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
+        ),
+      );
+      const layer = ProviderUsageRefreshLive.pipe(
+        Layer.provide(registryLayer),
+        Layer.provideMerge(healthLayer),
+        Layer.provide(httpLayer),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* ProviderUsageRefresh;
+        const health = yield* ProviderInstanceHealth;
+
+        yield* health.reportUsageSnapshot(
+          target,
+          { pool: "gateway" },
+          1_000,
+          yield* health.beginUsageObservation(),
+        );
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
+
+        // A probe against the old source is still in flight when the user
+        // turns the usage source off.
+        const lateToken = yield* health.beginUsageObservation();
+        yield* Ref.set(config, { driver, environment, config: {} });
+        yield* PubSub.publish(changes, undefined);
+        while ((yield* health.listUsageSnapshots()).length > 0) {
+          yield* Effect.yieldNow;
+        }
+
+        // The late probe must not resurrect the pooled payload…
+        yield* health.reportUsageSnapshot(target, { pool: "stale" }, 2_000, lateToken);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+        // …while an observation that begins after the clear reports normally.
+        yield* health.reportUsageSnapshot(
+          target,
+          { source: "direct" },
+          3_000,
+          yield* health.beginUsageObservation(),
+        );
+        expect(yield* health.listUsageSnapshots()).toEqual([
+          { instanceId: target, payload: { source: "direct" }, observedAt: 3_000 },
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("skips disabled and unsupported instances", () =>
   Effect.scoped(
     Effect.gen(function* () {

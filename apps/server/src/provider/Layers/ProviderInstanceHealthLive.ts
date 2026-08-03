@@ -93,11 +93,14 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     ReadonlyMap<ProviderInstanceId, ReadonlyMap<string, ProviderInstanceRateLimitState>>
   >(new Map());
   const nextUsageObservationToken = yield* Ref.make(0);
+  // `snapshot: undefined` is a tombstone left by `clearUsageSnapshot`: its
+  // token must keep outranking any observation that began before the clear,
+  // or a slow probe would re-install the payload it read from the old source.
   const usageSnapshots = yield* Ref.make<
     ReadonlyMap<
       ProviderInstanceId,
       {
-        readonly snapshot: ProviderInstanceUsageSnapshot;
+        readonly snapshot: ProviderInstanceUsageSnapshot | undefined;
         readonly observationToken: UsageObservationToken;
       }
     >
@@ -200,9 +203,25 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     });
   });
 
+  const clearUsageSnapshot: ProviderInstanceHealthShape["clearUsageSnapshot"] = Effect.fn(
+    "ProviderInstanceHealth.clearUsageSnapshot",
+  )(function* (instanceId, observationToken) {
+    yield* Ref.update(usageSnapshots, (snapshots) => {
+      const current = snapshots.get(instanceId);
+      if (current !== undefined && current.observationToken >= observationToken) {
+        return snapshots;
+      }
+      return new Map(snapshots).set(instanceId, { observationToken, snapshot: undefined });
+    });
+  });
+
   const listUsageSnapshots: ProviderInstanceHealthShape["listUsageSnapshots"] = () =>
     Ref.get(usageSnapshots).pipe(
-      Effect.map((snapshots) => Array.from(snapshots.values(), ({ snapshot }) => snapshot)),
+      Effect.map((snapshots) =>
+        Array.from(snapshots.values(), ({ snapshot }) => snapshot).filter(
+          (snapshot) => snapshot !== undefined,
+        ),
+      ),
     );
 
   const reportTurnOutcome: ProviderInstanceHealthShape["reportTurnOutcome"] = Effect.fn(
@@ -275,6 +294,7 @@ const makeProviderInstanceHealth = Effect.gen(function* () {
     reportRateLimitPayload,
     beginUsageObservation,
     reportUsageSnapshot,
+    clearUsageSnapshot,
     listUsageSnapshots,
     reportTurnOutcome,
     getRateLimitState,
