@@ -551,6 +551,7 @@ export const makeSessionImportService = Effect.gen(function* () {
             cwd: effectiveCwd,
             modelSelection,
             activeTurnId: null,
+            continuationKey: instance.continuationIdentity.continuationKey,
             ...(validatedWorktree === undefined ? {} : { cwdAuthority: "imported-session" }),
             lastRuntimeEvent: "provider.importConversation",
             lastRuntimeEventAt: createdAt,

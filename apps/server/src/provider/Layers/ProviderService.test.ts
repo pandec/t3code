@@ -71,6 +71,47 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
 
+function makeInstanceRegistry(
+  entries: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId;
+    readonly driverKind: ProviderDriverKind;
+    readonly continuationKey: string;
+    readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+  }>,
+): ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] {
+  const byInstanceId = new Map(entries.map((entry) => [entry.instanceId, entry] as const));
+  const unsupported = (instanceId: ProviderInstanceId) =>
+    new ProviderUnsupportedError({ provider: ProviderDriverKind.make(instanceId) });
+  return {
+    getByInstance: (instanceId) => {
+      const entry = byInstanceId.get(instanceId);
+      return entry ? Effect.succeed(entry.adapter) : Effect.fail(unsupported(instanceId));
+    },
+    getInstanceInfo: (instanceId) => {
+      const entry = byInstanceId.get(instanceId);
+      return entry
+        ? Effect.succeed({
+            instanceId,
+            driverKind: entry.driverKind,
+            displayName: undefined,
+            enabled: true,
+            continuationIdentity: {
+              driverKind: entry.driverKind,
+              continuationKey: entry.continuationKey,
+            },
+          })
+        : Effect.fail(unsupported(instanceId));
+    },
+    listInstances: () => Effect.succeed(entries.map((entry) => entry.instanceId)),
+    listProviders: () =>
+      Effect.succeed(Array.from(new Set(entries.map((entry) => entry.driverKind)))),
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+      PubSub.subscribe(pubsub),
+    ),
+  };
+}
+
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
@@ -1684,6 +1725,230 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }
 
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reuses persisted cursor and cwd across compatible instances after a restart", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-provider-service-compatible-instance-"),
+      );
+      const dbPath = NodePath.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const continuationKey = "claude:home:/shared-home";
+      const firstInstanceId = ProviderInstanceId.make("claude_personal");
+      const secondInstanceId = ProviderInstanceId.make("claude_work");
+      const makeProviderLayer = (
+        instanceId: ProviderInstanceId,
+        adapter: ProviderAdapterShape<ProviderAdapterError>,
+      ) =>
+        makeProviderServiceLive().pipe(
+          Layer.provide(
+            Layer.succeed(
+              ProviderAdapterRegistry.ProviderAdapterRegistry,
+              makeInstanceRegistry([
+                {
+                  instanceId,
+                  driverKind: CLAUDE_AGENT_DRIVER,
+                  continuationKey,
+                  adapter,
+                },
+              ]),
+            ),
+          ),
+          Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+          ),
+        );
+
+      const threadId = asThreadId("thread-compatible-instance");
+      const resumeCursor = { opaque: "legacy-compatible-resume" };
+      yield* Effect.gen(function* () {
+        const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        yield* repository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: firstInstanceId,
+          adapterKey: "claudeAgent",
+          runtimeMode: "full-access",
+          status: "stopped",
+          lastSeenAt: "2026-01-01T00:00:00.000Z",
+          resumeCursor,
+          runtimePayload: { cwd: "/tmp/shared-claude-project" },
+        });
+      }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+      const firstClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.listSessions();
+      }).pipe(Effect.provide(makeProviderLayer(firstInstanceId, firstClaude.adapter)));
+
+      const secondClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: secondInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(makeProviderLayer(secondInstanceId, secondClaude.adapter)));
+
+      assert.equal(secondClaude.startSession.mock.calls.length, 1);
+      assert.deepInclude(secondClaude.startSession.mock.calls[0]?.[0], {
+        providerInstanceId: secondInstanceId,
+        resumeCursor,
+        cwd: "/tmp/shared-claude-project",
+      });
+
+      NodeFS.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not carry a persisted cursor across incompatible instances", () =>
+    Effect.gen(function* () {
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const firstInstanceId = ProviderInstanceId.make("claude_personal");
+      const secondInstanceId = ProviderInstanceId.make("claude_isolated");
+      const firstClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const secondClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const registry = makeInstanceRegistry([
+        {
+          instanceId: firstInstanceId,
+          driverKind: CLAUDE_AGENT_DRIVER,
+          continuationKey: "claude:home:/personal",
+          adapter: firstClaude.adapter,
+        },
+        {
+          instanceId: secondInstanceId,
+          driverKind: CLAUDE_AGENT_DRIVER,
+          continuationKey: "claude:home:/isolated",
+          adapter: secondClaude.adapter,
+        },
+      ]);
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+      const threadId = asThreadId("thread-incompatible-instance");
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: firstInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(providerLayer));
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: secondInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(providerLayer));
+
+      assert.equal(secondClaude.startSession.mock.calls.length, 1);
+      const secondStartInput = secondClaude.startSession.mock.calls[0]?.[0];
+      assert.equal(
+        typeof secondStartInput === "object" &&
+          secondStartInput !== null &&
+          "resumeCursor" in secondStartInput,
+        false,
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects cursor reuse when a deleted owner's compatibility cannot be proven", () =>
+    Effect.gen(function* () {
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const threadId = asThreadId("thread-unprovable-instance");
+      yield* Effect.gen(function* () {
+        const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        yield* repository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claude_deleted"),
+          adapterKey: "claudeAgent",
+          runtimeMode: "full-access",
+          status: "stopped",
+          lastSeenAt: "2026-01-01T00:00:00.000Z",
+          resumeCursor: { opaque: "persisted-session" },
+          runtimePayload: { cwd: "/tmp/project" },
+        });
+      }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+      const targetInstanceId = ProviderInstanceId.make("claude_replacement");
+      const targetClaude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(
+          Layer.succeed(
+            ProviderAdapterRegistry.ProviderAdapterRegistry,
+            makeInstanceRegistry([
+              {
+                instanceId: targetInstanceId,
+                driverKind: CLAUDE_AGENT_DRIVER,
+                continuationKey: "claude:home:/shared-home",
+                adapter: targetClaude.adapter,
+              },
+            ]),
+          ),
+        ),
+        Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+
+      const failure = yield* Effect.flip(
+        Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          return yield* provider.startSession(threadId, {
+            provider: CLAUDE_AGENT_DRIVER,
+            providerInstanceId: targetInstanceId,
+            threadId,
+            runtimeMode: "full-access",
+          });
+        }).pipe(Effect.provide(providerLayer)),
+      );
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "cannot be verified");
+      assert.equal(targetClaude.startSession.mock.calls.length, 0);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

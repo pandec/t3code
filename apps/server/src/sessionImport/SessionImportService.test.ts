@@ -336,6 +336,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(binding?.runtimePayload).toMatchObject({
         modelSelection: { instanceId, model: "claude-sonnet-5" },
         activeTurnId: null,
+        continuationKey: "claude:home:/tmp/.claude",
       });
 
       const command = state.dispatched[0];

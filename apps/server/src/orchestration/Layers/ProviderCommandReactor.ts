@@ -519,28 +519,34 @@ const make = Effect.gen(function* () {
         detail: `Thread '${threadId}' has an active provider session without a provider instance id.`,
       });
     }
+    // A stopped thread's model selection may already reflect the requested
+    // switch. Its projected session retains the persisted binding's true
+    // owner, which is what continuation compatibility must compare against.
     const currentInstanceId =
       activeThreadSession !== null &&
       activeSession !== undefined &&
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
-        : thread.modelSelection.instanceId;
+        : (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId);
     const preferredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const preferredInstanceId = preferredModelSelection.instanceId;
-    const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
-      Effect.mapError(
-        () =>
-          new ProviderAdapterRequestError({
-            provider: providerErrorLabelFromInstanceHint({
-              instanceId: String(currentInstanceId),
-              modelSelectionInstanceId: String(thread.modelSelection.instanceId),
-              sessionProvider: thread.session?.providerName ?? undefined,
-            }),
-            method: "thread.turn.start",
-            detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
-          }),
-      ),
+    const currentInfo = Option.getOrUndefined(
+      yield* providerService.getInstanceInfo(currentInstanceId).pipe(Effect.option),
     );
+    if (
+      currentInfo === undefined &&
+      (activeThreadSession !== null || currentInstanceId === preferredInstanceId)
+    ) {
+      return yield* new ProviderAdapterRequestError({
+        provider: providerErrorLabelFromInstanceHint({
+          instanceId: String(currentInstanceId),
+          modelSelectionInstanceId: String(thread.modelSelection.instanceId),
+          sessionProvider: thread.session?.providerName ?? undefined,
+        }),
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
+      });
+    }
     const preferredInfo = yield* providerService.getInstanceInfo(preferredInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -605,22 +611,6 @@ const make = Effect.gen(function* () {
       );
     };
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
-    if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
-      yield* setThreadSession({
-        threadId,
-        session: {
-          threadId,
-          status: "starting",
-          providerName: activeSession?.provider ?? preferredProvider,
-          providerInstanceId: activeSession?.providerInstanceId ?? desiredInstanceId,
-          runtimeMode: desiredRuntimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      });
-    }
     if (thread.session !== null) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
@@ -635,7 +625,11 @@ const make = Effect.gen(function* () {
         requestedModelSelection: restartComparisonSelection,
       });
     }
+    // If a stopped binding's old instance was deleted, ProviderService owns
+    // the final check because it can compare the requested instance against
+    // the continuation key persisted alongside the resume cursor.
     if (
+      currentInfo !== undefined &&
       thread.session !== null &&
       restartComparisonSelection !== undefined &&
       restartComparisonSelection.instanceId !== currentInstanceId
@@ -657,6 +651,22 @@ const make = Effect.gen(function* () {
           detail: `Thread '${threadId}' cannot switch from instance '${currentInstanceId}' to '${desiredInstanceId}' because their provider resume state is incompatible.`,
         });
       }
+    }
+    if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
+      yield* setThreadSession({
+        threadId,
+        session: {
+          threadId,
+          status: "starting",
+          providerName: activeSession?.provider ?? preferredProvider,
+          providerInstanceId: activeSession?.providerInstanceId ?? desiredInstanceId,
+          runtimeMode: desiredRuntimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
     }
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({

@@ -47,6 +47,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import { readPersistedContinuationKey } from "../runtimeBindingContinuation.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -269,6 +270,39 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
   const withThreadLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     Effect.flatMap(getThreadLock(threadId), (lock) => lock.withPermit(effect));
+
+  // Upgrade pre-continuation-key bindings while their owning instances still
+  // resolve. This keeps a later rename/deletion recoverable without changing
+  // lastSeenAt (which would interfere with idle-session reaping).
+  yield* directory.listBindings().pipe(
+    Effect.flatMap((bindings) =>
+      Effect.forEach(
+        bindings,
+        (binding) =>
+          Effect.gen(function* () {
+            if (readPersistedContinuationKey(binding.runtimePayload) !== undefined) return;
+            const providerInstanceId = binding.providerInstanceId;
+            if (providerInstanceId === undefined) return;
+            const ownerInfo = Option.getOrUndefined(
+              yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+            );
+            if (ownerInfo === undefined) return;
+            yield* directory.refreshIfUnchanged({
+              binding,
+              touchLastSeenAt: false,
+              runtimePayloadPatch: {
+                continuationKey: ownerInfo.continuationIdentity.continuationKey,
+              },
+            });
+          }),
+        { concurrency: "unbounded", discard: true },
+      ),
+    ),
+    Effect.catch((error) =>
+      Effect.logWarning("provider.session.continuation-key-backfill-failed", { error }),
+    ),
+  );
+
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
@@ -391,21 +425,51 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         session,
       );
       const previousBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      // Stamp the owner's continuation key into the payload so compatibility
+      // can still be proven after the instance is renamed or deleted, when
+      // the registry can no longer answer for its id.
+      const ownerInfo = Option.getOrUndefined(
+        yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+      );
+      const previousInstanceId = previousBinding?.providerInstanceId;
+      const instanceChanged =
+        previousBinding !== undefined && previousInstanceId !== providerInstanceId;
+      const previousOwnerInfo =
+        instanceChanged && previousInstanceId !== undefined
+          ? Option.getOrUndefined(
+              yield* registry.getInstanceInfo(previousInstanceId).pipe(Effect.option),
+            )
+          : undefined;
+      const previousContinuationKey =
+        previousOwnerInfo?.continuationIdentity.continuationKey ??
+        readPersistedContinuationKey(previousBinding?.runtimePayload);
+      const continuationCompatible =
+        instanceChanged &&
+        previousBinding?.provider === session.provider &&
+        ownerInfo !== undefined &&
+        previousContinuationKey !== undefined &&
+        previousContinuationKey === ownerInfo.continuationIdentity.continuationKey;
       const preserveImportedCwd =
         previousBinding?.provider === session.provider &&
-        previousBinding.providerInstanceId === providerInstanceId &&
+        (previousInstanceId === providerInstanceId || continuationCompatible) &&
         hasDurableImportedCwdAuthority(previousBinding.runtimePayload);
       yield* directory.upsert({
         threadId,
         provider: session.provider,
         providerInstanceId,
+        ...(instanceChanged ? { continuationCompatible } : {}),
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, {
-          ...extra,
-          preserveImportedCwd,
-        }),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session, {
+            ...extra,
+            preserveImportedCwd,
+          }),
+          ...(ownerInfo !== undefined
+            ? { continuationKey: ownerInfo.continuationIdentity.continuationKey }
+            : {}),
+        },
       });
     });
 
@@ -735,15 +799,78 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        const effectiveResumeCursor =
-          input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
-        const persistedCwd =
-          persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? readPersistedCwd(persistedBinding.runtimePayload)
+        const persistedBindingInstanceId =
+          persistedBinding === undefined
+            ? undefined
+            : yield* requireBindingInstanceId("ProviderService.startSession", persistedBinding);
+        // Continuation compatibility of the persisted binding's owner with
+        // the instance being started. Compatibility spans instance ids: two
+        // instances sharing a continuation key (e.g. Claude shadow accounts
+        // over one config dir) continue each other's conversations, so the
+        // persisted cursor must be gated on the key, not on exact-id
+        // equality. When the owner no longer resolves in the registry
+        // (renamed/deleted instance), fall back to the key persisted
+        // alongside the binding.
+        const persistedOwnerInfo =
+          persistedBinding !== undefined &&
+          persistedBindingInstanceId !== undefined &&
+          persistedBindingInstanceId !== resolvedInstanceId
+            ? Option.getOrUndefined(
+                yield* registry.getInstanceInfo(persistedBindingInstanceId).pipe(Effect.option),
+              )
             : undefined;
+        const persistedOwnerMissing =
+          persistedBinding !== undefined &&
+          persistedBindingInstanceId !== undefined &&
+          persistedBindingInstanceId !== resolvedInstanceId &&
+          persistedOwnerInfo === undefined;
+        const ownerContinuationKey =
+          persistedOwnerInfo?.continuationIdentity.continuationKey ??
+          readPersistedContinuationKey(persistedBinding?.runtimePayload);
+        const bindingCompatibility =
+          persistedBinding === undefined
+            ? ("none" as const)
+            : persistedBindingInstanceId === resolvedInstanceId
+              ? ("same-instance" as const)
+              : ownerContinuationKey === undefined
+                ? ("unprovable" as const)
+                : (persistedOwnerInfo?.driverKind ?? persistedBinding.provider) ===
+                      resolvedProvider &&
+                    ownerContinuationKey === instanceInfo.continuationIdentity.continuationKey
+                  ? ("continuation-group" as const)
+                  : ("incompatible" as const);
+        const reusePersistedState =
+          bindingCompatibility === "same-instance" || bindingCompatibility === "continuation-group";
+        const persistedCursorPresent =
+          persistedBinding?.resumeCursor !== null && persistedBinding?.resumeCursor !== undefined;
+        const persistedCursorDropped =
+          input.resumeCursor === undefined && persistedCursorPresent && !reusePersistedState;
+        if (persistedCursorDropped && persistedBinding !== undefined) {
+          yield* Effect.logWarning("provider.session.resume-state-not-carried", {
+            threadId,
+            requestedInstanceId: resolvedInstanceId,
+            bindingInstanceId: persistedBindingInstanceId,
+            bindingProvider: persistedBinding.provider,
+            bindingCompatibility,
+          });
+          if (persistedOwnerMissing) {
+            // Never trade the conversation for a working button when the old
+            // owner has disappeared. A persisted key may still prove a
+            // compatible rename; otherwise fail instead of silently starting
+            // a new native conversation.
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              bindingCompatibility === "unprovable"
+                ? `Thread '${threadId}' has persisted conversation state owned by unavailable provider instance '${persistedBindingInstanceId}', and its continuation compatibility with instance '${resolvedInstanceId}' cannot be verified. Starting here would discard the conversation context; restore or re-add instance '${persistedBindingInstanceId}' with the same account/config to continue this thread, or start a new thread.`
+                : `Thread '${threadId}' has persisted conversation state owned by provider instance '${persistedBindingInstanceId}', which no longer exists and is not continuation-compatible with instance '${resolvedInstanceId}'. Starting here would discard the conversation context; switch the thread to a compatible instance or start a new thread.`,
+            );
+          }
+        }
+        const effectiveResumeCursor =
+          input.resumeCursor ?? (reusePersistedState ? persistedBinding?.resumeCursor : undefined);
+        const persistedCwd = reusePersistedState
+          ? readPersistedCwd(persistedBinding?.runtimePayload)
+          : undefined;
         const effectiveCwd =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
@@ -755,17 +882,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.resume_cursor.source":
             input.resumeCursor !== undefined
               ? "request"
-              : effectiveResumeCursor !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
-                : "none",
+              : effectiveResumeCursor !== undefined
+                ? bindingCompatibility === "same-instance"
+                  ? "persisted"
+                  : "persisted-continuation-group"
+                : persistedCursorDropped
+                  ? "dropped-incompatible"
+                  : "none",
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
           "provider.cwd.source":
             input.cwd !== undefined
               ? "request"
-              : effectiveCwd !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
+              : effectiveCwd !== undefined
+                ? bindingCompatibility === "same-instance"
+                  ? "persisted"
+                  : "persisted-continuation-group"
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
         });
@@ -872,6 +1003,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimeMode: binding.runtimeMode ?? "full-access",
       });
 
+      const forkOwnerInfo = Option.getOrUndefined(
+        yield* registry.getInstanceInfo(providerInstanceId).pipe(Effect.option),
+      );
       yield* directory.upsert({
         threadId: input.destinationThreadId,
         provider: binding.provider,
@@ -885,6 +1019,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           activeTurnId: null,
           lastRuntimeEvent: "provider.forkConversation",
           lastRuntimeEventAt: yield* nowIso,
+          ...(forkOwnerInfo !== undefined
+            ? { continuationKey: forkOwnerInfo.continuationIdentity.continuationKey }
+            : {}),
         },
       });
       return result;
