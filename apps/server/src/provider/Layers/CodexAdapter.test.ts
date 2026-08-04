@@ -191,6 +191,7 @@ function makeRuntimeFactory() {
 function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolean }) {
   const runtimes: Array<FakeCodexRuntime> = [];
   const releasedThreadIds: Array<ThreadId> = [];
+  let nextFailure: "construction" | "read" | undefined;
 
   const factory = vi.fn((runtimeOptions: CodexSessionRuntimeOptions) =>
     Effect.gen(function* () {
@@ -201,7 +202,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
         }),
       );
 
-      if (options?.failConstruction) {
+      const failure = nextFailure;
+      nextFailure = undefined;
+      if (options?.failConstruction || failure === "construction") {
         return yield* new CodexErrors.CodexAppServerSpawnError({
           command: `${runtimeOptions.binaryPath} app-server`,
           cause: new Error("runtime construction failed"),
@@ -209,6 +212,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
       }
 
       const runtime = new FakeCodexRuntime(runtimeOptions);
+      if (failure === "read") {
+        runtime.readAccountUsageImpl.mockRejectedValue(new Error("usage failed"));
+      }
       runtimes.push(runtime);
       return runtime;
     }),
@@ -217,6 +223,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
   return {
     factory,
     releasedThreadIds,
+    failNext(failure: "construction" | "read") {
+      nextFailure = failure;
+    },
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
     },
@@ -267,22 +276,6 @@ validationLayer("CodexAdapterLive validation", (it) => {
       NodeAssert.equal(runtime.startImpl.mock.calls.length, 0);
       NodeAssert.equal(runtime.readAccountUsageImpl.mock.calls.length, 1);
       NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
-    }),
-  );
-
-  it.effect("closes the standalone usage runtime when the read fails", () =>
-    Effect.gen(function* () {
-      validationRuntimeFactory.factory.mockClear();
-      const adapter = yield* CodexAdapter;
-      let failedRuntime: FakeCodexRuntime | undefined;
-      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
-        failedRuntime = new FakeCodexRuntime(options);
-        failedRuntime.readAccountUsageImpl.mockRejectedValue(new Error("usage failed"));
-        return Effect.succeed(failedRuntime);
-      });
-
-      NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
-      NodeAssert.equal(failedRuntime?.closeImpl.mock.calls.length, 1);
     }),
   );
 
@@ -1319,22 +1312,19 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
     }),
   );
 
-  it.effect("closes the standalone account-usage runtime scope", () =>
+  it.effect("closes the standalone account-usage scope on read and construction failures", () =>
     Effect.gen(function* () {
-      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
       const adapter = yield* CodexAdapter;
 
-      NodeAssert.deepStrictEqual(yield* adapter.readAccountUsage!(), {
-        rateLimits: {
-          primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
-        },
-      });
-      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
-      NodeAssert.ok(runtime);
-      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
-      NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
-        asThreadId("account-usage-probe"),
-      ]);
+      for (const failure of ["read", "construction"] as const) {
+        scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+        scopedLifecycleRuntimeFactory.failNext(failure);
+
+        NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
+        NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
+          asThreadId("account-usage-probe"),
+        ]);
+      }
     }),
   );
 });
@@ -1377,18 +1367,6 @@ scopedFailureLayer("CodexAdapterLive scoped startup failure", (it) => {
         asThreadId("thread-fail"),
       ]);
       NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-fail")), false);
-    }),
-  );
-
-  it.effect("closes the standalone account-usage scope when construction fails", () =>
-    Effect.gen(function* () {
-      scopedFailureRuntimeFactory.releasedThreadIds.length = 0;
-      const adapter = yield* CodexAdapter;
-
-      NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
-      NodeAssert.deepStrictEqual(scopedFailureRuntimeFactory.releasedThreadIds, [
-        asThreadId("account-usage-probe"),
-      ]);
     }),
   );
 });

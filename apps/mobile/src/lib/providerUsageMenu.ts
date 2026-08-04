@@ -1,7 +1,6 @@
-import {
-  primaryProviderUsageWindow,
-  type ProviderUsageSnapshot,
-  type ProviderUsageWindow,
+import type {
+  ProviderUsageSnapshot,
+  ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
 
 /**
@@ -11,11 +10,10 @@ import {
  * tap-opened `ControlPillMenu` with the account facts in each row's subtitle.
  */
 
-export function providerUsageTriggerLabel(snapshot: ProviderUsageSnapshot): string {
-  const primary = primaryProviderUsageWindow(snapshot);
-  if (primary?.status === "warning" || primary?.status === "critical") {
-    const percent = primary.usedPercent !== null ? ` ${Math.round(primary.usedPercent)}%` : "";
-    return `${primary.shortLabel}${percent}`;
+export function providerUsageTriggerLabel(window: ProviderUsageWindow | null): string {
+  if (window?.status === "warning" || window?.status === "critical") {
+    const percent = window.usedPercent !== null ? ` ${Math.round(window.usedPercent)}%` : "";
+    return `${window.shortLabel}${percent}`;
   }
   return "Usage";
 }

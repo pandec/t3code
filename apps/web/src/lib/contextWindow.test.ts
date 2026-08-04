@@ -9,7 +9,6 @@ import { createModelCapabilities, createModelSelection } from "@t3tools/shared/m
 
 import {
   deriveLatestContextWindowSnapshot,
-  emptyContextWindowSnapshot,
   formatContextWindowTokens,
   resolveKnownContextWindowMaxTokens,
 } from "./contextWindow";
@@ -72,7 +71,7 @@ describe("contextWindow", () => {
     });
   });
 
-  it("builds a zero-usage snapshot when the selected model declares its context window", () => {
+  it("resolves the context window declared by the selected model", () => {
     const model = {
       slug: "claude-opus-5",
       name: "Claude Opus 5",
@@ -92,17 +91,7 @@ describe("contextWindow", () => {
       }),
     };
     const selection = createModelSelection(ProviderInstanceId.make("claudeAgent"), model.slug, []);
-    const maxTokens = resolveKnownContextWindowMaxTokens(model, selection);
-
-    expect(maxTokens).toBe(1_000_000);
-    expect(
-      emptyContextWindowSnapshot({ maxTokens: maxTokens!, compactsAutomatically: true }),
-    ).toMatchObject({
-      usedTokens: 0,
-      maxTokens: 1_000_000,
-      usedPercentage: 0,
-      remainingPercentage: 100,
-    });
+    expect(resolveKnownContextWindowMaxTokens(model, selection)).toBe(1_000_000);
   });
 
   it("does not invent a context window for custom models", () => {

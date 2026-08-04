@@ -104,11 +104,7 @@ export type ProviderUsageSnapshot = {
   readonly providerInstanceId: string | null;
   readonly windows: ReadonlyArray<ProviderUsageWindow>;
   readonly status: ProviderUsageStatus;
-  /** The most constrained window; what the collapsed trigger surfaces. */
-  readonly constrainedWindow: ProviderUsageWindow | null;
   readonly updatedAt: string;
-  /** Window the provider flagged as binding, when it says so. */
-  readonly activeWindowId?: string | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -142,7 +138,10 @@ function statusForPercent(
   return "ok";
 }
 
-function maxStatus(a: ProviderUsageStatus, b: ProviderUsageStatus): ProviderUsageStatus {
+export function maxProviderUsageStatus(
+  a: ProviderUsageStatus,
+  b: ProviderUsageStatus,
+): ProviderUsageStatus {
   return statusRank(b) > statusRank(a) ? b : a;
 }
 
@@ -241,7 +240,7 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
   const { label, shortLabel } = claudeWindowLabels(rateLimitType);
   const reportedStatus: ProviderUsageStatus =
     status === "rejected" ? "critical" : status === "allowed_warning" ? "warning" : "ok";
-  const windowStatus = maxStatus(statusForPercent(usedPercent), reportedStatus);
+  const windowStatus = maxProviderUsageStatus(statusForPercent(usedPercent), reportedStatus);
 
   return {
     providerLabel: "Claude",
@@ -271,9 +270,6 @@ function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
 //   { kind: "weekly_scoped", group: "weekly", percent: 44, severity: "normal",
 //     resets_at: "2026-07-31T02:59:59Z", is_active: true,
 //     scope: { model: { display_name: "Fable" } } }
-// `is_active` marks the window the account is actually constrained by, which
-// beats inferring it from the highest percentage.
-//
 // The sibling flat map (five_hour/seven_day/…) is the fallback for payloads
 // without `limits`; it also carries a long tail of codenamed placeholder
 // windows that are always null, so null entries must be skipped rather than
@@ -325,13 +321,11 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
   providerLabel: "Claude";
   windows: ProviderUsageWindow[];
   clearedWindowIds: string[];
-  activeWindowId: string | null;
 } | null {
   const rateLimits = asRecord(payload.rateLimits);
   if (!rateLimits) return null;
 
   const windows: ProviderUsageWindow[] = [];
-  let activeWindowId: string | null = null;
 
   // An empty array must fall through to the flat map rather than claim the
   // payload reported no windows — the flat map is the SDK's declared shape and
@@ -395,9 +389,6 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
       if (usedIds.has(id)) id = `${id}:${index}`;
       usedIds.add(id);
       const usedPercent = clampPercent(percent);
-      if (limit.is_active === true) {
-        activeWindowId = id;
-      }
       // The payload's own `group` ("session" / "weekly") is authoritative when
       // present; otherwise infer it from the window kind.
       const reportedGroup = asString(limit.group);
@@ -415,7 +406,7 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
         shortLabel,
         usedPercent,
         resetsAt: isoToUnixSeconds(limit.resets_at),
-        status: maxStatus(
+        status: maxProviderUsageStatus(
           statusForPercent(usedPercent),
           asString(limit.severity) === "critical" ? "critical" : "ok",
         ),
@@ -449,7 +440,6 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
     // The usage API reports every window at once, so it is authoritative:
     // windows it omits no longer exist and must not linger from older events.
     clearedWindowIds: [],
-    activeWindowId,
   };
 }
 
@@ -573,8 +563,6 @@ type NormalizedRateLimitPayload =
       readonly clearedWindowIds: ReadonlyArray<string>;
       /** Usage-API payloads report every window at once and replace the merge state. */
       readonly authoritative?: boolean;
-      /** Window the provider flags as currently binding, when it says so. */
-      readonly activeWindowId?: string | null;
     }
   | {
       readonly providerLabel: "Codex";
@@ -831,11 +819,19 @@ const byProviderUsageAccountPriority = (a: ProviderUsageAccount, b: ProviderUsag
   (b.priority ?? Number.NEGATIVE_INFINITY) - (a.priority ?? Number.NEGATIVE_INFINITY);
 
 /** Highest priority first — the order the gateway's failover ladder serves. */
-export function sortProviderUsageAccountsByPriority(
+function sortProviderUsageAccountsByPriority(
   accounts: ReadonlyArray<ProviderUsageAccount>,
 ): ReadonlyArray<ProviderUsageAccount> {
   // Hermes lacks ES2023 change-by-copy methods, so copy before sorting.
   return [...accounts].sort(byProviderUsageAccountPriority);
+}
+
+export function listProviderUsageAccountsForDisplay(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+): ReadonlyArray<ProviderUsageAccount> {
+  return sortProviderUsageAccountsByPriority(
+    accounts.filter((account) => account.state !== "disabled"),
+  );
 }
 
 /**
@@ -870,14 +866,40 @@ export function featuredProviderUsageAccount(
   );
 }
 
-function isFableProviderUsageWindow(window: ProviderUsageWindow): boolean {
-  return window.id === "seven_day_fable" || window.shortLabel.toLowerCase() === "fable";
-}
-
 export function providerUsageFableWindow(
   snapshot: ProviderUsageSnapshot | null,
 ): ProviderUsageWindow | null {
-  return snapshot?.windows.find(isFableProviderUsageWindow) ?? null;
+  return (
+    snapshot?.windows.find(
+      (window) =>
+        window.id === "seven_day_fable" || window.shortLabel.toLowerCase().startsWith("fable"),
+    ) ?? null
+  );
+}
+
+/**
+ * Severity the compact ring should paint itself.
+ *
+ * The ring's *value* is the primary (session) window, but its colour must not
+ * hide an exhausted window that has no other passive signal — a spent weekly
+ * would otherwise be invisible until the popover is opened.
+ *
+ * The exception is any window rendered separately: the Fable sub-ring already
+ * shows Fable, and repainting the outer ring for it is exactly the hijacking
+ * that moving Fable out of the ring was meant to end.
+ */
+export function providerUsageRingStatus(
+  snapshot: ProviderUsageSnapshot | null,
+  separatelyRenderedWindowId?: string | null,
+): ProviderUsageStatus {
+  if (snapshot === null) return "ok";
+  return snapshot.windows.reduce<ProviderUsageStatus>(
+    (status, window) =>
+      window.id === separatelyRenderedWindowId
+        ? status
+        : maxProviderUsageStatus(status, window.status),
+    "ok",
+  );
 }
 
 export type ProviderUsageFableSelection = {
@@ -885,32 +907,55 @@ export type ProviderUsageFableSelection = {
   readonly window: ProviderUsageWindow;
 };
 
+const FULL_HEADROOM_FABLE_WINDOW: ProviderUsageWindow = {
+  id: "seven_day_fable",
+  group: "weekly",
+  label: "Weekly (Fable)",
+  shortLabel: "Fable",
+  usedPercent: 0,
+  resetsAt: null,
+  status: "ok",
+};
+
 /** The available Claude account the gateway would route a Fable turn to next. */
 export function selectProviderUsageFableAccount(
   accounts: ReadonlyArray<ProviderUsageAccount>,
 ): ProviderUsageFableSelection | null {
-  const availableWithHeadroom = sortProviderUsageAccountsByPriority(
-    accounts.filter((account) => {
-      if (
-        account.provider !== "claude" ||
-        account.state !== "available" ||
-        account.usage === null
-      ) {
-        return false;
-      }
-      const window = providerUsageFableWindow(account.usage);
-      return window !== null && window.usedPercent !== null && window.usedPercent < 100;
-    }),
-  );
-  const next = availableWithHeadroom[0];
-  if (next !== undefined) {
-    const window = providerUsageFableWindow(next.usage);
-    return window === null ? null : { account: next, window };
+  for (const account of sortProviderUsageAccountsByPriority(
+    accounts.filter(
+      (candidate) => candidate.provider === "claude" && candidate.state === "available",
+    ),
+  )) {
+    const window = providerUsageFableWindow(account.usage);
+    if (window === null) return { account, window: FULL_HEADROOM_FABLE_WINDOW };
+    if (window.usedPercent !== null && window.usedPercent < 100) return { account, window };
   }
 
   const featured = featuredProviderUsageAccount(accounts, "claude");
   const window = providerUsageFableWindow(featured?.usage ?? null);
   return featured === null || window === null ? null : { account: featured, window };
+}
+
+/** Shared Fable ring selection and labelling for web and mobile composers. */
+export function resolveProviderUsageFableRing(input: {
+  readonly upstreamProvider: string | null;
+  readonly accounts: ReadonlyArray<ProviderUsageAccount> | null;
+  readonly snapshot: ProviderUsageSnapshot | null;
+}): { readonly accountName: string; readonly window: ProviderUsageWindow } | null {
+  if (input.upstreamProvider !== "claude") return null;
+  if (input.accounts !== null) {
+    const selection = selectProviderUsageFableAccount(input.accounts);
+    return selection === null
+      ? null
+      : {
+          accountName: presentProviderUsageAccount(selection.account).displayName,
+          window: selection.window,
+        };
+  }
+  const window = providerUsageFableWindow(input.snapshot);
+  return window === null
+    ? null
+    : { accountName: input.snapshot?.providerLabel ?? "Claude", window };
 }
 
 /**
@@ -983,14 +1028,12 @@ function deriveProviderUsageSnapshotFromSources(
   let providerLabel: string | null = null;
   let providerInstanceId: string | null = requestedInstanceId;
   let inheritedCodexIdentity: string | null = null;
-  let activeWindowId: string | null = null;
 
   const resetMergeState = (nextProviderLabel: string, nextProviderInstanceId: string | null) => {
     windowsById.clear();
     providerLabel = nextProviderLabel;
     providerInstanceId = requestedInstanceId ?? nextProviderInstanceId;
     inheritedCodexIdentity = null;
-    activeWindowId = null;
   };
 
   // Oldest first: Map#set gives newest-wins semantics per semantic window id
@@ -1030,15 +1073,9 @@ function deriveProviderUsageSnapshotFromSources(
       // A full quota report supersedes everything merged so far, including
       // windows the account no longer has.
       windowsById.clear();
-      activeWindowId = result.activeWindowId ?? null;
     } else {
       for (const windowId of result.clearedWindowIds) {
         windowsById.delete(windowId);
-      }
-      // A single-window event cannot confirm which window is binding overall;
-      // keep the last authoritative answer only while that window survives.
-      if (activeWindowId !== null && result.windows.some((w) => w.id === activeWindowId)) {
-        activeWindowId = null;
       }
     }
 
@@ -1110,8 +1147,8 @@ function deriveProviderUsageSnapshotFromSources(
     return forcedCriticalIsFresh
       ? {
           ...window,
-          status: maxStatus(window.status, "critical"),
-          reportedStatus: maxStatus(window.reportedStatus ?? "ok", "critical"),
+          status: maxProviderUsageStatus(window.status, "critical"),
+          reportedStatus: maxProviderUsageStatus(window.reportedStatus ?? "ok", "critical"),
         }
       : window;
   });
@@ -1126,57 +1163,32 @@ function deriveProviderUsageSnapshotFromSources(
   }
   if (!updatedAt) return null;
 
-  const { status, constrainedWindow } = summarizeProviderUsageWindows(windows, activeWindowId);
-
   return applyProviderUsageThresholds(
     {
       providerLabel,
       providerInstanceId,
       windows,
-      status,
-      constrainedWindow,
+      status: windows.reduce<ProviderUsageStatus>(
+        (status, window) => maxProviderUsageStatus(status, window.status),
+        "ok",
+      ),
       updatedAt,
-      activeWindowId,
     },
     options.thresholds,
   );
 }
 
-/**
- * Snapshot-level severity and the window a compact surface should feature.
- *
- * The provider's own "active" flag beats inferring the binding window from
- * percentages — a 44% Fable weekly can bind while a 24% all-models weekly does
- * not. It may NOT downgrade severity though: compact surfaces render this
- * window alone, so preferring an active warning over a critical window
- * elsewhere would hide the very state the meter exists to surface.
- */
-function summarizeProviderUsageWindows(
-  windows: ReadonlyArray<ProviderUsageWindow>,
-  activeWindowId: string | null | undefined,
-): {
-  readonly status: ProviderUsageStatus;
-  readonly constrainedWindow: ProviderUsageWindow | null;
-} {
-  const status = windows.reduce<ProviderUsageStatus>(
-    (acc, window) => maxStatus(acc, window.status),
-    "ok",
+/** Re-evaluates one window against warning/critical thresholds. */
+export function applyProviderUsageWindowThresholds(
+  window: ProviderUsageWindow,
+  thresholds: Partial<ProviderUsageThresholds> | undefined,
+): ProviderUsageWindow {
+  if (window.usedPercent === null) return window;
+  const status = maxProviderUsageStatus(
+    statusForPercent(window.usedPercent, normalizeProviderUsageThresholds(thresholds)),
+    window.reportedStatus ?? "ok",
   );
-  const flaggedActiveWindow =
-    activeWindowId !== null && activeWindowId !== undefined
-      ? (windows.find((w) => w.id === activeWindowId) ?? null)
-      : null;
-  const constrainedWindow =
-    status === "ok" || windows.length === 0
-      ? null
-      : flaggedActiveWindow !== null && flaggedActiveWindow.status === status
-        ? flaggedActiveWindow
-        : windows.reduce((worst, window) => {
-            const severityDelta = statusRank(window.status) - statusRank(worst.status);
-            if (severityDelta !== 0) return severityDelta > 0 ? window : worst;
-            return (window.usedPercent ?? 0) > (worst.usedPercent ?? 0) ? window : worst;
-          });
-  return { status, constrainedWindow };
+  return status === window.status ? window : { ...window, status };
 }
 
 /**
@@ -1200,24 +1212,14 @@ export function applyProviderUsageThresholds(
   thresholds: Partial<ProviderUsageThresholds> | undefined,
 ): ProviderUsageSnapshot | null {
   if (snapshot === null) return null;
-  const resolved = normalizeProviderUsageThresholds(thresholds);
-  const windows = snapshot.windows.map((window) => {
-    if (window.usedPercent === null) {
-      // No number to threshold against; whatever state the provider signalled
-      // is all this window has ever had.
-      return window;
-    }
-    const status = maxStatus(
-      statusForPercent(window.usedPercent, resolved),
-      window.reportedStatus ?? "ok",
-    );
-    return status === window.status ? window : { ...window, status };
-  });
-  const { status, constrainedWindow } = summarizeProviderUsageWindows(
-    windows,
-    snapshot.activeWindowId,
+  const windows = snapshot.windows.map((window) =>
+    applyProviderUsageWindowThresholds(window, thresholds),
   );
-  return { ...snapshot, windows, status, constrainedWindow };
+  const status = windows.reduce<ProviderUsageStatus>(
+    (current, window) => maxProviderUsageStatus(current, window.status),
+    "ok",
+  );
+  return { ...snapshot, windows, status };
 }
 
 /**
@@ -1267,8 +1269,7 @@ export function collectProviderUsageAlerts(
     if (
       window.status === "ok" ||
       window.reportedStatus === "critical" ||
-      window.usedPercent === null ||
-      window.usedPercent >= 100
+      (window.usedPercent !== null && window.usedPercent >= 100)
     ) {
       continue;
     }

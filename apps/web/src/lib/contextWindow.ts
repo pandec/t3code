@@ -4,7 +4,10 @@ import type {
   ServerProviderModel,
   ThreadTokenUsageSnapshot,
 } from "@t3tools/contracts";
-import { getProviderOptionCurrentValue, getProviderOptionDescriptors } from "@t3tools/shared/model";
+import {
+  getModelSelectionOptionDescriptors,
+  getProviderOptionCurrentValue,
+} from "@t3tools/shared/model";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -67,14 +70,15 @@ export function resolveKnownContextWindowMaxTokens(
   modelSelection: ModelSelection | null | undefined,
 ): number | null {
   if (!model || model.isCustom) return null;
+  // Keep in sync with selectedClaudeContextWindow in
+  // apps/server/src/provider/Layers/ClaudeAdapter.ts until fixed capacity moves
+  // into shared model capability metadata.
   if (model.slug === "claude-opus-4-8" || model.slug === "claude-opus-4-7") {
     return 1_000_000;
   }
-  if (!model.capabilities) return null;
-  const descriptor = getProviderOptionDescriptors({
-    caps: model.capabilities,
-    selections: modelSelection?.options,
-  }).find((candidate) => candidate.id === "contextWindow");
+  const descriptor = getModelSelectionOptionDescriptors(modelSelection, model.capabilities).find(
+    (candidate) => candidate.id === "contextWindow",
+  );
   return parseContextWindowOption(getProviderOptionCurrentValue(descriptor));
 }
 

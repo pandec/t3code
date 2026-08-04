@@ -4,7 +4,6 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -289,16 +288,6 @@ describe("makeCliProxyApiUsageProbe", () => {
         })().pipe(Effect.provideService(HttpClient.HttpClient, client))) as CliProxyApiUsagePayload;
         expect(retried.modelProviders).toBeUndefined();
         expect(modelsRequests).toBe(2);
-
-        // Suppression is keyed by origin *and* rejected key. Alternating two
-        // bad values must not evict either one and spend another rejection.
-        yield* runProbe;
-        yield* makeCliProxyApiUsageProbe({
-          ...target,
-          clientUrl: target.managementUrl,
-          clientKey: "corrected-client-key",
-        })().pipe(Effect.provideService(HttpClient.HttpClient, client));
-        expect(modelsRequests).toBe(2);
       });
     },
   );
@@ -374,50 +363,6 @@ describe("makeCliProxyApiUsageProbe", () => {
       const payload = (yield* Fiber.join(probe)) as CliProxyApiUsagePayload;
       expect(payload.modelProviders).toBeUndefined();
       expect(payload.accounts).toHaveLength(1);
-    }),
-  );
-
-  it.effect("shares a completed catalog read with concurrent same-key probes", () =>
-    Effect.gen(function* () {
-      const firstModelsRequestStarted = yield* Deferred.make<void>();
-      const releaseFirstModelsRequest = yield* Deferred.make<void>();
-      let modelsRequests = 0;
-      const client = HttpClient.make((request) => {
-        if (request.url.endsWith("/v1/models")) {
-          modelsRequests += 1;
-          return Deferred.succeed(firstModelsRequestStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseFirstModelsRequest)),
-            Effect.as(
-              jsonResponse(request, {
-                data: [{ id: "gpt-5.6-sol", owned_by: "openai" }],
-              }),
-            ),
-          );
-        }
-        return Effect.succeed(
-          jsonResponse(request, { files: [{ name: "unknown.json", provider: "unknown" }] }),
-        );
-      });
-      const run = (managementUrl: string) =>
-        makeCliProxyApiUsageProbe({
-          managementUrl,
-          managementKey: "management-key",
-          clientUrl: "https://shared-client.example.test",
-          clientKey: "client-key",
-        })().pipe(Effect.provideService(HttpClient.HttpClient, client));
-
-      const first = yield* run("https://management-a.example.test").pipe(Effect.forkChild);
-      yield* Deferred.await(firstModelsRequestStarted);
-      const second = yield* run("https://management-b.example.test").pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      expect(modelsRequests).toBe(1);
-
-      yield* Deferred.succeed(releaseFirstModelsRequest, undefined);
-      const firstPayload = (yield* Fiber.join(first)) as CliProxyApiUsagePayload;
-      const secondPayload = (yield* Fiber.join(second)) as CliProxyApiUsagePayload;
-      expect(firstPayload.modelProviders).toEqual({ "gpt-5.6-sol": "codex" });
-      expect(secondPayload.modelProviders).toEqual({ "gpt-5.6-sol": "codex" });
-      expect(modelsRequests).toBe(1);
     }),
   );
 
@@ -629,23 +574,32 @@ describe("makeCliProxyApiUsageProbe", () => {
     }),
   );
 
-  it.effect("lets healthy same-origin probes run concurrently", () =>
+  it.effect("completes concurrent same-origin probes with real account requests", () =>
     Effect.gen(function* () {
-      const firstRequestStarted = yield* Deferred.make<void>();
-      const releaseFirstRequest = yield* Deferred.make<void>();
-      const secondRequestStarted = yield* Deferred.make<void>();
-      let requestCount = 0;
+      const allAccountRequestsStarted = yield* Deferred.make<void>();
+      const releaseAccountRequests = yield* Deferred.make<void>();
+      let authFilesRequests = 0;
+      let accountRequests = 0;
       const client = HttpClient.make((request) =>
         Effect.gen(function* () {
-          requestCount += 1;
-          if (requestCount === 1) {
-            yield* Deferred.succeed(firstRequestStarted, undefined);
-            yield* Deferred.await(releaseFirstRequest);
-          } else {
-            yield* Deferred.succeed(secondRequestStarted, undefined);
+          if (request.url.endsWith("/auth-files")) {
+            authFilesRequests += 1;
+            return jsonResponse(request, {
+              files: [
+                { auth_index: "claude-1", name: "claude-1.json", provider: "claude" },
+                { auth_index: "claude-2", name: "claude-2.json", provider: "claude" },
+              ],
+            });
           }
+
+          accountRequests += 1;
+          if (accountRequests === 4) {
+            yield* Deferred.succeed(allAccountRequestsStarted, undefined);
+          }
+          yield* Deferred.await(releaseAccountRequests);
           return jsonResponse(request, {
-            files: [{ name: "unknown.json", provider: "unknown" }],
+            status_code: 200,
+            body: encodeJsonBody({ limits: [{ kind: "session", percent: 12 }] }),
           });
         }),
       );
@@ -654,29 +608,35 @@ describe("makeCliProxyApiUsageProbe", () => {
           Effect.provideService(HttpClient.HttpClient, client),
         );
 
-      const first = yield* run("management-key-a").pipe(Effect.forkChild);
-      yield* Deferred.await(firstRequestStarted);
+      const first = yield* run("management-key-a").pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
       const second = yield* run("management-key-b").pipe(
         Effect.forkChild({ startImmediately: true }),
       );
-      expect(yield* Deferred.isDone(secondRequestStarted)).toBe(true);
+      yield* Deferred.await(allAccountRequestsStarted);
+      yield* Deferred.succeed(releaseAccountRequests, undefined);
 
-      yield* Deferred.succeed(releaseFirstRequest, undefined);
-      yield* Fiber.join(first);
-      yield* Fiber.join(second);
-      expect(requestCount).toBe(2);
+      const firstPayload = (yield* Fiber.join(first)) as CliProxyApiUsagePayload;
+      const secondPayload = (yield* Fiber.join(second)) as CliProxyApiUsagePayload;
+      expect(firstPayload.accounts).toHaveLength(2);
+      expect(secondPayload.accounts).toHaveLength(2);
+      expect(firstPayload.accounts.every((account) => account.usage !== null)).toBe(true);
+      expect(secondPayload.accounts.every((account) => account.usage !== null)).toBe(true);
+      expect(authFilesRequests).toBe(2);
+      expect(accountRequests).toBe(4);
     }),
   );
 
-  it.effect("releases management reservations when requests time out", () =>
+  it.effect("releases a management reservation when a request times out", () =>
     Effect.gen(function* () {
-      const requestStarted = yield* Queue.unbounded<void>();
+      const requestStarted = yield* Deferred.make<void>();
       let stall = true;
       let requestCount = 0;
       const client = HttpClient.make((request) => {
         requestCount += 1;
         if (stall) {
-          return Queue.offer(requestStarted, undefined).pipe(Effect.andThen(Effect.never));
+          return Deferred.succeed(requestStarted, undefined).pipe(Effect.andThen(Effect.never));
         }
         return Effect.succeed(
           jsonResponse(request, { files: [{ name: "unknown.json", provider: "unknown" }] }),
@@ -687,17 +647,15 @@ describe("makeCliProxyApiUsageProbe", () => {
           Effect.provideService(HttpClient.HttpClient, client),
         );
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const fiber = yield* run(`management-key-${attempt}`).pipe(Effect.exit, Effect.forkChild);
-        yield* Queue.take(requestStarted);
-        yield* TestClock.adjust("5 seconds");
-        yield* Fiber.join(fiber);
-      }
+      const timedOut = yield* run("stalled-key").pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(requestStarted);
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(timedOut);
 
       stall = false;
       const payload = (yield* run("working-key")) as CliProxyApiUsagePayload;
       expect(payload.accounts).toHaveLength(1);
-      expect(requestCount).toBe(4);
+      expect(requestCount).toBe(2);
     }),
   );
 });

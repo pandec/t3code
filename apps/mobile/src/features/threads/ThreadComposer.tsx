@@ -62,15 +62,15 @@ import {
   deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
+  listProviderUsageAccountsForDisplay,
   presentProviderUsageAccount,
-  providerUsageFableWindow,
   providerUsageLabelForDriver,
   primaryProviderUsageWindow,
+  providerUsageRingStatus,
+  resolveProviderUsageFableRing,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
-  selectProviderUsageFableAccount,
-  sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
 import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
@@ -497,9 +497,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         null;
       const observedAt =
         providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
-      return sortProviderUsageAccountsByPriority(
-        activeGatewayPool.accounts.filter((account) => account.state !== "disabled"),
-      ).map((account) => ({
+      return listProviderUsageAccountsForDisplay(activeGatewayPool.accounts).map((account) => ({
         instanceId: providerUsageInstanceId,
         accountKey: `${providerUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
@@ -550,27 +548,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
   ]);
-  const fableMenuUsage = useMemo(() => {
-    if (activeUpstreamProvider !== "claude") return null;
-    if (activeGatewayPool !== null) {
-      const selected = selectProviderUsageFableAccount(activeGatewayPool.accounts);
-      return selected === null
-        ? null
-        : { accountName: selected.account.label, window: selected.window };
-    }
-    const window = providerUsageFableWindow(providerUsage);
-    if (window === null) return null;
-    return {
-      accountName: selectedProviderStatus?.displayName ?? providerUsageInstanceId ?? "Claude",
-      window,
-    };
-  }, [
-    activeGatewayPool,
-    activeUpstreamProvider,
-    providerUsage,
-    providerUsageInstanceId,
-    selectedProviderStatus?.displayName,
-  ]);
+  const fableMenuUsage = useMemo(
+    () =>
+      resolveProviderUsageFableRing({
+        upstreamProvider: activeUpstreamProvider,
+        accounts: activeGatewayPool?.accounts ?? null,
+        snapshot: providerUsage,
+      }),
+    [activeGatewayPool, activeUpstreamProvider, providerUsage],
+  );
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
     () =>
@@ -638,6 +624,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const providerUsagePrimaryWindow = providerUsage
     ? primaryProviderUsageWindow(providerUsage)
     : null;
+  // Fable has its own row, so it must not repaint the primary dot.
+  const providerUsageStatus = providerUsageRingStatus(
+    providerUsage,
+    fableMenuUsage?.window.id ?? null,
+  );
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -1268,15 +1259,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         <View
                           className={cn(
                             "h-2 w-2 rounded-full",
-                            providerUsagePrimaryWindow?.status === "critical"
+                            providerUsageStatus === "critical"
                               ? "bg-rose-500"
-                              : providerUsagePrimaryWindow?.status === "warning"
+                              : providerUsageStatus === "warning"
                                 ? "bg-amber-500"
                                 : "bg-neutral-400 dark:bg-neutral-500",
                           )}
                         />
                       }
-                      label={providerUsage ? providerUsageTriggerLabel(providerUsage) : "Usage"}
+                      label={providerUsageTriggerLabel(providerUsagePrimaryWindow)}
                     />
                   </ControlPillMenu>
                 ) : null}

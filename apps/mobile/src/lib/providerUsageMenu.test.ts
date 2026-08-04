@@ -17,7 +17,6 @@ function makeSnapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageS
     providerInstanceId: null,
     windows: [],
     status: "ok",
-    constrainedWindow: null,
     updatedAt: "2026-07-25T00:00:00.000Z",
     ...overrides,
   };
@@ -25,47 +24,35 @@ function makeSnapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageS
 
 describe("providerUsageTriggerLabel", () => {
   it("stays quiet while usage is unremarkable", () => {
-    expect(providerUsageTriggerLabel(makeSnapshot({}))).toBe("Usage");
+    expect(providerUsageTriggerLabel(null)).toBe("Usage");
   });
 
-  it("surfaces the constrained window with its percentage", () => {
-    const label = providerUsageTriggerLabel(
-      makeSnapshot({
+  it("surfaces the primary window with its percentage", () => {
+    expect(
+      providerUsageTriggerLabel({
+        id: "five_hour",
+        group: "session",
+        label: "Session (5h)",
+        shortLabel: "5h",
+        usedPercent: 88,
+        resetsAt: null,
         status: "warning",
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: 88,
-            resetsAt: null,
-            status: "warning",
-          },
-        ],
       }),
-    );
-    expect(label).toBe("5h 88%");
+    ).toBe("5h 88%");
   });
 
-  it("omits the percentage for numberless constrained windows", () => {
-    const label = providerUsageTriggerLabel(
-      makeSnapshot({
+  it("omits the percentage for a numberless primary window", () => {
+    expect(
+      providerUsageTriggerLabel({
+        id: "five_hour",
+        group: "session",
+        label: "Session (5h)",
+        shortLabel: "5h",
+        usedPercent: null,
+        resetsAt: null,
         status: "warning",
-        windows: [
-          {
-            id: "five_hour",
-            group: "session",
-            label: "Session (5h)",
-            shortLabel: "5h",
-            usedPercent: null,
-            resetsAt: null,
-            status: "warning",
-          },
-        ],
       }),
-    );
-    expect(label).toBe("5h");
+    ).toBe("5h");
   });
 });
 
@@ -142,22 +129,11 @@ describe("providerUsageAccountMenuActions", () => {
       resetsAt: null,
       status: "ok" as const,
     };
-    const actions = providerUsageAccountMenuActions(
-      [
-        {
-          instanceId: "claude-proxy",
-          displayName: "Claude Proxy",
-          email: undefined,
-          isCurrent: true,
-          snapshot: makeSnapshot({ windows: [fableWindow] }),
-          observedAt: NOW_MS,
-        },
-      ],
-      NOW_MS,
-      { fableUsage: { accountName: "next@example.com", window: fableWindow } },
-    );
+    const actions = providerUsageAccountMenuActions([], NOW_MS, {
+      fableUsage: { accountName: "next@example.com", window: fableWindow },
+    });
 
-    expect(actions.at(-2)).toEqual({
+    expect(actions[0]).toEqual({
       id: "usage-fable",
       title: "Weekly (Fable)",
       subtitle: "next@example.com · 42% used",

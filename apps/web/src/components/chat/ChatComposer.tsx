@@ -222,14 +222,14 @@ import {
   deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
+  listProviderUsageAccountsForDisplay,
   presentProviderUsageAccount,
-  providerUsageFableWindow,
   providerUsageLabelForDriver,
+  resolveProviderUsageFableRing,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
-  selectProviderUsageFableAccount,
-  sortProviderUsageAccountsByPriority,
+  type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import {
@@ -445,7 +445,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
-  fableUsage: ReturnType<typeof providerUsageFableWindow>;
+  fableUsage: ProviderUsageWindow | null;
   fableAccountName: string | null;
   providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing: boolean;
@@ -1156,20 +1156,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProviderUsageInstanceId !== null && isGatewayUsageInstance(activeProviderUsageInstanceId);
   const activeProviderUsage =
     activeServerProviderUsage ?? (activeUsageSourceOwned ? null : activityProviderUsage);
-  const activeFableSelection = useMemo(
+  const fableRing = useMemo(
     () =>
-      activeUpstreamProvider === "claude" && activeGatewayUsage !== null
-        ? selectProviderUsageFableAccount(activeGatewayUsage.accounts)
-        : null,
-    [activeGatewayUsage, activeUpstreamProvider],
+      resolveProviderUsageFableRing({
+        upstreamProvider: activeUpstreamProvider,
+        accounts: activeGatewayUsage?.accounts ?? null,
+        snapshot: activeProviderUsage,
+      }),
+    [activeGatewayUsage, activeProviderUsage, activeUpstreamProvider],
   );
-  const fableUsage =
-    activeUpstreamProvider === "claude"
-      ? (activeFableSelection?.window ?? providerUsageFableWindow(activeProviderUsage))
-      : null;
-  const fableAccountName = activeFableSelection
-    ? presentProviderUsageAccount(activeFableSelection.account).displayName
-    : null;
+  const fableUsage = fableRing?.window ?? null;
+  const fableAccountName = fableRing?.accountName ?? null;
   const providerUsageLabel = providerUsageLabelForDriver(activeThreadProviderDriver);
   // A gateway pool's accounts header names the instance ("Proxy accounts"),
   // not the driver: the rows are upstream accounts of mixed providers.
@@ -1219,9 +1216,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         null;
       const observedAt =
         providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
-      return sortProviderUsageAccountsByPriority(
-        activeGatewayUsage.accounts.filter((account) => account.state !== "disabled"),
-      ).map((account) => ({
+      return listProviderUsageAccountsForDisplay(activeGatewayUsage.accounts).map((account) => ({
         instanceId: activeProviderUsageInstanceId,
         accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
