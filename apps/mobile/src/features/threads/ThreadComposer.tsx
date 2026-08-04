@@ -63,10 +63,12 @@ import {
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
   presentProviderUsageAccount,
+  providerUsageFableWindow,
   providerUsageLabelForDriver,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
+  selectProviderUsageFableAccount,
   sortProviderUsageAccountsByPriority,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
@@ -458,6 +460,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       model,
       isCustom:
         selectedProviderStatus?.models.find((entry) => entry.slug === model)?.isCustom === true,
+      driver: selectedProviderStatus?.driver ?? null,
     });
   }, [
     props.persistedModel,
@@ -493,7 +496,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         null;
       const observedAt =
         providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
-      return sortProviderUsageAccountsByPriority(activeGatewayPool.accounts).map((account) => ({
+      return sortProviderUsageAccountsByPriority(
+        activeGatewayPool.accounts.filter((account) => account.state !== "disabled"),
+      ).map((account) => ({
         instanceId: providerUsageInstanceId,
         accountKey: `${providerUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
@@ -544,13 +549,35 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
   ]);
+  const fableMenuUsage = useMemo(() => {
+    if (activeUpstreamProvider !== "claude") return null;
+    if (activeGatewayPool !== null) {
+      const selected = selectProviderUsageFableAccount(activeGatewayPool.accounts);
+      return selected === null
+        ? null
+        : { accountName: selected.account.label, window: selected.window };
+    }
+    const window = providerUsageFableWindow(providerUsage);
+    if (window === null) return null;
+    return {
+      accountName: selectedProviderStatus?.displayName ?? providerUsageInstanceId ?? "Claude",
+      window,
+    };
+  }, [
+    activeGatewayPool,
+    activeUpstreamProvider,
+    providerUsage,
+    providerUsageInstanceId,
+    selectedProviderStatus?.displayName,
+  ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   const providerUsageActions = useMemo(
     () =>
       providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs, {
         refreshing: isRefreshingProviderUsage,
+        fableUsage: fableMenuUsage,
       }),
-    [isRefreshingProviderUsage, providerUsageAccounts, providerUsageNowMs],
+    [fableMenuUsage, isRefreshingProviderUsage, providerUsageAccounts, providerUsageNowMs],
   );
   const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
     reportFailure: false,

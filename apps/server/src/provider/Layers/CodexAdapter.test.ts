@@ -251,12 +251,55 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
-  it.effect("does not spawn an app server just to read account usage", () =>
+  it.effect("reads account usage through a short-lived standalone runtime", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
+      NodeAssert.deepStrictEqual(yield* adapter.readAccountUsage!(), {
+        rateLimits: {
+          primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        },
+      });
+      const runtime = validationRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(runtime.startImpl.mock.calls.length, 0);
+      NodeAssert.equal(runtime.readAccountUsageImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("closes the standalone usage runtime when the read fails", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      let failedRuntime: FakeCodexRuntime | undefined;
+      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
+        failedRuntime = new FakeCodexRuntime(options);
+        failedRuntime.readAccountUsageImpl.mockRejectedValue(new Error("usage failed"));
+        return Effect.succeed(failedRuntime);
+      });
+
       NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
-      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+      NodeAssert.equal(failedRuntime?.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("closes the standalone usage runtime when interrupted", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      let interruptedRuntime: FakeCodexRuntime | undefined;
+      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
+        interruptedRuntime = new FakeCodexRuntime(options);
+        interruptedRuntime.readAccountUsage = Effect.never;
+        return Effect.succeed(interruptedRuntime);
+      });
+
+      const fiber = yield* adapter.readAccountUsage!().pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      NodeAssert.equal(interruptedRuntime?.closeImpl.mock.calls.length, 1);
     }),
   );
 

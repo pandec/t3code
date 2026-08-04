@@ -179,7 +179,7 @@ export interface CliProxyApiUsageEnvelope {
 /**
  * Resolve the probe target from an instance envelope. The management API
  * shares the gateway's origin, so when `managementUrl` is not set explicitly
- * the instance's `ANTHROPIC_BASE_URL` environment entry supplies it.
+ * the instance's Anthropic- or OpenAI-compatible base URL supplies it.
  */
 export function resolveCliProxyApiUsageProbeTarget(
   envelope: CliProxyApiUsageEnvelope,
@@ -196,17 +196,30 @@ export function resolveCliProxyApiUsageProbeTarget(
       return null;
     }
   };
-  const clientBase = envelope.environment?.find(
-    (variable) => variable.name === "ANTHROPIC_BASE_URL",
-  )?.value;
-  const managementUrl = origin(usageSource.managementUrl ?? clientBase);
+  const environmentValue = (name: string): string | undefined =>
+    envelope.environment?.find((variable) => variable.name === name)?.value;
+  const clients = [
+    {
+      url: origin(environmentValue("ANTHROPIC_BASE_URL")),
+      key: environmentValue("ANTHROPIC_AUTH_TOKEN"),
+    },
+    {
+      url: origin(environmentValue("OPENAI_BASE_URL")),
+      key: environmentValue("OPENAI_API_KEY"),
+    },
+  ];
+  const client = clients.find((candidate) => candidate.url !== null && candidate.key);
+  const explicitManagementUrl = origin(usageSource.managementUrl);
+  if (usageSource.managementUrl !== undefined && explicitManagementUrl === null) return null;
+  const managementUrl =
+    explicitManagementUrl ??
+    client?.url ??
+    clients.find((candidate) => candidate.url !== null)?.url;
   if (!managementUrl) return null;
-  const clientUrl = origin(clientBase);
-  const clientKey = envelope.environment?.find(
-    (variable) => variable.name === "ANTHROPIC_AUTH_TOKEN",
-  )?.value;
   const base = { managementUrl, managementKey: usageSource.managementKey };
-  return clientUrl && clientKey ? { ...base, clientUrl, clientKey } : base;
+  return client?.url && client.key
+    ? { ...base, clientUrl: client.url, clientKey: client.key }
+    : base;
 }
 
 interface AuthFileEntry {

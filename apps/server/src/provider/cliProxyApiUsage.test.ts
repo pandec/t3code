@@ -47,6 +47,49 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     });
   });
 
+  it("derives Codex gateway targets from OpenAI-compatible variables", () => {
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment: [
+          {
+            name: "OPENAI_BASE_URL",
+            value: "https://codex-gateway.example.ts.net/v1",
+            sensitive: false,
+          },
+          { name: "OPENAI_API_KEY", value: "codex-client-key", sensitive: true },
+        ],
+        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toEqual({
+      managementUrl: "https://codex-gateway.example.ts.net",
+      managementKey: "mgmt",
+      clientUrl: "https://codex-gateway.example.ts.net",
+      clientKey: "codex-client-key",
+    });
+  });
+
+  it("keeps the derived management and client targets on the same env family", () => {
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment: [
+          { name: "ANTHROPIC_BASE_URL", value: "https://unused.example/v1", sensitive: false },
+          {
+            name: "OPENAI_BASE_URL",
+            value: "https://codex-gateway.example/v1",
+            sensitive: false,
+          },
+          { name: "OPENAI_API_KEY", value: "codex-client-key", sensitive: true },
+        ],
+        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toEqual({
+      managementUrl: "https://codex-gateway.example",
+      managementKey: "mgmt",
+      clientUrl: "https://codex-gateway.example",
+      clientKey: "codex-client-key",
+    });
+  });
+
   it("prefers an explicit management URL, reduced to its origin", () => {
     expect(
       resolveCliProxyApiUsageProbeTarget({
@@ -76,6 +119,16 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
       resolveCliProxyApiUsageProbeTarget({
         environment: [{ name: "ANTHROPIC_BASE_URL", value: "not a url", sensitive: false }],
         usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toBeNull();
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment,
+        usageSource: {
+          kind: "cliproxyapi",
+          managementUrl: "not a url",
+          managementKey: "mgmt",
+        },
       }),
     ).toBeNull();
     expect(

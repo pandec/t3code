@@ -1,4 +1,10 @@
-import type { OrchestrationThreadActivity, ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  OrchestrationThreadActivity,
+  ServerProviderModel,
+  ThreadTokenUsageSnapshot,
+} from "@t3tools/contracts";
+import { getProviderOptionCurrentValue, getProviderOptionDescriptors } from "@t3tools/shared/model";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -45,6 +51,58 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
       return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
     }
   }
+}
+
+function parseContextWindowOption(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d+)(k|m)$/i.exec(value.trim());
+  if (!match?.[1] || !match[2]) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount * (match[2].toLowerCase() === "m" ? 1_000_000 : 1_000);
+}
+
+export function resolveKnownContextWindowMaxTokens(
+  model: ServerProviderModel | null | undefined,
+  modelSelection: ModelSelection | null | undefined,
+): number | null {
+  if (!model || model.isCustom) return null;
+  if (model.slug === "claude-opus-4-8" || model.slug === "claude-opus-4-7") {
+    return 1_000_000;
+  }
+  if (!model.capabilities) return null;
+  const descriptor = getProviderOptionDescriptors({
+    caps: model.capabilities,
+    selections: modelSelection?.options,
+  }).find((candidate) => candidate.id === "contextWindow");
+  return parseContextWindowOption(getProviderOptionCurrentValue(descriptor));
+}
+
+export function emptyContextWindowSnapshot(input: {
+  readonly maxTokens: number;
+  readonly compactsAutomatically: boolean;
+}): ContextWindowSnapshot {
+  return {
+    usedTokens: 0,
+    totalProcessedTokens: null,
+    maxTokens: input.maxTokens,
+    remainingTokens: input.maxTokens,
+    usedPercentage: 0,
+    remainingPercentage: 100,
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningOutputTokens: null,
+    lastUsedTokens: null,
+    lastInputTokens: null,
+    lastCachedInputTokens: null,
+    lastOutputTokens: null,
+    lastReasoningOutputTokens: null,
+    toolUses: null,
+    durationMs: null,
+    compactsAutomatically: input.compactsAutomatically,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function deriveLatestContextWindowSnapshot(

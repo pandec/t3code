@@ -32,15 +32,17 @@ describe("providerUsageTriggerLabel", () => {
     const label = providerUsageTriggerLabel(
       makeSnapshot({
         status: "warning",
-        constrainedWindow: {
-          id: "five_hour",
-          group: "session",
-          label: "Session (5h)",
-          shortLabel: "5h",
-          usedPercent: 88,
-          resetsAt: null,
-          status: "warning",
-        },
+        windows: [
+          {
+            id: "five_hour",
+            group: "session",
+            label: "Session (5h)",
+            shortLabel: "5h",
+            usedPercent: 88,
+            resetsAt: null,
+            status: "warning",
+          },
+        ],
       }),
     );
     expect(label).toBe("5h 88%");
@@ -50,15 +52,17 @@ describe("providerUsageTriggerLabel", () => {
     const label = providerUsageTriggerLabel(
       makeSnapshot({
         status: "warning",
-        constrainedWindow: {
-          id: "five_hour",
-          group: "session",
-          label: "Session (5h)",
-          shortLabel: "5h",
-          usedPercent: null,
-          resetsAt: null,
-          status: "warning",
-        },
+        windows: [
+          {
+            id: "five_hour",
+            group: "session",
+            label: "Session (5h)",
+            shortLabel: "5h",
+            usedPercent: null,
+            resetsAt: null,
+            status: "warning",
+          },
+        ],
       }),
     );
     expect(label).toBe("5h");
@@ -126,6 +130,38 @@ describe("providerUsageAccountMenuActions", () => {
     expect(actions[0]?.subtitle).toContain("Limit warning");
     expect(actions[0]?.subtitle).toContain("updated 4m ago");
     expect(actions[1]?.subtitle).toContain("No usage data");
+  });
+
+  it("adds a distinct row for the account that would serve Fable next", () => {
+    const fableWindow = {
+      id: "seven_day_fable",
+      group: "weekly" as const,
+      label: "Weekly (Fable)",
+      shortLabel: "Fable",
+      usedPercent: 42,
+      resetsAt: null,
+      status: "ok" as const,
+    };
+    const actions = providerUsageAccountMenuActions(
+      [
+        {
+          instanceId: "claude-proxy",
+          displayName: "Claude Proxy",
+          email: undefined,
+          isCurrent: true,
+          snapshot: makeSnapshot({ windows: [fableWindow] }),
+          observedAt: NOW_MS,
+        },
+      ],
+      NOW_MS,
+      { fableUsage: { accountName: "next@example.com", window: fableWindow } },
+    );
+
+    expect(actions.at(-2)).toEqual({
+      id: "usage-fable",
+      title: "Weekly (Fable)",
+      subtitle: "next@example.com · 42% used",
+    });
   });
 
   it("describes exhausted numberless windows as limit reached", () => {

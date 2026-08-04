@@ -25,10 +25,12 @@ import {
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -1758,14 +1760,41 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     "CodexAdapter.readAccountUsage",
   )(function* () {
     const session = Array.from(sessions.values()).find((candidate) => !candidate.stopped);
-    if (session === undefined) {
-      return undefined;
+    if (session !== undefined) {
+      return yield* session.runtime.readAccountUsage.pipe(
+        Effect.mapError((cause) =>
+          mapCodexRuntimeError(session.threadId, "account/rateLimits/read", cause),
+        ),
+      );
     }
-    return yield* session.runtime.readAccountUsage.pipe(
-      Effect.mapError((cause) =>
-        mapCodexRuntimeError(session.threadId, "account/rateLimits/read", cause),
+
+    const probeThreadId = ThreadId.make("account-usage-probe");
+    const createRuntime = options?.makeRuntime ?? makeCodexSessionRuntime;
+    const result = yield* Effect.scoped(
+      createRuntime({
+        threadId: probeThreadId,
+        providerInstanceId: boundInstanceId,
+        cwd: serverConfig.cwd,
+        binaryPath: codexConfig.binaryPath,
+        launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+        ...(options?.environment ? { environment: options.environment } : {}),
+        ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+        runtimeMode: "full-access",
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.flatMap((runtime) => runtime.readAccountUsage.pipe(Effect.ensuring(runtime.close))),
+        Effect.mapError((cause) =>
+          mapCodexRuntimeError(probeThreadId, "account/rateLimits/read", cause),
+        ),
+      ),
+    ).pipe(
+      Effect.timeoutOption("15 seconds"),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(Option.none()),
       ),
     );
+    return Option.getOrUndefined(result);
   });
 
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>

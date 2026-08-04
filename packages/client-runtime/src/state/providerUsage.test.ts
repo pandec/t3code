@@ -20,6 +20,7 @@ import {
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
+  selectProviderUsageFableAccount,
 } from "./providerUsage.ts";
 
 function makeActivity(
@@ -1051,6 +1052,7 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: null,
         model: "claude-opus-5",
         isCustom: false,
+        driver: ProviderDriverKind.make("claudeAgent"),
       }),
     ).toBe("claude");
     expect(
@@ -1058,6 +1060,7 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
         model: "gpt-5.6-sol",
         isCustom: true,
+        driver: ProviderDriverKind.make("claudeAgent"),
       }),
     ).toBe("codex");
     expect(
@@ -1065,13 +1068,27 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
         model: "gpt-5.6-sol",
         isCustom: false,
+        driver: ProviderDriverKind.make("claudeAgent"),
+      }),
+    ).toBe("codex");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: null,
+        model: "gpt-5.6-sol",
+        isCustom: false,
+        driver: ProviderDriverKind.make("codex"),
       }),
     ).toBe("codex");
   });
 
   it("returns null for an unknown custom model or malformed mapping", () => {
     const resolve = (payload: unknown) =>
-      resolveProviderUsageUpstreamProvider({ payload, model: "gpt-5.6-sol", isCustom: true });
+      resolveProviderUsageUpstreamProvider({
+        payload,
+        model: "gpt-5.6-sol",
+        isCustom: true,
+        driver: ProviderDriverKind.make("claudeAgent"),
+      });
     expect(resolve({})).toBeNull();
     expect(resolve({ modelProviders: [] })).toBeNull();
     expect(resolve({ modelProviders: { "gpt-5.6-sol": 42 } })).toBeNull();
@@ -1161,6 +1178,126 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
     // A custom model on a mixed pool: nothing maps it to an account, so no
     // quota may be featured for it.
     expect(featuredProviderUsageAccount(pool?.accounts ?? [], null)).toBeNull();
+  });
+
+  it("never features disabled accounts", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    const base = pool?.accounts[0];
+    expect(base).toBeDefined();
+    expect(
+      featuredProviderUsageAccount([
+        ...(pool?.accounts ?? []),
+        { ...base!, id: "disabled.json", priority: 1_000, state: "disabled" },
+      ])?.id,
+    ).toBe("claude-tier2.json");
+  });
+
+  it("selects the highest-priority available Fable account with headroom", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot({
+      ...gatewaySnapshot,
+      payload: {
+        source: "cliproxyapi.management",
+        accounts: [
+          {
+            id: "exhausted.json",
+            label: "exhausted@example.com",
+            provider: "claude",
+            priority: 100,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 100,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            id: "headroom.json",
+            label: "headroom@example.com",
+            provider: "claude",
+            priority: 75,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 42,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            id: "disabled.json",
+            label: "disabled@example.com",
+            provider: "claude",
+            priority: 1_000,
+            state: "disabled",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 1,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(selectProviderUsageFableAccount(pool?.accounts ?? [])).toMatchObject({
+      account: { id: "headroom.json" },
+      window: { usedPercent: 42 },
+    });
+  });
+
+  it("falls back to the featured account's exhausted Fable window", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot({
+      ...gatewaySnapshot,
+      payload: {
+        source: "cliproxyapi.management",
+        accounts: [
+          {
+            id: "featured.json",
+            label: "featured@example.com",
+            provider: "claude",
+            priority: 100,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 100,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(selectProviderUsageFableAccount(pool?.accounts ?? [])).toMatchObject({
+      account: { id: "featured.json" },
+      window: { usedPercent: 100 },
+    });
   });
 
   it("falls back to the highest-priority cooled-down account when the pool is exhausted", () => {
@@ -1286,7 +1423,7 @@ describe("primaryProviderUsageWindow", () => {
     expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly");
   });
 
-  it("surfaces a constrained window even when a calm session window exists", () => {
+  it("keeps the session window when a Fable window is constrained", () => {
     const snapshot = usageApiSnapshot([
       { kind: "session", percent: 3, resets_at: null },
       {
@@ -1297,7 +1434,7 @@ describe("primaryProviderUsageWindow", () => {
       },
     ]);
 
-    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly (Fable)");
+    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Session (5h)");
   });
 
   it("returns null for a snapshot with no windows", () => {
@@ -1327,15 +1464,14 @@ describe("collectProviderUsageAlerts", () => {
   it("fires a warning alert once per window per reset period", () => {
     const first = collectProviderUsageAlerts(warningSnapshot, new Set());
     expect(first).toHaveLength(1);
-    expect(first[0]?.threshold).toBe("warning");
 
-    const fired = new Set(first.flatMap((alert) => alert.keys));
+    const fired = new Set(first.map((alert) => alert.key));
     expect(collectProviderUsageAlerts(warningSnapshot, fired)).toHaveLength(0);
   });
 
   it("fires again after the window resets to a new period", () => {
     const fired = new Set(
-      collectProviderUsageAlerts(warningSnapshot, new Set()).flatMap((alert) => alert.keys),
+      collectProviderUsageAlerts(warningSnapshot, new Set()).map((alert) => alert.key),
     );
     const nextPeriod = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
@@ -1351,13 +1487,13 @@ describe("collectProviderUsageAlerts", () => {
 
   it("de-duplicates within an environment without suppressing another environment", () => {
     const environmentA = collectProviderUsageAlerts(warningSnapshot, new Set(), "environment-a");
-    const fired = new Set(environmentA.flatMap((alert) => alert.keys));
+    const fired = new Set(environmentA.map((alert) => alert.key));
 
     expect(collectProviderUsageAlerts(warningSnapshot, fired, "environment-a")).toHaveLength(0);
     expect(collectProviderUsageAlerts(warningSnapshot, fired, "environment-b")).toHaveLength(1);
   });
 
-  it("collapses a jump past both thresholds into one critical alert", () => {
+  it("keeps the warning alert when usage jumps past the configured critical threshold", () => {
     const criticalSnapshot = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
         status: "allowed",
@@ -1367,51 +1503,44 @@ describe("collectProviderUsageAlerts", () => {
       }),
     ]);
 
-    const alerts = collectProviderUsageAlerts(criticalSnapshot, new Set());
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]?.threshold).toBe("critical");
-    // The skipped warning key is marked too, so no late warning ever fires.
-    expect(alerts[0]?.keys).toHaveLength(2);
-
-    const fired = new Set(alerts.flatMap((alert) => alert.keys));
-    expect(collectProviderUsageAlerts(criticalSnapshot, fired)).toHaveLength(0);
-    expect(collectProviderUsageAlerts(warningSnapshot, fired)).toHaveLength(0);
+    expect(collectProviderUsageAlerts(criticalSnapshot, new Set())).toHaveLength(1);
   });
 
-  it("escalates from warning to critical as usage grows", () => {
-    const fired = new Set(
-      collectProviderUsageAlerts(warningSnapshot, new Set()).flatMap((alert) => alert.keys),
-    );
-    const criticalSnapshot = deriveLatestProviderUsageSnapshot([
+  it("does not alert after the limit is reached or the provider rejects usage", () => {
+    const reached = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
         status: "allowed",
         resetsAt: 1784970000,
         rateLimitType: "five_hour",
-        utilization: 0.96,
+        utilization: 1,
+      }),
+    ]);
+    const rejected = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a2", {
+        status: "rejected",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
       }),
     ]);
 
-    const alerts = collectProviderUsageAlerts(criticalSnapshot, fired);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]?.threshold).toBe("critical");
+    expect(collectProviderUsageAlerts(reached, new Set())).toHaveLength(0);
+    expect(collectProviderUsageAlerts(rejected, new Set())).toHaveLength(0);
   });
 
   it("builds stable keys", () => {
     const window = warningSnapshot?.windows[0];
     expect(window).toBeDefined();
     if (!window) return;
-    expect(providerUsageAlertKey("Claude", window, "warning")).toBe(
-      "Claude:five_hour:warning:1784970000",
-    );
-    expect(providerUsageAlertKey("Claude", window, "warning", "claude-work")).toBe(
+    expect(providerUsageAlertKey("Claude", window)).toBe("Claude:five_hour:warning:1784970000");
+    expect(providerUsageAlertKey("Claude", window, "claude-work")).toBe(
       "Claude@claude-work:five_hour:warning:1784970000",
     );
-    expect(providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-a")).toBe(
+    expect(providerUsageAlertKey("Claude", window, "claude-work", "environment-a")).toBe(
       "environment-a:Claude@claude-work:five_hour:warning:1784970000",
     );
-    expect(
-      providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-b"),
-    ).not.toBe(providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-a"));
+    expect(providerUsageAlertKey("Claude", window, "claude-work", "environment-b")).not.toBe(
+      providerUsageAlertKey("Claude", window, "claude-work", "environment-a"),
+    );
   });
 });
 

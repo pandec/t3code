@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
+import {
+  EventId,
+  type OrchestrationThreadActivity,
+  ProviderInstanceId,
+  TurnId,
+} from "@t3tools/contracts";
+import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  emptyContextWindowSnapshot,
+  formatContextWindowTokens,
+  resolveKnownContextWindowMaxTokens,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -59,6 +70,53 @@ describe("contextWindow", () => {
       usedPercentage: 0,
       remainingPercentage: 100,
     });
+  });
+
+  it("builds a zero-usage snapshot when the selected model declares its context window", () => {
+    const model = {
+      slug: "claude-opus-5",
+      name: "Claude Opus 5",
+      isCustom: false,
+      capabilities: createModelCapabilities({
+        optionDescriptors: [
+          {
+            id: "contextWindow",
+            label: "Context Window",
+            type: "select",
+            options: [
+              { id: "200k", label: "200k" },
+              { id: "1m", label: "1M", isDefault: true },
+            ],
+          },
+        ],
+      }),
+    };
+    const selection = createModelSelection(ProviderInstanceId.make("claudeAgent"), model.slug, []);
+    const maxTokens = resolveKnownContextWindowMaxTokens(model, selection);
+
+    expect(maxTokens).toBe(1_000_000);
+    expect(
+      emptyContextWindowSnapshot({ maxTokens: maxTokens!, compactsAutomatically: true }),
+    ).toMatchObject({
+      usedTokens: 0,
+      maxTokens: 1_000_000,
+      usedPercentage: 0,
+      remainingPercentage: 100,
+    });
+  });
+
+  it("does not invent a context window for custom models", () => {
+    expect(
+      resolveKnownContextWindowMaxTokens(
+        {
+          slug: "custom-model",
+          name: "Custom",
+          isCustom: true,
+          capabilities: null,
+        },
+        createModelSelection(ProviderInstanceId.make("claudeAgent"), "custom-model", []),
+      ),
+    ).toBeNull();
   });
 
   it("formats compact token counts", () => {

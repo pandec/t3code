@@ -1,5 +1,6 @@
 import type {
   OrchestrationThreadActivity,
+  ProviderDriverKind,
   ProviderInstanceUsageSnapshot,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -735,9 +736,19 @@ export function resolveProviderUsageUpstreamProvider(input: {
   readonly payload: unknown;
   readonly model: string;
   readonly isCustom: boolean;
+  readonly driver: ProviderDriverKind | null;
 }): string | null {
   const mapped = asString(asRecord(asRecord(input.payload)?.modelProviders)?.[input.model]);
-  return mapped ?? (input.isCustom ? null : "claude");
+  if (mapped !== null) return mapped;
+  if (input.isCustom) return null;
+  switch (input.driver) {
+    case "claudeAgent":
+      return "claude";
+    case "codex":
+      return "codex";
+    default:
+      return null;
+  }
 }
 
 export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";
@@ -850,11 +861,56 @@ export function featuredProviderUsageAccount(
   preferredUpstreamProvider: string | null = "claude",
 ): ProviderUsageAccount | null {
   if (preferredUpstreamProvider === null) return null;
-  const ofProvider = accounts.filter((account) => account.provider === preferredUpstreamProvider);
-  const available = ofProvider.filter((account) => account.state === "available");
-  return (
-    sortProviderUsageAccountsByPriority(available.length > 0 ? available : ofProvider)[0] ?? null
+  const eligible = accounts.filter(
+    (account) => account.provider === preferredUpstreamProvider && account.state !== "disabled",
   );
+  const available = eligible.filter((account) => account.state === "available");
+  return (
+    sortProviderUsageAccountsByPriority(available.length > 0 ? available : eligible)[0] ?? null
+  );
+}
+
+function isFableProviderUsageWindow(window: ProviderUsageWindow): boolean {
+  return window.id === "seven_day_fable" || window.shortLabel.toLowerCase() === "fable";
+}
+
+export function providerUsageFableWindow(
+  snapshot: ProviderUsageSnapshot | null,
+): ProviderUsageWindow | null {
+  return snapshot?.windows.find(isFableProviderUsageWindow) ?? null;
+}
+
+export type ProviderUsageFableSelection = {
+  readonly account: ProviderUsageAccount;
+  readonly window: ProviderUsageWindow;
+};
+
+/** The available Claude account the gateway would route a Fable turn to next. */
+export function selectProviderUsageFableAccount(
+  accounts: ReadonlyArray<ProviderUsageAccount>,
+): ProviderUsageFableSelection | null {
+  const availableWithHeadroom = sortProviderUsageAccountsByPriority(
+    accounts.filter((account) => {
+      if (
+        account.provider !== "claude" ||
+        account.state !== "available" ||
+        account.usage === null
+      ) {
+        return false;
+      }
+      const window = providerUsageFableWindow(account.usage);
+      return window !== null && window.usedPercent !== null && window.usedPercent < 100;
+    }),
+  );
+  const next = availableWithHeadroom[0];
+  if (next !== undefined) {
+    const window = providerUsageFableWindow(next.usage);
+    return window === null ? null : { account: next, window };
+  }
+
+  const featured = featuredProviderUsageAccount(accounts, "claude");
+  const window = providerUsageFableWindow(featured?.usage ?? null);
+  return featured === null || window === null ? null : { account: featured, window };
 }
 
 /**
@@ -1169,15 +1225,13 @@ export function applyProviderUsageThresholds(
  *
  * Prefers the session window and falls back to the weekly one — the session
  * window is the actionable near-term constraint, and it is often absent
- * (Codex reports weekly only today). A window in warning or critical state
- * always wins regardless of class: a calm 3% session window must never mask
- * a Fable weekly window sitting at 96%.
+ * (Codex reports weekly only today). Model-scoped windows have their own compact
+ * indicator and never replace this session view.
  */
 export function primaryProviderUsageWindow(
   snapshot: ProviderUsageSnapshot,
 ): ProviderUsageWindow | null {
   if (snapshot.windows.length === 0) return null;
-  if (snapshot.constrainedWindow !== null) return snapshot.constrainedWindow;
   return (
     snapshot.windows.find((window) => window.group === "session") ??
     snapshot.windows.find((window) => window.group === "weekly") ??
@@ -1191,20 +1245,15 @@ export function primaryProviderUsageWindow(
 // ---------------------------------------------------------------------------
 
 export type ProviderUsageAlert = {
-  /** All de-dupe keys this alert covers; callers must persist every one. */
-  readonly keys: ReadonlyArray<string>;
+  readonly key: string;
   readonly providerLabel: string;
   readonly window: ProviderUsageWindow;
-  readonly threshold: "warning" | "critical";
 };
 
 /**
- * Computes which threshold notifications the snapshot warrants, de-duplicated
- * against `firedKeys`. Keys embed the window's reset time, so each threshold
- * fires at most once per window per known reset period; callers choose a
- * bounded fallback for windows whose reset time is unavailable and persist
- * every key in `alert.keys`. When usage jumps straight past both thresholds a
- * single critical alert is surfaced, with the warning key marked alongside.
+ * Computes warning notifications, de-duplicated against `firedKeys`. Critical
+ * states stay visible in the meter but do not toast: once the limit is reached
+ * there is no remaining action for a threshold notification to prompt.
  */
 export function collectProviderUsageAlerts(
   snapshot: ProviderUsageSnapshot | null,
@@ -1215,29 +1264,22 @@ export function collectProviderUsageAlerts(
 
   const alerts: ProviderUsageAlert[] = [];
   for (const window of snapshot.windows) {
-    if (window.status === "ok") continue;
-    const crossed: Array<"warning" | "critical"> =
-      window.status === "critical" ? ["warning", "critical"] : ["warning"];
-    const keys = crossed.map((threshold) =>
-      providerUsageAlertKey(
-        snapshot.providerLabel,
-        window,
-        threshold,
-        snapshot.providerInstanceId,
-        alertScope,
-      ),
-    );
-    const freshKeys = keys.filter((key) => !firedKeys.has(key));
-    if (freshKeys.length === 0) continue;
-    // The most severe crossed threshold must itself be fresh — otherwise the
-    // critical alert already fired and a late warning would only be noise.
-    if (firedKeys.has(keys[keys.length - 1] ?? "")) continue;
-    alerts.push({
-      keys: freshKeys,
-      providerLabel: snapshot.providerLabel,
+    if (
+      window.status === "ok" ||
+      window.reportedStatus === "critical" ||
+      window.usedPercent === null ||
+      window.usedPercent >= 100
+    ) {
+      continue;
+    }
+    const key = providerUsageAlertKey(
+      snapshot.providerLabel,
       window,
-      threshold: crossed[crossed.length - 1] ?? "warning",
-    });
+      snapshot.providerInstanceId,
+      alertScope,
+    );
+    if (firedKeys.has(key)) continue;
+    alerts.push({ key, providerLabel: snapshot.providerLabel, window });
   }
   return alerts;
 }
@@ -1245,7 +1287,6 @@ export function collectProviderUsageAlerts(
 export function providerUsageAlertKey(
   providerLabel: string,
   window: ProviderUsageWindow,
-  threshold: "warning" | "critical",
   providerInstanceId?: string | null,
   alertScope?: string | null,
 ): string {
@@ -1253,5 +1294,5 @@ export function providerUsageAlertKey(
     ? `${providerLabel}@${providerInstanceId}`
     : providerLabel;
   const scope = alertScope ? `${alertScope}:${providerScope}` : providerScope;
-  return `${scope}:${window.id}:${threshold}:${window.resetsAt ?? "unknown"}`;
+  return `${scope}:${window.id}:warning:${window.resetsAt ?? "unknown"}`;
 }

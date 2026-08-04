@@ -45,13 +45,22 @@ describe("ContextWindowMeter", () => {
     expect(markup).toContain("var(--color-warning)");
   });
 
-  it("colours the ring by the worst window, not just the featured one", () => {
-    const criticalWindow = {
+  it("keeps the quota ring on the session window and renders Fable as a centre pie", () => {
+    const sessionWindow = {
       id: "session",
       group: "session" as const,
       label: "Session (5h)",
       shortLabel: "5h",
-      usedPercent: 97,
+      usedPercent: 3,
+      resetsAt: null,
+      status: "ok" as const,
+    };
+    const fableWindow = {
+      id: "seven_day_fable",
+      group: "weekly" as const,
+      label: "Weekly (Fable)",
+      shortLabel: "Fable",
+      usedPercent: 100,
       resetsAt: null,
       status: "critical" as const,
     };
@@ -61,36 +70,53 @@ describe("ContextWindowMeter", () => {
         providerUsage={{
           providerLabel: "Claude",
           providerInstanceId: "claudeAgent",
-          windows: [
-            criticalWindow,
-            {
-              id: "weekly_scoped:Fable",
-              group: "weekly",
-              label: "Weekly (Fable)",
-              shortLabel: "Fable",
-              usedPercent: 85,
-              resetsAt: null,
-              status: "warning",
-            },
-          ],
+          windows: [sessionWindow, fableWindow],
           status: "critical",
-          // A snapshot whose featured window is milder than its worst window
-          // must still read as critical on the ring.
-          constrainedWindow: {
-            id: "weekly_scoped:Fable",
-            group: "weekly",
-            label: "Weekly (Fable)",
-            shortLabel: "Fable",
-            usedPercent: 85,
-            resetsAt: null,
-            status: "warning",
-          },
+          constrainedWindow: fableWindow,
           updatedAt: "2026-07-27T05:00:00.000Z",
         }}
+        fableUsage={fableWindow}
+        fableAccountName="fable-next.json"
       />,
     );
 
-    expect(markup).toContain("var(--color-destructive)");
+    expect(markup).toContain(
+      'r="6" fill="none" stroke="color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)"',
+    );
+    expect(markup).toContain('r="2.5" fill="var(--color-destructive)"');
+    expect(markup).toContain("Weekly Fable on fable-next.json at 100%");
+  });
+
+  it("renders a known context window at zero usage", () => {
+    const markup = renderToStaticMarkup(
+      <ContextWindowMeter
+        usage={{
+          usedTokens: 0,
+          maxTokens: 200_000,
+          usedPercentage: 0,
+          remainingTokens: 200_000,
+          remainingPercentage: 100,
+          totalProcessedTokens: null,
+          inputTokens: null,
+          cachedInputTokens: null,
+          outputTokens: null,
+          reasoningOutputTokens: null,
+          lastUsedTokens: null,
+          lastInputTokens: null,
+          lastCachedInputTokens: null,
+          lastOutputTokens: null,
+          lastReasoningOutputTokens: null,
+          toolUses: null,
+          durationMs: null,
+          compactsAutomatically: true,
+          updatedAt: "2026-07-27T05:00:00.000Z",
+        }}
+        providerUsage={null}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Context window 0% used"');
+    expect(markup).toContain('stroke-dashoffset="64.40264939859075"');
   });
 
   it("still renders with only context-window usage", () => {
