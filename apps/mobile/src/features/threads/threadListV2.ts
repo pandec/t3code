@@ -333,9 +333,9 @@ export function buildThreadListV2ListItems(input: {
 /**
  * Partitions visible threads into the active card block (manual/creation
  * recency) and the settled recency tail, matching the web v2 list.
- * `autoSettleAfterDays`
- * mirrors the web default of 3 — mobile has no client-settings sync yet, so
- * the default is fixed here rather than user-configurable.
+ * `autoSettleAfterDays` mirrors the web default of 3 — mobile has no
+ * client-settings sync yet, so the default is fixed here rather than
+ * user-configurable.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;

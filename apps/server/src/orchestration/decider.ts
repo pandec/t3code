@@ -813,12 +813,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (!Number.isFinite(Date.parse(command.movedToTopAt))) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} move-to-top timestamp ${command.movedToTopAt} is invalid`,
-        });
-      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
