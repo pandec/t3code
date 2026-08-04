@@ -1066,21 +1066,16 @@ describe("sortActiveThreadsForSidebarV2", () => {
       id: "older",
       createdAt: "2026-03-09T08:00:00.000Z",
       latestUserMessageAt: "2026-03-09T13:00:00.000Z",
+      movedToTopAt: null,
     },
     {
       id: "newer",
       createdAt: "2026-03-09T12:00:00.000Z",
       latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+      movedToTopAt: null,
     },
   ];
-  const options = (input?: {
-    bumpedAtByThreadKey?: Readonly<Record<string, string>>;
-    sortByLatestUserMessage?: boolean;
-  }) => ({
-    bumpedAtByThreadKey: input?.bumpedAtByThreadKey ?? {},
-    getThreadKey: (thread: (typeof threads)[number]) => thread.id,
-    sortByLatestUserMessage: input?.sortByLatestUserMessage ?? false,
-  });
+  const options = (sortByLatestUserMessage = false) => ({ sortByLatestUserMessage });
 
   it("preserves creation order unless a recency layer is enabled", () => {
     expect(sortActiveThreadsForSidebarV2(threads, options()).map((thread) => thread.id)).toEqual([
@@ -1091,22 +1086,24 @@ describe("sortActiveThreadsForSidebarV2", () => {
 
   it("can order by latest user message without using assistant activity", () => {
     expect(
-      sortActiveThreadsForSidebarV2(threads, options({ sortByLatestUserMessage: true })).map(
-        (thread) => thread.id,
-      ),
+      sortActiveThreadsForSidebarV2(threads, options(true)).map((thread) => thread.id),
     ).toEqual(["older", "newer"]);
   });
 
   it("treats a manual move as recency rather than a permanent pin", () => {
     const bumpedBeforeNewerThread = sortActiveThreadsForSidebarV2(
-      threads,
-      options({ bumpedAtByThreadKey: { older: "2026-03-09T11:00:00.000Z" } }),
+      threads.map((thread) =>
+        thread.id === "older" ? { ...thread, movedToTopAt: "2026-03-09T11:00:00.000Z" } : thread,
+      ),
+      options(),
     );
     expect(bumpedBeforeNewerThread.map((thread) => thread.id)).toEqual(["newer", "older"]);
 
     const bumpedAfterNewerThread = sortActiveThreadsForSidebarV2(
-      threads,
-      options({ bumpedAtByThreadKey: { older: "2026-03-09T14:00:00.000Z" } }),
+      threads.map((thread) =>
+        thread.id === "older" ? { ...thread, movedToTopAt: "2026-03-09T14:00:00.000Z" } : thread,
+      ),
+      options(),
     );
     expect(bumpedAfterNewerThread.map((thread) => thread.id)).toEqual(["older", "newer"]);
   });
@@ -1117,14 +1114,13 @@ describe("sortActiveThreadsForSidebarV2", () => {
         id: "future",
         createdAt: "2099-03-09T08:00:00.000Z",
         latestUserMessageAt: "2099-03-09T13:00:00.000Z",
+        movedToTopAt: "2099-03-09T14:00:00.000Z",
       },
     ];
     const bumpedAt = nextSidebarV2ThreadBumpAt(futureThreads, {
-      bumpedAtByThreadKey: {},
-      getThreadKey: (thread) => thread.id,
       sortByLatestUserMessage: true,
     });
-    expect(Date.parse(bumpedAt)).toBeGreaterThan(Date.parse("2099-03-09T13:00:00.000Z"));
+    expect(Date.parse(bumpedAt)).toBeGreaterThan(Date.parse("2099-03-09T14:00:00.000Z"));
   });
 });
 

@@ -235,6 +235,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           NULL
         )
       `;
+      yield* sql`
+        UPDATE projection_threads
+        SET moved_to_top_at = '2026-02-24T00:00:10.000Z'
+        WHERE thread_id = 'thread-1'
+      `;
 
       yield* sql`
         INSERT INTO projection_thread_messages (
@@ -502,6 +507,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           settledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
+          movedToTopAt: "2026-02-24T00:00:10.000Z",
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -632,6 +638,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           settledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
+          movedToTopAt: "2026-02-24T00:00:10.000Z",
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),

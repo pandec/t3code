@@ -248,6 +248,13 @@ export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boo
   );
 }
 
+export function readEnvironmentSupportsMoveToTop(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadMoveToTop === true
+  );
+}
+
 /** Whether the environment's server accepts thread.snooze with a null wake
     time (indefinite snooze). Older snooze-capable servers require a wake
     time, so this gates the "Until I wake it" preset separately. */

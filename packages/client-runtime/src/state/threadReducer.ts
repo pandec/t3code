@@ -76,6 +76,7 @@ export function applyThreadDetailEvent(
           settledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
+          movedToTopAt: null,
           deletedAt: null,
           messages: [],
           completedTurnAssistantMessageIds: [],
@@ -147,6 +148,15 @@ export function applyThreadDetailEvent(
           snoozedUntil: null,
           snoozedAt: null,
           updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.moved-to-top":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          movedToTopAt: event.payload.movedToTopAt,
         },
       };
 

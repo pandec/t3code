@@ -188,7 +188,7 @@ export function buildArchiveCurrentThreadAction(input: {
 export function buildMoveCurrentThreadToTopAction(input: {
   threadRef: ScopedThreadRef | null;
   icon: ReactNode;
-  runThread: (threadRef: ScopedThreadRef) => void;
+  runThread: (threadRef: ScopedThreadRef) => void | Promise<void>;
 }): CommandPaletteActionItem | null {
   if (!input.threadRef) {
     return null;
@@ -201,7 +201,7 @@ export function buildMoveCurrentThreadToTopAction(input: {
     title: "Move current thread to top",
     icon: input.icon,
     run: async () => {
-      input.runThread(threadRef);
+      await input.runThread(threadRef);
     },
   };
 }
