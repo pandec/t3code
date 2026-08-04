@@ -293,6 +293,49 @@ describe("buildThreadListV2Items", () => {
     expect(layout.items.map((item) => item.thread.id)).toEqual(["included"]);
   });
 
+  it("moves a bumped active thread first without changing shelf placement", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("newer"),
+          title: "Newer",
+          createdAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("bumped"),
+          title: "Bumped",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          movedToTopAt: "2026-06-01T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+          movedToTopAt: "2099-01-01T00:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled"),
+          title: "Settled",
+          settledOverride: "settled",
+          settledAt: NOW,
+          movedToTopAt: "2099-01-01T00:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual([
+      "bumped",
+      "newer",
+      "snoozed",
+      "settled",
+    ]);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

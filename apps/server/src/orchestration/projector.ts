@@ -27,6 +27,7 @@ import {
   ThreadRuntimeModeSetPayload,
   ThreadSettledPayload,
   ThreadSnoozedPayload,
+  ThreadMovedToTopPayload,
   ThreadUnarchivedPayload,
   ThreadUnsettledPayload,
   ThreadUnsnoozedPayload,
@@ -301,6 +302,7 @@ export function projectEvent(
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            movedToTopAt: null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -450,6 +452,16 @@ export function projectEvent(
             snoozedUntil: null,
             snoozedAt: null,
             updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.moved-to-top":
+      return decodeForEvent(ThreadMovedToTopPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            movedToTopAt: payload.movedToTopAt,
           }),
         })),
       );

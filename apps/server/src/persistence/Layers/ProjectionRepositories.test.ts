@@ -117,6 +117,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         settledAt: null,
         snoozedUntil: null,
         snoozedAt: null,
+        movedToTopAt: null,
         latestUserMessageAt: null,
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,
@@ -155,7 +156,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("round-trips non-null settlement values through the thread row", () =>
+  it.effect("round-trips lifecycle and move-to-top values through the thread row", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
 
@@ -179,6 +180,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         settledAt: "2026-03-25T00:00:00.000Z",
         snoozedUntil: "2026-03-26T09:00:00.000Z",
         snoozedAt: "2026-03-25T00:00:00.000Z",
+        movedToTopAt: "2026-03-27T00:00:00.000Z",
         latestUserMessageAt: null,
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,
@@ -197,6 +199,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(row.settledAt, "2026-03-25T00:00:00.000Z");
       assert.strictEqual(row.snoozedUntil, "2026-03-26T09:00:00.000Z");
       assert.strictEqual(row.snoozedAt, "2026-03-25T00:00:00.000Z");
+      assert.strictEqual(row.movedToTopAt, "2026-03-27T00:00:00.000Z");
+      assert.strictEqual(row.updatedAt, "2026-03-25T00:00:00.000Z");
 
       // Un-settle to the keep-active pin and wake the snooze; confirm the
       // flips persist.

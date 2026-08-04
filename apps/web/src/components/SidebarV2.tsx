@@ -1388,10 +1388,6 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const sidebarV2ThreadBumpedAtByKey = useUiStateStore(
-    (store) => store.sidebarV2ThreadBumpedAtByKey,
-  );
-  const bumpSidebarV2Thread = useUiStateStore((store) => store.bumpSidebarV2Thread);
   const threads = useThreadShells();
   const allEnvironmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const router = useRouter();
@@ -1425,6 +1421,7 @@ export default function SidebarV2() {
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
+    moveThreadToTop,
     deleteThread,
     confirmAndDeleteThread,
     forkThread,
@@ -2069,8 +2066,6 @@ export default function SidebarV2() {
     }
     return {
       activeThreads: sortActiveThreadsForSidebarV2(active, {
-        bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
-        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         sortByLatestUserMessage: sortActiveByLatestUserMessage,
       }),
       // Soonest wake first: "what comes back next" is the shelf's question.
@@ -2088,27 +2083,32 @@ export default function SidebarV2() {
     nowMinute,
     scopedProjectKeys,
     serverConfigs,
-    sidebarV2ThreadBumpedAtByKey,
     snoozeWakeTick,
     sortActiveByLatestUserMessage,
     threads,
   ]);
 
-  const moveThreadToTop = useCallback(
-    (threadRef: ScopedThreadRef) => {
+  const attemptMoveThreadToTop = useCallback(
+    async (threadRef: ScopedThreadRef) => {
       const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
-      const sortOptions = {
-        bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
-        getThreadKey: (thread: EnvironmentThreadShell) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        sortByLatestUserMessage: sortActiveByLatestUserMessage,
-      };
-      bumpSidebarV2Thread(
-        scopedThreadKey(threadRef),
-        nextSidebarV2ThreadBumpAt(unarchivedThreads, sortOptions),
+      const result = await moveThreadToTop(
+        threadRef,
+        nextSidebarV2ThreadBumpAt(unarchivedThreads, {
+          sortByLatestUserMessage: sortActiveByLatestUserMessage,
+        }),
       );
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to move thread to top",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
     },
-    [bumpSidebarV2Thread, sidebarV2ThreadBumpedAtByKey, sortActiveByLatestUserMessage, threads],
+    [moveThreadToTop, sortActiveByLatestUserMessage, threads],
   );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2860,6 +2860,9 @@ export default function SidebarV2() {
           true;
         const supportsSnooze =
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
+        const supportsMoveToTop =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadMoveToTop ===
+          true;
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
@@ -2916,7 +2919,9 @@ export default function SidebarV2() {
                   ]
                 : []),
               { id: "mark-unread", label: "Mark unread" },
-              ...(!isSettled && !isSnoozed ? [{ id: "move-to-top", label: "Move to top" }] : []),
+              ...(supportsMoveToTop && !isSettled && !isSnoozed
+                ? [{ id: "move-to-top", label: "Move to top" }]
+                : []),
               ...(canForkConversation(thread) ? [{ id: "fork", label: "Fork conversation" }] : []),
               {
                 id: "archive",
@@ -2998,7 +3003,7 @@ export default function SidebarV2() {
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
           case "move-to-top":
-            moveThreadToTop(threadRef);
+            await attemptMoveThreadToTop(threadRef);
             return;
           case "fork": {
             const result = await forkThread(threadRef);
@@ -3071,6 +3076,7 @@ export default function SidebarV2() {
       })();
     },
     [
+      attemptMoveThreadToTop,
       attemptSettle,
       attemptSnooze,
       attemptUnsettle,
@@ -3084,7 +3090,6 @@ export default function SidebarV2() {
       forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
-      moveThreadToTop,
       projectCwdByKey,
       serverConfigs,
       startThreadRename,

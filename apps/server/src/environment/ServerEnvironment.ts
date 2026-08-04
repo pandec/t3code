@@ -150,6 +150,7 @@ export const make = Effect.gen(function* () {
       providerCatalog: true,
       threadSnooze: true,
       threadSnoozeIndefinite: true,
+      threadMoveToTop: true,
       recentArchivedThreads: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,

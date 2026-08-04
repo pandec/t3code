@@ -38,6 +38,7 @@ const baseThread: OrchestrationThread = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
+  movedToTopAt: null,
   deletedAt: null,
   messages: [],
   completedTurnAssistantMessageIds: [],
@@ -230,6 +231,29 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.settledOverride).toBe(settledOverride);
         expect(result.thread.settledAt).toBeNull();
       }
+    });
+  });
+
+  describe("thread.moved-to-top", () => {
+    it("changes only movedToTopAt", () => {
+      const movedToTopAt = "2026-04-01T05:00:00.000Z";
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 5,
+        occurredAt: "2026-04-01T04:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.moved-to-top",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          movedToTopAt,
+        },
+      });
+
+      expect(result).toEqual({
+        kind: "updated",
+        thread: { ...baseThread, movedToTopAt },
+      });
     });
   });
 

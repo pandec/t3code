@@ -651,9 +651,7 @@ export function sortThreadsForSidebarV2<
   );
 }
 
-export interface SidebarV2ActiveThreadSortOptions<T> {
-  readonly bumpedAtByThreadKey: Readonly<Record<string, string>>;
-  readonly getThreadKey: (thread: T) => string;
+export interface SidebarV2ActiveThreadSortOptions {
   readonly sortByLatestUserMessage: boolean;
 }
 
@@ -661,26 +659,27 @@ function activeThreadSortTimestamp<
   T extends {
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
+    readonly movedToTopAt?: string | null | undefined;
   },
->(thread: T, options: SidebarV2ActiveThreadSortOptions<T>): number {
+>(thread: T, options: SidebarV2ActiveThreadSortOptions): number {
   const baseTimestamp = options.sortByLatestUserMessage
     ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
     : parseTimestampMs(thread.createdAt);
-  const bumpedAt = options.bumpedAtByThreadKey[options.getThreadKey(thread)];
-  return Math.max(baseTimestamp, firstValidTimestampMs(bumpedAt));
+  return Math.max(baseTimestamp, firstValidTimestampMs(thread.movedToTopAt));
 }
 
 /** Optional Sidebar V2 recency layers. The default creation-order helper stays
-    unchanged; manual moves and latest-user-message sorting only affect active
-    threads when their client-owned controls opt in. */
+    unchanged; server-backed manual moves and latest-user-message sorting only
+    affect active threads. */
 export function sortActiveThreadsForSidebarV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
+    readonly movedToTopAt?: string | null | undefined;
   },
->(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions<T>): T[] {
-  if (!options.sortByLatestUserMessage && Object.keys(options.bumpedAtByThreadKey).length === 0) {
+>(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions): T[] {
+  if (!options.sortByLatestUserMessage && threads.every((thread) => thread.movedToTopAt == null)) {
     return sortThreadsForSidebarV2(threads);
   }
   return [...threads].toSorted(
@@ -696,8 +695,9 @@ export function nextSidebarV2ThreadBumpAt<
   T extends {
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
+    readonly movedToTopAt?: string | null | undefined;
   },
->(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions<T>): string {
+>(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions): string {
   const latestTimestamp = threads.reduce(
     (latest, thread) => Math.max(latest, activeThreadSortTimestamp(thread, options)),
     Date.now(),

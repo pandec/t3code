@@ -1,13 +1,10 @@
 "use client";
 
-import {
-  scopeProjectRef,
-  scopeThreadRef,
-  scopedThreadKey,
-} from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
@@ -78,7 +75,7 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -570,16 +567,13 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { attemptArchiveThread } = useThreadActions();
+  const { attemptArchiveThread, moveThreadToTop } = useThreadActions();
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const sidebarV2ThreadBumpedAtByKey = useUiStateStore(
-    (store) => store.sidebarV2ThreadBumpedAtByKey,
-  );
-  const bumpSidebarV2Thread = useUiStateStore((store) => store.bumpSidebarV2Thread);
   const threads = useThreadShells();
+  const serverConfigs = useServerConfigs();
   const sidebarV2Enabled = useSidebarV2Enabled();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -1443,30 +1437,60 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const openUnarchivedThreadRef =
-    routeThreadRef &&
-    threads.some(
-      (thread) =>
-        thread.environmentId === routeThreadRef.environmentId &&
-        thread.id === routeThreadRef.threadId &&
-        thread.archivedAt === null,
+  const openUnarchivedThread =
+    routeThreadRef === null
+      ? null
+      : (threads.find(
+          (thread) =>
+            thread.environmentId === routeThreadRef.environmentId &&
+            thread.id === routeThreadRef.threadId &&
+            thread.archivedAt === null,
+        ) ?? null);
+  const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
+  const openThreadCapabilities =
+    openUnarchivedThread === null
+      ? null
+      : serverConfigs.get(openUnarchivedThread.environmentId)?.environment.capabilities;
+  const now = new Date().toISOString();
+  const openActiveThreadRef =
+    sidebarV2Enabled &&
+    openUnarchivedThread !== null &&
+    openThreadCapabilities?.threadMoveToTop === true &&
+    !(
+      openThreadCapabilities.threadSnooze === true &&
+      effectiveSnoozed(openUnarchivedThread, { now })
+    ) &&
+    !(
+      openThreadCapabilities.threadSettlement === true &&
+      effectiveSettled(openUnarchivedThread, {
+        now,
+        autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
+        changeRequestState: null,
+      })
     )
-      ? routeThreadRef
+      ? openUnarchivedThreadRef
       : null;
   const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
-    threadRef: sidebarV2Enabled ? openUnarchivedThreadRef : null,
+    threadRef: openActiveThreadRef,
     icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
-    runThread: (threadRef) => {
+    runThread: async (threadRef) => {
       const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
-      bumpSidebarV2Thread(
-        scopedThreadKey(threadRef),
+      const result = await moveThreadToTop(
+        threadRef,
         nextSidebarV2ThreadBumpAt(unarchivedThreads, {
-          bumpedAtByThreadKey: sidebarV2ThreadBumpedAtByKey,
-          getThreadKey: (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           sortByLatestUserMessage: clientSettings.sidebarV2SortActiveByLatestUserMessage,
         }),
       );
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to move thread to top",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
     },
   });
   if (moveCurrentThreadToTopAction) {

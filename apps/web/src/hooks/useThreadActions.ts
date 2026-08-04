@@ -26,6 +26,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { readLocalApi } from "../localApi";
 import {
+  readEnvironmentSupportsMoveToTop,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeIndefinite,
@@ -112,6 +113,18 @@ export class ThreadSnoozeUnsupportedError extends Schema.TaggedErrorClass<Thread
   }
 }
 
+export class ThreadMoveToTopUnsupportedError extends Schema.TaggedErrorClass<ThreadMoveToTopUnsupportedError>()(
+  "ThreadMoveToTopUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "This environment's server does not support Move to top yet. Update the server to use it.";
+  }
+}
+
 export class ThreadSnoozeBlockedError extends Schema.TaggedErrorClass<ThreadSnoozeBlockedError>()(
   "ThreadSnoozeBlockedError",
   {
@@ -146,6 +159,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
+    reportFailure: false,
+  });
+  const moveThreadToTopMutation = useAtomCommand(threadEnvironment.moveToTop, {
     reportFailure: false,
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
@@ -633,6 +649,26 @@ export function useThreadActions() {
     [unsnoozeThreadMutation],
   );
 
+  const moveThreadToTop = useCallback(
+    async (target: ScopedThreadRef, movedToTopAt: string) => {
+      if (!readEnvironmentSupportsMoveToTop(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadMoveToTopUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return moveThreadToTopMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, movedToTopAt },
+      });
+    },
+    [moveThreadToTopMutation],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -673,6 +709,7 @@ export function useThreadActions() {
       unsettleThread,
       snoozeThread,
       unsnoozeThread,
+      moveThreadToTop,
     }),
     [
       archiveThread,
@@ -680,6 +717,7 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       deleteThread,
       forkThread,
+      moveThreadToTop,
       settleThread,
       snoozeThread,
       unarchiveThread,

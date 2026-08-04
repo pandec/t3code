@@ -61,6 +61,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       requires a wake time, so clients hide the preset instead of sending
       a command that would fail to decode. */
   threadSnoozeIndefinite: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.move-to-top. Absent on older servers, so
+      clients hide the action instead of sending an unknown command. */
+  threadMoveToTop: Schema.optionalKey(Schema.Boolean),
   /** Server exposes a bounded recent-archive query for always-mounted shelves. */
   recentArchivedThreads: Schema.optionalKey(Schema.Boolean),
   /** Server persists ServerSettings.projectAccentColors and accepts its

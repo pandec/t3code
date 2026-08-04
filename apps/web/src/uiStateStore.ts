@@ -21,7 +21,6 @@ export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
-  sidebarV2ThreadBumpedAtByKey?: Record<string, string>;
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
@@ -40,7 +39,6 @@ export interface UiProjectState {
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
-  sidebarV2ThreadBumpedAtByKey: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -55,7 +53,6 @@ const initialState: UiState = {
   projectOrder: [],
   sidebarEnvironmentFilterId: null,
   threadLastVisitedAtById: {},
-  sidebarV2ThreadBumpedAtByKey: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
 };
@@ -138,7 +135,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
         ? parsed.sidebarEnvironmentFilterId
         : null,
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
-    sidebarV2ThreadBumpedAtByKey: sanitizeTimestampRecord(parsed.sidebarV2ThreadBumpedAtByKey),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
@@ -218,7 +214,6 @@ export function persistState(state: UiState): void {
         projectOrder: state.projectOrder,
         sidebarEnvironmentFilterId: state.sidebarEnvironmentFilterId,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
-        sidebarV2ThreadBumpedAtByKey: state.sidebarV2ThreadBumpedAtByKey,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
@@ -256,22 +251,6 @@ export function markThreadVisited(state: UiState, threadId: string, visitedAt: s
     threadLastVisitedAtById: {
       ...state.threadLastVisitedAtById,
       [threadId]: visitedAt,
-    },
-  };
-}
-
-export function bumpSidebarV2Thread(state: UiState, threadKey: string, bumpedAt: string): UiState {
-  if (threadKey.length === 0 || !Number.isFinite(Date.parse(bumpedAt))) {
-    return state;
-  }
-  if (state.sidebarV2ThreadBumpedAtByKey[threadKey] === bumpedAt) {
-    return state;
-  }
-  return {
-    ...state,
-    sidebarV2ThreadBumpedAtByKey: {
-      ...state.sidebarV2ThreadBumpedAtByKey,
-      [threadKey]: bumpedAt,
     },
   };
 }
@@ -413,7 +392,6 @@ export function reorderProjects(
 }
 
 interface UiStateStore extends UiState {
-  bumpSidebarV2Thread: (threadKey: string, bumpedAt: string) => void;
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
@@ -429,8 +407,6 @@ interface UiStateStore extends UiState {
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
   ...readPersistedState(),
-  bumpSidebarV2Thread: (threadKey, bumpedAt) =>
-    set((state) => bumpSidebarV2Thread(state, threadKey, bumpedAt)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
