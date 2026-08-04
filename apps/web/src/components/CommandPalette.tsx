@@ -72,6 +72,7 @@ import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -136,7 +137,11 @@ import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons"
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
-import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import {
+  resolveThreadPr,
+  ThreadRowLeadingStatus,
+  ThreadRowTrailingStatus,
+} from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
@@ -1451,6 +1456,29 @@ function OpenCommandPaletteDialog(props: {
     openUnarchivedThread === null
       ? null
       : serverConfigs.get(openUnarchivedThread.environmentId)?.environment.capabilities;
+  const openThreadGitCwd =
+    openUnarchivedThread?.worktreePath ??
+    (openUnarchivedThread === null
+      ? null
+      : (projectCwdById.get(openUnarchivedThread.projectId) ?? null));
+  const openThreadGitStatus = useEnvironmentQuery(
+    openUnarchivedThread !== null &&
+      openThreadCapabilities?.threadSettlement === true &&
+      (openUnarchivedThread.branch !== null || openUnarchivedThread.worktreePath !== null) &&
+      openThreadGitCwd !== null
+      ? vcsEnvironment.status({
+          environmentId: openUnarchivedThread.environmentId,
+          input: { cwd: openThreadGitCwd },
+        })
+      : null,
+  );
+  const openThreadChangeRequestState =
+    openUnarchivedThread === null
+      ? null
+      : (resolveThreadPr({
+          threadBranch: openUnarchivedThread.branch,
+          gitStatus: openThreadGitStatus.data ?? null,
+        })?.state ?? null);
   const now = new Date().toISOString();
   const openActiveThreadRef =
     sidebarV2Enabled &&
@@ -1465,7 +1493,7 @@ function OpenCommandPaletteDialog(props: {
       effectiveSettled(openUnarchivedThread, {
         now,
         autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
-        changeRequestState: null,
+        changeRequestState: openThreadChangeRequestState,
       })
     )
       ? openUnarchivedThreadRef
