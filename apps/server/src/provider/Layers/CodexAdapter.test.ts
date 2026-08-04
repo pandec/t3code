@@ -1314,6 +1314,25 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
       NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
     }),
   );
+
+  it.effect("closes the standalone account-usage runtime scope", () =>
+    Effect.gen(function* () {
+      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+
+      NodeAssert.deepStrictEqual(yield* adapter.readAccountUsage!(), {
+        rateLimits: {
+          primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        },
+      });
+      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+      NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
+        asThreadId("account-usage-probe"),
+      ]);
+    }),
+  );
 });
 
 const scopedFailureRuntimeFactory = makeScopedRuntimeFactory({ failConstruction: true });
@@ -1354,6 +1373,18 @@ scopedFailureLayer("CodexAdapterLive scoped startup failure", (it) => {
         asThreadId("thread-fail"),
       ]);
       NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-fail")), false);
+    }),
+  );
+
+  it.effect("closes the standalone account-usage scope when construction fails", () =>
+    Effect.gen(function* () {
+      scopedFailureRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+
+      NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
+      NodeAssert.deepStrictEqual(scopedFailureRuntimeFactory.releasedThreadIds, [
+        asThreadId("account-usage-probe"),
+      ]);
     }),
   );
 });

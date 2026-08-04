@@ -26,12 +26,17 @@
  * refuses to contact the gateway again for a cooldown period rather than
  * letting popover-driven refreshes spend ban strikes.
  */
-import type { ProviderInstanceEnvironment, ProviderInstanceUsageSource } from "@t3tools/contracts";
+import type {
+  ProviderDriverKind,
+  ProviderInstanceEnvironment,
+  ProviderInstanceUsageSource,
+} from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { ProviderAdapterRequestError, type ProviderAdapterError } from "./Errors.ts";
@@ -75,6 +80,11 @@ interface GatewayAuthFailureState {
 
 const gatewayAuthFailures = new Map<string, GatewayAuthFailureState>();
 
+// Management rejections are budgeted per origin, so probes for separate
+// provider instances sharing one gateway must pass through the same admission
+// lane. Per-probe account reads remain concurrent inside the lane.
+const gatewayProbeLocks = new Map<string, Semaphore.Semaphore>();
+
 /**
  * A rejected *client* key must not be retried on every probe either: the
  * gateway's per-IP rejection budget is only documented for management keys,
@@ -83,11 +93,25 @@ const gatewayAuthFailures = new Map<string, GatewayAuthFailureState>();
  * origin until the configured key changes.
  */
 const rejectedModelCatalogKeys = new Map<string, string>();
+const modelCatalogLocks = new Map<string, Semaphore.Semaphore>();
+
+function lockForOrigin(
+  locks: Map<string, Semaphore.Semaphore>,
+  origin: string,
+): Semaphore.Semaphore {
+  const existing = locks.get(origin);
+  if (existing !== undefined) return existing;
+  const created = Semaphore.makeUnsafe(1);
+  locks.set(origin, created);
+  return created;
+}
 
 /** Test-only: drop the process-wide strike ledgers between cases. */
 export function resetCliProxyApiAuthFailuresForTest(): void {
   gatewayAuthFailures.clear();
   rejectedModelCatalogKeys.clear();
+  gatewayProbeLocks.clear();
+  modelCatalogLocks.clear();
 }
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -183,6 +207,7 @@ export interface CliProxyApiUsageEnvelope {
  */
 export function resolveCliProxyApiUsageProbeTarget(
   envelope: CliProxyApiUsageEnvelope,
+  preferredDriver?: ProviderDriverKind | null,
 ): CliProxyApiUsageProbeTarget | null {
   const usageSource = envelope.usageSource;
   if (usageSource?.kind !== CLIPROXYAPI_USAGE_SOURCE_KIND) return null;
@@ -198,16 +223,16 @@ export function resolveCliProxyApiUsageProbeTarget(
   };
   const environmentValue = (name: string): string | undefined =>
     envelope.environment?.find((variable) => variable.name === name)?.value;
-  const clients = [
-    {
-      url: origin(environmentValue("ANTHROPIC_BASE_URL")),
-      key: environmentValue("ANTHROPIC_AUTH_TOKEN"),
-    },
-    {
-      url: origin(environmentValue("OPENAI_BASE_URL")),
-      key: environmentValue("OPENAI_API_KEY"),
-    },
-  ];
+  const anthropicClient = {
+    url: origin(environmentValue("ANTHROPIC_BASE_URL")),
+    key: environmentValue("ANTHROPIC_AUTH_TOKEN"),
+  };
+  const openAiClient = {
+    url: origin(environmentValue("OPENAI_BASE_URL")),
+    key: environmentValue("OPENAI_API_KEY"),
+  };
+  const clients =
+    preferredDriver === "codex" ? [openAiClient, anthropicClient] : [anthropicClient, openAiClient];
   const client = clients.find((candidate) => candidate.url !== null && candidate.key);
   const explicitManagementUrl = origin(usageSource.managementUrl);
   if (usageSource.managementUrl !== undefined && explicitManagementUrl === null) return null;
@@ -397,24 +422,28 @@ export function makeCliProxyApiUsageProbe(
   const modelProvidersEffect = (() => {
     const { clientUrl, clientKey } = target;
     if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
-    return Effect.gen(function* () {
-      if (rejectedModelCatalogKeys.get(clientUrl) === clientKey) return null;
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.get(`${clientUrl}/v1/models`).pipe(
-          HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
-        ),
+    return lockForOrigin(modelCatalogLocks, clientUrl)
+      .withPermits(1)(
+        Effect.gen(function* () {
+          if (rejectedModelCatalogKeys.get(clientUrl) === clientKey) return null;
+          const client = yield* HttpClient.HttpClient;
+          const response = yield* client.execute(
+            HttpClientRequest.get(`${clientUrl}/v1/models`).pipe(
+              HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+            ),
+          );
+          if (response.status === 401 || response.status === 403) {
+            rejectedModelCatalogKeys.set(clientUrl, clientKey);
+            return null;
+          }
+          if (response.status < 200 || response.status >= 300) return null;
+          return parseModelProviders(yield* response.json);
+        }),
+      )
+      .pipe(
+        Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
+        Effect.orElseSucceed(() => null),
       );
-      if (response.status === 401 || response.status === 403) {
-        rejectedModelCatalogKeys.set(clientUrl, clientKey);
-        return null;
-      }
-      if (response.status < 200 || response.status >= 300) return null;
-      return parseModelProviders(yield* response.json);
-    }).pipe(
-      Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
-      Effect.orElseSucceed(() => null),
-    );
   })();
 
   const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
@@ -485,96 +514,97 @@ export function makeCliProxyApiUsageProbe(
       } satisfies CliProxyApiUsageAccount;
     });
 
-  return () =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const failures = gatewayAuthFailures.get(target.managementUrl);
-      if (failures !== undefined) {
-        if (now - failures.firstFailureAtMs >= GATEWAY_STRIKE_WINDOW_MS) {
-          gatewayAuthFailures.delete(target.managementUrl);
-        } else if (
-          failures.count >= GATEWAY_STRIKE_BUDGET ||
-          (failures.lastKey === target.managementKey &&
-            now - failures.lastFailureAtMs < AUTH_FAILURE_COOLDOWN_MS)
-        ) {
-          // Fail without touching the gateway: a silent skip would leave a
-          // manual refresh looking like a signed-out account, when the real
-          // story is the rejected-key pause.
+  const probe = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const failures = gatewayAuthFailures.get(target.managementUrl);
+    if (failures !== undefined) {
+      if (now - failures.firstFailureAtMs >= GATEWAY_STRIKE_WINDOW_MS) {
+        gatewayAuthFailures.delete(target.managementUrl);
+      } else if (
+        failures.count >= GATEWAY_STRIKE_BUDGET ||
+        (failures.lastKey === target.managementKey &&
+          now - failures.lastFailureAtMs < AUTH_FAILURE_COOLDOWN_MS)
+      ) {
+        // Fail without touching the gateway: a silent skip would leave a
+        // manual refresh looking like a signed-out account, when the real
+        // story is the rejected-key pause.
+        return yield* new ProviderAdapterRequestError({
+          provider: "cliproxyapi",
+          method: "account/usage",
+          detail:
+            "The gateway rejected the management key earlier; probes are " +
+            "paused to avoid the gateway's 30-minute IP ban. Fix the key " +
+            "or wait for the pause to lapse.",
+        });
+      }
+    }
+
+    const modelProvidersFiber = yield* modelProvidersEffect.pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    const authFiles = yield* managementRequest(
+      HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
+      AUTH_FILES_REQUEST_TIMEOUT_MS,
+    );
+    const entries = parseAuthFiles(authFiles);
+    if (entries.length === 0) {
+      return undefined;
+    }
+
+    const accounts = yield* Effect.forEach(
+      entries,
+      (entry) => probeAccount(entry, ACCOUNT_REQUEST_TIMEOUT_MS),
+      { concurrency: ACCOUNT_REQUEST_CONCURRENCY },
+    );
+    const modelProviders = yield* Fiber.join(modelProvidersFiber);
+    const payload: CliProxyApiUsagePayload = {
+      source: CLIPROXYAPI_USAGE_PAYLOAD_SOURCE,
+      accounts,
+      ...(modelProviders !== null ? { modelProviders } : {}),
+    };
+    return payload as unknown;
+  }).pipe(
+    Effect.catchTags({
+      CliProxyApiAuthRejectedError: (error) =>
+        Effect.gen(function* () {
+          const failedAtMs = yield* Clock.currentTimeMillis;
+          const previous = gatewayAuthFailures.get(target.managementUrl);
+          const withinWindow =
+            previous !== undefined &&
+            failedAtMs - previous.firstFailureAtMs < GATEWAY_STRIKE_WINDOW_MS;
+          const count = withinWindow ? previous.count + 1 : 1;
+          gatewayAuthFailures.set(target.managementUrl, {
+            firstFailureAtMs: withinWindow ? previous.firstFailureAtMs : failedAtMs,
+            lastFailureAtMs: failedAtMs,
+            lastKey: target.managementKey,
+            count,
+          });
+          const spent = count >= GATEWAY_STRIKE_BUDGET;
           return yield* new ProviderAdapterRequestError({
             provider: "cliproxyapi",
             method: "account/usage",
             detail:
-              "The gateway rejected the management key earlier; probes are " +
-              "paused to avoid the gateway's 30-minute IP ban. Fix the key " +
-              "or wait for the pause to lapse.",
+              `${error.message} ` +
+              (spent
+                ? `This gateway has now been refused ${count} times; probes stop until the ` +
+                  `${Math.round(GATEWAY_STRIKE_WINDOW_MS / 60_000)}-minute window elapses.`
+                : `Retrying with the same key is paused for ` +
+                  `${Math.round(AUTH_FAILURE_COOLDOWN_MS / 60_000)} minutes.`) +
+              " Repeated rejected management keys trigger the gateway's 30-minute IP ban.",
+            cause: error,
           });
-        }
-      }
-
-      const modelProvidersFiber = yield* modelProvidersEffect.pipe(
-        Effect.forkChild({ startImmediately: true }),
-      );
-      const authFiles = yield* managementRequest(
-        HttpClientRequest.get(`${target.managementUrl}/v0/management/auth-files`),
-        AUTH_FILES_REQUEST_TIMEOUT_MS,
-      );
-      const entries = parseAuthFiles(authFiles);
-      if (entries.length === 0) {
-        return undefined;
-      }
-
-      const accounts = yield* Effect.forEach(
-        entries,
-        (entry) => probeAccount(entry, ACCOUNT_REQUEST_TIMEOUT_MS),
-        { concurrency: ACCOUNT_REQUEST_CONCURRENCY },
-      );
-      const modelProviders = yield* Fiber.join(modelProvidersFiber);
-      const payload: CliProxyApiUsagePayload = {
-        source: CLIPROXYAPI_USAGE_PAYLOAD_SOURCE,
-        accounts,
-        ...(modelProviders !== null ? { modelProviders } : {}),
-      };
-      return payload as unknown;
-    }).pipe(
-      Effect.catchTags({
-        CliProxyApiAuthRejectedError: (error) =>
-          Effect.gen(function* () {
-            const failedAtMs = yield* Clock.currentTimeMillis;
-            const previous = gatewayAuthFailures.get(target.managementUrl);
-            const withinWindow =
-              previous !== undefined &&
-              failedAtMs - previous.firstFailureAtMs < GATEWAY_STRIKE_WINDOW_MS;
-            const count = withinWindow ? previous.count + 1 : 1;
-            gatewayAuthFailures.set(target.managementUrl, {
-              firstFailureAtMs: withinWindow ? previous.firstFailureAtMs : failedAtMs,
-              lastFailureAtMs: failedAtMs,
-              lastKey: target.managementKey,
-              count,
-            });
-            const spent = count >= GATEWAY_STRIKE_BUDGET;
-            return yield* new ProviderAdapterRequestError({
-              provider: "cliproxyapi",
-              method: "account/usage",
-              detail:
-                `${error.message} ` +
-                (spent
-                  ? `This gateway has now been refused ${count} times; probes stop until the ` +
-                    `${Math.round(GATEWAY_STRIKE_WINDOW_MS / 60_000)}-minute window elapses.`
-                  : `Retrying with the same key is paused for ` +
-                    `${Math.round(AUTH_FAILURE_COOLDOWN_MS / 60_000)} minutes.`) +
-                " Repeated rejected management keys trigger the gateway's 30-minute IP ban.",
-              cause: error,
-            });
+        }),
+      CliProxyApiRequestFailedError: (error) =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "cliproxyapi",
+            method: "account/usage",
+            detail: error.detail,
+            cause: error.cause,
           }),
-        CliProxyApiRequestFailedError: (error) =>
-          Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: "cliproxyapi",
-              method: "account/usage",
-              detail: error.detail,
-              cause: error.cause,
-            }),
-          ),
-      }),
-    );
+        ),
+    }),
+  );
+
+  return () => lockForOrigin(gatewayProbeLocks, target.managementUrl).withPermits(1)(probe);
 }
