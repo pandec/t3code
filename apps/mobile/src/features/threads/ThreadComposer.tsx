@@ -65,6 +65,7 @@ import {
   presentProviderUsageAccount,
   providerUsageFableWindow,
   providerUsageLabelForDriver,
+  primaryProviderUsageWindow,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
@@ -634,6 +635,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     providerUsage?.providerLabel ??
     providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
     "Provider";
+  const providerUsagePrimaryWindow = providerUsage
+    ? primaryProviderUsageWindow(providerUsage)
+    : null;
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -1264,9 +1268,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         <View
                           className={cn(
                             "h-2 w-2 rounded-full",
-                            providerUsage?.status === "critical"
+                            providerUsagePrimaryWindow?.status === "critical"
                               ? "bg-rose-500"
-                              : providerUsage?.status === "warning"
+                              : providerUsagePrimaryWindow?.status === "warning"
                                 ? "bg-amber-500"
                                 : "bg-neutral-400 dark:bg-neutral-500",
                           )}

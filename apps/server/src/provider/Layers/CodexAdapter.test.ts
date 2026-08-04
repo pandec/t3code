@@ -23,6 +23,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -289,15 +290,18 @@ validationLayer("CodexAdapterLive validation", (it) => {
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
+      const readStarted = yield* Deferred.make<void>();
       let interruptedRuntime: FakeCodexRuntime | undefined;
       validationRuntimeFactory.factory.mockImplementationOnce((options) => {
         interruptedRuntime = new FakeCodexRuntime(options);
-        interruptedRuntime.readAccountUsage = Effect.never;
+        interruptedRuntime.readAccountUsage = Deferred.succeed(readStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+        );
         return Effect.succeed(interruptedRuntime);
       });
 
       const fiber = yield* adapter.readAccountUsage!().pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(readStarted);
       yield* Fiber.interrupt(fiber);
       NodeAssert.equal(interruptedRuntime?.closeImpl.mock.calls.length, 1);
     }),

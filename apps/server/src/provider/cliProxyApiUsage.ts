@@ -79,39 +79,50 @@ interface GatewayAuthFailureState {
 }
 
 const gatewayAuthFailures = new Map<string, GatewayAuthFailureState>();
-
-// Management rejections are budgeted per origin, so probes for separate
-// provider instances sharing one gateway must pass through the same admission
-// lane. Per-probe account reads remain concurrent inside the lane.
-const gatewayProbeLocks = new Map<string, Semaphore.Semaphore>();
+// Reserve the remaining strike budget around each actual management request.
+// Admission is fail-fast: a same-origin waiter must not sit inside the refresh
+// coordinator's global permit and starve probes for unrelated origins.
+const gatewayAuthReservations = new Map<string, number>();
 
 /**
  * A rejected *client* key must not be retried on every probe either: the
  * gateway's per-IP rejection budget is only documented for management keys,
  * but nothing guarantees it is endpoint-scoped, and this machine's live agent
- * traffic rides the same IP. One 401/403 suppresses the models fetch for that
- * origin until the configured key changes.
+ * traffic rides the same IP. One 401/403 permanently suppresses that exact
+ * origin/key pairing; a corrected key can still probe immediately.
  */
-const rejectedModelCatalogKeys = new Map<string, string>();
-const modelCatalogLocks = new Map<string, Semaphore.Semaphore>();
+interface ModelCatalogState {
+  readonly lock: Semaphore.Semaphore;
+  generation: number;
+  latest: Record<string, string> | null;
+  rejected: boolean;
+}
 
-function lockForOrigin(
-  locks: Map<string, Semaphore.Semaphore>,
-  origin: string,
-): Semaphore.Semaphore {
-  const existing = locks.get(origin);
+const modelCatalogStates = new Map<string, Map<string, ModelCatalogState>>();
+
+function modelCatalogState(origin: string, key: string): ModelCatalogState {
+  let statesForOrigin = modelCatalogStates.get(origin);
+  if (statesForOrigin === undefined) {
+    statesForOrigin = new Map();
+    modelCatalogStates.set(origin, statesForOrigin);
+  }
+  const existing = statesForOrigin.get(key);
   if (existing !== undefined) return existing;
-  const created = Semaphore.makeUnsafe(1);
-  locks.set(origin, created);
+  const created: ModelCatalogState = {
+    lock: Semaphore.makeUnsafe(1),
+    generation: 0,
+    latest: null,
+    rejected: false,
+  };
+  statesForOrigin.set(key, created);
   return created;
 }
 
-/** Test-only: drop the process-wide strike ledgers between cases. */
+/** Test-only: drop the process-wide probe state between cases. */
 export function resetCliProxyApiAuthFailuresForTest(): void {
   gatewayAuthFailures.clear();
-  rejectedModelCatalogKeys.clear();
-  gatewayProbeLocks.clear();
-  modelCatalogLocks.clear();
+  gatewayAuthReservations.clear();
+  modelCatalogStates.clear();
 }
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -165,6 +176,7 @@ export interface CliProxyApiUsagePayload {
 
 class CliProxyApiAuthRejectedError extends Data.TaggedError("CliProxyApiAuthRejectedError")<{
   readonly status: number;
+  readonly count: number;
 }> {
   override get message(): string {
     return `CLIProxyAPI management authentication rejected (HTTP ${this.status}).`;
@@ -371,79 +383,158 @@ function upstreamUsageRequest(provider: string): UpstreamUsageRequest | null {
 export function makeCliProxyApiUsageProbe(
   target: CliProxyApiUsageProbeTarget,
 ): () => Effect.Effect<unknown | undefined, ProviderAdapterError, HttpClient.HttpClient> {
+  const pausedRequestError = () =>
+    new ProviderAdapterRequestError({
+      provider: "cliproxyapi",
+      method: "account/usage",
+      detail:
+        "The gateway rejected the management key earlier, or another probe is already " +
+        "using the remaining rejection budget. Probes are paused to avoid the gateway's " +
+        "30-minute IP ban. Fix the key or wait for the pause to lapse.",
+    });
+
+  const reserveManagementRequest = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    yield* Effect.suspend(() => {
+      const failures = gatewayAuthFailures.get(target.managementUrl);
+      if (failures !== undefined && now - failures.firstFailureAtMs >= GATEWAY_STRIKE_WINDOW_MS) {
+        gatewayAuthFailures.delete(target.managementUrl);
+      }
+      const current = gatewayAuthFailures.get(target.managementUrl);
+      const reservations = gatewayAuthReservations.get(target.managementUrl) ?? 0;
+      if (
+        (current?.count ?? 0) + reservations >= GATEWAY_STRIKE_BUDGET ||
+        (current !== undefined &&
+          current.lastKey === target.managementKey &&
+          now - current.lastFailureAtMs < AUTH_FAILURE_COOLDOWN_MS)
+      ) {
+        return Effect.fail(pausedRequestError());
+      }
+      gatewayAuthReservations.set(target.managementUrl, reservations + 1);
+      return Effect.void;
+    });
+  });
+
+  const releaseManagementRequest = Effect.sync(() => {
+    const reservations = gatewayAuthReservations.get(target.managementUrl) ?? 0;
+    if (reservations <= 1) {
+      gatewayAuthReservations.delete(target.managementUrl);
+    } else {
+      gatewayAuthReservations.set(target.managementUrl, reservations - 1);
+    }
+  });
+
   const managementRequest = (
     request: HttpClientRequest.HttpClientRequest,
     timeoutMs: number,
   ): Effect.Effect<
     unknown,
-    CliProxyApiAuthRejectedError | CliProxyApiRequestFailedError,
+    CliProxyApiAuthRejectedError | CliProxyApiRequestFailedError | ProviderAdapterRequestError,
     HttpClient.HttpClient
   > =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        request.pipe(
-          HttpClientRequest.setHeader("Authorization", `Bearer ${target.managementKey}`),
+    Effect.acquireUseRelease(
+      reserveManagementRequest,
+      () =>
+        Effect.gen(function* () {
+          const client = yield* HttpClient.HttpClient;
+          const response = yield* client.execute(
+            request.pipe(
+              HttpClientRequest.setHeader("Authorization", `Bearer ${target.managementKey}`),
+            ),
+          );
+          if (response.status === 401 || response.status === 403) {
+            return yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                const failedAtMs = yield* Clock.currentTimeMillis;
+                const count = yield* Effect.sync(() => {
+                  const previous = gatewayAuthFailures.get(target.managementUrl);
+                  const withinWindow =
+                    previous !== undefined &&
+                    failedAtMs - previous.firstFailureAtMs < GATEWAY_STRIKE_WINDOW_MS;
+                  const nextCount = withinWindow ? previous.count + 1 : 1;
+                  gatewayAuthFailures.set(target.managementUrl, {
+                    firstFailureAtMs: withinWindow ? previous.firstFailureAtMs : failedAtMs,
+                    lastFailureAtMs: failedAtMs,
+                    lastKey: target.managementKey,
+                    count: nextCount,
+                  });
+                  return nextCount;
+                });
+                return yield* new CliProxyApiAuthRejectedError({
+                  status: response.status,
+                  count,
+                });
+              }),
+            );
+          }
+          if (response.status < 200 || response.status >= 300) {
+            return yield* new CliProxyApiRequestFailedError({
+              detail: `CLIProxyAPI management request failed (HTTP ${response.status}).`,
+            });
+          }
+          return yield* response.json.pipe(
+            Effect.mapError(
+              (cause) =>
+                new CliProxyApiRequestFailedError({
+                  detail: "CLIProxyAPI management response was not JSON.",
+                  cause,
+                }),
+            ),
+          );
+          // The timeout wraps the body read too: `execute` resolves at headers, so
+          // a gateway that stalls mid-body would otherwise escape the budget and
+          // let the coordinator's own 30s deadline discard the whole snapshot.
+        }).pipe(
+          Effect.timeout(timeoutMs),
+          Effect.mapError((cause) =>
+            cause instanceof CliProxyApiAuthRejectedError ||
+            cause instanceof CliProxyApiRequestFailedError
+              ? cause
+              : new CliProxyApiRequestFailedError({
+                  detail: "CLIProxyAPI management request failed.",
+                  cause,
+                }),
+          ),
         ),
-      );
-      if (response.status === 401 || response.status === 403) {
-        return yield* new CliProxyApiAuthRejectedError({ status: response.status });
-      }
-      if (response.status < 200 || response.status >= 300) {
-        return yield* new CliProxyApiRequestFailedError({
-          detail: `CLIProxyAPI management request failed (HTTP ${response.status}).`,
-        });
-      }
-      return yield* response.json.pipe(
-        Effect.mapError(
-          (cause) =>
-            new CliProxyApiRequestFailedError({
-              detail: "CLIProxyAPI management response was not JSON.",
-              cause,
-            }),
-        ),
-      );
-      // The timeout wraps the body read too: `execute` resolves at headers, so
-      // a gateway that stalls mid-body would otherwise escape the budget and
-      // let the coordinator's own 30s deadline discard the whole snapshot.
-    }).pipe(
-      Effect.timeout(timeoutMs),
-      Effect.mapError((cause) =>
-        cause instanceof CliProxyApiAuthRejectedError ||
-        cause instanceof CliProxyApiRequestFailedError
-          ? cause
-          : new CliProxyApiRequestFailedError({
-              detail: "CLIProxyAPI management request failed.",
-              cause,
-            }),
-      ),
+      () => releaseManagementRequest,
     );
 
   const modelProvidersEffect = (() => {
     const { clientUrl, clientKey } = target;
     if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
-    return lockForOrigin(modelCatalogLocks, clientUrl)
-      .withPermits(1)(
-        Effect.gen(function* () {
-          if (rejectedModelCatalogKeys.get(clientUrl) === clientKey) return null;
-          const client = yield* HttpClient.HttpClient;
-          const response = yield* client.execute(
-            HttpClientRequest.get(`${clientUrl}/v1/models`).pipe(
-              HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+    const state = modelCatalogState(clientUrl, clientKey);
+    return Effect.suspend(() => {
+      const generation = state.generation;
+      return state.lock.withPermits(1)(
+        Effect.suspend(() => {
+          if (state.rejected) return Effect.succeed(null);
+          if (state.generation !== generation) return Effect.succeed(state.latest);
+          return Effect.gen(function* () {
+            const client = yield* HttpClient.HttpClient;
+            const response = yield* client.execute(
+              HttpClientRequest.get(`${clientUrl}/v1/models`).pipe(
+                HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+              ),
+            );
+            if (response.status === 401 || response.status === 403) {
+              state.rejected = true;
+              return null;
+            }
+            if (response.status < 200 || response.status >= 300) return null;
+            return parseModelProviders(yield* response.json);
+          }).pipe(
+            Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
+            Effect.orElseSucceed(() => null),
+            Effect.tap((latest) =>
+              Effect.sync(() => {
+                state.latest = latest;
+                state.generation += 1;
+              }),
             ),
           );
-          if (response.status === 401 || response.status === 403) {
-            rejectedModelCatalogKeys.set(clientUrl, clientKey);
-            return null;
-          }
-          if (response.status < 200 || response.status >= 300) return null;
-          return parseModelProviders(yield* response.json);
         }),
-      )
-      .pipe(
-        Effect.timeout(AUTH_FILES_REQUEST_TIMEOUT_MS),
-        Effect.orElseSucceed(() => null),
       );
+    });
   })();
 
   const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
@@ -515,30 +606,6 @@ export function makeCliProxyApiUsageProbe(
     });
 
   const probe = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    const failures = gatewayAuthFailures.get(target.managementUrl);
-    if (failures !== undefined) {
-      if (now - failures.firstFailureAtMs >= GATEWAY_STRIKE_WINDOW_MS) {
-        gatewayAuthFailures.delete(target.managementUrl);
-      } else if (
-        failures.count >= GATEWAY_STRIKE_BUDGET ||
-        (failures.lastKey === target.managementKey &&
-          now - failures.lastFailureAtMs < AUTH_FAILURE_COOLDOWN_MS)
-      ) {
-        // Fail without touching the gateway: a silent skip would leave a
-        // manual refresh looking like a signed-out account, when the real
-        // story is the rejected-key pause.
-        return yield* new ProviderAdapterRequestError({
-          provider: "cliproxyapi",
-          method: "account/usage",
-          detail:
-            "The gateway rejected the management key earlier; probes are " +
-            "paused to avoid the gateway's 30-minute IP ban. Fix the key " +
-            "or wait for the pause to lapse.",
-        });
-      }
-    }
-
     const modelProvidersFiber = yield* modelProvidersEffect.pipe(
       Effect.forkChild({ startImmediately: true }),
     );
@@ -566,34 +633,21 @@ export function makeCliProxyApiUsageProbe(
   }).pipe(
     Effect.catchTags({
       CliProxyApiAuthRejectedError: (error) =>
-        Effect.gen(function* () {
-          const failedAtMs = yield* Clock.currentTimeMillis;
-          const previous = gatewayAuthFailures.get(target.managementUrl);
-          const withinWindow =
-            previous !== undefined &&
-            failedAtMs - previous.firstFailureAtMs < GATEWAY_STRIKE_WINDOW_MS;
-          const count = withinWindow ? previous.count + 1 : 1;
-          gatewayAuthFailures.set(target.managementUrl, {
-            firstFailureAtMs: withinWindow ? previous.firstFailureAtMs : failedAtMs,
-            lastFailureAtMs: failedAtMs,
-            lastKey: target.managementKey,
-            count,
-          });
-          const spent = count >= GATEWAY_STRIKE_BUDGET;
-          return yield* new ProviderAdapterRequestError({
+        Effect.fail(
+          new ProviderAdapterRequestError({
             provider: "cliproxyapi",
             method: "account/usage",
             detail:
               `${error.message} ` +
-              (spent
-                ? `This gateway has now been refused ${count} times; probes stop until the ` +
+              (error.count >= GATEWAY_STRIKE_BUDGET
+                ? `This gateway has now been refused ${error.count} times; probes stop until the ` +
                   `${Math.round(GATEWAY_STRIKE_WINDOW_MS / 60_000)}-minute window elapses.`
                 : `Retrying with the same key is paused for ` +
                   `${Math.round(AUTH_FAILURE_COOLDOWN_MS / 60_000)} minutes.`) +
               " Repeated rejected management keys trigger the gateway's 30-minute IP ban.",
             cause: error,
-          });
-        }),
+          }),
+        ),
       CliProxyApiRequestFailedError: (error) =>
         Effect.fail(
           new ProviderAdapterRequestError({
@@ -606,5 +660,5 @@ export function makeCliProxyApiUsageProbe(
     }),
   );
 
-  return () => lockForOrigin(gatewayProbeLocks, target.managementUrl).withPermits(1)(probe);
+  return () => probe;
 }
