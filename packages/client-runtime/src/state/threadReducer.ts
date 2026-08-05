@@ -25,8 +25,7 @@ const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]
 
 const checkpointOrder = O.mapInput(
   O.Number,
-  (cp: OrchestrationThread["checkpoints"][number]) =>
-    cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
+  (cp: OrchestrationThread["checkpoints"][number]) => cp.checkpointTurnCount,
 );
 
 const activityOrder = O.combineAll<OrchestrationThreadActivity>([
@@ -51,8 +50,8 @@ function retainRecentActivities(
   const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
   let latestContextWindow: OrchestrationThreadActivity | undefined;
   for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
-    if (activity !== undefined && isResolvableContextWindowActivity(activity)) {
+    const activity = activities[index]!;
+    if (isResolvableContextWindowActivity(activity)) {
       latestContextWindow = activity;
       break;
     }
@@ -630,38 +629,38 @@ export function applyThreadDetailEvent(
     case "thread.reverted": {
       const discardedTurnIds = new Set(
         thread.checkpoints.flatMap((entry) =>
-          entry.checkpointTurnCount !== undefined &&
-          entry.checkpointTurnCount > event.payload.turnCount
-            ? [entry.turnId]
-            : [],
+          entry.checkpointTurnCount > event.payload.turnCount ? [entry.turnId] : [],
         ),
       );
       const checkpoints = pipe(
         thread.checkpoints,
-        Arr.filter(
-          (entry) =>
-            entry.checkpointTurnCount !== undefined &&
-            entry.checkpointTurnCount <= event.payload.turnCount,
-        ),
+        Arr.filter((entry) => entry.checkpointTurnCount <= event.payload.turnCount),
         Arr.sort(checkpointOrder),
       );
+      const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
+      const latestCheckpoint = checkpoints.at(-1) ?? null;
+      const targetFrontier = latestCheckpoint?.completedAt ?? null;
+      const shouldDiscardTurnContent = (turnId: TurnId | null, createdAt: string): boolean => {
+        if (turnId === null) return false;
+        if (discardedTurnIds.has(turnId) || event.payload.turnCount === 0) return true;
+        return (
+          targetFrontier !== null && !retainedTurnIds.has(turnId) && createdAt > targetFrontier
+        );
+      };
 
-      // Checkpoints are capped, so absence does not mean a turn predates the
-      // revert target. Preserve unknown older turns and remove only turns whose
-      // retained checkpoints prove they came after the target.
-      const messages = retainMessagesAfterRevert(thread.messages, discardedTurnIds);
+      // Checkpoints are capped, so unknown turns older than the retained target
+      // frontier survive. Known post-target turns and newer uncheckpointed turns
+      // are removed; reverting to zero removes all turn-bound content.
+      const messages = retainMessagesAfterRevert(thread.messages, shouldDiscardTurnContent);
       const retainedMessageIds = new Set(Arr.map(messages, (message) => message.id));
       const proposedPlans = pipe(
         thread.proposedPlans,
-        Arr.filter((plan) => plan.turnId === null || !discardedTurnIds.has(plan.turnId)),
+        Arr.filter((plan) => !shouldDiscardTurnContent(plan.turnId, plan.createdAt)),
       );
       const activities = pipe(
         thread.activities,
-        Arr.filter(
-          (activity) => activity.turnId === null || !discardedTurnIds.has(activity.turnId),
-        ),
+        Arr.filter((activity) => !shouldDiscardTurnContent(activity.turnId, activity.createdAt)),
       );
-      const latestCheckpoint = checkpoints.at(-1) ?? null;
 
       return {
         kind: "updated",
@@ -700,9 +699,9 @@ export function applyThreadDetailEvent(
       // array backwards), and providers stream these updates continuously, so
       // retaining the history grows the thread by thousands of rows over a
       // long session. Mirrors the server-side snapshot rule in
-      // dropStaleContextWindowActivities; retention stays per turn so a
-      // thread.reverted that discards turns can still resolve a value from
-      // the turns that survive.
+      // dropStaleContextWindowActivities. Supersession stays per turn, while
+      // the strict global 500-row cap separately preserves the latest
+      // resolvable context-window snapshot.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
       const activities = retainRecentActivities(
         pipe(
@@ -818,11 +817,11 @@ function rebindCheckpointAssistantMessage(
 
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
-  discardedTurnIds: ReadonlySet<string>,
+  shouldDiscardTurnContent: (turnId: TurnId | null, createdAt: string) => boolean,
 ): OrchestrationMessage[] {
   return Arr.filter(
     messages,
     (message) =>
-      message.role === "system" || message.turnId === null || !discardedTurnIds.has(message.turnId),
+      message.role === "system" || !shouldDiscardTurnContent(message.turnId, message.createdAt),
   );
 }

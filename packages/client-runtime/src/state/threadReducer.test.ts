@@ -1502,6 +1502,129 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.checkpoints).toEqual([]);
       }
     });
+
+    it("removes turn-bound content when reverting to zero", () => {
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          messages: [
+            {
+              id: MessageId.make("msg-turn-bound"),
+              role: "assistant",
+              text: "Response",
+              turnId: TurnId.make("turn-1"),
+              streaming: false,
+              createdAt: "2026-04-01T02:00:00.000Z",
+              updatedAt: "2026-04-01T02:00:00.000Z",
+            },
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 503,
+          occurredAt: "2026-04-01T04:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.reverted",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            turnCount: 0,
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages).toEqual([]);
+      }
+    });
+
+    it("removes an uncheckpointed turn newer than the target frontier", () => {
+      const targetTurnId = TurnId.make("turn-target");
+      const latestTurnId = TurnId.make("turn-uncheckpointed");
+      const targetMessageId = MessageId.make("msg-target");
+      const latestMessageId = MessageId.make("msg-uncheckpointed");
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          messages: [
+            {
+              id: targetMessageId,
+              role: "assistant",
+              text: "Target response",
+              turnId: targetTurnId,
+              streaming: false,
+              createdAt: "2026-04-01T02:00:00.000Z",
+              updatedAt: "2026-04-01T02:00:00.000Z",
+            },
+            {
+              id: latestMessageId,
+              role: "assistant",
+              text: "Interrupted response",
+              turnId: latestTurnId,
+              streaming: false,
+              createdAt: "2026-04-01T03:00:00.000Z",
+              updatedAt: "2026-04-01T03:00:00.000Z",
+            },
+          ],
+          completedTurnAssistantMessageIds: [targetMessageId, latestMessageId],
+          proposedPlans: [
+            {
+              id: "plan-uncheckpointed",
+              turnId: latestTurnId,
+              planMarkdown: "Interrupted plan",
+              implementedAt: null,
+              implementationThreadId: null,
+              createdAt: "2026-04-01T03:00:00.000Z",
+              updatedAt: "2026-04-01T03:00:00.000Z",
+            },
+          ],
+          activities: [
+            {
+              id: EventId.make("activity-uncheckpointed"),
+              tone: "tool",
+              kind: "command",
+              summary: "Interrupted command",
+              payload: {},
+              turnId: latestTurnId,
+              createdAt: "2026-04-01T03:00:00.000Z",
+            },
+          ],
+          checkpoints: [
+            {
+              turnId: targetTurnId,
+              checkpointTurnCount: 1,
+              checkpointRef: CheckpointRef.make("ref-target"),
+              status: "ready",
+              files: [],
+              assistantMessageId: targetMessageId,
+              completedAt: "2026-04-01T02:30:00.000Z",
+            },
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 503,
+          occurredAt: "2026-04-01T04:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.reverted",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            turnCount: 1,
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((message) => message.id)).toEqual([targetMessageId]);
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual([targetMessageId]);
+        expect(result.thread.proposedPlans).toEqual([]);
+        expect(result.thread.activities).toEqual([]);
+        expect(result.thread.latestTurn?.turnId).toBe(targetTurnId);
+      }
+    });
   });
 
   describe("no-op events", () => {
