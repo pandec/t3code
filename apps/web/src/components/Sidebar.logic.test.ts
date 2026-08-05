@@ -551,12 +551,17 @@ describe("Sidebar V2 attention filter", () => {
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
       }),
     ).toBe(true);
+  });
+
+  it("excludes a ready thread while it is marked as woke", () => {
     expect(
       isSidebarV2AttentionThread({
         ...readyThread,
+        latestTurn: makeLatestTurn(),
+        lastVisitedAt: "2026-03-09T10:04:00.000Z",
         wokeAt: "2026-03-09T10:05:00.000Z",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not include a ready thread after its completion or wake was visited", () => {

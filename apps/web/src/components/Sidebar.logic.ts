@@ -588,15 +588,14 @@ export function hasUnseenWake(input: {
 export function isSidebarV2AttentionThread(
   thread: ThreadStatusInput & { wokeAt?: string | null | undefined },
 ): boolean {
-  return (
-    resolveSidebarV2Status(thread) !== "ready" ||
-    hasPlanReadyPrompt(thread) ||
-    hasUnseenCompletion(thread) ||
-    hasUnseenWake({
-      wokeAt: thread.wokeAt ?? null,
-      ...(thread.lastVisitedAt === undefined ? {} : { lastVisitedAt: thread.lastVisitedAt }),
-    })
-  );
+  const status = resolveSidebarV2Status(thread);
+  const isWoke = hasUnseenWake({
+    wokeAt: thread.wokeAt ?? null,
+    ...(thread.lastVisitedAt === undefined ? {} : { lastVisitedAt: thread.lastVisitedAt }),
+  });
+  if (isWoke && status === "ready") return false;
+
+  return status !== "ready" || hasPlanReadyPrompt(thread) || hasUnseenCompletion(thread);
 }
 
 export interface SidebarV2AttentionFilterThread {
