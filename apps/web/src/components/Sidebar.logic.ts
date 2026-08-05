@@ -73,6 +73,43 @@ export function toggleSidebarProjectScope(
   return next.size === 0 ? null : next;
 }
 
+export interface SidebarProjectFilters {
+  scope: SidebarProjectScope;
+  hidden: ReadonlySet<string>;
+}
+
+export function toggleSidebarProjectSelection(
+  filters: SidebarProjectFilters,
+  projectKey: string,
+): SidebarProjectFilters {
+  const hidden = new Set(filters.hidden);
+  const wasHidden = hidden.delete(projectKey);
+  return {
+    scope: wasHidden
+      ? new Set([...(filters.scope ?? []), projectKey])
+      : toggleSidebarProjectScope(filters.scope, projectKey),
+    hidden,
+  };
+}
+
+export function toggleSidebarProjectHidden(
+  filters: SidebarProjectFilters,
+  projectKey: string,
+): SidebarProjectFilters {
+  const hidden = new Set(filters.hidden);
+  if (hidden.delete(projectKey)) {
+    return { ...filters, hidden };
+  }
+
+  hidden.add(projectKey);
+  if (filters.scope === null) {
+    return { scope: null, hidden };
+  }
+  const scope = new Set(filters.scope);
+  scope.delete(projectKey);
+  return { scope: scope.size > 0 ? scope : null, hidden };
+}
+
 export function sidebarProjectScopeSignature(scope: SidebarProjectScope): string {
   return scope === null ? "all" : `projects:${JSON.stringify([...scope].toSorted())}`;
 }

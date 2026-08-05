@@ -38,6 +38,8 @@ import {
   GitBranchIcon,
   ImportIcon,
   EllipsisIcon,
+  EyeIcon,
+  EyeOffIcon,
   ListFilterIcon,
   MessageSquareIcon,
   PinIcon,
@@ -159,7 +161,8 @@ import {
   sortActiveThreadsForSidebarV2,
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
-  toggleSidebarProjectScope,
+  toggleSidebarProjectHidden,
+  toggleSidebarProjectSelection,
 } from "./Sidebar.logic";
 import type { SidebarProjectScope, SidebarV2AttentionFilterState } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -1401,6 +1404,9 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const storedProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
+  const storedHiddenProjectKeys = useUiStateStore((store) => store.sidebarHiddenProjectKeys);
+  const updateSidebarProjectFilters = useUiStateStore((store) => store.updateSidebarProjectFilters);
   const threads = useThreadShells();
   const allEnvironmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const router = useRouter();
@@ -1717,14 +1723,17 @@ export default function SidebarV2() {
     [],
   );
 
-  // Project scope: one menu above the list. null means All projects, while a
-  // non-empty set keeps an explicit selection (including when it currently
-  // contains every project, so newly added projects do not join implicitly).
-  // The set holds intent and is never pruned by availability: a project that
-  // disappears with its environment rejoins the scope when it comes back.
-  // Everything rendered reads the resolved scope below instead, and editing
-  // the scope rewrites it from that resolved value.
-  const [projectScopeKeys, setProjectScopeKeys] = useState<SidebarProjectScope>(null);
+  // Project visibility is persisted because settings routes temporarily unmount
+  // Sidebar V2. Scope and hidden keys are mutually exclusive; each interaction
+  // writes both lists together so the latest click wins without stale overlap.
+  const projectScopeKeys = useMemo<SidebarProjectScope>(
+    () => (storedProjectScopeKeys === null ? null : new Set(storedProjectScopeKeys)),
+    [storedProjectScopeKeys],
+  );
+  const hiddenProjectKeys = useMemo(
+    () => new Set(storedHiddenProjectKeys),
+    [storedHiddenProjectKeys],
+  );
   const scopedProjectGroups = useMemo(
     () =>
       projectScopeKeys === null
@@ -1744,13 +1753,71 @@ export default function SidebarV2() {
     () => resolveSidebarProjectScopePhysicalKeys(projectGroups, resolvedProjectScopeKeys),
     [projectGroups, resolvedProjectScopeKeys],
   );
+  const resolvedHiddenProjectKeys = useMemo(
+    () => resolveSidebarProjectScope(projectGroups, hiddenProjectKeys) ?? new Set<string>(),
+    [hiddenProjectKeys, projectGroups],
+  );
+  const hiddenPhysicalProjectKeys = useMemo(
+    () =>
+      resolveSidebarProjectScopePhysicalKeys(projectGroups, resolvedHiddenProjectKeys) ??
+      new Set<string>(),
+    [projectGroups, resolvedHiddenProjectKeys],
+  );
+  const selectProjectScope = useCallback(
+    (scopeKey: string) => {
+      updateSidebarProjectFilters((current) => {
+        const next = toggleSidebarProjectSelection(
+          {
+            scope: resolveSidebarProjectScope(
+              projectGroups,
+              current.scopeKeys === null ? null : new Set(current.scopeKeys),
+            ),
+            hidden: new Set(current.hiddenProjectKeys),
+          },
+          scopeKey,
+        );
+        return {
+          scopeKeys: next.scope === null ? null : [...next.scope],
+          hiddenProjectKeys: [...next.hidden],
+        };
+      });
+    },
+    [projectGroups, updateSidebarProjectFilters],
+  );
+  const toggleProjectHidden = useCallback(
+    (scopeKey: string) => {
+      updateSidebarProjectFilters((current) => {
+        const storedScope = current.scopeKeys === null ? null : new Set(current.scopeKeys);
+        const isHiding = !current.hiddenProjectKeys.includes(scopeKey);
+        const next = toggleSidebarProjectHidden(
+          {
+            scope: isHiding ? resolveSidebarProjectScope(projectGroups, storedScope) : storedScope,
+            hidden: new Set(current.hiddenProjectKeys),
+          },
+          scopeKey,
+        );
+        return {
+          scopeKeys: next.scope === null ? null : [...next.scope],
+          hiddenProjectKeys: [...next.hidden],
+        };
+      });
+    },
+    [projectGroups, updateSidebarProjectFilters],
+  );
+  const clearProjectFilters = useCallback(
+    () => updateSidebarProjectFilters(() => ({ scopeKeys: null, hiddenProjectKeys: [] })),
+    [updateSidebarProjectFilters],
+  );
   // Keyed on the stored intent, not the resolved scope: clearing the selection
   // and collapsing the settled tail answer "the user changed the filter", and
   // an environment reconnecting must not wipe staged bulk work. Bulk actions
   // already ignore selected keys whose rows are not rendered.
-  const projectScopeSignature = useMemo(
-    () => sidebarProjectScopeSignature(projectScopeKeys),
-    [projectScopeKeys],
+  const projectFilterSignature = useMemo(
+    () =>
+      `${sidebarProjectScopeSignature(projectScopeKeys)}|hidden:${JSON.stringify(
+        [...hiddenProjectKeys].toSorted(),
+      )}`,
+    [hiddenProjectKeys, projectScopeKeys],
   );
   // The menu stays open across clicks now that it multi-selects, and
   // projectGroups is activity-sorted, so a background thread update would
@@ -1778,9 +1845,15 @@ export default function SidebarV2() {
   // otherwise the current filter is unreadable without opening the menu.
   const unavailableProjectCount =
     projectScopeKeys === null ? 0 : projectScopeKeys.size - scopedProjectGroups.length;
+  const hiddenProjectGroups = projectGroups.filter((project) =>
+    hiddenProjectKeys.has(project.projectKey),
+  );
+  const unavailableHiddenProjectCount = hiddenProjectKeys.size - hiddenProjectGroups.length;
   const projectScopeLabel =
     projectScopeKeys === null
-      ? "All projects"
+      ? hiddenProjectKeys.size === 0
+        ? "All projects"
+        : `${hiddenProjectKeys.size} ${hiddenProjectKeys.size === 1 ? "project" : "projects"} hidden`
       : unavailableProjectCount === projectScopeKeys.size
         ? `${projectScopeKeys.size} ${projectScopeKeys.size === 1 ? "project" : "projects"} unavailable`
         : (singleScopedProjectGroup?.displayName ?? `${projectScopeKeys.size} projects`);
@@ -1794,10 +1867,18 @@ export default function SidebarV2() {
         ]
       : []),
   ];
+  const hiddenProjectDetailParts = [
+    ...hiddenProjectGroups.map((project) => project.displayName),
+    ...(unavailableHiddenProjectCount > 0 ? [`${unavailableHiddenProjectCount} unavailable`] : []),
+  ];
   const projectScopeDetail =
-    singleScopedProjectGroup === null && projectScopeKeys !== null && scopedProjectGroups.length > 0
-      ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
-      : projectScopeLabel;
+    projectScopeKeys === null && hiddenProjectKeys.size > 0
+      ? `${projectScopeLabel}: ${hiddenProjectDetailParts.join(", ")}`
+      : singleScopedProjectGroup === null &&
+          projectScopeKeys !== null &&
+          scopedProjectGroups.length > 0
+        ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
+        : projectScopeLabel;
   const attentionFilterThreads = useMemo(
     () =>
       threads.map((thread) => ({
@@ -1827,7 +1908,7 @@ export default function SidebarV2() {
   }, [attentionFilterState, effectiveAttentionFilterState]);
   const attentionFilterEnabled = effectiveAttentionFilterState !== null;
   const displayedRecentArchive =
-    projectScopeKeys === null && !attentionFilterEnabled
+    projectScopeKeys === null && hiddenProjectKeys.size === 0 && !attentionFilterEnabled
       ? recentArchive
       : { threads: [], totalCount: 0 };
   const toggleAttentionFilter = useCallback(() => {
@@ -1855,12 +1936,12 @@ export default function SidebarV2() {
       });
     });
   }, [allEnvironmentShellsBootstrapped, attentionFilterThreads, threads]);
-  // Scope and attention-filter flips drop the selection: rows selected under
+  // Project and attention-filter changes drop the selection: rows selected under
   // the previous view may now be hidden, and bulk actions must never count or
   // touch invisible rows. Sticky membership growth does not clear selection.
   useEffect(() => {
     clearSelection();
-  }, [attentionFilterEnabled, clearSelection, projectScopeSignature]);
+  }, [attentionFilterEnabled, clearSelection, projectFilterSignature]);
 
   const handleRemoveProjectMembers = useCallback(
     async (projectGroup: SidebarProjectSnapshot, members: readonly SidebarProjectGroupMember[]) => {
@@ -1957,11 +2038,20 @@ export default function SidebarV2() {
         draftStore.clearProjectDraftThreadId(projectRef);
       }
 
+      if (isWholeGroup) {
+        updateSidebarProjectFilters((current) => ({
+          scopeKeys: current.scopeKeys?.filter((key) => key !== projectGroup.projectKey) ?? null,
+          hiddenProjectKeys: current.hiddenProjectKeys.filter(
+            (key) => key !== projectGroup.projectKey,
+          ),
+        }));
+      }
+
       if (shouldNavigate) {
         void router.navigate({ to: "/" });
       }
     },
-    [deleteProject, router, threads],
+    [deleteProject, router, threads, updateSidebarProjectFilters],
   );
 
   const renameProjectMember = useCallback(
@@ -2040,6 +2130,7 @@ export default function SidebarV2() {
       const visible = threads.filter((thread) => {
         if (
           thread.archivedAt !== null ||
+          hiddenPhysicalProjectKeys.has(`${thread.environmentId}:${thread.projectId}`) ||
           (scopedProjectKeys !== null &&
             !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
         ) {
@@ -2092,6 +2183,7 @@ export default function SidebarV2() {
       autoSettleAfterDays,
       changeRequestStateByKey,
       effectiveAttentionFilterState,
+      hiddenPhysicalProjectKeys,
       nowMinute,
       scopedProjectKeys,
       serverConfigs,
@@ -2173,7 +2265,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = `${projectScopeSignature}:${attentionFilterEnabled ? "attention" : "all"}`;
+  const settledResetKey = `${projectFilterSignature}:${attentionFilterEnabled ? "attention" : "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -3367,16 +3459,16 @@ export default function SidebarV2() {
                         <FolderIcon className="size-4 shrink-0" />
                       )}
                       <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
-                      {projectScopeKeys !== null ? (
+                      {projectScopeKeys !== null || hiddenProjectKeys.size > 0 ? (
                         <span aria-hidden className="size-6 shrink-0" />
                       ) : null}
                       <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                     </MenuTrigger>
                     <MenuPopup align="start" className="w-(--anchor-width)">
                       <MenuCheckboxItem
-                        checked={resolvedProjectScopeKeys === null}
+                        checked={resolvedProjectScopeKeys === null && hiddenProjectKeys.size === 0}
                         closeOnClick
-                        onCheckedChange={() => setProjectScopeKeys(null)}
+                        onCheckedChange={clearProjectFilters}
                         className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                       >
                         <FolderIcon className="size-4 shrink-0" />
@@ -3385,24 +3477,16 @@ export default function SidebarV2() {
                       {menuProjectGroups.map((project) => {
                         const scopeKey = project.projectKey;
                         const accentColor = projectAccentColors.resolve(project.memberProjects);
+                        const isHidden = resolvedHiddenProjectKeys.has(scopeKey);
                         return (
                           <MenuCheckboxItem
                             key={scopeKey}
                             checked={resolvedProjectScopeKeys?.has(scopeKey) ?? false}
-                            // Toggling edits the resolved scope, not the stored
-                            // intent: a project the user cannot currently see
-                            // must not reappear in the filter later. Resolving
-                            // inside the updater keeps two toggles in one batch
-                            // from dropping the first.
-                            onCheckedChange={() =>
-                              setProjectScopeKeys((current) =>
-                                toggleSidebarProjectScope(
-                                  resolveSidebarProjectScope(projectGroups, current),
-                                  scopeKey,
-                                ),
-                              )
-                            }
-                            className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                            onCheckedChange={() => selectProjectScope(scopeKey)}
+                            className={cn(
+                              "h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2",
+                              isHidden && "text-muted-foreground",
+                            )}
                           >
                             <ProjectFavicon
                               environmentId={project.environmentId}
@@ -3412,8 +3496,14 @@ export default function SidebarV2() {
                             {/* flex-1 rather than a second ml-auto: two auto
                                 margins split the free space between them and
                                 would leave the accent dot floating mid-row. */}
-                            <span className="min-w-0 flex-1 truncate text-sm">
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 truncate text-sm",
+                                isHidden && "line-through",
+                              )}
+                            >
                               {project.displayName}
+                              {isHidden ? <span className="sr-only"> (hidden)</span> : null}
                             </span>
                             {accentColor ? (
                               <>
@@ -3427,9 +3517,27 @@ export default function SidebarV2() {
                             ) : null}
                             <button
                               type="button"
+                              aria-label={`${isHidden ? "Show" : "Hide"} ${project.displayName}`}
+                              title={`${isHidden ? "Show" : "Hide"} project`}
+                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onMouseUp={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleProjectHidden(scopeKey);
+                              }}
+                            >
+                              {isHidden ? (
+                                <EyeIcon className="size-3.5" />
+                              ) : (
+                                <EyeOffIcon className="size-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
                               aria-label={`Project actions for ${project.displayName}`}
                               title={`Project actions for ${project.displayName}`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                               onPointerDown={(event) => event.stopPropagation()}
                               // Menu items synthesize a click on mouseup once the
                               // trigger's press-drag-release window opens, so a
@@ -3447,14 +3555,14 @@ export default function SidebarV2() {
                       })}
                     </MenuPopup>
                   </Menu>
-                  {projectScopeKeys !== null ? (
+                  {projectScopeKeys !== null || hiddenProjectKeys.size > 0 ? (
                     <button
                       type="button"
                       data-testid="sidebar-v2-project-filter-clear"
                       aria-label="Clear project filter"
                       title="Clear project filter"
                       className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      onClick={() => setProjectScopeKeys(null)}
+                      onClick={clearProjectFilters}
                     >
                       <XIcon className="size-3.5" />
                     </button>

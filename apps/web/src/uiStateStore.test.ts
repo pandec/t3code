@@ -22,6 +22,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarEnvironmentFilterId: null,
+    sidebarProjectScopeKeys: null,
+    sidebarHiddenProjectKeys: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -175,6 +177,8 @@ describe("parsePersistedState", () => {
       },
       projectOrder: ["physical-b", "physical-a"],
       sidebarEnvironmentFilterId: null,
+      sidebarProjectScopeKeys: null,
+      sidebarHiddenProjectKeys: [],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -196,6 +200,17 @@ describe("parsePersistedState", () => {
       null,
     );
     expect(parsePersistedState({}).sidebarEnvironmentFilterId).toBe(null);
+  });
+
+  it("hydrates mutually exclusive project scope and hidden filters", () => {
+    const parsed = parsePersistedState({
+      sidebarProjectScopeKeys: ["project-a", "", "project-a", "project-b"],
+      sidebarHiddenProjectKeys: ["project-b", "project-c", "project-c"],
+    });
+
+    expect(parsed.sidebarProjectScopeKeys).toEqual(["project-a", "project-b"]);
+    expect(parsed.sidebarHiddenProjectKeys).toEqual(["project-c"]);
+    expect(parsePersistedState({ sidebarProjectScopeKeys: [] }).sidebarProjectScopeKeys).toBeNull();
   });
 
   it("ignores changed-file expansion values saved with legacy folder semantics", () => {
@@ -282,6 +297,8 @@ describe("uiStateStore persistence", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      sidebarProjectScopeKeys: ["project-a"],
+      sidebarHiddenProjectKeys: ["project-b"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -305,6 +322,8 @@ describe("uiStateStore persistence", () => {
       },
       projectOrder: ["physical-b", "physical-a"],
       sidebarEnvironmentFilterId: null,
+      sidebarProjectScopeKeys: ["project-a"],
+      sidebarHiddenProjectKeys: ["project-b"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
