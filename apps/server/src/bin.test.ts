@@ -508,55 +508,67 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
-  it.effect("adds, renames, and removes projects offline through the orchestration engine", () =>
+  it.effect("adds, renames, and removes projects through a running server", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-offline-test-"),
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-live-mutations-test-"),
       );
       const workspaceRoot = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-workspace-"),
       );
 
-      yield* runCliWithRuntime([
-        "project",
-        "add",
-        workspaceRoot,
-        "--title",
-        "Alpha",
-        "--base-dir",
-        baseDir,
-      ]);
-      const afterAdd = yield* readPersistedSnapshot(baseDir);
-      const addedProject = afterAdd.projects.find(
-        (project) => project.workspaceRoot === workspaceRoot && project.deletedAt === null,
-      );
-      assert.isTrue(addedProject !== undefined);
-      assert.equal(addedProject?.title, "Alpha");
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime([
+            "project",
+            "add",
+            workspaceRoot,
+            "--title",
+            "Alpha",
+            "--base-dir",
+            baseDir,
+          ]);
+          const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const afterAdd = yield* projectionSnapshotQuery.getSnapshot();
+          const addedProject = afterAdd.projects.find(
+            (project) => project.workspaceRoot === workspaceRoot && project.deletedAt === null,
+          );
+          assert.isTrue(addedProject !== undefined);
+          assert.equal(addedProject?.title, "Alpha");
 
-      yield* runCliWithRuntime(["project", "rename", workspaceRoot, "Beta", "--base-dir", baseDir]);
-      const afterRename = yield* readPersistedSnapshot(baseDir);
-      const renamedProject = afterRename.projects.find(
-        (project) => project.id === addedProject?.id,
-      );
-      assert.equal(renamedProject?.title, "Beta");
-      assert.equal(renamedProject?.deletedAt, null);
+          yield* runCliWithRuntime([
+            "project",
+            "rename",
+            workspaceRoot,
+            "Beta",
+            "--base-dir",
+            baseDir,
+          ]);
+          const afterRename = yield* projectionSnapshotQuery.getSnapshot();
+          const renamedProject = afterRename.projects.find(
+            (project) => project.id === addedProject?.id,
+          );
+          assert.equal(renamedProject?.title, "Beta");
+          assert.equal(renamedProject?.deletedAt, null);
 
-      yield* runCliWithRuntime([
-        "project",
-        "remove",
-        addedProject?.id ?? "",
-        "--base-dir",
-        baseDir,
-      ]);
-      const afterRemove = yield* readPersistedSnapshot(baseDir);
-      const removedProject = afterRemove.projects.find(
-        (project) => project.id === addedProject?.id,
+          yield* runCliWithRuntime([
+            "project",
+            "remove",
+            addedProject?.id ?? "",
+            "--base-dir",
+            baseDir,
+          ]);
+          const afterRemove = yield* projectionSnapshotQuery.getSnapshot();
+          const removedProject = afterRemove.projects.find(
+            (project) => project.id === addedProject?.id,
+          );
+          assert.isTrue((removedProject?.deletedAt ?? null) !== null);
+        }),
       );
-      assert.isTrue((removedProject?.deletedAt ?? null) !== null);
     }),
   );
 
-  it.effect("force removes projects that still contain threads", () =>
+  it.effect("force removes projects that still contain threads through a running server", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-force-remove-test-"),
@@ -565,50 +577,53 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-force-remove-workspace-"),
       );
 
-      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
-      const afterAdd = yield* readPersistedSnapshot(baseDir);
-      const project = afterAdd.projects.find(
-        (candidate) => candidate.workspaceRoot === workspaceRoot && candidate.deletedAt === null,
-      );
-      assert.isTrue(project !== undefined);
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+          const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const afterAdd = yield* projectionSnapshotQuery.getSnapshot();
+          const project = afterAdd.projects.find(
+            (candidate) =>
+              candidate.workspaceRoot === workspaceRoot && candidate.deletedAt === null,
+          );
+          assert.isTrue(project !== undefined);
 
-      const config = yield* makeCliTestServerConfig(baseDir);
-      yield* Effect.gen(function* () {
-        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("cmd-cli-force-remove-thread"),
-          threadId: ThreadId.make("thread-cli-force-remove"),
-          projectId: project!.id,
-          title: "Thread",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: "gpt-5-codex",
-          },
-          interactionMode: "default",
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: DateTime.formatIso(yield* DateTime.now),
-        });
-      }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
+          const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("cmd-cli-force-remove-thread"),
+            threadId: ThreadId.make("thread-cli-force-remove"),
+            projectId: project!.id,
+            title: "Thread",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            interactionMode: "default",
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt: DateTime.formatIso(yield* DateTime.now),
+          });
 
-      yield* runCliWithRuntime([
-        "project",
-        "remove",
-        project!.id,
-        "--force",
-        "--base-dir",
-        baseDir,
-      ]);
-      const afterRemove = yield* readPersistedSnapshot(baseDir);
-      assert.isTrue(
-        (afterRemove.projects.find((candidate) => candidate.id === project!.id)?.deletedAt ??
-          null) !== null,
-      );
-      assert.isTrue(
-        (afterRemove.threads.find((thread) => thread.id === "thread-cli-force-remove")?.deletedAt ??
-          null) !== null,
+          yield* runCliWithRuntime([
+            "project",
+            "remove",
+            project!.id,
+            "--force",
+            "--base-dir",
+            baseDir,
+          ]);
+          const afterRemove = yield* projectionSnapshotQuery.getSnapshot();
+          assert.isTrue(
+            (afterRemove.projects.find((candidate) => candidate.id === project!.id)?.deletedAt ??
+              null) !== null,
+          );
+          assert.isTrue(
+            (afterRemove.threads.find((thread) => thread.id === "thread-cli-force-remove")
+              ?.deletedAt ?? null) !== null,
+          );
+        }),
       );
     }),
   );
@@ -859,8 +874,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       const workspaceRoot = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-project-actions-offline-workspace-"),
       );
-      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
-
       const error = yield* runCliWithRuntime([
         "project",
         "action",
@@ -1018,7 +1031,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     ).pipe(Effect.provide(FetchHttpClient.layer)),
   );
 
-  it.effect("lists projects as structured JSON", () =>
+  it.effect("lists projects as structured JSON through a running server", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-list-test-"),
@@ -1026,33 +1039,38 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       const workspaceRoot = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-list-workspace-"),
       );
-      yield* runCliWithRuntime([
-        "project",
-        "add",
-        workspaceRoot,
-        "--title",
-        "Listed Project",
-        "--base-dir",
-        baseDir,
-      ]);
 
-      const { output } = yield* captureStdout(
-        runCli(["project", "list", "--base-dir", baseDir, "--json"]),
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime([
+            "project",
+            "add",
+            workspaceRoot,
+            "--title",
+            "Listed Project",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const { output } = yield* captureStdout(
+            runCli(["project", "list", "--base-dir", baseDir, "--json"]),
+          );
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          const result = JSON.parse(output) as {
+            readonly mode: string;
+            readonly projects: ReadonlyArray<{
+              readonly title: string;
+              readonly workspaceRoot: string;
+            }>;
+          };
+          assert.equal(result.mode, "live");
+          assert.deepInclude(result.projects[0], { title: "Listed Project", workspaceRoot });
+        }),
       );
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
-      const result = JSON.parse(output) as {
-        readonly mode: string;
-        readonly projects: ReadonlyArray<{
-          readonly title: string;
-          readonly workspaceRoot: string;
-        }>;
-      };
-      assert.equal(result.mode, "offline");
-      assert.deepInclude(result.projects[0], { title: "Listed Project", workspaceRoot });
     }),
   );
 
-  it("reserves stdout for JSON in a real CLI process", () => {
+  it("reserves stdout for structured project errors in a real CLI process", () => {
     const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-json-process-test-"));
     const workspaceRoot = NodeFS.mkdtempSync(
       NodePath.join(NodeOS.tmpdir(), "t3-cli-json-process-workspace-"),
@@ -1071,9 +1089,16 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       { cwd: process.cwd(), encoding: "utf8" },
     );
 
-    assert.equal(result.status, 0, result.stderr);
-    const output = JSON.parse(result.stdout) as { readonly workspaceRoot: string };
-    assert.equal(output.workspaceRoot, workspaceRoot);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(cliStderr(result.stderr), "");
+    const output = JSON.parse(result.stdout) as {
+      readonly error: { readonly code: string; readonly message: string };
+    };
+    assert.equal(output.error.code, "CliOrchestrationServerUnavailableError");
+    assert.equal(
+      output.error.message,
+      "No running T3 Code server was found for this data directory.",
+    );
   });
 
   it("emits one structured JSON document for parser failures in a real CLI process", () => {
@@ -1228,25 +1253,15 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     ),
   );
 
-  it.effect("falls back only for read-only commands when a live server read times out", () =>
+  it.effect("fails project reads and mutations when live server discovery times out", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const baseDir = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-fallback-test-"),
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-test-"),
         );
         const workspaceRoot = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-fallback-workspace-"),
+          NodePath.join(NodeOS.tmpdir(), "t3-cli-live-timeout-workspace-"),
         );
-        yield* runCliWithRuntime([
-          "project",
-          "add",
-          workspaceRoot,
-          "--title",
-          "Original Title",
-          "--base-dir",
-          baseDir,
-        ]);
-
         const config = yield* makeCliTestServerConfig(baseDir);
         const server = NodeHttp.createServer((_request, response) => {
           // @effect-diagnostics-next-line globalTimers:off - delayed response exercises the CLI read deadline.
@@ -1286,12 +1301,16 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           },
         });
 
-        const { output } = yield* captureStdout(
-          runCli(["project", "list", "--base-dir", baseDir, "--timeout-ms", "10", "--json"]),
-        );
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
-        const listed = JSON.parse(output) as { readonly mode: string };
-        assert.equal(listed.mode, "offline", output);
+        const listError = yield* runCliWithRuntime([
+          "project",
+          "list",
+          "--base-dir",
+          baseDir,
+          "--timeout-ms",
+          "10",
+        ]).pipe(Effect.flip);
+        assert.instanceOf(listError, CliOrchestrationReadTimeoutError);
+        assert.equal(listError.phase, "discovery");
 
         const mutationError = yield* runCliWithRuntime([
           "project",
@@ -1305,12 +1324,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         ]).pipe(Effect.flip);
         assert.instanceOf(mutationError, CliOrchestrationReadTimeoutError);
         assert.equal(mutationError.phase, "discovery");
-
-        const snapshot = yield* readPersistedSnapshot(baseDir);
-        assert.equal(
-          snapshot.projects.find((project) => project.workspaceRoot === workspaceRoot)?.title,
-          "Original Title",
-        );
       }),
     ).pipe(TestClock.withLive),
   );

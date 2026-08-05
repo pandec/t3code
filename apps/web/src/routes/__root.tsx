@@ -27,6 +27,7 @@ import {
   toastManager,
 } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
+import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useClientSettings } from "../hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -112,6 +113,7 @@ function RootRouteView() {
         ) : (
           <>
             <GlassAppearanceSync />
+            <FontAppearanceSync />
             {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
             <RelayClientInstallDialog />
             <ConnectOnboardingDialog />
@@ -138,6 +140,38 @@ function GlassAppearanceSync() {
   useEffect(() => {
     document.documentElement.style.setProperty("--glass-opacity", `${glassOpacity}%`);
   }, [glassOpacity]);
+
+  return null;
+}
+
+function FontAppearanceSync() {
+  const fontFamilySans = useClientSettings((settings) => settings.fontFamilySans);
+  const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
+  const fontFamilyComposer = useClientSettings((settings) => settings.fontFamilyComposer);
+  const fontSizeInterface = useClientSettings((settings) => settings.fontSizeInterface);
+  const fontSizePrompt = useClientSettings((settings) => settings.fontSizePrompt);
+  const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
+  const fontSmoothing = useClientSettings((settings) => settings.fontSmoothing);
+
+  useEffect(() => {
+    applyAppearanceFontVariables(document.documentElement, {
+      sans: fontFamilySans,
+      code: fontFamilyCode,
+      composer: fontFamilyComposer,
+      sizeInterface: fontSizeInterface,
+      sizePrompt: fontSizePrompt,
+      sizeCode: fontSizeCode,
+      smoothing: fontSmoothing,
+    });
+  }, [
+    fontFamilyCode,
+    fontFamilyComposer,
+    fontFamilySans,
+    fontSizeCode,
+    fontSizeInterface,
+    fontSizePrompt,
+    fontSmoothing,
+  ]);
 
   return null;
 }

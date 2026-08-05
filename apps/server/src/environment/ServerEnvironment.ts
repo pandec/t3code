@@ -154,6 +154,7 @@ export const make = Effect.gen(function* () {
       recentArchivedThreads: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
+      threadPinning: true,
       threadTitleRegeneration: true,
       turnStartBootstrap: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),

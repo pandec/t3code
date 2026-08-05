@@ -32,13 +32,13 @@ Caveats found (experiment + code review):
 
 ## v0: agent-driven handover (CLI + skill) — the implementation target
 
-Insight from practice: an agent with SSH access to all machines can already perform the full handover today. The transcript transfer is proven; remote thread creation via the `t3` CLI is proven (the CLI is on all 3 machines via the dotfiles shim, `~/.local/bin/t3`, running the installed app's bundled `bin.mjs` through `ELECTRON_RUN_AS_NODE`). The only missing primitive is a CLI path into session import. The user interface for v0 is conversational: tell any thread "move this session to <machine>", and the agent executes the recipe.
+An agent with SSH access to both machines can perform the full handover today. Transcript transfer, session import, remote thread creation, and source-thread archival are shipped CLI paths. The user interface for v0 is conversational: tell any thread "move this session to <machine>", and the agent executes the recipe.
 
 ### Division of labor
 
 **The CLI moves conversations; the agent reproduces repository state.**
 
-### CLI additions (fork, PR to dev)
+### Shipped CLI surface
 
 1. **`t3 session import --file <transcript> --project <id-or-path> [--worktree-branch B] [--model M] [--effort E] [--instance I] [--title T] [--json]`**
    - Sniffs provider, native session id, source cwd, and last-used model from the file itself (Codex rollouts start with `session_meta`; Claude JSONLs are typed message lines). No provider/id flags needed.
@@ -52,8 +52,8 @@ Insight from practice: an agent with SSH access to all machines can already perf
    - History beyond `THREAD_IMPORT_MAX_MESSAGES` is trimmed to the most recent messages with a `history-truncated` warning rather than failing: the cap bounds imported display history, while the provider keeps the full transcript that the resume cursor binds to.
 2. **`t3 session candidates --project <id-or-path> [--cwd <worktree>] [--json]`** — standalone candidate inspection for a project or validated existing worktree.
 3. **`t3 thread new ... --model M [--effort E] [--instance I]`** — explicitly selects an advertised provider model; with no model flags, project-default behavior is unchanged.
-4. **`t3 thread archive <thread-id>`** — required so the agent can mark the source thread handed-off (archive exists in the UI multi-select only).
-5. **Bugfix**: `t3 project list --json` times out against a live server (reproduced on grey-mac while `status`/`thread` commands work). The recipe resolves projects by path, so this must work.
+4. **`t3 thread archive <thread-id>`** — marks the source thread handed off after the target import succeeds.
+5. **`t3 project list --json`** — resolves target projects through the running server; an unavailable server now fails clearly instead of falling back to direct SQLite access.
 
 ### Agent skill (`t3-session-handover`, references remote-machines + t3-cli)
 

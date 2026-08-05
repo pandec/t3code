@@ -65,7 +65,7 @@ export interface ClaudeParsedTranscript {
   readonly name: string | null;
 }
 
-const decodeJsonLine = Schema.decodeEffect(Schema.UnknownFromJsonString);
+const decodeJsonLine = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 interface ChainEntry {
   readonly uuid: string;

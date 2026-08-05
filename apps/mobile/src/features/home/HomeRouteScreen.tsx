@@ -58,6 +58,8 @@ export function HomeRouteScreen() {
     settleThread,
     snoozeThread,
     unsnoozeThread,
+    pinThread,
+    unpinThread,
     unsettleThread,
   } = useThreadListActions();
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
@@ -196,6 +198,8 @@ export function HomeRouteScreen() {
           onSnoozeThread={snoozeThread}
           onUnsnoozeThread={unsnoozeThread}
           onUnsettleThread={unsettleThread}
+          onPinThread={pinThread}
+          onUnpinThread={unpinThread}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>

@@ -60,6 +60,7 @@ export function threadDetailToShell(
     snoozedUntil: thread.snoozedUntil ?? null,
     snoozedAt: thread.snoozedAt ?? null,
     movedToTopAt: thread.movedToTopAt ?? null,
+    pinnedAt: thread.pinnedAt ?? null,
     session: thread.session,
     latestUserMessageAt: latestUserMessageAt(thread),
     hasPendingApprovals: false,

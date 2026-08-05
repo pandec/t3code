@@ -659,14 +659,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // settledAt: the engine rejects zero-event commands, and bulk-settle /
       // double-click must stay silent no-ops rather than surface errors.
       const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
-      return {
+      const settledEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.settled",
+        type: "thread.settled" as const,
         payload: {
           threadId: command.threadId,
           settledAt: alreadySettled ? thread.settledAt : occurredAt,
@@ -676,6 +676,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
         },
       };
+      // Settling is "I'm done with this": it clears a pin the same way it
+      // parks the thread. Without this, settling a pinned thread would only
+      // stamp invisible state — the pin would hold the card in place until
+      // a separate unpin.
+      if (thread.pinnedAt == null) {
+        return settledEvent;
+      }
+      return [
+        settledEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unpinned" as const,
+          payload: {
+            threadId: command.threadId,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
     }
 
     case "thread.unsettle": {
@@ -825,6 +848,87 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           movedToTopAt: command.movedToTopAt,
+        },
+      };
+    }
+
+    case "thread.pin": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = yield* nowIso;
+      const existingPinnedAt = thread.pinnedAt ?? null;
+      const pinnedEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.pinned" as const,
+        payload: {
+          threadId: command.threadId,
+          pinnedAt: existingPinnedAt ?? occurredAt,
+          updatedAt: existingPinnedAt !== null ? thread.updatedAt : occurredAt,
+        },
+      };
+      const promotionEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (thread.settledOverride === "settled") {
+        promotionEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          payload: {
+            threadId: command.threadId,
+            reason: "user",
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      if (thread.snoozedUntil != null || thread.snoozedAt != null) {
+        promotionEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsnoozed",
+          payload: {
+            threadId: command.threadId,
+            reason: "user",
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return promotionEvents.length > 0 ? [pinnedEvent, ...promotionEvents] : pinnedEvent;
+    }
+
+    case "thread.unpin": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const alreadyUnpinned = thread.pinnedAt == null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.unpinned",
+        payload: {
+          threadId: command.threadId,
+          updatedAt: alreadyUnpinned ? thread.updatedAt : occurredAt,
         },
       };
     }

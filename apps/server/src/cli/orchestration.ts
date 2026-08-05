@@ -125,8 +125,6 @@ export class CliOrchestrationReadTimeoutError extends Schema.TaggedErrorClass<Cl
   }
 }
 
-export const isCliOrchestrationReadTimeoutError = Schema.is(CliOrchestrationReadTimeoutError);
-
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 const isCliOrchestrationUndeclaredStatusError = Schema.is(CliOrchestrationUndeclaredStatusError);
 

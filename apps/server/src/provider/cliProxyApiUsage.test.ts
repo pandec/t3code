@@ -14,8 +14,8 @@ import {
   type CliProxyApiUsagePayload,
 } from "./cliProxyApiUsage.ts";
 
-const decodeJsonBody = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
-const encodeJsonBody = Schema.encodeSync(Schema.UnknownFromJsonString);
+const decodeJsonBody = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJsonBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
   return HttpClientResponse.fromWeb(request, Response.json(body, { status }));

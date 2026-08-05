@@ -72,7 +72,7 @@ import { readHermesSkillsSnapshot } from "../hermesSkillsSnapshot.ts";
 import { type HermesAdapterShape } from "../Services/HermesAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
-const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
+const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("hermes");
 const HERMES_LEGACY_RESUME_VERSION = 1 as const;

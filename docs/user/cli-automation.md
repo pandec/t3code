@@ -35,11 +35,9 @@ the phase that expired. Mutations use a separate fixed 30-second acknowledgement
 `thread new --new-worktree`, which waits up to 3 minutes because the server prepares the worktree
 before acknowledging; `--timeout-ms` does not change either mutation bound.
 
-Read-only listings (`project list`, `project action list`) fall back to reading local state when the
-server is alive but slower than the timeout (or its database is briefly locked); a warning on
-stderr and `"mode": "offline"` in JSON output mark the fallback. The fallback opens the database
-strictly read-only — it never migrates the schema or writes — and refuses to read through a schema
-older than the CLI expects. Mutations never fall back to a stale read.
+Project commands require the selected T3 server to be running. They never read or mutate the local
+SQLite database directly; an unavailable or timed-out server returns a structured server-unavailable
+or read-timeout error.
 
 ## Projects
 
@@ -50,8 +48,8 @@ t3 project rename /absolute/path/to/repository "New Title" --json
 t3 project remove /absolute/path/to/repository --json
 ```
 
-Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME`. Mutations
-are sent to its running server when available; otherwise project metadata is updated offline.
+Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME` and use its
+running server. If that server is unavailable, the command fails without opening the database.
 
 ### Project actions
 
@@ -80,8 +78,8 @@ boolean update flags also accept the `--no-...` form, and `--clear-preview-url` 
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
 
-Action listing works with or without a running T3 server. Adding, updating, and removing actions
-requires the server so concurrent UI and CLI edits can be serialized safely. If another client
+Action listing, adding, updating, and removing require the running server so concurrent UI and CLI
+edits can be serialized safely. If another client
 changed the actions after the CLI read them, the mutation fails with a conflict; list the actions
 again and retry. The CLI also verifies that the running server supports conditional action updates
 before writing; update and restart T3 Code if it reports an incompatible server.
@@ -106,6 +104,7 @@ t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
 t3 thread interrupt <thread-id> --json
+t3 thread archive <thread-id> --json
 ```
 
 Thread commands require a running T3 server. `thread new` creates a thread and starts its first
@@ -152,6 +151,21 @@ both `null` for the plain checkout mode). In `--new-worktree` mode the server cr
 as part of the turn start, so `createCommandId` is `null`. Thread list and status summaries also
 include `branch` and `worktreePath` (both `null` for plain checkout threads), so automation can
 discover where a thread runs.
+
+## Session import
+
+```bash
+t3 session candidates --project /absolute/path/to/repository --json
+t3 session candidates --project /absolute/path/to/repository --cwd /absolute/path/to/worktree --json
+t3 session import --file /path/to/transcript.jsonl --project /absolute/path/to/repository --json
+t3 session import --file /path/to/transcript.jsonl --project /absolute/path/to/repository --worktree-branch feature/example --title "Continue the task" --json
+```
+
+Session commands require a running T3 server. `candidates` lists importable local Claude and Codex
+sessions for the selected project or validated worktree. `import` detects the provider and native
+session identity from the transcript, places the provider file without overwriting an existing one,
+and creates a T3 thread that resumes the native session. Model, effort, provider instance, title, and
+worktree branch can be overridden with the corresponding flags.
 
 ## Environment Status
 

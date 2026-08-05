@@ -26,8 +26,10 @@ import {
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadSettledPayload,
+  ThreadPinnedPayload,
   ThreadSnoozedPayload,
   ThreadMovedToTopPayload,
+  ThreadUnpinnedPayload,
   ThreadUnarchivedPayload,
   ThreadUnsettledPayload,
   ThreadUnsnoozedPayload,
@@ -462,6 +464,28 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             movedToTopAt: payload.movedToTopAt,
+          }),
+        })),
+      );
+
+    case "thread.pinned":
+      return decodeForEvent(ThreadPinnedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            pinnedAt: payload.pinnedAt,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.unpinned":
+      return decodeForEvent(ThreadUnpinnedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            pinnedAt: null,
+            updatedAt: payload.updatedAt,
           }),
         })),
       );

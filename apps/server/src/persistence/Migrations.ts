@@ -56,6 +56,7 @@ import Migration0040 from "./Migrations/040_BackfillImportedThreadSessions.ts";
 import Migration0041 from "./Migrations/041_ProjectionThreadsSnoozed.ts";
 import Migration0042 from "./Migrations/042_ProjectionThreadTitleRegeneration.ts";
 import Migration0043 from "./Migrations/043_ProjectionThreadsMovedToTop.ts";
+import Migration0044 from "./Migrations/044_ProjectionThreadsPinned.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,10 +112,8 @@ export const migrationEntries = [
   [41, "ProjectionThreadsSnoozed", Migration0041],
   [42, "ProjectionThreadTitleRegeneration", Migration0042],
   [43, "ProjectionThreadsMovedToTop", Migration0043],
+  [44, "ProjectionThreadsPinned", Migration0044],
 ] as const;
-
-export const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
-export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(

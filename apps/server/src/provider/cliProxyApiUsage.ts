@@ -93,7 +93,7 @@ export function resetCliProxyApiAuthFailuresForTest(): void {
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 
-const decodeJsonBody = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
+const decodeJsonBody = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export interface CliProxyApiUsageProbeTarget {
   readonly managementUrl: string;

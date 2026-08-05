@@ -73,6 +73,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server atomically fills absent project accent keys during legacy
       migration. Absent on servers that only support whole-map replacement. */
   projectAccentColorsFill: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.pin / thread.unpin commands. Same
+      version-skew contract as threadSettlement. */
+  threadPinning: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),

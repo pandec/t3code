@@ -559,6 +559,14 @@ export interface ChatComposerHandle {
 // Props
 // --------------------------------------------------------------------------
 
+export interface ChatComposerSendOptions {
+  readonly deliveryIntent?: ThreadOutboxDeliveryIntent;
+  readonly directAnnotation?: {
+    readonly annotation: PreviewAnnotationPayload;
+    readonly image: ComposerImageAttachment | null;
+  };
+}
+
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
@@ -640,10 +648,7 @@ export interface ChatComposerProps {
   composerRef: React.RefObject<ChatComposerHandle | null>;
 
   // Callbacks
-  onSend: (
-    e?: { preventDefault: () => void },
-    options?: { readonly deliveryIntent?: ThreadOutboxDeliveryIntent },
-  ) => void;
+  onSend: (e?: { preventDefault: () => void }, options?: ChatComposerSendOptions) => void;
   /** Pulls the newest queued message back for editing, like the CLI's up-arrow. */
   onRecallQueuedMessage?: (() => boolean) | undefined;
   onInterrupt: () => void;
@@ -2220,10 +2225,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const submitComposer = useCallback(
-    (
-      event?: { preventDefault: () => void },
-      options?: { readonly deliveryIntent?: ThreadOutboxDeliveryIntent },
-    ) => {
+    (event?: { preventDefault: () => void }, options?: ChatComposerSendOptions) => {
       if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;

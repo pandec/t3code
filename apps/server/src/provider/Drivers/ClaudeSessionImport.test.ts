@@ -13,7 +13,7 @@ import {
 
 const SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
-const toJsonLine = Schema.encodeSync(Schema.UnknownFromJsonString);
+const toJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function entry(input: {
   uuid: string;

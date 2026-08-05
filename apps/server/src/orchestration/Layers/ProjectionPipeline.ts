@@ -675,6 +675,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             snoozedUntil: null,
             snoozedAt: null,
             movedToTopAt: null,
+            pinnedAt: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -791,6 +792,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             movedToTopAt: event.payload.movedToTopAt,
+          });
+          return;
+        }
+
+        case "thread.pinned": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedAt: event.payload.pinnedAt,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.unpinned": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedAt: null,
+            updatedAt: event.payload.updatedAt,
           });
           return;
         }

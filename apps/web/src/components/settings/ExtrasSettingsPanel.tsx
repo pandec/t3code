@@ -618,7 +618,7 @@ function ComposerExtrasSection() {
             </output>
             <input
               aria-label="Steer grace window in seconds"
-              className="settings-range-slider min-w-0 flex-1"
+              className="settings-slider min-w-0 flex-1"
               id="steer-grace-window"
               max={MAX_STEER_GRACE_WINDOW_MS}
               min={MIN_STEER_GRACE_WINDOW_MS}
@@ -701,7 +701,7 @@ function AccentTintsExtrasSection() {
             </output>
             <input
               aria-label="Accent tint intensity"
-              className="settings-range-slider min-w-0 flex-1"
+              className="settings-slider min-w-0 flex-1"
               disabled={!settings.accentTintsEnabled}
               id="accent-tint-intensity"
               max={MAX_ACCENT_TINT_INTENSITY_PERCENT}

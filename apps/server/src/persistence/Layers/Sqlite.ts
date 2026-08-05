@@ -7,14 +7,9 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { runMigrations } from "../Migrations.ts";
 import { ServerConfig } from "../../config.ts";
-import * as ServiceLauncherClient from "../../cloud/serviceLauncherClient.ts";
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
-  readonly readonly?: boolean;
-  readonly readwrite?: boolean;
-  readonly create?: boolean;
-  readonly disableWAL?: boolean;
   readonly spanAttributes?: Record<string, unknown>;
 };
 
@@ -35,31 +30,26 @@ const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
   return clientModule.layer(config);
 }, Layer.unwrap);
 
-const setup = (trial: boolean) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      // The server and the CLI open this database concurrently; wait for locks
-      // instead of surfacing immediate SQLITE_BUSY failures.
-      yield* sql`PRAGMA busy_timeout = 5000;`;
-      yield* sql`PRAGMA foreign_keys = ON;`;
-      if (!trial) {
-        yield* sql`PRAGMA journal_mode = WAL;`;
-        yield* runMigrations();
-      }
-    }),
-  );
+const setup = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // Wait for transient locks instead of surfacing immediate SQLITE_BUSY failures.
+    yield* sql`PRAGMA busy_timeout = 5000;`;
+    yield* sql`PRAGMA foreign_keys = ON;`;
+    yield* sql`PRAGMA journal_mode = WAL;`;
+    yield* runMigrations();
+  }),
+);
 
 export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(function* (
   dbPath: string,
-  options?: { readonly trial?: boolean },
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    setup(options?.trial === true),
+    setup,
     makeRuntimeSqliteLayer({
       filename: dbPath,
       spanAttributes: {
@@ -71,43 +61,13 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup(false),
+  setup,
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
-
-/**
- * Read-only connection to an existing database. Runs no pragmas and no
- * migrations, so it can be opened safely next to a live server process that
- * owns the schema.
- */
-export const makeSqliteReadOnlyPersistence = Effect.fn("makeSqliteReadOnlyPersistence")(function* (
-  dbPath: string,
-) {
-  const path = yield* Path.Path;
-  return makeRuntimeSqliteLayer({
-    filename: dbPath,
-    // The bun client defaults readwrite/create to true and runs a WAL pragma
-    // even with readonly set, so every flag must be pinned explicitly for the
-    // connection to actually reject writes on both runtimes.
-    readonly: true,
-    readwrite: false,
-    create: false,
-    disableWAL: true,
-    spanAttributes: {
-      "db.name": path.basename(dbPath),
-      "service.name": "t3-server",
-    },
-  });
-}, Layer.unwrap);
 
 export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
-    const launcher = yield* ServiceLauncherClient.resolveServiceLauncherMode();
-    return makeSqlitePersistenceLive(dbPath, { trial: launcher.trial });
+    return makeSqlitePersistenceLive(dbPath);
   }),
-);
-
-export const layerReadOnlyConfig = Layer.unwrap(
-  Effect.map(Effect.service(ServerConfig), ({ dbPath }) => makeSqliteReadOnlyPersistence(dbPath)),
 );
