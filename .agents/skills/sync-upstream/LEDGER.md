@@ -42,6 +42,8 @@ Self-cleaning rules (apply during every sync's ledger update):
 
 When the incoming upstream range touches a path below, spawn one targeted sub-agent during the behavioral-overlap review to answer that entry's question (is the fork change still needed / still compatible?). Untouched paths need no check.
 
+Housekeeping: the 2026-08-05 sync through `de592a00e` touched none of the current watchpoints, their first consecutive untouched sync.
+
 - `apps/server/src/cloud/serviceLauncherClient.ts`, `apps/server/src/server.ts`, `apps/server/src/persistence/Layers/Sqlite.ts`, or `apps/server/src/bin.ts`: if upstream changes launcher activation, trial startup, or native WebSocket options again, do unconditional trial migrations/rollback still compose with voice upload, all CLI commands, normal-connection busy timeout, and 128 MiB frame limits without reintroducing a persistence→launcher dependency? Compatibility reconfirmed 2026-08-05; the obsolete read-only CLI layer was removed.
 - `apps/web/src/components/SidebarV2.tsx`, `apps/mobile/src/features/threads/threadListV2.ts`, or thread pin/move contracts and projectors: if upstream changes pin classification or ordering, do pinned rows remain creation-ordered while `movedToTopAt` affects only unpinned active rows, and does pinning wake both timed and indefinite snoozes? Added after the 2026-08-05 pin merge.
 - `apps/desktop/src/app/DesktopEarlyElectronStartup.ts`, `apps/desktop/src/app/DesktopPreReadyPlatform.ts`, or `apps/desktop/src/app/DesktopStatePaths.ts`: if upstream extends pre-ready startup again, does it still route dev identity through `DesktopBuildFlavor`, and does `resolveDesktopStateDir` still send packaged Dev builds to `dev-packaged`? Added after the 2026-08-04 Linux secret-storage merge.
