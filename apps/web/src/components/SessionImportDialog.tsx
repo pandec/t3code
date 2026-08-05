@@ -25,21 +25,12 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
+import {
+  getAmbiguousSessionImportProviders,
+  getSessionImportCandidateKey,
+  getSessionImportProviderLabel,
+} from "./SessionImportDialog.logic";
 import { toastManager } from "./ui/toast";
-
-function providerLabel(candidate: SessionImportCandidate): string {
-  if (candidate.providerDisplayName !== candidate.provider) {
-    return candidate.providerDisplayName;
-  }
-  switch (candidate.provider) {
-    case "claudeAgent":
-      return "Claude Code";
-    case "codex":
-      return "Codex";
-    default:
-      return candidate.provider;
-  }
-}
 
 export function SessionImportDialog(props: {
   readonly member: SidebarProjectGroupMember | null;
@@ -47,7 +38,7 @@ export function SessionImportDialog(props: {
 }) {
   const { member, onClose } = props;
   const navigate = useNavigate();
-  const [importingSessionId, setImportingSessionId] = useState<string | null>(null);
+  const [importingCandidateKey, setImportingCandidateKey] = useState<string | null>(null);
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
 
   const candidatesQuery = useEnvironmentQuery(
@@ -59,6 +50,8 @@ export function SessionImportDialog(props: {
       : null,
   );
   const candidates = candidatesQuery.data?.candidates;
+  const ambiguousProviders = getAmbiguousSessionImportProviders(candidates ?? []);
+  const hasAmbiguousProviders = ambiguousProviders.size > 0;
   const refreshCandidates = candidatesQuery.refresh;
 
   // The candidates query atom is cached per project; refresh on every dialog
@@ -70,10 +63,10 @@ export function SessionImportDialog(props: {
   }, [member, refreshCandidates]);
 
   const handleImport = async (candidate: SessionImportCandidate) => {
-    if (member === null || importingSessionId !== null) {
+    if (member === null || importingCandidateKey !== null) {
       return;
     }
-    setImportingSessionId(candidate.nativeSessionId);
+    setImportingCandidateKey(getSessionImportCandidateKey(candidate));
     try {
       const result = await importSession({
         environmentId: member.environmentId,
@@ -122,7 +115,7 @@ export function SessionImportDialog(props: {
         description: error instanceof Error ? error.message : "An unexpected error occurred.",
       });
     } finally {
-      setImportingSessionId(null);
+      setImportingCandidateKey(null);
     }
   };
 
@@ -130,7 +123,7 @@ export function SessionImportDialog(props: {
     <Dialog
       open={member !== null}
       onOpenChange={(open) => {
-        if (!open && importingSessionId === null) {
+        if (!open && importingCandidateKey === null) {
           onClose();
         }
       }}
@@ -144,7 +137,13 @@ export function SessionImportDialog(props: {
               : "Import a session created outside T3 Code."}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-1">
+        <DialogPanel className="space-y-2">
+          {hasAmbiguousProviders ? (
+            <p className="text-xs text-muted-foreground">
+              More than one instance can import these sessions. Choose the instance to continue
+              with.
+            </p>
+          ) : null}
           {candidatesQuery.isPending ? (
             <p className="py-6 text-center text-sm text-muted-foreground">Scanning sessions…</p>
           ) : candidatesQuery.error !== null ? (
@@ -157,44 +156,49 @@ export function SessionImportDialog(props: {
             </p>
           ) : (
             <ul className="max-h-80 space-y-1 overflow-y-auto">
-              {candidates.map((candidate) => (
-                <li key={`${candidate.instanceId}:${candidate.nativeSessionId}`}>
-                  <button
-                    type="button"
-                    className="w-full rounded-md border border-border px-3 py-2 text-left transition-colors hover:bg-accent disabled:opacity-60"
-                    disabled={importingSessionId !== null}
-                    onClick={() => void handleImport(candidate)}
-                  >
-                    <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        {providerLabel(candidate)}
+              {candidates.map((candidate) => {
+                const candidateKey = getSessionImportCandidateKey(candidate);
+                const providerLabel = getSessionImportProviderLabel(
+                  candidate,
+                  ambiguousProviders.has(candidate.provider),
+                );
+                const isImporting = importingCandidateKey === candidateKey;
+                return (
+                  <li key={candidateKey}>
+                    <button
+                      type="button"
+                      className="w-full rounded-md border border-border px-3 py-2 text-left transition-colors hover:bg-accent disabled:opacity-60"
+                      disabled={importingCandidateKey !== null}
+                      onClick={() => void handleImport(candidate)}
+                    >
+                      <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground" title={providerLabel}>
+                          {providerLabel}
+                        </span>
+                        <span>
+                          {candidate.messageCount !== null
+                            ? `${candidate.messageCount} messages · `
+                            : ""}
+                          {formatRelativeTimeLabel(candidate.updatedAt)}
+                        </span>
                       </span>
-                      <span>
-                        {candidate.messageCount !== null
-                          ? `${candidate.messageCount} messages · `
-                          : ""}
-                        {formatRelativeTimeLabel(candidate.updatedAt)}
+                      <span className="mt-1 block truncate text-sm">
+                        {isImporting ? "Importing…" : (candidate.name ?? candidate.preview)}
                       </span>
-                    </span>
-                    <span className="mt-1 block truncate text-sm">
-                      {importingSessionId === candidate.nativeSessionId
-                        ? "Importing…"
-                        : (candidate.name ?? candidate.preview)}
-                    </span>
-                    {candidate.name !== null &&
-                      importingSessionId !== candidate.nativeSessionId && (
+                      {candidate.name !== null && !isImporting ? (
                         <span className="block truncate text-xs text-muted-foreground">
                           {candidate.preview}
                         </span>
-                      )}
-                  </button>
-                </li>
-              ))}
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" disabled={importingSessionId !== null} onClick={onClose}>
+          <Button variant="outline" disabled={importingCandidateKey !== null} onClick={onClose}>
             Close
           </Button>
         </DialogFooter>

@@ -15,6 +15,7 @@ import type { ServerProviderSkill } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { expandHomePath } from "../../pathExpansion.ts";
+import { codexAppServerArgs } from "../Layers/codexLaunchArgs.ts";
 import {
   buildCodexInitializeParams,
   parseCodexSkillsListResponse,
@@ -34,6 +35,7 @@ const LIST_MAX_PAGES = 20;
 
 export interface CodexImportReaderOptions {
   readonly binaryPath: string;
+  readonly launchArgs?: string | undefined;
   readonly homePath?: string | undefined;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly cwd: string;
@@ -88,10 +90,14 @@ const withCodexAppServerClient = <A, E>(
         ...(options.environment ?? process.env),
         ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
       };
-      const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, ["app-server"], {
-        env,
-        extendEnv: false,
-      }).pipe(Effect.mapError(toReaderError("Failed to resolve the Codex app-server command.")));
+      const spawnCommand = yield* resolveSpawnCommand(
+        options.binaryPath,
+        codexAppServerArgs(options.launchArgs),
+        {
+          env,
+          extendEnv: false,
+        },
+      ).pipe(Effect.mapError(toReaderError("Failed to resolve the Codex app-server command.")));
       const child = yield* spawner
         .spawn(
           ChildProcess.make(spawnCommand.command, spawnCommand.args, {
