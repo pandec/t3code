@@ -348,6 +348,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     selectedThreadKey,
   ]);
 
+  const handleAnchorEndSpaceConsumed = useCallback((messageId: MessageId) => {
+    setAnchorMessageId((current) => (current === messageId ? null : current));
+  }, []);
+
   const handleSendMessage = useCallback(
     async (options?: SendMessageOptions) => {
       const targetThreadKey = selectedThreadKey;
@@ -424,6 +428,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}
+            onAnchorEndSpaceConsumed={handleAnchorEndSpaceConsumed}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             contentInsetBaseline={contentInsetBaseline}
             keyboardVisible={keyboardVisible}

@@ -113,7 +113,11 @@ import {
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import { resolveThreadFeedInsetReport, type ThreadFeedInsetReport } from "./threadFeedInsets";
+import {
+  resolveThreadFeedInsetReport,
+  shouldReleaseThreadFeedAnchor,
+  type ThreadFeedInsetReport,
+} from "./threadFeedInsets";
 import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
@@ -189,6 +193,7 @@ export interface ThreadFeedProps {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
+  readonly onAnchorEndSpaceConsumed: (messageId: MessageId) => void;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentInsetBaseline: number;
   readonly keyboardVisible: boolean;
@@ -2028,16 +2033,33 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // content-inset override.
   const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
 
-  const anchoredEndSpace = useMemo(
-    () =>
-      resolveChatListAnchoredEndSpace(
-        presentedFeed,
-        props.anchorMessageId,
-        (entry) => (entry.type === "message" ? entry.id : null),
-        { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
-      ),
-    [presentedFeed, props.anchorMessageId, anchorTopInset],
-  );
+  const anchoredEndSpace = useMemo(() => {
+    const resolved = resolveChatListAnchoredEndSpace(
+      presentedFeed,
+      props.anchorMessageId,
+      (entry) => (entry.type === "message" ? entry.id : null),
+      { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
+    );
+    const anchorMessageId = props.anchorMessageId;
+    if (resolved === undefined || anchorMessageId === null) {
+      return resolved;
+    }
+
+    return {
+      ...resolved,
+      onReady: (info: { readonly anchorKey: string | undefined; readonly size: number }) => {
+        if (
+          shouldReleaseThreadFeedAnchor({
+            anchorMessageId,
+            readyAnchorKey: info.anchorKey,
+            readySize: info.size,
+          })
+        ) {
+          props.onAnchorEndSpaceConsumed(anchorMessageId);
+        }
+      },
+    };
+  }, [anchorTopInset, presentedFeed, props.anchorMessageId, props.onAnchorEndSpaceConsumed]);
 
   // Re-report the measured closed-keyboard baseline to each list mount before
   // its first positioning tick, and again when the floating composer changes

@@ -3,6 +3,19 @@ export interface ThreadFeedInsetReport {
   readonly baseline: number;
 }
 
+export function shouldReleaseThreadFeedAnchor(input: {
+  readonly anchorMessageId: string | null;
+  readonly readyAnchorKey: string | undefined;
+  readonly readySize: number;
+}): boolean {
+  return (
+    input.anchorMessageId !== null &&
+    input.readyAnchorKey === input.anchorMessageId &&
+    Number.isFinite(input.readySize) &&
+    input.readySize === 0
+  );
+}
+
 export function resolveThreadFeedInsetBaseline(input: {
   readonly measuredOverlayHeight: number | null;
   readonly estimatedOverlayHeight: number;

@@ -3,8 +3,49 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   resolveThreadFeedInsetBaseline,
   resolveThreadFeedInsetReport,
+  shouldReleaseThreadFeedAnchor,
   type ThreadFeedInsetReport,
 } from "./threadFeedInsets";
+
+describe("thread feed anchor", () => {
+  it("releases only an authoritative consumed active anchor", () => {
+    expect(
+      shouldReleaseThreadFeedAnchor({
+        anchorMessageId: "message-1",
+        readyAnchorKey: "message-1",
+        readySize: 0,
+      }),
+    ).toBe(true);
+    expect(
+      shouldReleaseThreadFeedAnchor({
+        anchorMessageId: "message-1",
+        readyAnchorKey: "message-1",
+        readySize: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReleaseThreadFeedAnchor({
+        anchorMessageId: "message-1",
+        readyAnchorKey: "message-2",
+        readySize: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReleaseThreadFeedAnchor({
+        anchorMessageId: null,
+        readyAnchorKey: "message-1",
+        readySize: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReleaseThreadFeedAnchor({
+        anchorMessageId: "message-1",
+        readyAnchorKey: "message-1",
+        readySize: Number.NaN,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("thread feed insets", () => {
   it("prefers the measured overlay height and removes native inset overcount", () => {
