@@ -2821,7 +2821,9 @@ describe("ProviderRuntimeIngestion", () => {
     const entered = (await harness.readModel()).threads.find(
       (entry) => entry.id === asThreadId("thread-1"),
     )!;
-    expect(entered.worktreePath).toBe(worktreePath);
+    // Stored canonically: elsewhere worktree paths are compared with strict
+    // equality, so an alias such as /var for /private/var would silently miss.
+    expect(entered.worktreePath).toBe(NodeFS.realpathSync(worktreePath));
     expect(entered.branch).toBe("feature/entered");
 
     // Leaving the worktree must clear both fields, otherwise the thread keeps
@@ -2842,6 +2844,64 @@ describe("ProviderRuntimeIngestion", () => {
     )!;
     expect(left.worktreePath).toBeNull();
     expect(left.branch).toBeNull();
+  });
+
+  it("ignores a cwd change into a directory that is not a checkout of its own", async () => {
+    const harness = await createHarness();
+    const plainDirectory = makeTempDir("t3-provider-plain-");
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-plain"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: plainDirectory, previousCwd: harness.workspaceRoot },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.worktreePath).toBeNull();
+    expect(thread.branch).toBeNull();
+  });
+
+  it("ignores a cwd change emitted by a superseded session generation", async () => {
+    const harness = await createHarness();
+    const worktreePath = makeTempDir("t3-provider-stale-worktree-");
+    NodeFS.mkdirSync(NodePath.join(worktreePath, ".git"));
+    NodeFS.writeFileSync(NodePath.join(worktreePath, ".git", "HEAD"), "ref: refs/heads/stale\n");
+
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      status: "ready",
+      runtimeMode: "approval-required",
+      threadId: asThreadId("thread-1"),
+      sessionGenerationId: "generation-2",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-stale"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        cwd: worktreePath,
+        previousCwd: harness.workspaceRoot,
+        sessionGenerationId: "generation-1",
+      },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.worktreePath).toBeNull();
+    expect(thread.branch).toBeNull();
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {

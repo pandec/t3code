@@ -4158,6 +4158,56 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("keeps the resume cursor on the main transcript's last assistant message", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate some work",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-sidechain",
+        uuid: "assistant-main-1",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-main-1",
+          content: [{ type: "text", text: "Main transcript" }],
+        },
+      } as unknown as SDKMessage);
+
+      // A subagent's reply lives in its own sidechain file. Adopting its uuid
+      // would point resumeSessionAt at a message the resumed session cannot
+      // find in the main transcript.
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-sidechain",
+        uuid: "assistant-subagent-1",
+        parent_tool_use_id: "tool-use-subagent",
+        message: {
+          id: "assistant-message-subagent-1",
+          content: [{ type: "text", text: "Subagent transcript" }],
+        },
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+
+      const activeSessions = yield* adapter.listSessions();
+      const cursor = activeSessions[0]?.resumeCursor as
+        | { readonly resumeSessionAt?: string }
+        | undefined;
+      assert.equal(cursor?.resumeSessionAt, "assistant-main-1");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
   it.effect("preserves durable resume ids across Claude resume hooks", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

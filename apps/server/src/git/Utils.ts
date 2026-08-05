@@ -12,16 +12,24 @@ export function isGitRepository(cwd: string): boolean {
  * that has since been deleted can still be recognized.
  */
 export function isSameDirectory(left: string, right: string): boolean {
-  const normalize = (value: string) => NodePath.resolve(value);
-  const canonicalize = (value: string) => {
-    try {
-      return NodeFS.realpathSync(value);
-    } catch {
-      return normalize(value);
-    }
-  };
-  if (normalize(left) === normalize(right)) return true;
-  return canonicalize(left) === canonicalize(right);
+  if (NodePath.resolve(left) === NodePath.resolve(right)) return true;
+  return canonicalizeDirectory(left) === canonicalizeDirectory(right);
+}
+
+/**
+ * Resolve a directory to its canonical form, falling back to a normalized path
+ * when it cannot be resolved (most often because it no longer exists).
+ *
+ * Persisted worktree paths are compared with strict equality across the server,
+ * so storing an alias — `/tmp` for `/private/tmp`, or any symlinked parent —
+ * makes later comparisons miss.
+ */
+export function canonicalizeDirectory(value: string): string {
+  try {
+    return NodeFS.realpathSync(value);
+  } catch {
+    return NodePath.resolve(value);
+  }
 }
 
 /**

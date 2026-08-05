@@ -3786,7 +3786,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             return {};
           }
           const previousCwd = hookInput.old_cwd.trim();
-          runFork(
+          // Awaited rather than forked: the move must be recorded before the
+          // session can proceed to a state that discards it. A detached fiber
+          // loses the final directory change when the agent leaves a worktree
+          // as its last act and the session then exits, which is exactly the
+          // case this fix exists for.
+          await runPromise(
             recordSessionCwdChange(nextCwd, previousCwd.length > 0 ? previousCwd : undefined),
           );
         } catch (cause) {

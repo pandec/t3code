@@ -34,7 +34,12 @@ import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstan
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import { isGitRepository, isSameDirectory, readCheckedOutBranch } from "../../git/Utils.ts";
+import {
+  canonicalizeDirectory,
+  isGitRepository,
+  isSameDirectory,
+  readCheckedOutBranch,
+} from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -1273,6 +1278,79 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Mirror a live session's directory move onto the thread, so the worktree
+   * chip, git status, diff panel, and thread terminals follow the agent instead
+   * of staying pinned to the workspace root.
+   */
+  const mirrorSessionCwdOntoThread = Effect.fn("mirrorSessionCwdOntoThread")(function* (input: {
+    readonly event: Extract<ProviderRuntimeEvent, { readonly type: "session.cwd.changed" }>;
+    readonly thread: {
+      readonly id: ThreadId;
+      readonly branch: string | null;
+      readonly worktreePath: string | null;
+    };
+  }) {
+    const { event, thread } = input;
+
+    // Events are drained asynchronously, so one emitted by a session generation
+    // that has since been replaced can arrive after the thread was rebound. The
+    // provider binding rejects those; the thread's metadata must too, or the UI
+    // ends up describing a directory no live session is using.
+    const sessions = yield* providerService.listSessions();
+    const liveSession = sessions.find((entry) => entry.threadId === thread.id);
+    if (liveSession?.sessionGenerationId !== event.payload.sessionGenerationId) {
+      yield* Effect.logDebug("provider.session.cwd-changed-stale-generation", {
+        threadId: thread.id,
+        eventGenerationId: event.payload.sessionGenerationId,
+        liveGenerationId: liveSession?.sessionGenerationId,
+      });
+      return;
+    }
+
+    const workspace = yield* projectionSnapshotQuery
+      .getThreadCheckpointContext(thread.id)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!workspace) {
+      return;
+    }
+
+    const cwd = event.payload.cwd;
+    const backAtWorkspaceRoot = isSameDirectory(cwd, workspace.workspaceRoot);
+    // Only a checkout of its own can stand in as the thread's worktree. A plain
+    // directory change into a subdirectory would otherwise be recorded as one,
+    // pointing git status, diffs, and worktree cleanup at a path that is not a
+    // working tree at all.
+    if (!backAtWorkspaceRoot && !isGitRepository(cwd)) {
+      yield* Effect.logDebug("provider.session.cwd-changed-not-a-worktree", {
+        threadId: thread.id,
+        cwd,
+      });
+      return;
+    }
+
+    // Stored paths are compared with strict equality elsewhere, so record the
+    // canonical spelling rather than whatever alias the runtime reported.
+    const nextWorktreePath = backAtWorkspaceRoot ? null : canonicalizeDirectory(cwd);
+    // Null covers a detached HEAD as well as the workspace root, where threads
+    // carry no branch of their own.
+    const nextBranch = nextWorktreePath === null ? null : readCheckedOutBranch(cwd);
+    if (nextWorktreePath === thread.worktreePath && nextBranch === thread.branch) {
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: yield* providerCommandId(event, "session-cwd-changed"),
+      threadId: thread.id,
+      worktreePath: nextWorktreePath,
+      branch: nextBranch,
+      // Defer the whole workspace update to a concurrent user-driven change
+      // rather than overwriting it with what this event observed.
+      expectedBranch: thread.branch,
+    });
+  });
+
   const getSourceProposedPlanReferenceForAcceptedTurnStart = Effect.fn(
     "getSourceProposedPlanReferenceForAcceptedTurnStart",
   )(function* (threadId: ThreadId, eventTurnId: TurnId | undefined) {
@@ -1825,31 +1903,7 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.cwd.changed") {
-        // The session moved itself between directories. Mirror that onto the
-        // thread so the worktree chip, git status, diffs, and thread terminals
-        // all follow the agent instead of staying pinned to the workspace root.
-        const workspace = yield* projectionSnapshotQuery
-          .getThreadCheckpointContext(thread.id)
-          .pipe(Effect.map(Option.getOrUndefined));
-        if (workspace) {
-          const cwd = event.payload.cwd;
-          const nextWorktreePath = isSameDirectory(cwd, workspace.workspaceRoot) ? null : cwd;
-          // Null covers a detached HEAD and a directory that is no longer a
-          // repository; both mean "no branch to show" rather than a failure.
-          const nextBranch = nextWorktreePath === null ? null : readCheckedOutBranch(cwd);
-          if (nextWorktreePath !== thread.worktreePath || nextBranch !== thread.branch) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.meta.update",
-              commandId: yield* providerCommandId(event, "session-cwd-changed"),
-              threadId: thread.id,
-              worktreePath: nextWorktreePath,
-              branch: nextBranch,
-              // Defer to a concurrent user-driven branch change instead of
-              // overwriting it with what this event observed.
-              expectedBranch: thread.branch,
-            });
-          }
-        }
+        yield* mirrorSessionCwdOntoThread({ event, thread });
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {

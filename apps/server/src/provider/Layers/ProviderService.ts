@@ -416,56 +416,69 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       return;
     }
 
-    const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-    if (!binding) {
-      return;
-    }
-    const eventGenerationId = event.payload.sessionGenerationId;
-    const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
-    if (
-      binding.provider !== source.provider ||
-      binding.providerInstanceId !== source.instanceId ||
-      bindingGenerationId !== eventGenerationId
-    ) {
-      yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
-        threadId: event.threadId,
-        eventProvider: source.provider,
-        eventProviderInstanceId: source.instanceId,
-        bindingProvider: binding.provider,
-        bindingProviderInstanceId: binding.providerInstanceId,
-        bindingGenerationId,
-        eventGenerationId,
-      });
-      return;
-    }
+    // A cwd observation is one-shot and cannot be reconstructed from a later
+    // event: if it is dropped, the binding keeps a directory the session has
+    // already left. `refreshIfUnchanged` reports a lost compare-and-swap by
+    // returning false rather than failing, so `Effect.retry` never sees it —
+    // re-read the binding and reapply instead.
+    const conflictAttempts = event.type === "session.cwd.changed" ? 3 : 1;
 
-    if (binding.status === "stopped") return;
+    for (let attempt = 1; attempt <= conflictAttempts; attempt += 1) {
+      const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+      if (!binding) {
+        return;
+      }
+      const eventGenerationId = event.payload.sessionGenerationId;
+      const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
+      if (
+        binding.provider !== source.provider ||
+        binding.providerInstanceId !== source.instanceId ||
+        bindingGenerationId !== eventGenerationId
+      ) {
+        yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
+          threadId: event.threadId,
+          eventProvider: source.provider,
+          eventProviderInstanceId: source.instanceId,
+          bindingProvider: binding.provider,
+          bindingProviderInstanceId: binding.providerInstanceId,
+          bindingGenerationId,
+          eventGenerationId,
+        });
+        return;
+      }
 
-    const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
-    const runtimePayloadPatch =
-      event.type === "session.exited"
-        ? { hasPendingWork: false, activeTurnId: null }
-        : event.type === "session.cwd.changed"
-          ? // Claim authority over the cwd so a later resume follows the session
-            // into the directory it actually ran in, instead of resetting to the
-            // thread's workspace root.
-            { cwd: event.payload.cwd, cwdAuthority: "runtime-observed" }
-          : hasPendingWork !== undefined
-            ? { hasPendingWork }
-            : undefined;
-    const refreshed = yield* directory
-      .refreshIfUnchanged({
-        binding,
-        ...(event.type === "session.exited" ? { status: "stopped" as const } : {}),
-        ...(runtimePayloadPatch !== undefined ? { runtimePayloadPatch } : {}),
-      })
-      .pipe(Effect.retry({ times: 2 }));
-    if (!refreshed) {
+      if (binding.status === "stopped") return;
+
+      const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
+      const runtimePayloadPatch =
+        event.type === "session.exited"
+          ? { hasPendingWork: false, activeTurnId: null }
+          : event.type === "session.cwd.changed"
+            ? // Claim authority over the cwd so a later resume follows the
+              // session into the directory it actually ran in, instead of
+              // resetting to the thread's workspace root.
+              { cwd: event.payload.cwd, cwdAuthority: "runtime-observed" }
+            : hasPendingWork !== undefined
+              ? { hasPendingWork }
+              : undefined;
+      const refreshed = yield* directory
+        .refreshIfUnchanged({
+          binding,
+          ...(event.type === "session.exited" ? { status: "stopped" as const } : {}),
+          ...(runtimePayloadPatch !== undefined ? { runtimePayloadPatch } : {}),
+        })
+        .pipe(Effect.retry({ times: 2 }));
+      if (refreshed) {
+        return;
+      }
+
       yield* Effect.logDebug("provider.session.runtime-event-binding-changed", {
         threadId: event.threadId,
         eventProvider: source.provider,
         eventProviderInstanceId: source.instanceId,
         expectedLastSeenAt: binding.lastSeenAt,
+        attempt,
+        remainingAttempts: conflictAttempts - attempt,
       });
     }
   });
