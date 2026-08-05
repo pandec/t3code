@@ -193,7 +193,6 @@ function buildProps() {
     workspaceRoot: undefined,
     anchorMessageId: null,
     onAnchorReady: () => {},
-    onAnchorSizeChanged: () => {},
     contentInsetEndAdjustment: 0,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
@@ -478,7 +477,6 @@ describe("MessagesTimeline", () => {
 
   it("anchors a sent attachment message using its measured height", () => {
     const onAnchorReady = vi.fn();
-    const onAnchorSizeChanged = vi.fn();
     const firstEntry = buildUserTimelineEntry("First prompt.");
     const secondEntry = {
       ...buildUserTimelineEntry("Newest prompt."),
@@ -503,7 +501,6 @@ describe("MessagesTimeline", () => {
         {...buildProps()}
         anchorMessageId={secondEntry.message.id}
         onAnchorReady={onAnchorReady}
-        onAnchorSizeChanged={onAnchorSizeChanged}
         contentInsetEndAdjustment={144}
         timelineEntries={[firstEntry, secondEntry]}
       />,
@@ -521,7 +518,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-maintain-visible-content-position-size="false"');
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(secondEntry.message.id, 1);
-    expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
   });
 
   it("renders collapse controls for long user messages", () => {

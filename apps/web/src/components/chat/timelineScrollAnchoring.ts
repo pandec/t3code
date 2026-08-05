@@ -21,6 +21,21 @@ export function isTimelineDetachedForThread(
   return detachedThreadKey === activeThreadKey;
 }
 
+export function shouldPositionTimelineAnchor({
+  scrollMode,
+  anchorUserScrollGeneration,
+  liveFollowUserScrollGeneration,
+}: {
+  readonly scrollMode: TimelineScrollMode;
+  readonly anchorUserScrollGeneration: number;
+  readonly liveFollowUserScrollGeneration: number | null;
+}): boolean {
+  return (
+    scrollMode === "anchoring-new-turn" &&
+    liveFollowUserScrollGeneration === anchorUserScrollGeneration
+  );
+}
+
 export interface TimelineListMeasurementState {
   readonly data: readonly unknown[];
   readonly scroll: number;
