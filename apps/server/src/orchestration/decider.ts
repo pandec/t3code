@@ -939,12 +939,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // `expectedBranch` guards the workspace the thread points at, so a lost
+      // compare-and-swap must drop `worktreePath` alongside `branch`. Applying
+      // only one of them would leave a branch and a worktree that describe
+      // different checkouts.
+      const workspaceUpdateStale =
+        command.expectedBranch !== undefined && thread.branch !== command.expectedBranch;
       const branch =
-        command.branch !== undefined &&
-        command.expectedBranch !== undefined &&
-        thread.branch !== command.expectedBranch
-          ? thread.branch
-          : command.branch;
+        command.branch !== undefined && workspaceUpdateStale ? thread.branch : command.branch;
+      const worktreePath = workspaceUpdateStale ? undefined : command.worktreePath;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -974,7 +977,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(worktreePath !== undefined ? { worktreePath } : {}),
           updatedAt: occurredAt,
         },
       };

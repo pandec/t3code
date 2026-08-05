@@ -622,6 +622,64 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("drops the worktree path when the branch compare-and-swap is stale", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-workspace-cas-project-create"),
+        projectId: asProjectId("project-workspace-cas"),
+        title: "Workspace CAS Project",
+        workspaceRoot: "/tmp/project-workspace-cas",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-workspace-cas-thread-create"),
+        threadId: ThreadId.make("thread-workspace-cas"),
+        projectId: asProjectId("project-workspace-cas"),
+        title: "Workspace CAS Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "current-branch",
+        worktreePath: "/tmp/project-workspace-cas-current",
+        createdAt,
+      }),
+    );
+
+    // Branch and worktree describe one checkout, so a lost compare-and-swap has
+    // to reject both. Keeping the worktree while dropping the branch would pair
+    // this thread's branch with a different checkout's directory.
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-workspace-cas-stale"),
+        threadId: ThreadId.make("thread-workspace-cas"),
+        branch: "observed-branch",
+        worktreePath: "/tmp/project-workspace-cas-observed",
+        expectedBranch: "branch-that-moved-on",
+      }),
+    );
+
+    const snapshot = await system.readModel();
+    expect(snapshot.threads[0]?.branch).toBe("current-branch");
+    expect(snapshot.threads[0]?.worktreePath).toBe("/tmp/project-workspace-cas-current");
+    await system.dispose();
+  });
+
   it("allows authoritative worktree bootstrap to assign a temporary branch", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

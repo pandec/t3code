@@ -31,6 +31,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -895,6 +896,66 @@ describe("ClaudeAdapterLive", () => {
 
       assert.isTrue(harness.query.usageCalls >= 1);
       assert.isFalse(events.includes("account.rate-limits.updated"));
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("emits a cwd change when the session moves itself into a worktree", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const workspaceRoot = "/tmp/project";
+      const worktreePath = "/tmp/project/.claude/worktrees/feature";
+
+      const cwdChangedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.cwd.changed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: workspaceRoot,
+      });
+
+      const cwdHook = harness.getLastCreateQueryInput()?.options.hooks?.CwdChanged?.[0]?.hooks[0];
+      assert.isDefined(cwdHook);
+      if (!cwdHook) {
+        return;
+      }
+
+      const baseHookInput = {
+        session_id: "sdk-session-cwd",
+        transcript_path: "/tmp/transcript.jsonl",
+        cwd: workspaceRoot,
+        hook_event_name: "CwdChanged" as const,
+      };
+      const invoke = (input: Record<string, unknown>) =>
+        Effect.promise(() =>
+          cwdHook({ ...baseHookInput, ...input } as never, undefined, {
+            signal: new AbortController().signal,
+          }),
+        );
+
+      // A subagent's directory does not decide where the resumable transcript
+      // lives, so it must not move the session's recorded cwd.
+      const subagentOutput = yield* invoke({
+        old_cwd: workspaceRoot,
+        new_cwd: "/tmp/somewhere-else",
+        agent_id: "agent-1",
+      });
+      assert.deepEqual(subagentOutput, {});
+
+      const hookOutput = yield* invoke({ old_cwd: workspaceRoot, new_cwd: worktreePath });
+      assert.deepEqual(hookOutput, {});
+
+      const event = yield* Fiber.join(cwdChangedFiber);
+      const cwdChanged = Option.getOrUndefined(event);
+      assert.equal(cwdChanged?.type, "session.cwd.changed");
+      assert.deepInclude(cwdChanged?.payload, {
+        cwd: worktreePath,
+        previousCwd: workspaceRoot,
+      });
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
@@ -4095,6 +4156,56 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  it.effect("keeps the resume cursor on the main transcript's last assistant message", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate some work",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-sidechain",
+        uuid: "assistant-main-1",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-main-1",
+          content: [{ type: "text", text: "Main transcript" }],
+        },
+      } as unknown as SDKMessage);
+
+      // A subagent's reply lives in its own sidechain file. Adopting its uuid
+      // would point resumeSessionAt at a message the resumed session cannot
+      // find in the main transcript.
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-sidechain",
+        uuid: "assistant-subagent-1",
+        parent_tool_use_id: "tool-use-subagent",
+        message: {
+          id: "assistant-message-subagent-1",
+          content: [{ type: "text", text: "Subagent transcript" }],
+        },
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+
+      const activeSessions = yield* adapter.listSessions();
+      const cursor = activeSessions[0]?.resumeCursor as
+        | { readonly resumeSessionAt?: string }
+        | undefined;
+      assert.equal(cursor?.resumeSessionAt, "assistant-main-1");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
   it.effect("preserves durable resume ids across Claude resume hooks", () => {
