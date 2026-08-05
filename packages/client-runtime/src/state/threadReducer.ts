@@ -627,40 +627,27 @@ export function applyThreadDetailEvent(
 
     // ── Revert ──────────────────────────────────────────────────────
     case "thread.reverted": {
-      const discardedTurnIds = new Set(
-        thread.checkpoints.flatMap((entry) =>
-          entry.checkpointTurnCount > event.payload.turnCount ? [entry.turnId] : [],
-        ),
-      );
       const checkpoints = pipe(
         thread.checkpoints,
         Arr.filter((entry) => entry.checkpointTurnCount <= event.payload.turnCount),
         Arr.sort(checkpointOrder),
       );
       const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
-      const latestCheckpoint = checkpoints.at(-1) ?? null;
-      const targetFrontier = latestCheckpoint?.completedAt ?? null;
-      const shouldDiscardTurnContent = (turnId: TurnId | null, createdAt: string): boolean => {
-        if (turnId === null) return false;
-        if (discardedTurnIds.has(turnId) || event.payload.turnCount === 0) return true;
-        return (
-          targetFrontier !== null && !retainedTurnIds.has(turnId) && createdAt > targetFrontier
-        );
-      };
-
-      // Checkpoints are capped, so unknown turns older than the retained target
-      // frontier survive. Known post-target turns and newer uncheckpointed turns
-      // are removed; reverting to zero removes all turn-bound content.
-      const messages = retainMessagesAfterRevert(thread.messages, shouldDiscardTurnContent);
+      const messages = retainMessagesAfterRevert(
+        thread.messages,
+        retainedTurnIds,
+        event.payload.turnCount,
+      );
       const retainedMessageIds = new Set(Arr.map(messages, (message) => message.id));
       const proposedPlans = pipe(
         thread.proposedPlans,
-        Arr.filter((plan) => !shouldDiscardTurnContent(plan.turnId, plan.createdAt)),
+        Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
       );
       const activities = pipe(
         thread.activities,
-        Arr.filter((activity) => !shouldDiscardTurnContent(activity.turnId, activity.createdAt)),
+        Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
       );
+      const latestCheckpoint = checkpoints.at(-1) ?? null;
 
       return {
         kind: "updated",
@@ -817,11 +804,40 @@ function rebindCheckpointAssistantMessage(
 
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
-  shouldDiscardTurnContent: (turnId: TurnId | null, createdAt: string) => boolean,
+  retainedTurnIds: ReadonlySet<string>,
+  turnCount: number,
 ): OrchestrationMessage[] {
-  return Arr.filter(
-    messages,
-    (message) =>
-      message.role === "system" || !shouldDiscardTurnContent(message.turnId, message.createdAt),
-  );
+  const retainedMessageIds = new Set<MessageId>();
+  for (const message of messages) {
+    if (message.role === "system") {
+      retainedMessageIds.add(message.id);
+    } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
+      retainedMessageIds.add(message.id);
+    }
+  }
+
+  const retainFallbackMessages = (role: "user" | "assistant") => {
+    const retainedCount = messages.filter(
+      (message) => message.role === role && retainedMessageIds.has(message.id),
+    ).length;
+    const missingCount = Math.max(0, turnCount - retainedCount);
+    const fallbackMessages = messages
+      .filter(
+        (message) =>
+          message.role === role &&
+          !retainedMessageIds.has(message.id) &&
+          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+      )
+      // The filtered copy is safe to sort in place; Hermes does not support toSorted.
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      )
+      .slice(0, missingCount);
+    for (const message of fallbackMessages) retainedMessageIds.add(message.id);
+  };
+
+  retainFallbackMessages("user");
+  retainFallbackMessages("assistant");
+  return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

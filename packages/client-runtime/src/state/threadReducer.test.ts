@@ -78,6 +78,62 @@ describe("retainRecentThreadHistory", () => {
     expect(retained.checkpoints[0]?.turnId).toBe("turn-1");
   });
 
+  it("preserves turn content when only checkpoint history is capped", () => {
+    const oldTurnId = TurnId.make("turn-old");
+    const oldMessageId = MessageId.make("msg-old");
+    const checkpoints = Array.from({ length: 501 }, (_, index) => ({
+      turnId: TurnId.make(`turn-${index}`),
+      checkpointTurnCount: index,
+      checkpointRef: CheckpointRef.make(`ref-${index}`),
+      status: "ready" as const,
+      files: [],
+      assistantMessageId: null,
+      completedAt: "2026-04-01T00:00:00.000Z",
+    }));
+    const retained = retainRecentThreadHistory({
+      ...baseThread,
+      messages: [
+        {
+          id: oldMessageId,
+          role: "assistant",
+          text: "Old response",
+          turnId: oldTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:00.000Z",
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+      proposedPlans: [
+        {
+          id: "plan-old",
+          turnId: oldTurnId,
+          planMarkdown: "Old plan",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: "2026-04-01T00:00:00.000Z",
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+      activities: [
+        {
+          id: EventId.make("activity-old"),
+          tone: "tool",
+          kind: "command",
+          summary: "Old command",
+          payload: {},
+          turnId: oldTurnId,
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+      checkpoints,
+    });
+
+    expect(retained.checkpoints[0]?.turnId).toBe("turn-1");
+    expect(retained.messages.map((message) => message.id)).toEqual([oldMessageId]);
+    expect(retained.proposedPlans.map((plan) => plan.id)).toEqual(["plan-old"]);
+    expect(retained.activities.map((activity) => activity.id)).toEqual(["activity-old"]);
+  });
+
   it("keeps the latest resolvable context-window activity within the cap", () => {
     const contextWindow = {
       id: EventId.make("activity-context-window"),
@@ -1398,7 +1454,7 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
-    it("preserves capped-away turns while removing known post-target turns", () => {
+    it("discards capped-away turn content when reverting past the retention window", () => {
       const oldTurnId = TurnId.make("turn-old");
       const postTargetTurnId = TurnId.make("turn-501");
       const oldMessageId = MessageId.make("msg-old");
@@ -1495,11 +1551,12 @@ describe("applyThreadDetailEvent", () => {
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.messages.map((message) => message.id)).toEqual([oldMessageId]);
-        expect(result.thread.completedTurnAssistantMessageIds).toEqual([oldMessageId]);
-        expect(result.thread.proposedPlans.map((plan) => plan.id)).toEqual(["plan-old"]);
-        expect(result.thread.activities.map((activity) => activity.id)).toEqual(["activity-old"]);
+        expect(result.thread.messages).toEqual([]);
+        expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
+        expect(result.thread.proposedPlans).toEqual([]);
+        expect(result.thread.activities).toEqual([]);
         expect(result.thread.checkpoints).toEqual([]);
+        expect(result.thread.latestTurn).toBeNull();
       }
     });
 
