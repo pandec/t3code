@@ -677,6 +677,28 @@ describe("mobile composer drafts", () => {
     }
   });
 
+  it("caps recovered attachments while preserving eight user-visible attachments", async () => {
+    const draftKey = "environment-1:thread-partial-cap";
+    const seeded = seedPartiallyAvailableDraft(draftKey);
+    const replacements = Array.from({ length: 8 }, (_, index) =>
+      testImage(`replacement-${index}`, `data:image/png;base64,replacement-${index}`),
+    );
+
+    ensureComposerDraftsLoaded();
+    await flushComposerDrafts();
+    replaceComposerDraftAttachments(draftKey, replacements);
+    await flushComposerDrafts();
+
+    failReadPathFragments.clear();
+    await flushComposerDrafts();
+
+    expect(getComposerDraftSnapshot(draftKey).attachments).toEqual(replacements);
+    expect(persistedAttachmentIds(seeded.recordPath)).toEqual(
+      replacements.map((attachment) => attachment.id),
+    );
+    expect(persistedFiles.has(seeded.unavailablePath)).toBe(false);
+  });
+
   it("allows an explicit clear to remove unavailable attachment references", async () => {
     const draftKey = "environment-1:thread-partial-clear";
     const dataUrl = "data:image/png;base64,YWJj";

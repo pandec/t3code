@@ -333,8 +333,18 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
       if (!entry.name.endsWith(DRAFT_RECORD_SUFFIX)) {
         continue;
       }
+      let raw: string;
       try {
-        const raw = await entry.text();
+        raw = await entry.text();
+      } catch (cause) {
+        throw new ComposerDraftPersistenceError({
+          operation: "read",
+          directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+          fileName: entry.name,
+          cause,
+        });
+      }
+      try {
         documents.push(decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown));
       } catch (cause) {
         console.warn(
@@ -350,6 +360,9 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
     }
     return documents;
   } catch (cause) {
+    if (cause instanceof ComposerDraftPersistenceError) {
+      throw cause;
+    }
     throw new ComposerDraftPersistenceError({
       operation,
       directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
@@ -678,6 +691,9 @@ export async function sweepOrphanComposerDraftAttachments(): Promise<void> {
       }
     }
   } catch (cause) {
+    if (cause instanceof ComposerDraftPersistenceError) {
+      throw cause;
+    }
     throw new ComposerDraftPersistenceError({
       operation,
       directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_ATTACHMENTS_DIRECTORY}`,
@@ -770,7 +786,13 @@ export async function hydratePersistedComposerDraftKey(
   if (!file.exists) {
     return { state: "missing" };
   }
-  const record = decodeComposerDraftRecordDocument(JSON.parse(await file.text()) as unknown);
+  const raw = await file.text();
+  let record: PersistedComposerDraftRecord;
+  try {
+    record = decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown);
+  } catch {
+    return { state: "missing" };
+  }
   const hydrated = await hydrateRecord(record, attachments);
   if (hydrated.repairedRecord !== null) {
     await repairCorruptRecord(hydrated);

@@ -132,20 +132,22 @@ function mergeRecoveredAttachments(
   latest: ReadonlyArray<DraftComposerImageAttachment>,
   previouslyVisibleIds: ReadonlySet<string>,
 ): ReadonlyArray<DraftComposerImageAttachment> {
-  const latestIds = new Set(latest.map((attachment) => attachment.id));
-  const retainedRecovered = recovered.filter(
-    (attachment) => !previouslyVisibleIds.has(attachment.id) || latestIds.has(attachment.id),
-  );
-  const attachmentIds = new Set(retainedRecovered.map((attachment) => attachment.id));
-  return [
-    ...retainedRecovered,
-    ...latest.filter((attachment) => {
-      if (attachmentIds.has(attachment.id)) {
+  const visibleIds = new Set<string>();
+  const visible = latest
+    .filter((attachment) => {
+      if (visibleIds.has(attachment.id)) {
         return false;
       }
-      attachmentIds.add(attachment.id);
+      visibleIds.add(attachment.id);
       return true;
-    }),
+    })
+    .slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
+  const retainedRecovered = recovered.filter(
+    (attachment) => !visibleIds.has(attachment.id) && !previouslyVisibleIds.has(attachment.id),
+  );
+  return [
+    ...retainedRecovered.slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - visible.length),
+    ...visible,
   ];
 }
 

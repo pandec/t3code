@@ -130,6 +130,7 @@ vi.mock("expo-crypto", () => ({
 import {
   ComposerDraftBatchPersistenceError,
   composerDraftAttachmentReferenceCounts,
+  hydratePersistedComposerDraftKey,
   loadPersistedComposerDrafts,
   orphanComposerDraftAttachmentFileNames,
   persistComposerDraftKeys,
@@ -542,6 +543,15 @@ describe("composer draft record split", () => {
     expect(hashMetrics.maxActive).toBeLessThanOrEqual(2);
   });
 
+  it("treats an invalid split record as missing during targeted rehydration", async () => {
+    const draftKey = "environment-1:thread-invalid-targeted-record";
+    persistedFiles.set(draftRecordPath(draftKey), "{invalid json");
+
+    await expect(hydratePersistedComposerDraftKey(draftKey)).resolves.toEqual({
+      state: "missing",
+    });
+  });
+
   it("quarantines corrupt legacy JSON without deleting its payload", async () => {
     const legacyPath = "file:///document/composer-drafts/drafts.json";
     const corruptPayload = "{not valid json";
@@ -568,6 +578,27 @@ describe("composer draft record split", () => {
 });
 
 describe("composer draft attachment sweep", () => {
+  it("aborts without deleting attachments when a draft record cannot be read", async () => {
+    const draftKey = "environment-1:thread-unreadable-record";
+    const contentHash = testContentHash(DATA_URL);
+    const referencedPath = attachmentPath(contentHash);
+    const orphanPath = attachmentPath("orphan");
+    persistedFiles.set(
+      draftRecordPath(draftKey),
+      JSON.stringify(splitRecord(draftKey, contentHash)),
+    );
+    persistedFiles.set(referencedPath, DATA_URL);
+    persistedFiles.set(orphanPath, DATA_URL);
+    failReadPathFragments.add(`${encodeURIComponent(draftKey)}.json`);
+
+    await expect(sweepOrphanComposerDraftAttachments()).rejects.toMatchObject({
+      operation: "read",
+    });
+
+    expect(persistedFiles.has(referencedPath)).toBe(true);
+    expect(persistedFiles.has(orphanPath)).toBe(true);
+  });
+
   it("counts shared references and removes only unreferenced attachment files", async () => {
     const first = await splitComposerDraftForPersistence(
       "environment-1:thread-1",
