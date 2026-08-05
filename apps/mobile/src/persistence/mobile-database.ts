@@ -11,12 +11,14 @@ import { recordMobileDiagnostic } from "../diagnostics/journal";
 import { type ScheduledAsyncOperation, SerializedAsyncQueue } from "../lib/serialized-async-queue";
 
 const DATABASE_NAME = "t3code-client.db";
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 const CACHE_INCREMENTAL_VACUUM_PAGES = 256;
 const CACHE_STARTUP_VACUUM_PASSES = 32;
 const CACHE_LRU_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const CACHE_STARTUP_MAINTENANCE_DELAY_MS = 1_000;
 const MEBIBYTE = 1024 * 1024;
+const CACHE_AUTO_VACUUM_MIN_ALLOCATED_BYTES = 16 * MEBIBYTE;
+const AUTO_VACUUM_CONVERSION_META_KEY = "auto-vacuum-conversion-v1";
 
 export const MOBILE_CACHE_MAX_ROW_BYTES = 4 * MEBIBYTE;
 export const MOBILE_CACHE_MAX_TOTAL_BYTES = 128 * MEBIBYTE;
@@ -399,28 +401,72 @@ export function decodeLegacyCacheRecord(
   }
 }
 
-async function ensureIncrementalAutoVacuum(database: SQLiteDatabase): Promise<void> {
+type AutoVacuumConversionOutcome = "succeeded" | "failed";
+
+async function loadAutoVacuumConversionOutcome(
+  database: CacheSqliteDatabase,
+): Promise<AutoVacuumConversionOutcome | null> {
+  const row = await database.getFirstAsync<{ readonly value: string }>(
+    "SELECT value FROM client_meta WHERE key = ?",
+    AUTO_VACUUM_CONVERSION_META_KEY,
+  );
+  return row?.value === "succeeded" || row?.value === "failed" ? row.value : null;
+}
+
+async function saveAutoVacuumConversionOutcome(
+  database: CacheSqliteDatabase,
+  outcome: AutoVacuumConversionOutcome,
+): Promise<void> {
+  await database.runAsync(
+    `INSERT INTO client_meta (key, value)
+     VALUES (?, ?)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    AUTO_VACUUM_CONVERSION_META_KEY,
+    outcome,
+  );
+}
+
+async function ensureIncrementalAutoVacuum(
+  database: SQLiteDatabase,
+  allocatedBytes: number,
+  minAllocatedBytes: number,
+): Promise<boolean> {
+  const previousOutcome = await loadAutoVacuumConversionOutcome(database);
   const row = await database.getFirstAsync<{ readonly autoVacuum: number }>(
     "SELECT auto_vacuum AS autoVacuum FROM pragma_auto_vacuum()",
   );
   const autoVacuum = row?.autoVacuum ?? 0;
-  if (autoVacuum === 2) return;
-  if (autoVacuum === 0) {
-    try {
-      await database.execAsync("PRAGMA journal_mode = DELETE;");
-      await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
-      await database.execAsync("VACUUM;");
-    } finally {
-      await database.execAsync("PRAGMA journal_mode = WAL;");
+  if (autoVacuum === 2) {
+    if (previousOutcome === null) {
+      await saveAutoVacuumConversionOutcome(database, "succeeded");
     }
-  } else {
-    await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+    return true;
   }
-  const converted = await database.getFirstAsync<{ readonly autoVacuum: number }>(
-    "SELECT auto_vacuum AS autoVacuum FROM pragma_auto_vacuum()",
-  );
-  if ((converted?.autoVacuum ?? 0) !== 2) {
-    throw new Error("SQLite incremental auto-vacuum conversion did not persist.");
+  if (previousOutcome !== null || allocatedBytes < minAllocatedBytes) return false;
+
+  try {
+    if (autoVacuum === 0) {
+      try {
+        await database.execAsync("PRAGMA journal_mode = DELETE;");
+        await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+        await database.execAsync("VACUUM;");
+      } finally {
+        await database.execAsync("PRAGMA journal_mode = WAL;");
+      }
+    } else {
+      await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+    }
+    const converted = await database.getFirstAsync<{ readonly autoVacuum: number }>(
+      "SELECT auto_vacuum AS autoVacuum FROM pragma_auto_vacuum()",
+    );
+    if ((converted?.autoVacuum ?? 0) !== 2) {
+      throw new Error("SQLite incremental auto-vacuum conversion did not persist.");
+    }
+    await saveAutoVacuumConversionOutcome(database, "succeeded");
+    return true;
+  } catch (cause) {
+    await saveAutoVacuumConversionOutcome(database, "failed");
+    throw cause;
   }
 }
 
@@ -429,16 +475,20 @@ export async function runStartupCacheMaintenance(
   options: {
     readonly maxTotalBytes?: number;
     readonly vacuumPasses?: number;
+    readonly autoVacuumMinAllocatedBytes?: number;
   } = {},
 ): Promise<void> {
   const pruneResult = await pruneCacheToBudget(database, {
     maxTotalBytes: options.maxTotalBytes,
   });
-  let incrementalVacuumAvailable = true;
+  let incrementalVacuumAvailable = false;
   try {
-    await ensureIncrementalAutoVacuum(database);
+    incrementalVacuumAvailable = await ensureIncrementalAutoVacuum(
+      database,
+      pruneResult.allocatedBytes,
+      options.autoVacuumMinAllocatedBytes ?? CACHE_AUTO_VACUUM_MIN_ALLOCATED_BYTES,
+    );
   } catch (cause) {
-    incrementalVacuumAvailable = false;
     const reason = cause instanceof Error ? cause.name : "Unknown";
     recordMobileDiagnostic("cache", { op: "auto-vacuum-failed", reason });
     console.warn("[mobile-database] could not enable incremental auto-vacuum", { reason });
@@ -563,7 +613,7 @@ export class MobileDatabase extends Context.Service<
 >()("@t3tools/mobile/persistence/MobileDatabase") {}
 
 const makeAvailable = Effect.gen(function* () {
-  const cacheOperations = new SerializedAsyncQueue();
+  const databaseOperations = new SerializedAsyncQueue();
   let startupMaintenance: ScheduledAsyncOperation | null = null;
   const database = yield* Effect.acquireRelease(
     Effect.tryPromise({
@@ -577,7 +627,7 @@ const makeAvailable = Effect.gen(function* () {
       Effect.promise(async () => {
         startupMaintenance?.cancel();
         await startupMaintenance?.done;
-        await cacheOperations.drain();
+        await databaseOperations.drain();
         await openDatabase.closeAsync();
       }).pipe(Effect.ignore),
   );
@@ -616,6 +666,11 @@ const makeAvailable = Effect.gen(function* () {
                 payload TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
               );
+
+              CREATE TABLE IF NOT EXISTS client_meta (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+              ) WITHOUT ROWID;
             `);
       });
       const payloadBytesColumn = await database.getFirstAsync<{ readonly present: number }>(
@@ -683,7 +738,7 @@ const makeAvailable = Effect.gen(function* () {
     catch: databaseError("migrate"),
   });
 
-  startupMaintenance = cacheOperations.schedule(CACHE_STARTUP_MAINTENANCE_DELAY_MS, async () => {
+  startupMaintenance = databaseOperations.schedule(CACHE_STARTUP_MAINTENANCE_DELAY_MS, async () => {
     try {
       await runStartupCacheMaintenance(database);
     } catch (cause) {
@@ -697,7 +752,9 @@ const makeAvailable = Effect.gen(function* () {
     loadCache: Effect.fn("MobileDatabase.loadCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
         try: () =>
-          cacheOperations.run(() => loadCacheRecord(database, { environmentId, kind, cacheKey })),
+          databaseOperations.run(() =>
+            loadCacheRecord(database, { environmentId, kind, cacheKey }),
+          ),
         catch: databaseError("load-cache"),
       }).pipe(Effect.map((row) => Option.fromNullishOr(row?.payload))),
     ),
@@ -705,7 +762,7 @@ const makeAvailable = Effect.gen(function* () {
       (environmentId, kind, cacheKey, schemaVersion, payload) =>
         Effect.tryPromise({
           try: () =>
-            cacheOperations.run(() =>
+            databaseOperations.run(() =>
               saveBoundedCacheRecord(database, {
                 environmentId,
                 kind,
@@ -735,7 +792,7 @@ const makeAvailable = Effect.gen(function* () {
     removeCache: Effect.fn("MobileDatabase.removeCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
         try: () =>
-          cacheOperations.run(() =>
+          databaseOperations.run(() =>
             database.runAsync(
               `DELETE FROM client_cache
                        WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
@@ -750,7 +807,7 @@ const makeAvailable = Effect.gen(function* () {
     clearCacheKind: Effect.fn("MobileDatabase.clearCacheKind")((environmentId, kind) =>
       Effect.tryPromise({
         try: () =>
-          cacheOperations.run(() =>
+          databaseOperations.run(() =>
             database.runAsync(
               "DELETE FROM client_cache WHERE environment_id = ? AND kind = ?",
               environmentId,
@@ -763,19 +820,19 @@ const makeAvailable = Effect.gen(function* () {
     clearEnvironmentCache: Effect.fn("MobileDatabase.clearEnvironmentCache")((environmentId) =>
       Effect.tryPromise({
         try: () =>
-          cacheOperations.run(() =>
+          databaseOperations.run(() =>
             database.runAsync("DELETE FROM client_cache WHERE environment_id = ?", environmentId),
           ),
         catch: databaseError("clear-environment-cache"),
       }).pipe(Effect.asVoid),
     ),
     clearAllCaches: Effect.tryPromise({
-      try: () => cacheOperations.run(() => database.runAsync("DELETE FROM client_cache")),
+      try: () => databaseOperations.run(() => database.runAsync("DELETE FROM client_cache")),
       catch: databaseError("clear-all-caches"),
     }).pipe(Effect.asVoid),
     inspectCaches: Effect.tryPromise({
       try: () =>
-        cacheOperations.run(() =>
+        databaseOperations.run(() =>
           database.getAllAsync<unknown>(`
                 SELECT
                   environment_id AS environmentId,
@@ -803,24 +860,28 @@ const makeAvailable = Effect.gen(function* () {
     ),
     loadPreferencesJson: Effect.tryPromise({
       try: () =>
-        database.getFirstAsync<StoredPreferencesJson>(
-          `SELECT payload, updated_at AS updatedAt
-                 FROM client_preferences
-                 WHERE singleton = 1`,
+        databaseOperations.run(() =>
+          database.getFirstAsync<StoredPreferencesJson>(
+            `SELECT payload, updated_at AS updatedAt
+                   FROM client_preferences
+                   WHERE singleton = 1`,
+          ),
         ),
       catch: databaseError("load-preferences"),
     }).pipe(Effect.map(Option.fromNullishOr)),
     savePreferencesJson: Effect.fn("MobileDatabase.savePreferencesJson")((payload, updatedAt) =>
       Effect.tryPromise({
         try: () =>
-          database.runAsync(
-            `INSERT INTO client_preferences (singleton, payload, updated_at)
-                   VALUES (1, ?, ?)
-                   ON CONFLICT (singleton) DO UPDATE SET
-                     payload = excluded.payload,
-                     updated_at = excluded.updated_at`,
-            payload,
-            updatedAt,
+          databaseOperations.run(() =>
+            database.runAsync(
+              `INSERT INTO client_preferences (singleton, payload, updated_at)
+                     VALUES (1, ?, ?)
+                     ON CONFLICT (singleton) DO UPDATE SET
+                       payload = excluded.payload,
+                       updated_at = excluded.updated_at`,
+              payload,
+              updatedAt,
+            ),
           ),
         catch: databaseError("save-preferences"),
       }).pipe(Effect.asVoid),

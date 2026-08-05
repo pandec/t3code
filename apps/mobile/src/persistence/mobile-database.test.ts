@@ -1,6 +1,8 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import type { SQLiteDatabase } from "expo-sqlite";
 import * as NodeSqlite from "node:sqlite";
 import { vi } from "vite-plus/test";
@@ -23,10 +25,22 @@ function sqliteValue(value: unknown): NodeSqlite.SQLInputValue {
   throw new Error("Unsupported SQLite test parameter.");
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function makeCacheDatabase(
   options: {
     readonly incrementalAutoVacuum?: boolean;
     readonly failAutoVacuumConversion?: boolean;
+    readonly preferenceWriteGate?: Promise<void>;
+    readonly onPreferenceWriteStarted?: () => void;
+    readonly onPreferenceWriteFinished?: () => void;
+    readonly onClose?: () => void;
   } = {},
 ) {
   const sqlite = new NodeSqlite.DatabaseSync(":memory:");
@@ -35,6 +49,8 @@ function makeCacheDatabase(
     sqlite.exec("PRAGMA auto_vacuum = INCREMENTAL;");
   }
   sqlite.exec(`
+    PRAGMA user_version = 3;
+
     CREATE TABLE client_cache (
       environment_id TEXT NOT NULL,
       kind TEXT NOT NULL,
@@ -44,6 +60,17 @@ function makeCacheDatabase(
       payload_bytes INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (environment_id, kind, cache_key)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE client_preferences (
+      singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE client_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
     ) WITHOUT ROWID;
   `);
   const database = {
@@ -59,13 +86,22 @@ function makeCacheDatabase(
       const row = sqlite.prepare(sql).get(...params.map(sqliteValue));
       return Promise.resolve(row === undefined ? null : (row as T));
     },
-    runAsync: (sql: string, ...params: ReadonlyArray<unknown>) => {
+    runAsync: async (sql: string, ...params: ReadonlyArray<unknown>) => {
+      if (sql.includes("INSERT INTO client_preferences")) {
+        options.onPreferenceWriteStarted?.();
+        await options.preferenceWriteGate;
+      }
       const result = sqlite.prepare(sql).run(...params.map(sqliteValue));
-      return Promise.resolve({
+      if (sql.includes("INSERT INTO client_preferences")) {
+        options.onPreferenceWriteFinished?.();
+      }
+      return {
         changes: result.changes,
         lastInsertRowId: Number(result.lastInsertRowid),
-      });
+      };
     },
+    getAllAsync: <T>(sql: string, ...params: ReadonlyArray<unknown>): Promise<T[]> =>
+      Promise.resolve(sqlite.prepare(sql).all(...params.map(sqliteValue)) as T[]),
     withExclusiveTransactionAsync: async (run: (transaction: SQLiteDatabase) => Promise<void>) => {
       sqlite.exec("BEGIN IMMEDIATE");
       try {
@@ -75,6 +111,11 @@ function makeCacheDatabase(
         sqlite.exec("ROLLBACK");
         throw cause;
       }
+    },
+    closeAsync: () => {
+      options.onClose?.();
+      sqlite.close();
+      return Promise.resolve();
     },
   };
 
@@ -95,6 +136,12 @@ function makeCacheDatabase(
         | { readonly auto_vacuum: number }
         | undefined;
       return row?.auto_vacuum ?? 0;
+    },
+    autoVacuumOutcome: () => {
+      const row = sqlite
+        .prepare("SELECT value FROM client_meta WHERE key = 'auto-vacuum-conversion-v1'")
+        .get() as { readonly value: string } | undefined;
+      return row?.value ?? null;
     },
     executedSql,
     close: () => sqlite.close(),
@@ -179,27 +226,37 @@ describe("mobile database cache budgets", () => {
         );
       }
 
-      await runStartupCacheMaintenance(cache.database, { maxTotalBytes: 8, vacuumPasses: 2 });
+      await runStartupCacheMaintenance(cache.database, {
+        maxTotalBytes: 8,
+        vacuumPasses: 2,
+        autoVacuumMinAllocatedBytes: 0,
+      });
 
       expect(cache.autoVacuum()).toBe(2);
+      expect(cache.autoVacuumOutcome()).toBe("succeeded");
       expect(cache.rows().map((row) => row.cacheKey)).toEqual(["thread-2", "thread-3"]);
     } finally {
       cache.close();
     }
   });
 
-  it("restores WAL and continues maintenance when auto-vacuum conversion fails", async () => {
+  it("records a failed auto-vacuum conversion and does not retry it", async () => {
     const cache = makeCacheDatabase({
       incrementalAutoVacuum: false,
       failAutoVacuumConversion: true,
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      await runStartupCacheMaintenance(cache.database, { vacuumPasses: 2 });
+      const options = { vacuumPasses: 2, autoVacuumMinAllocatedBytes: 0 } as const;
+      await runStartupCacheMaintenance(cache.database, options);
+      await runStartupCacheMaintenance(cache.database, options);
 
+      expect(cache.autoVacuumOutcome()).toBe("failed");
+      expect(cache.executedSql.filter((sql) => sql === "VACUUM;")).toHaveLength(1);
       expect(cache.executedSql).toContain("PRAGMA journal_mode = WAL;");
       expect(cache.executedSql).toContain("PRAGMA wal_checkpoint(TRUNCATE);");
       expect(cache.executedSql).toContain("PRAGMA optimize;");
+      expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         "[mobile-database] could not enable incremental auto-vacuum",
         { reason: "Error" },
@@ -207,6 +264,71 @@ describe("mobile database cache budgets", () => {
     } finally {
       warn.mockRestore();
       cache.close();
+    }
+  });
+
+  it("defers auto-vacuum conversion until the database reaches the physical size threshold", async () => {
+    const cache = makeCacheDatabase({ incrementalAutoVacuum: false });
+    try {
+      await runStartupCacheMaintenance(cache.database, {
+        vacuumPasses: 0,
+        autoVacuumMinAllocatedBytes: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(cache.autoVacuumOutcome()).toBeNull();
+      expect(cache.executedSql).not.toContain("VACUUM;");
+
+      await runStartupCacheMaintenance(cache.database, {
+        vacuumPasses: 0,
+        autoVacuumMinAllocatedBytes: 0,
+      });
+      expect(cache.autoVacuumOutcome()).toBe("succeeded");
+      expect(cache.executedSql.filter((sql) => sql === "VACUUM;")).toHaveLength(1);
+    } finally {
+      cache.close();
+    }
+  });
+});
+
+describe("mobile database operation ordering", () => {
+  it("waits for queued preference saves before closing the database", async () => {
+    const writeGate = deferred();
+    const writeStarted = deferred();
+    const events: string[] = [];
+    const cache = makeCacheDatabase({
+      preferenceWriteGate: writeGate.promise,
+      onPreferenceWriteStarted: () => {
+        events.push("preference:start");
+        writeStarted.resolve();
+      },
+      onPreferenceWriteFinished: () => {
+        events.push("preference:end");
+      },
+      onClose: () => {
+        events.push("close");
+      },
+    });
+    openDatabaseAsync.mockResolvedValueOnce(cache.database);
+    const scope = await Effect.runPromise(Scope.make());
+    let close: Promise<void> | null = null;
+
+    try {
+      const database = await Effect.runPromise(
+        make.pipe(Effect.provideService(Scope.Scope, scope)),
+      );
+      const save = Effect.runPromise(database.savePreferencesJson("{}", 1));
+      await writeStarted.promise;
+
+      close = Effect.runPromise(Scope.close(scope, Exit.void));
+      await Promise.resolve();
+      expect(events).toEqual(["preference:start"]);
+
+      writeGate.resolve();
+      await Promise.all([save, close]);
+      expect(events).toEqual(["preference:start", "preference:end", "close"]);
+    } finally {
+      writeGate.resolve();
+      await (close ?? Effect.runPromise(Scope.close(scope, Exit.void)));
     }
   });
 });

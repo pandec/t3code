@@ -56,6 +56,9 @@ const mocks = vi.hoisted(() => {
         if (sql.includes("pragma_table_info")) {
           return Promise.resolve({ present: 1 });
         }
+        if (sql.includes("FROM client_meta")) {
+          return Promise.resolve(null);
+        }
         if (sql.includes("pragma_auto_vacuum")) {
           return Promise.resolve({ autoVacuum: 2 });
         }
@@ -79,7 +82,10 @@ const mocks = vi.hoisted(() => {
             : { payload: preferencesJson, updatedAt: preferencesUpdatedAt },
         );
       }),
-      runAsync: vi.fn((_sql: string, payload?: unknown, updatedAt?: unknown) => {
+      runAsync: vi.fn((sql: string, payload?: unknown, updatedAt?: unknown) => {
+        if (sql.includes("client_meta")) {
+          return Promise.resolve({ changes: 1, lastInsertRowId: 0 });
+        }
         if (savePreferencesFails) {
           return Promise.reject(new Error("database unavailable"));
         }
@@ -89,7 +95,7 @@ const mocks = vi.hoisted(() => {
         if (typeof updatedAt === "number") {
           preferencesUpdatedAt = updatedAt;
         }
-        return Promise.resolve();
+        return Promise.resolve({ changes: 1, lastInsertRowId: 1 });
       }),
     },
   };

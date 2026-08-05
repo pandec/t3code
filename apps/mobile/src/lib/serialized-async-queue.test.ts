@@ -60,6 +60,28 @@ describe("SerializedAsyncQueue", () => {
     expect(complete).toBe(true);
   });
 
+  it("keeps draining until the queue tail stabilizes", async () => {
+    const queue = new SerializedAsyncQueue();
+    const firstGate = deferred();
+    const secondGate = deferred();
+    let drained = false;
+
+    void queue.run(() => firstGate.promise);
+    const drain = queue.drain().then(() => {
+      drained = true;
+    });
+    void queue.run(() => secondGate.promise);
+
+    firstGate.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    secondGate.resolve();
+    await drain;
+    expect(drained).toBe(true);
+  });
+
   it("lets initial work finish before delayed maintenance gates later work", async () => {
     vi.useFakeTimers();
     try {

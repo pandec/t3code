@@ -40,7 +40,11 @@ export class SerializedAsyncQueue {
     };
   }
 
-  drain(): Promise<void> {
-    return this.tail;
+  async drain(): Promise<void> {
+    while (true) {
+      const tail = this.tail;
+      await tail;
+      if (tail === this.tail) return;
+    }
   }
 }
