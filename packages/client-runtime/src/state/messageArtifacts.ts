@@ -31,10 +31,54 @@ export interface MessageArtifactSessionSnapshot {
 }
 
 const EMPTY_ARTIFACTS: MessageArtifactSessionSnapshot = { summary: null, speech: null };
+const MAX_RETAINED_ARTIFACTS = 16;
 const sessionArtifacts = new Map<string, MessageArtifactSessionSnapshot & { sourceText: string }>();
 const sessionArtifactListeners = new Map<string, Set<() => void>>();
+const pendingArtifactRequests = new Map<string, number>();
+const retainedArtifactKeys = new Set<string>();
 const artifactKey = (environmentId: EnvironmentId, messageId: MessageId) =>
   `${environmentId}\u0000${messageId}`;
+
+function retainCompletedArtifact(key: string) {
+  retainedArtifactKeys.delete(key);
+  retainedArtifactKeys.add(key);
+  if (retainedArtifactKeys.size <= MAX_RETAINED_ARTIFACTS) return;
+
+  const oldestKey = retainedArtifactKeys.values().next().value;
+  if (oldestKey === undefined) return;
+  retainedArtifactKeys.delete(oldestKey);
+  if (!pendingArtifactRequests.has(oldestKey) && !sessionArtifactListeners.has(oldestKey)) {
+    sessionArtifacts.delete(oldestKey);
+  }
+}
+
+export function beginMessageArtifactRequest(
+  environmentId: EnvironmentId,
+  messageId: MessageId,
+): () => void {
+  const key = artifactKey(environmentId, messageId);
+  pendingArtifactRequests.set(key, (pendingArtifactRequests.get(key) ?? 0) + 1);
+  retainedArtifactKeys.delete(key);
+
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+
+    const remainingRequests = (pendingArtifactRequests.get(key) ?? 1) - 1;
+    if (remainingRequests > 0) {
+      pendingArtifactRequests.set(key, remainingRequests);
+      return;
+    }
+
+    pendingArtifactRequests.delete(key);
+    if (sessionArtifacts.has(key)) {
+      retainCompletedArtifact(key);
+    } else {
+      retainedArtifactKeys.delete(key);
+    }
+  };
+}
 
 export function getMessageArtifactSessionSnapshot(
   environmentId: EnvironmentId,
@@ -54,11 +98,14 @@ export function subscribeMessageArtifactSession(
   const listeners = sessionArtifactListeners.get(key) ?? new Set();
   listeners.add(listener);
   sessionArtifactListeners.set(key, listeners);
+  if (retainedArtifactKeys.delete(key)) retainedArtifactKeys.add(key);
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && sessionArtifactListeners.get(key) === listeners) {
       sessionArtifactListeners.delete(key);
-      sessionArtifacts.delete(key);
+      if (!pendingArtifactRequests.has(key) && !retainedArtifactKeys.has(key)) {
+        sessionArtifacts.delete(key);
+      }
     }
   };
 }
@@ -71,7 +118,7 @@ function updateMessageArtifactSession(
 ) {
   const key = artifactKey(environmentId, messageId);
   const listeners = sessionArtifactListeners.get(key);
-  if (listeners === undefined) return;
+  if (listeners === undefined && !pendingArtifactRequests.has(key)) return;
 
   const current = sessionArtifacts.get(key);
   sessionArtifacts.set(key, {
@@ -80,7 +127,7 @@ function updateMessageArtifactSession(
     speech: current?.sourceText === sourceText ? current.speech : null,
     ...update,
   });
-  for (const listener of listeners) listener();
+  for (const listener of listeners ?? []) listener();
 }
 
 export const rememberMessageSummary = (

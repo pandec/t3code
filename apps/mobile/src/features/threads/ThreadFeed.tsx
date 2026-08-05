@@ -125,6 +125,7 @@ import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import {
+  beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
   rememberMessageSpeech,
   rememberMessageSummary,
@@ -1119,20 +1120,25 @@ function AssistantMessageMetaAndArtifacts(props: {
   const prepareSpeech = useCallback(async () => {
     if (preparing) return;
     setPreparing(true);
-    const result = await synthesize({
-      environmentId: props.environmentId,
-      input: { messageId: props.messageId },
-    });
-    setPreparing(false);
-    if (result._tag === "Success") {
-      rememberMessageSpeech(props.environmentId, props.messageText, result.value);
-      setExpanded(true);
-      return;
+    const endRequest = beginMessageArtifactRequest(props.environmentId, props.messageId);
+    try {
+      const result = await synthesize({
+        environmentId: props.environmentId,
+        input: { messageId: props.messageId },
+      });
+      setPreparing(false);
+      if (result._tag === "Success") {
+        rememberMessageSpeech(props.environmentId, props.messageText, result.value);
+        setExpanded(true);
+        return;
+      }
+      Alert.alert(
+        "Listening version unavailable",
+        "T3 Code could not prepare audio for this message. Try again in a moment.",
+      );
+    } finally {
+      endRequest();
     }
-    Alert.alert(
-      "Listening version unavailable",
-      "T3 Code could not prepare audio for this message. Try again in a moment.",
-    );
   }, [preparing, props.environmentId, props.messageId, props.messageText, synthesize]);
 
   const onPressSpeech = useCallback(async () => {
@@ -1150,20 +1156,25 @@ function AssistantMessageMetaAndArtifacts(props: {
     }
     if (summaryPreparing) return;
     setSummaryPreparing(true);
-    const result = await summarize({
-      environmentId: props.environmentId,
-      input: { messageId: props.messageId },
-    });
-    setSummaryPreparing(false);
-    if (result._tag === "Success") {
-      rememberMessageSummary(props.environmentId, props.messageText, result.value);
-      setSummaryExpanded(true);
-      return;
+    const endRequest = beginMessageArtifactRequest(props.environmentId, props.messageId);
+    try {
+      const result = await summarize({
+        environmentId: props.environmentId,
+        input: { messageId: props.messageId },
+      });
+      setSummaryPreparing(false);
+      if (result._tag === "Success") {
+        rememberMessageSummary(props.environmentId, props.messageText, result.value);
+        setSummaryExpanded(true);
+        return;
+      }
+      Alert.alert(
+        "Summary unavailable",
+        "T3 Code could not summarize this message. Try again in a moment.",
+      );
+    } finally {
+      endRequest();
     }
-    Alert.alert(
-      "Summary unavailable",
-      "T3 Code could not summarize this message. Try again in a moment.",
-    );
   }, [
     props.environmentId,
     props.messageId,
