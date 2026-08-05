@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import {
   isSameDirectory,
   readCheckedOutBranch,
+  readGitCommonDir,
   sanitizeGitRepositoryEnvironment,
 } from "./Utils.ts";
 
@@ -81,4 +82,24 @@ it("removes repository-scoping Git variables without dropping ordinary configura
     GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
     PATH: "/usr/bin",
   });
+});
+
+it("resolves a linked worktree and its primary checkout to the same repository", () => {
+  const root = makeTempDir();
+  const repo = NodePath.join(root, "project");
+  NodeFS.mkdirSync(NodePath.join(repo, ".git", "worktrees", "feature"), { recursive: true });
+
+  const worktree = NodePath.join(root, "feature");
+  NodeFS.mkdirSync(worktree);
+  NodeFS.writeFileSync(
+    NodePath.join(worktree, ".git"),
+    `gitdir: ${NodePath.join(repo, ".git", "worktrees", "feature")}\n`,
+  );
+
+  const foreign = NodePath.join(root, "other-project");
+  NodeFS.mkdirSync(NodePath.join(foreign, ".git"), { recursive: true });
+
+  expect(readGitCommonDir(worktree)).toBe(readGitCommonDir(repo));
+  expect(readGitCommonDir(foreign)).not.toBe(readGitCommonDir(repo));
+  expect(readGitCommonDir(makeTempDir())).toBeNull();
 });

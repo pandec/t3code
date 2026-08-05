@@ -3734,7 +3734,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         reportedPreviousCwd: string | undefined,
       ) {
         const context = yield* Ref.get(contextRef);
-        if (!context || context.stopped) return;
+        if (!context || context.stopped) {
+          // Hooks are registered with the query before the session context is
+          // published, so a very early move has nowhere to land. Log it rather
+          // than dropping it silently — the persisted cwd would be wrong and
+          // there would be nothing to explain why.
+          yield* Effect.logWarning("claude.session.cwd-change-unrecorded", {
+            threadId,
+            cwd: nextCwd,
+            reason: context ? "session-stopped" : "context-not-ready",
+          });
+          return;
+        }
 
         const previousCwd = context.session.cwd;
         if (previousCwd === nextCwd) return;

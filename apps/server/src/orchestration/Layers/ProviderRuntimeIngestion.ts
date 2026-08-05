@@ -39,6 +39,7 @@ import {
   isGitRepository,
   isSameDirectory,
   readCheckedOutBranch,
+  readGitCommonDir,
 } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -1299,11 +1300,20 @@ const make = Effect.gen(function* () {
     // ends up describing a directory no live session is using.
     const sessions = yield* providerService.listSessions();
     const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-    if (liveSession?.sessionGenerationId !== event.payload.sessionGenerationId) {
+    // Reject only against a *different* live generation. Requiring a live
+    // session would discard the most important case of all: the agent leaves a
+    // worktree as its last act, the session exits, and the event drains after
+    // the adapter has already dropped it — leaving the thread pointing at a
+    // directory nothing uses. Events drain in order, so when no session is live
+    // the newest observation is still the correct one.
+    if (
+      liveSession !== undefined &&
+      liveSession.sessionGenerationId !== event.payload.sessionGenerationId
+    ) {
       yield* Effect.logDebug("provider.session.cwd-changed-stale-generation", {
         threadId: thread.id,
         eventGenerationId: event.payload.sessionGenerationId,
-        liveGenerationId: liveSession?.sessionGenerationId,
+        liveGenerationId: liveSession.sessionGenerationId,
       });
       return;
     }
@@ -1317,16 +1327,22 @@ const make = Effect.gen(function* () {
 
     const cwd = event.payload.cwd;
     const backAtWorkspaceRoot = isSameDirectory(cwd, workspace.workspaceRoot);
-    // Only a checkout of its own can stand in as the thread's worktree. A plain
-    // directory change into a subdirectory would otherwise be recorded as one,
-    // pointing git status, diffs, and worktree cleanup at a path that is not a
-    // working tree at all.
-    if (!backAtWorkspaceRoot && !isGitRepository(cwd)) {
-      yield* Effect.logDebug("provider.session.cwd-changed-not-a-worktree", {
-        threadId: thread.id,
-        cwd,
-      });
-      return;
+    // Only a checkout of this project can stand in as the thread's worktree.
+    // A plain subdirectory is not a working tree at all, and a checkout of some
+    // other repository would silently retarget this thread's diffs, checkpoints
+    // and git status at a codebase it has nothing to do with.
+    if (!backAtWorkspaceRoot) {
+      const projectRepository = readGitCommonDir(workspace.workspaceRoot);
+      const cwdRepository = readGitCommonDir(cwd);
+      if (cwdRepository === null || cwdRepository !== projectRepository) {
+        yield* Effect.logDebug("provider.session.cwd-changed-outside-project-repository", {
+          threadId: thread.id,
+          cwd,
+          cwdRepository,
+          projectRepository,
+        });
+        return;
+      }
     }
 
     // Stored paths are compared with strict equality elsewhere, so record the

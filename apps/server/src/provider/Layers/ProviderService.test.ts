@@ -1460,23 +1460,23 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("resumes in the directory the running session moved itself into", () =>
+  it.effect("falls back to the requested directory when a persisted cwd no longer exists", () =>
     Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-      const threadId = asThreadId("thread-runtime-observed-cwd");
-      // A session that entered a worktree mid-run: the provider stores its
-      // transcript under the project directory derived from that cwd, so a cold
-      // resume at the workspace root would not find the conversation.
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-cwd-removed");
+      // A worktree the session ran in, removed between sessions. Handing it to
+      // the provider again fails at process start, and nothing downgrades the
+      // authority on its own, so the thread would never start again.
       yield* directory.upsert({
         threadId,
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         status: "stopped",
-        resumeCursor: { threadId: "native-moved-thread" },
+        resumeCursor: { threadId: "native-removed-worktree" },
         runtimeMode: "full-access",
         runtimePayload: {
-          cwd: "/tmp/project-root/.claude/worktrees/feature",
+          cwd: "/tmp/a-worktree-that-no-longer-exists",
           cwdAuthority: "runtime-observed",
         },
       });
@@ -1490,10 +1490,42 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      assert.equal(
-        routing.codex.startSession.mock.calls[0]?.[0]?.cwd,
-        "/tmp/project-root/.claude/worktrees/feature",
-      );
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, "/tmp/project-root");
+    }),
+  );
+
+  it.effect("resumes in the directory the running session moved itself into", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-observed-cwd");
+      const movedCwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-moved-worktree-"));
+      // A session that entered a worktree mid-run: the provider stores its
+      // transcript under the project directory derived from that cwd, so a cold
+      // resume at the workspace root would not find the conversation.
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-moved-thread" },
+        runtimeMode: "full-access",
+        runtimePayload: {
+          cwd: movedCwd,
+          cwdAuthority: "runtime-observed",
+        },
+      });
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-root",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, movedCwd);
     }),
   );
 
@@ -2297,6 +2329,52 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
 const fanout = makeProviderServiceLayer();
 fanout.layer("ProviderServiceLive fanout", (it) => {
+  it.effect("persists a runtime cwd change onto the binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-cwd-changed-binding");
+
+      const session = yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        cwd: "/tmp/project-cwd-binding",
+        runtimeMode: "full-access",
+      });
+      yield* advanceTestClock(1_000);
+
+      fanout.claude.emit({
+        type: "session.cwd.changed",
+        eventId: asEventId("evt-cwd-changed-binding"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        payload: {
+          cwd: "/tmp/project-cwd-binding/.claude/worktrees/feature",
+          previousCwd: "/tmp/project-cwd-binding",
+          sessionGenerationId: session.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const binding = (yield* directory.listBindings()).find(
+        (entry) => entry.threadId === threadId,
+      );
+      const runtimePayload = binding?.runtimePayload as
+        | { readonly cwd?: string; readonly cwdAuthority?: string }
+        | null
+        | undefined;
+      // Without this the binding keeps the workspace root and the next cold
+      // resume looks for the transcript in the wrong project directory.
+      // Without the session.cwd.changed branch in refreshBindingFromRuntimeEvent
+      // the binding keeps the workspace root, and the next cold resume looks for
+      // the transcript in the wrong project directory — the original bug.
+      assert.equal(runtimePayload?.cwd, "/tmp/project-cwd-binding/.claude/worktrees/feature");
+      assert.equal(runtimePayload?.cwdAuthority, "runtime-observed");
+    }),
+  );
+
   it.effect("fans out adapter turn completion events", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

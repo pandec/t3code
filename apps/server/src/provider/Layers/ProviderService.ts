@@ -55,6 +55,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import { isExistingDirectory } from "../../pathExpansion.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -959,10 +960,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const persistedCwd = reusePersistedState
           ? readPersistedCwd(persistedBinding?.runtimePayload)
           : undefined;
-        const effectiveCwd =
+        const persistedCwdOutranksRequest =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
-          shouldUsePersistedCwd(persistedBinding.runtimePayload)
+          shouldUsePersistedCwd(persistedBinding.runtimePayload);
+        // A directory the session wandered into only outranks the requested one
+        // while it still exists: an agent-created worktree can be removed
+        // between sessions, and nothing downgrades the authority on its own, so
+        // the thread would keep being started somewhere that is gone. The
+        // imported-session authority keeps its existing behavior — there the
+        // recorded directory is the whole point of the import.
+        const persistedCwdMissing =
+          persistedCwdOutranksRequest &&
+          readDurableCwdAuthority(persistedBinding?.runtimePayload) === "runtime-observed" &&
+          !isExistingDirectory(persistedCwd);
+        if (persistedCwdMissing) {
+          yield* Effect.logWarning("provider.session.observed-cwd-missing", {
+            threadId,
+            persistedCwd,
+            fallbackCwd: input.cwd ?? null,
+          });
+        }
+        const effectiveCwd =
+          persistedCwdOutranksRequest && !persistedCwdMissing
             ? persistedCwd
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({

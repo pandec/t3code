@@ -234,6 +234,19 @@ describe("ProviderRuntimeIngestion", () => {
   // clock without reading Date.now(), which the effect lint bans.
   const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
 
+  function makeLinkedWorktree(input: {
+    readonly workspaceRoot: string;
+    readonly name: string;
+    readonly branch: string;
+  }): string {
+    const worktree = makeTempDir(`t3-provider-worktree-${input.name}-`);
+    const gitDir = NodePath.join(input.workspaceRoot, ".git", "worktrees", input.name);
+    NodeFS.mkdirSync(gitDir, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(gitDir, "HEAD"), `ref: refs/heads/${input.branch}\n`);
+    NodeFS.writeFileSync(NodePath.join(worktree, ".git"), `gitdir: ${gitDir}\n`);
+    return worktree;
+  }
+
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     providerInstanceHealth?: ProviderInstanceHealthShape;
@@ -2801,12 +2814,11 @@ describe("ProviderRuntimeIngestion", () => {
   it("mirrors a session cwd change onto the thread's worktree and branch", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
-    const worktreePath = makeTempDir("t3-provider-worktree-");
-    NodeFS.mkdirSync(NodePath.join(worktreePath, ".git"));
-    NodeFS.writeFileSync(
-      NodePath.join(worktreePath, ".git", "HEAD"),
-      "ref: refs/heads/feature/entered\n",
-    );
+    const worktreePath = makeLinkedWorktree({
+      workspaceRoot: harness.workspaceRoot,
+      name: "entered",
+      branch: "feature/entered",
+    });
 
     harness.emit({
       type: "session.cwd.changed",
@@ -2846,9 +2858,14 @@ describe("ProviderRuntimeIngestion", () => {
     expect(left.branch).toBeNull();
   });
 
-  it("ignores a cwd change into a directory that is not a checkout of its own", async () => {
+  it("ignores a cwd change outside the project's repository", async () => {
     const harness = await createHarness();
     const plainDirectory = makeTempDir("t3-provider-plain-");
+    // A checkout of an unrelated repository must not become this thread's
+    // worktree: diffs, checkpoints and git status would silently retarget.
+    const foreignCheckout = makeTempDir("t3-provider-foreign-");
+    NodeFS.mkdirSync(NodePath.join(foreignCheckout, ".git"));
+    NodeFS.writeFileSync(NodePath.join(foreignCheckout, ".git", "HEAD"), "ref: refs/heads/main\n");
 
     harness.emit({
       type: "session.cwd.changed",
@@ -2857,6 +2874,14 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       threadId: asThreadId("thread-1"),
       payload: { cwd: plainDirectory, previousCwd: harness.workspaceRoot },
+    });
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-foreign"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: foreignCheckout, previousCwd: harness.workspaceRoot },
     });
     await harness.drain();
 
@@ -2869,9 +2894,11 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("ignores a cwd change emitted by a superseded session generation", async () => {
     const harness = await createHarness();
-    const worktreePath = makeTempDir("t3-provider-stale-worktree-");
-    NodeFS.mkdirSync(NodePath.join(worktreePath, ".git"));
-    NodeFS.writeFileSync(NodePath.join(worktreePath, ".git", "HEAD"), "ref: refs/heads/stale\n");
+    const worktreePath = makeLinkedWorktree({
+      workspaceRoot: harness.workspaceRoot,
+      name: "stale",
+      branch: "stale",
+    });
 
     harness.setProviderSession({
       provider: ProviderDriverKind.make("codex"),

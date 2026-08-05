@@ -33,6 +33,36 @@ export function canonicalizeDirectory(value: string): string {
 }
 
 /**
+ * Resolve the shared git directory backing `cwd` — the repository a checkout
+ * belongs to. A primary checkout points at its own `.git`; a linked worktree's
+ * `gitdir` sits under `<repo>/.git/worktrees/<name>`, whose repository is two
+ * levels up. Returns `null` when `cwd` is not a checkout.
+ *
+ * Two checkouts of the same repository share this value, which is what
+ * distinguishes a worktree of the project from an unrelated clone.
+ */
+export function readGitCommonDir(cwd: string): string | null {
+  try {
+    const dotGit = NodePath.join(cwd, ".git");
+    const stats = NodeFS.statSync(dotGit, { throwIfNoEntry: false });
+    if (!stats) return null;
+    if (stats.isDirectory()) return canonicalizeDirectory(dotGit);
+
+    const pointer = NodeFS.readFileSync(dotGit, "utf8").trim();
+    const match = /^gitdir:\s*(.+)$/.exec(pointer);
+    if (!match?.[1]) return null;
+    const target = match[1].trim();
+    const gitDir = NodePath.isAbsolute(target) ? target : NodePath.resolve(cwd, target);
+    const parent = NodePath.dirname(gitDir);
+    return NodePath.basename(parent) === "worktrees"
+      ? canonicalizeDirectory(NodePath.dirname(parent))
+      : canonicalizeDirectory(gitDir);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read the branch checked out at `cwd` without shelling out to git.
  *
  * `.git` is a directory in a primary checkout and a `gitdir:` pointer file in a
