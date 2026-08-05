@@ -3,6 +3,8 @@ import { vi } from "vite-plus/test";
 
 const persistedFiles = new Map<string, string>();
 const failNextHash = { value: false };
+const corruptWritesRemaining = { value: 0 };
+const failWritePathFragments = new Set<string>();
 
 vi.mock("expo-file-system", () => {
   class File {
@@ -28,6 +30,14 @@ vi.mock("expo-file-system", () => {
     }
 
     write(value: string): void {
+      if ([...failWritePathFragments].some((fragment) => this.uri.includes(fragment))) {
+        throw new Error(`write failed: ${this.uri}`);
+      }
+      if (corruptWritesRemaining.value > 0) {
+        corruptWritesRemaining.value -= 1;
+        persistedFiles.set(this.uri, `${value}!`);
+        return;
+      }
       persistedFiles.set(this.uri, value);
     }
 
@@ -115,6 +125,8 @@ function image(id: string) {
 afterEach(() => {
   persistedFiles.clear();
   failNextHash.value = false;
+  corruptWritesRemaining.value = 0;
+  failWritePathFragments.clear();
 });
 
 describe("composer draft record split", () => {
@@ -171,6 +183,47 @@ describe("composer draft record split", () => {
     await expect(persistComposerDraftKeys(drafts, new Set([draftKey]))).resolves.toBeUndefined();
   });
 
+  it("attempts every draft in a batch before rejecting the first failure", async () => {
+    const failedKey = "environment-1:thread-failed";
+    const persistedKey = "environment-1:thread-persisted";
+    failWritePathFragments.add(encodeURIComponent(failedKey));
+
+    await expect(
+      persistComposerDraftKeys(
+        {
+          [failedKey]: { text: "failed", attachments: [] },
+          [persistedKey]: { text: "persisted", attachments: [] },
+        },
+        new Set([failedKey, persistedKey]),
+      ),
+    ).rejects.toThrow();
+
+    const persistedPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(persistedKey)}.json`;
+    expect(persistedFiles.has(persistedPath)).toBe(true);
+  });
+
+  it("repairs corrupt attachment content before committing a verified record", async () => {
+    const draftKey = "environment-1:thread-corrupt-attachment";
+    const draft: ComposerDraft = { text: "draft", attachments: [image("corrupt")] };
+    await persistComposerDraftKeys({ [draftKey]: draft }, new Set([draftKey]));
+    const attachmentPath = [...persistedFiles.keys()].find((path) =>
+      path.startsWith("file:///document/composer-drafts/attachments/"),
+    );
+    expect(attachmentPath).toBeDefined();
+    persistedFiles.set(attachmentPath!, "corrupt");
+    corruptWritesRemaining.value = 1;
+
+    await expect(
+      persistComposerDraftKeys({ [draftKey]: draft }, new Set([draftKey]), { verify: true }),
+    ).rejects.toThrow();
+    expect(persistedFiles.get(attachmentPath!)).not.toBe(DATA_URL);
+
+    await expect(
+      persistComposerDraftKeys({ [draftKey]: draft }, new Set([draftKey]), { verify: true }),
+    ).resolves.toBeUndefined();
+    expect(persistedFiles.get(attachmentPath!)).toBe(DATA_URL);
+  });
+
   it("migrates the legacy aggregate document without dropping draft content", async () => {
     const draft: ComposerDraft = {
       text: "legacy draft",
@@ -202,6 +255,46 @@ describe("composer draft record split", () => {
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({
       "environment-1:thread-legacy": draft,
     });
+  });
+
+  it("prefers valid legacy content over a split record with a corrupt attachment", async () => {
+    const draftKey = "environment-1:thread-incomplete-split";
+    const legacyDraft: ComposerDraft = {
+      text: "legacy survives",
+      attachments: [image("legacy")],
+    };
+    persistedFiles.set(
+      "file:///document/composer-drafts/drafts.json",
+      JSON.stringify({ schemaVersion: 1, drafts: { [draftKey]: legacyDraft } }),
+    );
+    persistedFiles.set(
+      `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`,
+      JSON.stringify({
+        schemaVersion: 2,
+        draftKey,
+        draft: {
+          text: "incomplete split",
+          attachments: [
+            {
+              id: "split",
+              type: "image",
+              name: "split.png",
+              mimeType: "image/png",
+              sizeBytes: 3,
+              contentHash: "wrong-hash",
+            },
+          ],
+        },
+      }),
+    );
+    persistedFiles.set(
+      "file:///document/composer-drafts/attachments/wrong-hash.attachment",
+      "corrupt",
+    );
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({ [draftKey]: legacyDraft });
+    expect(persistedFiles.has("file:///document/composer-drafts/drafts.json")).toBe(false);
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({ [draftKey]: legacyDraft });
   });
 
   it("quarantines corrupt legacy JSON without deleting its payload", async () => {

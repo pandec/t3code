@@ -23,6 +23,9 @@ import {
 export { ComposerDraftPersistenceError, decodePersistedComposerDrafts };
 
 const PERSIST_DEBOUNCE_MS = 1_000;
+const PERSIST_MAX_DELAY_MS = 5_000;
+const PERSIST_RETRY_MAX_ATTEMPTS = 5;
+const PERSIST_RETRY_MAX_DELAY_MS = 30_000;
 
 export interface ComposerDraft {
   readonly text: string;
@@ -65,6 +68,10 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
 
 let loadPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistMaxDelayTimer: ReturnType<typeof setTimeout> | null = null;
+let hydrationComplete = false;
+let persistRetryCount = 0;
+const draftKeysMutatedBeforeHydration = new Set<string>();
 const persistenceQueue = new SerializedAsyncQueue();
 
 function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
@@ -132,17 +139,54 @@ async function savePendingComposerDrafts(): Promise<void> {
         sweepAttachments: pending.sweepAttachments,
       }),
     );
+    persistRetryCount = 0;
   } catch (error) {
+    for (const draftKey of pending.draftKeys) {
+      pendingDraftKeys.add(draftKey);
+    }
+    pendingAttachmentSweep ||= pending.sweepAttachments;
+    schedulePersistenceRetry();
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.
   }
 }
 
-export async function flushComposerDrafts(): Promise<void> {
+function clearPersistenceTimers(): void {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  if (persistMaxDelayTimer !== null) {
+    clearTimeout(persistMaxDelayTimer);
+    persistMaxDelayTimer = null;
+  }
+}
+
+function startPendingPersistence(): void {
+  clearPersistenceTimers();
+  void savePendingComposerDrafts();
+}
+
+function ensurePersistenceTimers(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+  }
+  persistTimer = setTimeout(startPendingPersistence, PERSIST_DEBOUNCE_MS);
+  persistMaxDelayTimer ??= setTimeout(startPendingPersistence, PERSIST_MAX_DELAY_MS);
+}
+
+function schedulePersistenceRetry(): void {
+  clearPersistenceTimers();
+  if (persistRetryCount >= PERSIST_RETRY_MAX_ATTEMPTS) {
+    return;
+  }
+  const delay = Math.min(PERSIST_DEBOUNCE_MS * 2 ** persistRetryCount, PERSIST_RETRY_MAX_DELAY_MS);
+  persistRetryCount += 1;
+  persistTimer = setTimeout(startPendingPersistence, delay);
+}
+
+export async function flushComposerDrafts(): Promise<void> {
+  clearPersistenceTimers();
   await savePendingComposerDrafts();
 }
 
@@ -152,18 +196,12 @@ function schedulePersistComposerDraft(
 ): void {
   pendingDraftKeys.add(draftKey);
   pendingAttachmentSweep ||= options?.sweepAttachments === true;
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-  }
+  persistRetryCount = 0;
   if (options?.immediate === true) {
-    persistTimer = null;
-    void savePendingComposerDrafts();
+    startPendingPersistence();
     return;
   }
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    void savePendingComposerDrafts();
-  }, PERSIST_DEBOUNCE_MS);
+  ensurePersistenceTimers();
 }
 
 function removePendingDraftKey(draftKey: string): void {
@@ -174,6 +212,31 @@ function requeueDraftPersistence(draftKey: string, sweepAttachments = false): vo
   schedulePersistComposerDraft(draftKey, { sweepAttachments });
 }
 
+/** Resets module persistence state between isolated unit tests. */
+export function resetComposerDraftPersistenceForTests(): void {
+  clearPersistenceTimers();
+  loadPromise = null;
+  hydrationComplete = false;
+  persistRetryCount = 0;
+  draftKeysMutatedBeforeHydration.clear();
+  pendingDraftKeys.clear();
+  pendingAttachmentSweep = false;
+}
+
+export function mergeHydratedComposerDrafts(
+  persistedDrafts: Record<string, ComposerDraft>,
+  currentDrafts: Record<string, ComposerDraft>,
+  mutatedDraftKeys: ReadonlySet<string>,
+): Record<string, ComposerDraft> {
+  const retainedPersistedDrafts = Object.fromEntries(
+    Object.entries(persistedDrafts).filter(([draftKey]) => !mutatedDraftKeys.has(draftKey)),
+  );
+  return {
+    ...retainedPersistedDrafts,
+    ...currentDrafts,
+  };
+}
+
 export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
@@ -181,14 +244,11 @@ export function ensureComposerDraftsLoaded(): void {
   loadPromise = persistenceQueue
     .run(() => loadPersistedComposerDrafts())
     .then((persistedDrafts) => {
-      if (Object.keys(persistedDrafts).length === 0) {
-        return;
-      }
       const current = appAtomRegistry.get(composerDraftsAtom);
-      appAtomRegistry.set(composerDraftsAtom, {
-        ...persistedDrafts,
-        ...current,
-      });
+      appAtomRegistry.set(
+        composerDraftsAtom,
+        mergeHydratedComposerDrafts(persistedDrafts, current, draftKeysMutatedBeforeHydration),
+      );
     })
     .catch((cause) => {
       console.warn(
@@ -201,6 +261,10 @@ export function ensureComposerDraftsLoaded(): void {
         }),
       );
       // Draft loading is best-effort; in-memory drafts still keep working.
+    })
+    .finally(() => {
+      hydrationComplete = true;
+      draftKeysMutatedBeforeHydration.clear();
     });
 }
 
@@ -211,6 +275,9 @@ function updateComposerDrafts(
 ): void {
   const next = update(appAtomRegistry.get(composerDraftsAtom));
   appAtomRegistry.set(composerDraftsAtom, next);
+  if (!hydrationComplete) {
+    draftKeysMutatedBeforeHydration.add(draftKey);
+  }
   schedulePersistComposerDraft(draftKey, options);
 }
 

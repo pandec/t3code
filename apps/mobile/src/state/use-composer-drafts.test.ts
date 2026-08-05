@@ -4,6 +4,12 @@ import { vi } from "vite-plus/test";
 
 const persistedFiles = new Map<string, string>();
 const corruptNextWrite = { value: false };
+const failNextMove = { value: false };
+const readGate: {
+  uri: string | null;
+  promise: Promise<void> | null;
+  notifyStarted: (() => void) | null;
+} = { uri: null, promise: null, notifyStarted: null };
 const hashGate: {
   promise: Promise<void> | null;
   notifyStarted: (() => void) | null;
@@ -42,6 +48,10 @@ vi.mock("expo-file-system", () => {
     }
 
     moveSync(destination: { uri: string }, options?: { readonly overwrite?: boolean }): void {
+      if (failNextMove.value) {
+        failNextMove.value = false;
+        throw new Error("move failed");
+      }
       if (persistedFiles.has(destination.uri) && options?.overwrite !== true) {
         throw new Error(`destination already exists: ${destination.uri}`);
       }
@@ -52,6 +62,12 @@ vi.mock("expo-file-system", () => {
     }
 
     async text(): Promise<string> {
+      if (readGate.uri === this.uri) {
+        readGate.notifyStarted?.();
+        if (readGate.promise) {
+          await readGate.promise;
+        }
+      }
       return persistedFiles.get(this.uri) ?? "";
     }
   }
@@ -98,16 +114,19 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   appendedComposerDraftText,
   appendComposerDraftContentDurably,
+  clearComposerDraft,
   clearComposerDraftContentIfUnchangedState,
   clearComposerDraftContentState,
   composerDraftStillContainsAppend,
   composerDraftsAtom,
   decodePersistedComposerDrafts,
+  ensureComposerDraftsLoaded,
   flushComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
   removeComposerDraftsForEnvironment,
+  resetComposerDraftPersistenceForTests,
   revertComposerDraftAppend,
   restoreComposerDraftSnapshotState,
   setComposerDraftText,
@@ -119,9 +138,14 @@ const DRAFT: ComposerDraft = {
 };
 
 afterEach(() => {
+  resetComposerDraftPersistenceForTests();
   appAtomRegistry.set(composerDraftsAtom, {});
   persistedFiles.clear();
   corruptNextWrite.value = false;
+  failNextMove.value = false;
+  readGate.uri = null;
+  readGate.promise = null;
+  readGate.notifyStarted = null;
   hashGate.promise = null;
   hashGate.notifyStarted = null;
 });
@@ -393,6 +417,36 @@ describe("mobile composer drafts", () => {
       [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
     });
   });
+
+  it("does not resurrect a draft cleared while hydration is reading it", async () => {
+    const draftKey = "environment-1:thread-hydrating";
+    const legacyPath = "file:///document/composer-drafts/drafts.json";
+    persistedFiles.set(
+      legacyPath,
+      JSON.stringify({ schemaVersion: 1, drafts: { [draftKey]: DRAFT } }),
+    );
+    let releaseRead: () => void = () => undefined;
+    readGate.uri = legacyPath;
+    readGate.promise = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      readGate.notifyStarted = resolve;
+    });
+
+    ensureComposerDraftsLoaded();
+    await readStarted;
+    clearComposerDraft(draftKey);
+    releaseRead();
+    await flushComposerDrafts();
+
+    expect(appAtomRegistry.get(composerDraftsAtom)[draftKey]).toBeUndefined();
+    expect(
+      persistedFiles.has(
+        `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("appendedComposerDraftText", () => {
@@ -421,6 +475,43 @@ describe("appendedComposerDraftText", () => {
 });
 
 describe("appendComposerDraftContentDurably", () => {
+  it("requeues every pending draft after a debounced batch failure", async () => {
+    const firstKey = "environment-1:thread-retry-first";
+    const secondKey = "environment-1:thread-retry-second";
+    setComposerDraftText(firstKey, "first");
+    setComposerDraftText(secondKey, "second");
+    failNextMove.value = true;
+
+    await flushComposerDrafts();
+    await flushComposerDrafts();
+
+    for (const draftKey of [firstKey, secondKey]) {
+      const path = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+      expect(persistedFiles.has(path)).toBe(true);
+    }
+  });
+
+  it("flushes continuously edited drafts within the maximum delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstKey = "environment-1:thread-max-delay-first";
+      const secondKey = "environment-1:thread-max-delay-second";
+      setComposerDraftText(firstKey, "first");
+      for (let elapsed = 900; elapsed < 5_000; elapsed += 900) {
+        await vi.advanceTimersByTimeAsync(900);
+        setComposerDraftText(secondKey, `second-${elapsed}`);
+      }
+      await vi.advanceTimersByTimeAsync(500);
+
+      const firstPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(firstKey)}.json`;
+      const secondPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(secondKey)}.json`;
+      expect(persistedFiles.has(firstPath)).toBe(true);
+      expect(persistedFiles.has(secondPath)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads debounced draft state only when its queued write starts", async () => {
     const blockingDraftKey = "environment-1:thread-blocking";
     const pendingDraftKey = "environment-1:thread-pending";
