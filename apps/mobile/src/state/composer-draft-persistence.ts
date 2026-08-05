@@ -509,17 +509,17 @@ async function mapWithConcurrency<Input, Output>(
   concurrency: number,
   map: (value: Input) => Promise<Output>,
 ): Promise<ReadonlyArray<Output>> {
-  const results = new Array<Output>(values.length);
+  const results = new Map<number, { readonly value: Output }>();
   let nextIndex = 0;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     while (nextIndex < values.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await map(values[index]!);
+      results.set(index, { value: await map(values[index]!) });
     }
   });
   await Promise.all(workers);
-  return results;
+  return values.map((_, index) => results.get(index)!.value);
 }
 
 async function loadLegacyDrafts(): Promise<{
