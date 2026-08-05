@@ -349,6 +349,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     return {
       engine,
+      workspaceRoot,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
@@ -2795,6 +2796,52 @@ describe("ProviderRuntimeIngestion", () => {
         (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
       ),
     ).toBe(true);
+  });
+
+  it("mirrors a session cwd change onto the thread's worktree and branch", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const worktreePath = makeTempDir("t3-provider-worktree-");
+    NodeFS.mkdirSync(NodePath.join(worktreePath, ".git"));
+    NodeFS.writeFileSync(
+      NodePath.join(worktreePath, ".git", "HEAD"),
+      "ref: refs/heads/feature/entered\n",
+    );
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-entered"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: worktreePath, previousCwd: harness.workspaceRoot },
+    });
+    await harness.drain();
+
+    const entered = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(entered.worktreePath).toBe(worktreePath);
+    expect(entered.branch).toBe("feature/entered");
+
+    // Leaving the worktree must clear both fields, otherwise the thread keeps
+    // pointing at a directory the session no longer uses (and which the agent
+    // may have deleted on its way out).
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-left"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: harness.workspaceRoot, previousCwd: worktreePath },
+    });
+    await harness.drain();
+
+    const left = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(left.worktreePath).toBeNull();
+    expect(left.branch).toBeNull();
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {

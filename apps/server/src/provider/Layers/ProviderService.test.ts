@@ -1460,6 +1460,43 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("resumes in the directory the running session moved itself into", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-observed-cwd");
+      // A session that entered a worktree mid-run: the provider stores its
+      // transcript under the project directory derived from that cwd, so a cold
+      // resume at the workspace root would not find the conversation.
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-moved-thread" },
+        runtimeMode: "full-access",
+        runtimePayload: {
+          cwd: "/tmp/project-root/.claude/worktrees/feature",
+          cwdAuthority: "runtime-observed",
+        },
+      });
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-root",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(
+        routing.codex.startSession.mock.calls[0]?.[0]?.cwd,
+        "/tmp/project-root/.claude/worktrees/feature",
+      );
+    }),
+  );
+
   it.effect("keeps an imported worktree cwd authoritative across provider restarts", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

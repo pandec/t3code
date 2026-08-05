@@ -128,7 +128,7 @@ function toRuntimePayloadFromSession(
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly clearHasPendingWork?: boolean;
-    readonly preserveImportedCwd?: boolean;
+    readonly preserveCwdAuthority?: CwdAuthority;
   },
 ): Record<string, unknown> {
   return {
@@ -145,7 +145,9 @@ function toRuntimePayloadFromSession(
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
-    ...(extra?.preserveImportedCwd === true ? { cwdAuthority: "imported-session" } : {}),
+    ...(extra?.preserveCwdAuthority !== undefined
+      ? { cwdAuthority: extra.preserveCwdAuthority }
+      : {}),
   };
 }
 
@@ -179,28 +181,40 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function shouldUsePersistedImportedCwd(
+/**
+ * Why a binding's persisted cwd outranks the workspace the thread nominally
+ * belongs to.
+ *
+ * `imported-session` — the conversation came from an external transcript that
+ * ran somewhere else, so the import decided the directory.
+ * `runtime-observed` — the live session moved itself (the agent entered or left
+ * a worktree). The provider stores the resumable transcript under the project
+ * directory derived from that cwd, so resuming anywhere else cannot find the
+ * conversation.
+ */
+const CWD_AUTHORITIES = ["imported-session", "runtime-observed"] as const;
+type CwdAuthority = (typeof CWD_AUTHORITIES)[number];
+
+function readDurableCwdAuthority(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): CwdAuthority | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw = "cwdAuthority" in runtimePayload ? runtimePayload.cwdAuthority : undefined;
+  return CWD_AUTHORITIES.find((authority) => authority === raw);
+}
+
+function shouldUsePersistedCwd(
   runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
 ): boolean {
   if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
     return false;
   }
   return (
-    ("cwdAuthority" in runtimePayload && runtimePayload.cwdAuthority === "imported-session") ||
+    readDurableCwdAuthority(runtimePayload) !== undefined ||
     ("lastRuntimeEvent" in runtimePayload &&
       runtimePayload.lastRuntimeEvent === "provider.importConversation")
-  );
-}
-
-function hasDurableImportedCwdAuthority(
-  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
-): boolean {
-  return (
-    runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload) &&
-    "cwdAuthority" in runtimePayload &&
-    runtimePayload.cwdAuthority === "imported-session"
   );
 }
 
@@ -394,7 +408,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
     event: ProviderRuntimeEvent,
   ) {
-    if (event.type !== "turn.completed" && event.type !== "session.exited") {
+    if (
+      event.type !== "turn.completed" &&
+      event.type !== "session.exited" &&
+      event.type !== "session.cwd.changed"
+    ) {
       return;
     }
 
@@ -427,9 +445,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const runtimePayloadPatch =
       event.type === "session.exited"
         ? { hasPendingWork: false, activeTurnId: null }
-        : hasPendingWork !== undefined
-          ? { hasPendingWork }
-          : undefined;
+        : event.type === "session.cwd.changed"
+          ? // Claim authority over the cwd so a later resume follows the session
+            // into the directory it actually ran in, instead of resetting to the
+            // thread's workspace root.
+            { cwd: event.payload.cwd, cwdAuthority: "runtime-observed" }
+          : hasPendingWork !== undefined
+            ? { hasPendingWork }
+            : undefined;
     const refreshed = yield* directory
       .refreshIfUnchanged({
         binding,
@@ -473,7 +496,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
       readonly clearHasPendingWork?: boolean;
-      readonly preserveImportedCwd?: boolean;
+      readonly preserveCwdAuthority?: CwdAuthority;
     },
   ) =>
     Effect.gen(function* () {
@@ -508,10 +531,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ownerContinuationKey !== undefined &&
         previousContinuationKey !== undefined &&
         previousContinuationKey === ownerContinuationKey;
-      const preserveImportedCwd =
+      const preserveCwdAuthority =
         previousBinding?.provider === session.provider &&
-        (previousInstanceId === providerInstanceId || continuationCompatible) &&
-        hasDurableImportedCwdAuthority(previousBinding.runtimePayload);
+        (previousInstanceId === providerInstanceId || continuationCompatible)
+          ? readDurableCwdAuthority(previousBinding.runtimePayload)
+          : undefined;
       yield* directory.upsert({
         threadId,
         provider: session.provider,
@@ -523,7 +547,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimePayload: {
           ...toRuntimePayloadFromSession(session, {
             ...extra,
-            preserveImportedCwd,
+            ...(preserveCwdAuthority !== undefined ? { preserveCwdAuthority } : {}),
           }),
           ...(ownerContinuationKey !== undefined ? { continuationKey: ownerContinuationKey } : {}),
         },
@@ -925,7 +949,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const effectiveCwd =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
-          shouldUsePersistedImportedCwd(persistedBinding.runtimePayload)
+          shouldUsePersistedCwd(persistedBinding.runtimePayload)
             ? persistedCwd
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({

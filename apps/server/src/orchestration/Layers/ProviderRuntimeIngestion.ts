@@ -34,7 +34,7 @@ import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstan
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import { isGitRepository } from "../../git/Utils.ts";
+import { isGitRepository, isSameDirectory, readCheckedOutBranch } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -1821,6 +1821,34 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+        }
+      }
+
+      if (event.type === "session.cwd.changed") {
+        // The session moved itself between directories. Mirror that onto the
+        // thread so the worktree chip, git status, diffs, and thread terminals
+        // all follow the agent instead of staying pinned to the workspace root.
+        const workspace = yield* projectionSnapshotQuery
+          .getThreadCheckpointContext(thread.id)
+          .pipe(Effect.map(Option.getOrUndefined));
+        if (workspace) {
+          const cwd = event.payload.cwd;
+          const nextWorktreePath = isSameDirectory(cwd, workspace.workspaceRoot) ? null : cwd;
+          // Null covers a detached HEAD and a directory that is no longer a
+          // repository; both mean "no branch to show" rather than a failure.
+          const nextBranch = nextWorktreePath === null ? null : readCheckedOutBranch(cwd);
+          if (nextWorktreePath !== thread.worktreePath || nextBranch !== thread.branch) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.meta.update",
+              commandId: yield* providerCommandId(event, "session-cwd-changed"),
+              threadId: thread.id,
+              worktreePath: nextWorktreePath,
+              branch: nextBranch,
+              // Defer to a concurrent user-driven branch change instead of
+              // overwriting it with what this event observed.
+              expectedBranch: thread.branch,
+            });
+          }
         }
       }
 

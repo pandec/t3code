@@ -6,6 +6,57 @@ export function isGitRepository(cwd: string): boolean {
   return NodeFS.existsSync(NodePath.join(cwd, ".git"));
 }
 
+/**
+ * Compare two directory paths for identity, resolving symlinks when both sides
+ * still exist. Falls back to a normalized textual comparison so a directory
+ * that has since been deleted can still be recognized.
+ */
+export function isSameDirectory(left: string, right: string): boolean {
+  const normalize = (value: string) => NodePath.resolve(value);
+  const canonicalize = (value: string) => {
+    try {
+      return NodeFS.realpathSync(value);
+    } catch {
+      return normalize(value);
+    }
+  };
+  if (normalize(left) === normalize(right)) return true;
+  return canonicalize(left) === canonicalize(right);
+}
+
+/**
+ * Read the branch checked out at `cwd` without shelling out to git.
+ *
+ * `.git` is a directory in a primary checkout and a `gitdir:` pointer file in a
+ * linked worktree; both cases expose a `HEAD` holding either a symbolic ref or
+ * a raw commit id. Returns `null` for a detached HEAD, a non-repository, or any
+ * layout this cannot parse — callers treat that as "branch unknown" rather than
+ * an error, so a surprising on-disk shape must not fail the caller.
+ */
+export function readCheckedOutBranch(cwd: string): string | null {
+  try {
+    const dotGit = NodePath.join(cwd, ".git");
+    const stats = NodeFS.statSync(dotGit, { throwIfNoEntry: false });
+    if (!stats) return null;
+
+    let gitDir = dotGit;
+    if (!stats.isDirectory()) {
+      const pointer = NodeFS.readFileSync(dotGit, "utf8").trim();
+      const match = /^gitdir:\s*(.+)$/.exec(pointer);
+      if (!match?.[1]) return null;
+      const target = match[1].trim();
+      gitDir = NodePath.isAbsolute(target) ? target : NodePath.resolve(cwd, target);
+    }
+
+    const head = NodeFS.readFileSync(NodePath.join(gitDir, "HEAD"), "utf8").trim();
+    const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+    const branch = ref?.[1]?.trim();
+    return branch && branch.length > 0 ? branch : null;
+  } catch {
+    return null;
+  }
+}
+
 const REPOSITORY_SCOPING_GIT_ENVIRONMENT_KEYS = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_CEILING_DIRECTORIES",

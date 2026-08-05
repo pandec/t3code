@@ -149,6 +149,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "session.started",
   "session.configured",
   "session.state.changed",
+  "session.cwd.changed",
   "session.exited",
   "thread.started",
   "thread.state.changed",
@@ -199,6 +200,7 @@ export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 const SessionStartedType = Schema.Literal("session.started");
 const SessionConfiguredType = Schema.Literal("session.configured");
 const SessionStateChangedType = Schema.Literal("session.state.changed");
+const SessionCwdChangedType = Schema.Literal("session.cwd.changed");
 const SessionExitedType = Schema.Literal("session.exited");
 const ThreadStartedType = Schema.Literal("thread.started");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
@@ -279,6 +281,19 @@ const SessionStateChangedPayload = Schema.Struct({
   detail: Schema.optional(Schema.Unknown),
 });
 export type SessionStateChangedPayload = typeof SessionStateChangedPayload.Type;
+
+/**
+ * The provider runtime reported that the live session changed its working
+ * directory (for example, the agent entered or left a worktree). `cwd` is the
+ * directory the session is running in now; `previousCwd` is where it ran
+ * before, when the runtime reports it.
+ */
+const SessionCwdChangedPayload = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  previousCwd: Schema.optional(TrimmedNonEmptyStringSchema),
+  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type SessionCwdChangedPayload = typeof SessionCwdChangedPayload.Type;
 
 const SessionExitedPayload = Schema.Struct({
   reason: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -637,6 +652,14 @@ const ProviderRuntimeSessionStateChangedEvent = Schema.Struct({
 export type ProviderRuntimeSessionStateChangedEvent =
   typeof ProviderRuntimeSessionStateChangedEvent.Type;
 
+const ProviderRuntimeSessionCwdChangedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: SessionCwdChangedType,
+  payload: SessionCwdChangedPayload,
+});
+export type ProviderRuntimeSessionCwdChangedEvent =
+  typeof ProviderRuntimeSessionCwdChangedEvent.Type;
+
 const ProviderRuntimeSessionExitedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: SessionExitedType,
@@ -971,6 +994,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
   ProviderRuntimeSessionStateChangedEvent,
+  ProviderRuntimeSessionCwdChangedEvent,
   ProviderRuntimeSessionExitedEvent,
   ProviderRuntimeThreadStartedEvent,
   ProviderRuntimeThreadStateChangedEvent,
