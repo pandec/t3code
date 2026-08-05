@@ -21,6 +21,8 @@ const DRAFT_RECORD_SUFFIX = ".json";
 const ATTACHMENT_FILE_SUFFIX = ".attachment";
 const TEMP_FILE_SUFFIX = ".tmp";
 const attachmentContentHashes = new WeakMap<DraftComposerImageAttachment, Promise<string>>();
+let expoCryptoPromise: Promise<typeof import("expo-crypto")> | null = null;
+let expoFileSystemPromise: Promise<typeof import("expo-file-system")> | null = null;
 
 export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<ComposerDraftPersistenceError>()(
   "ComposerDraftPersistenceError",
@@ -47,6 +49,20 @@ export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<Compo
 ) {
   override get message(): string {
     return `Composer draft persistence operation ${this.operation} failed for ${this.directory}/${this.fileName}.`;
+  }
+}
+
+export class ComposerDraftBatchPersistenceError extends Error {
+  readonly failures: ReadonlyMap<string, unknown>;
+
+  constructor(failures: ReadonlyMap<string, unknown>) {
+    super(`Failed to persist ${failures.size} composer draft${failures.size === 1 ? "" : "s"}.`);
+    this.name = "ComposerDraftBatchPersistenceError";
+    this.failures = failures;
+  }
+
+  get failedDraftKeys(): ReadonlySet<string> {
+    return new Set(this.failures.keys());
   }
 }
 
@@ -212,8 +228,24 @@ function attachmentFileName(contentHash: string): string {
   return `${contentHash}${ATTACHMENT_FILE_SUFFIX}`;
 }
 
+async function loadExpoFileSystem(): Promise<typeof import("expo-file-system")> {
+  if (expoFileSystemPromise) {
+    return expoFileSystemPromise;
+  }
+  const loading = import("expo-file-system");
+  expoFileSystemPromise = loading;
+  try {
+    return await loading;
+  } catch (error) {
+    if (expoFileSystemPromise === loading) {
+      expoFileSystemPromise = null;
+    }
+    throw error;
+  }
+}
+
 async function getStorageDirectories() {
-  const { Directory, Paths } = await import("expo-file-system");
+  const { Directory, Paths } = await loadExpoFileSystem();
   const root = new Directory(Paths.document, COMPOSER_DRAFTS_DIRECTORY);
   root.create({ idempotent: true, intermediates: true });
   const records = new Directory(root, COMPOSER_DRAFT_RECORDS_DIRECTORY);
@@ -223,9 +255,25 @@ async function getStorageDirectories() {
   return { root, records, attachments };
 }
 
+async function loadExpoCrypto(): Promise<typeof import("expo-crypto")> {
+  if (expoCryptoPromise) {
+    return expoCryptoPromise;
+  }
+  const loading = import("expo-crypto");
+  expoCryptoPromise = loading;
+  try {
+    return await loading;
+  } catch (error) {
+    if (expoCryptoPromise === loading) {
+      expoCryptoPromise = null;
+    }
+    throw error;
+  }
+}
+
 async function hashAttachmentContent(content: string): Promise<string> {
   try {
-    const { CryptoDigestAlgorithm, digestStringAsync } = await import("expo-crypto");
+    const { CryptoDigestAlgorithm, digestStringAsync } = await loadExpoCrypto();
     return await digestStringAsync(CryptoDigestAlgorithm.SHA256, content);
   } catch (cause) {
     throw new ComposerDraftPersistenceError({
@@ -311,63 +359,167 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
   }
 }
 
+type AttachmentHydrationState = "ok" | "corrupt" | "unavailable";
+
+type HydratedAttachment =
+  | { readonly state: "ok"; readonly attachment: DraftComposerImageAttachment }
+  | { readonly state: "corrupt" }
+  | { readonly state: "unavailable" };
+
 interface HydratedComposerDraftRecord {
   readonly draft: ComposerDraft;
-  readonly complete: boolean;
+  readonly state: AttachmentHydrationState;
+  readonly repairedRecord: PersistedComposerDraftRecord | null;
+}
+
+function expectedAttachmentStorageBytes(attachment: PersistedAttachmentReference): number {
+  const dataUrlPrefixBytes = `data:${attachment.mimeType};base64,`.length;
+  const base64Bytes = Math.ceil(attachment.sizeBytes / 3) * 4;
+  return dataUrlPrefixBytes + base64Bytes;
+}
+
+function warnAttachmentHydrationFailure(message: string, fileName: string, cause: unknown): void {
+  console.warn(
+    message,
+    new ComposerDraftPersistenceError({
+      operation: "hydrate",
+      directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_ATTACHMENTS_DIRECTORY}`,
+      fileName,
+      cause,
+    }),
+  );
+}
+
+async function hydrateAttachment(
+  attachment: PersistedAttachmentReference,
+  attachmentDirectory: ExpoDirectory,
+): Promise<HydratedAttachment> {
+  const { File } = await loadExpoFileSystem();
+  const fileName = attachmentFileName(attachment.contentHash);
+  let file: InstanceType<typeof File>;
+  try {
+    file = new File(attachmentDirectory, fileName);
+    if (!file.exists) {
+      warnAttachmentHydrationFailure(
+        "[composer-drafts] ignored corrupt persisted attachment",
+        fileName,
+        new Error("Attachment content file is missing."),
+      );
+      return { state: "corrupt" };
+    }
+    if (file.size !== expectedAttachmentStorageBytes(attachment)) {
+      warnAttachmentHydrationFailure(
+        "[composer-drafts] ignored corrupt persisted attachment",
+        fileName,
+        new Error("Attachment content file size did not match its persisted byte size."),
+      );
+      return { state: "corrupt" };
+    }
+  } catch (cause) {
+    warnAttachmentHydrationFailure(
+      "[composer-drafts] persisted attachment is temporarily unavailable",
+      fileName,
+      cause,
+    );
+    return { state: "unavailable" };
+  }
+
+  let dataUrl: string;
+  try {
+    dataUrl = await file.text();
+  } catch (cause) {
+    warnAttachmentHydrationFailure(
+      "[composer-drafts] persisted attachment is temporarily unavailable",
+      fileName,
+      cause,
+    );
+    return { state: "unavailable" };
+  }
+
+  let contentHash: string;
+  try {
+    contentHash = await hashAttachmentContent(dataUrl);
+  } catch (cause) {
+    warnAttachmentHydrationFailure(
+      "[composer-drafts] persisted attachment is temporarily unavailable",
+      fileName,
+      cause,
+    );
+    return { state: "unavailable" };
+  }
+  if (contentHash !== attachment.contentHash) {
+    warnAttachmentHydrationFailure(
+      "[composer-drafts] ignored corrupt persisted attachment",
+      fileName,
+      new Error("Attachment content did not match its persisted hash."),
+    );
+    return { state: "corrupt" };
+  }
+
+  return {
+    state: "ok",
+    attachment: {
+      id: attachment.id,
+      type: attachment.type,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      dataUrl,
+      previewUri: dataUrl,
+    },
+  };
 }
 
 async function hydrateRecord(
   record: PersistedComposerDraftRecord,
   attachmentDirectory: ExpoDirectory,
 ): Promise<HydratedComposerDraftRecord> {
-  const { File } = await import("expo-file-system");
-  const hydratedAttachments = await Promise.all(
-    record.draft.attachments.map(
-      async (attachment): Promise<DraftComposerImageAttachment | null> => {
-        const fileName = attachmentFileName(attachment.contentHash);
-        try {
-          const file = new File(attachmentDirectory, fileName);
-          if (!file.exists) {
-            throw new Error("Attachment content file is missing.");
-          }
-          const dataUrl = await file.text();
-          if ((await hashAttachmentContent(dataUrl)) !== attachment.contentHash) {
-            throw new Error("Attachment content did not match its persisted hash.");
-          }
-          return {
-            id: attachment.id,
-            type: attachment.type,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            dataUrl,
-            previewUri: dataUrl,
-          };
-        } catch (cause) {
-          console.warn(
-            "[composer-drafts] ignored invalid persisted attachment",
-            new ComposerDraftPersistenceError({
-              operation: "hydrate",
-              directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_ATTACHMENTS_DIRECTORY}`,
-              fileName,
-              cause,
-            }),
-          );
-          return null;
-        }
-      },
-    ),
+  const results: HydratedAttachment[] = [];
+  for (const attachment of record.draft.attachments) {
+    results.push(await hydrateAttachment(attachment, attachmentDirectory));
+  }
+  const attachments = results.flatMap((result) =>
+    result.state === "ok" ? [result.attachment] : [],
   );
-  const attachments = hydratedAttachments.filter(
-    (attachment): attachment is DraftComposerImageAttachment => attachment !== null,
+  const hasUnavailableAttachment = results.some((result) => result.state === "unavailable");
+  const hasCorruptAttachment = results.some((result) => result.state === "corrupt");
+  const repairedAttachments = record.draft.attachments.filter(
+    (_, index) => results[index]?.state !== "corrupt",
   );
   return {
     draft: {
       ...record.draft,
       attachments,
     },
-    complete: attachments.length === hydratedAttachments.length,
+    state: hasUnavailableAttachment ? "unavailable" : hasCorruptAttachment ? "corrupt" : "ok",
+    repairedRecord: hasCorruptAttachment
+      ? {
+          ...record,
+          draft: {
+            ...record.draft,
+            attachments: repairedAttachments,
+          },
+        }
+      : null,
   };
+}
+
+async function mapWithConcurrency<Input, Output>(
+  values: ReadonlyArray<Input>,
+  concurrency: number,
+  map: (value: Input) => Promise<Output>,
+): Promise<ReadonlyArray<Output>> {
+  const results = new Array<Output>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await map(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 async function loadLegacyDrafts(): Promise<{
@@ -435,8 +587,22 @@ async function writeFileAtomically(
     temporary.moveSync(destination, { overwrite: true });
     moved = true;
   } finally {
-    if (!moved && temporary.exists) {
-      temporary.delete();
+    if (!moved) {
+      try {
+        if (temporary.exists) {
+          temporary.delete();
+        }
+      } catch (cause) {
+        console.warn(
+          "[composer-drafts] failed to remove temporary persistence file",
+          new ComposerDraftPersistenceError({
+            operation: "remove",
+            directory: directory.uri,
+            fileName: temporary.name,
+            cause,
+          }),
+        );
+      }
     }
   }
 }
@@ -540,7 +706,7 @@ export async function persistComposerDraftKeys(
   draftKeys: ReadonlySet<string>,
   options?: { readonly verify?: boolean; readonly sweepAttachments?: boolean },
 ): Promise<void> {
-  let firstError: unknown = null;
+  const failures = new Map<string, unknown>();
   for (const draftKey of draftKeys) {
     try {
       const draft = drafts[draftKey];
@@ -556,7 +722,7 @@ export async function persistComposerDraftKeys(
       await writeAttachmentContents(split.attachmentContents, options?.verify === true);
       await writeDraftRecord(split.record, options?.verify === true);
     } catch (error) {
-      firstError ??= error;
+      failures.set(draftKey, error);
     }
   }
   if (options?.sweepAttachments === true) {
@@ -566,8 +732,8 @@ export async function persistComposerDraftKeys(
       console.warn("[composer-drafts] failed to sweep orphan attachments", error);
     }
   }
-  if (firstError !== null) {
-    throw firstError;
+  if (failures.size > 0) {
+    throw new ComposerDraftBatchPersistenceError(failures);
   }
 }
 
@@ -580,18 +746,40 @@ async function removeLegacyDraftsFile(): Promise<void> {
   }
 }
 
+function isEmptyPersistedDraft(draft: PersistedComposerDraftRecord["draft"]): boolean {
+  return (
+    draft.text.length === 0 &&
+    draft.inputOrigin === undefined &&
+    draft.attachments.length === 0 &&
+    draft.modelSelection === undefined &&
+    draft.runtimeMode === undefined &&
+    draft.interactionMode === undefined &&
+    draft.workspaceSelection === undefined
+  );
+}
+
+async function repairCorruptRecord(hydrated: HydratedComposerDraftRecord): Promise<void> {
+  const repairedRecord = hydrated.repairedRecord;
+  if (!repairedRecord) {
+    return;
+  }
+  if (isEmptyPersistedDraft(repairedRecord.draft)) {
+    await removeDraftRecord(repairedRecord.draftKey);
+    return;
+  }
+  await writeDraftRecord(repairedRecord, true);
+}
+
 export async function loadPersistedComposerDrafts(): Promise<Record<string, ComposerDraft>> {
   const records = await loadRecordDocuments();
   const { attachments: attachmentDirectory } = await getStorageDirectories();
-  const hydratedRecords = await Promise.all(
-    records.map(async (record) => ({
-      draftKey: record.draftKey,
-      hydrated: await hydrateRecord(record, attachmentDirectory),
-    })),
-  );
+  const hydratedRecords = await mapWithConcurrency(records, 2, async (record) => ({
+    draftKey: record.draftKey,
+    hydrated: await hydrateRecord(record, attachmentDirectory),
+  }));
   const recordDrafts: Record<string, HydratedComposerDraftRecord> = {};
   for (const { draftKey, hydrated } of hydratedRecords) {
-    if (!isEmptyDraft(hydrated.draft)) {
+    if (!isEmptyDraft(hydrated.draft) || hydrated.state !== "ok") {
       recordDrafts[draftKey] = hydrated;
     }
   }
@@ -599,18 +787,33 @@ export async function loadPersistedComposerDrafts(): Promise<Record<string, Comp
   const legacy = await loadLegacyDrafts();
   const drafts: Record<string, ComposerDraft> = { ...legacy.drafts };
   for (const [draftKey, hydrated] of Object.entries(recordDrafts)) {
-    if (hydrated.complete || drafts[draftKey] === undefined) {
+    if (
+      !isEmptyDraft(hydrated.draft) &&
+      (hydrated.state === "ok" || drafts[draftKey] === undefined)
+    ) {
       drafts[draftKey] = hydrated.draft;
     }
   }
+
+  const unavailableRecordKeys = new Set(
+    Object.entries(recordDrafts)
+      .filter(([, hydrated]) => hydrated.state === "unavailable")
+      .map(([draftKey]) => draftKey),
+  );
   if (legacy.exists && legacy.valid) {
     try {
-      if (Object.keys(drafts).length > 0) {
-        await persistComposerDraftKeys(drafts, new Set(Object.keys(drafts)), {
-          verify: true,
-        });
+      const migrationKeys = Object.keys(drafts).filter(
+        (draftKey) => !unavailableRecordKeys.has(draftKey),
+      );
+      if (migrationKeys.length > 0) {
+        await persistComposerDraftKeys(drafts, new Set(migrationKeys), { verify: true });
       }
-      await removeLegacyDraftsFile();
+      const hasUnavailableLegacyDraft = Object.keys(legacy.drafts).some((draftKey) =>
+        unavailableRecordKeys.has(draftKey),
+      );
+      if (!hasUnavailableLegacyDraft) {
+        await removeLegacyDraftsFile();
+      }
     } catch (cause) {
       console.warn(
         "[composer-drafts] legacy migration will retry on next load",
@@ -622,22 +825,31 @@ export async function loadPersistedComposerDrafts(): Promise<Record<string, Comp
         }),
       );
     }
-  } else {
-    const incompleteDraftKeys = Object.entries(recordDrafts)
-      .filter(([draftKey, hydrated]) => !hydrated.complete && drafts[draftKey] === hydrated.draft)
-      .map(([draftKey]) => draftKey);
-    if (incompleteDraftKeys.length > 0) {
-      try {
-        await persistComposerDraftKeys(drafts, new Set(incompleteDraftKeys), { verify: true });
-      } catch (error) {
-        console.warn("[composer-drafts] failed to repair incomplete draft records", error);
-      }
+  }
+
+  for (const hydrated of Object.values(recordDrafts)) {
+    const canRepairDirectly =
+      hydrated.repairedRecord !== null &&
+      (!legacy.exists ||
+        !legacy.valid ||
+        hydrated.state === "unavailable" ||
+        legacy.drafts[hydrated.repairedRecord.draftKey] === undefined);
+    if (!canRepairDirectly) {
+      continue;
+    }
+    try {
+      await repairCorruptRecord(hydrated);
+    } catch (error) {
+      console.warn("[composer-drafts] failed to repair corrupt draft record", error);
     }
   }
-  try {
-    await sweepOrphanComposerDraftAttachments();
-  } catch (error) {
-    console.warn("[composer-drafts] failed to sweep orphan attachments on load", error);
+
+  if (unavailableRecordKeys.size === 0) {
+    try {
+      await sweepOrphanComposerDraftAttachments();
+    } catch (error) {
+      console.warn("[composer-drafts] failed to sweep orphan attachments on load", error);
+    }
   }
   return drafts;
 }

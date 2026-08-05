@@ -5,6 +5,17 @@ const persistedFiles = new Map<string, string>();
 const failNextHash = { value: false };
 const corruptWritesRemaining = { value: 0 };
 const failWritePathFragments = new Set<string>();
+const failReadPathFragments = new Set<string>();
+const failMovePathFragments = new Set<string>();
+const failDeletePathFragments = new Set<string>();
+const hashMetrics = { calls: 0, active: 0, maxActive: 0 };
+
+function testContentHash(value: string): string {
+  return [...value]
+    .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
+    .toString(16)
+    .padStart(64, "0");
+}
 
 vi.mock("expo-file-system", () => {
   class File {
@@ -20,6 +31,10 @@ vi.mock("expo-file-system", () => {
 
     get exists(): boolean {
       return persistedFiles.has(this.uri);
+    }
+
+    get size(): number {
+      return persistedFiles.get(this.uri)?.length ?? 0;
     }
 
     create(options?: { readonly overwrite?: boolean }): void {
@@ -42,10 +57,16 @@ vi.mock("expo-file-system", () => {
     }
 
     delete(): void {
+      if ([...failDeletePathFragments].some((fragment) => this.uri.includes(fragment))) {
+        throw new Error(`delete failed: ${this.uri}`);
+      }
       persistedFiles.delete(this.uri);
     }
 
     moveSync(destination: { uri: string }, options?: { readonly overwrite?: boolean }): void {
+      if ([...failMovePathFragments].some((fragment) => destination.uri.includes(fragment))) {
+        throw new Error(`move failed: ${destination.uri}`);
+      }
       if (persistedFiles.has(destination.uri) && options?.overwrite !== true) {
         throw new Error(`destination already exists: ${destination.uri}`);
       }
@@ -56,6 +77,9 @@ vi.mock("expo-file-system", () => {
     }
 
     async text(): Promise<string> {
+      if ([...failReadPathFragments].some((fragment) => this.uri.includes(fragment))) {
+        throw new Error(`read failed: ${this.uri}`);
+      }
       return persistedFiles.get(this.uri) ?? "";
     }
   }
@@ -87,18 +111,24 @@ vi.mock("expo-file-system", () => {
 vi.mock("expo-crypto", () => ({
   CryptoDigestAlgorithm: { SHA256: "SHA-256" },
   digestStringAsync: async (_algorithm: string, value: string) => {
-    if (failNextHash.value) {
-      failNextHash.value = false;
-      throw new Error("hash failed");
+    hashMetrics.calls += 1;
+    hashMetrics.active += 1;
+    hashMetrics.maxActive = Math.max(hashMetrics.maxActive, hashMetrics.active);
+    try {
+      await Promise.resolve();
+      if (failNextHash.value) {
+        failNextHash.value = false;
+        throw new Error("hash failed");
+      }
+      return testContentHash(value);
+    } finally {
+      hashMetrics.active -= 1;
     }
-    return [...value]
-      .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
-      .toString(16)
-      .padStart(64, "0");
   },
 }));
 
 import {
+  ComposerDraftBatchPersistenceError,
   composerDraftAttachmentReferenceCounts,
   loadPersistedComposerDrafts,
   orphanComposerDraftAttachmentFileNames,
@@ -122,11 +152,45 @@ function image(id: string) {
   };
 }
 
+function draftRecordPath(draftKey: string): string {
+  return `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+}
+
+function attachmentPath(contentHash: string): string {
+  return `file:///document/composer-drafts/attachments/${contentHash}.attachment`;
+}
+
+function splitRecord(draftKey: string, contentHash: string, text = "draft") {
+  return {
+    schemaVersion: 2,
+    draftKey,
+    draft: {
+      text,
+      attachments: [
+        {
+          id: `${draftKey}:image`,
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          contentHash,
+        },
+      ],
+    },
+  };
+}
+
 afterEach(() => {
   persistedFiles.clear();
   failNextHash.value = false;
   corruptWritesRemaining.value = 0;
   failWritePathFragments.clear();
+  failReadPathFragments.clear();
+  failMovePathFragments.clear();
+  failDeletePathFragments.clear();
+  hashMetrics.calls = 0;
+  hashMetrics.active = 0;
+  hashMetrics.maxActive = 0;
 });
 
 describe("composer draft record split", () => {
@@ -158,19 +222,55 @@ describe("composer draft record split", () => {
     ]);
   });
 
-  it("keeps the destination payload after the temporary file handle moves", async () => {
+  it("keeps record and attachment destinations after temporary file handles move", async () => {
     const draftKey = "environment-1:thread-atomic";
-    const draft: ComposerDraft = { text: "atomic draft", attachments: [] };
+    const draft: ComposerDraft = { text: "atomic draft", attachments: [image("atomic")] };
 
     await persistComposerDraftKeys({ [draftKey]: draft }, new Set([draftKey]), { verify: true });
 
     const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
-    expect(JSON.parse(persistedFiles.get(recordPath) ?? "null")).toMatchObject({
+    const record = JSON.parse(persistedFiles.get(recordPath) ?? "null") as {
+      readonly draft?: { readonly attachments?: ReadonlyArray<{ readonly contentHash?: string }> };
+    } | null;
+    expect(record).toMatchObject({
       schemaVersion: 2,
       draftKey,
       draft: { text: "atomic draft" },
     });
+    const contentHash = record?.draft?.attachments?.[0]?.contentHash;
+    expect(contentHash).toBeDefined();
+    expect(
+      persistedFiles.get(
+        `file:///document/composer-drafts/attachments/${contentHash ?? "missing"}.attachment`,
+      ),
+    ).toBe(DATA_URL);
     expect([...persistedFiles.keys()].some((path) => path.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("keeps a move failure observable when temporary cleanup also fails", async () => {
+    const draftKey = "environment-1:thread-cleanup-failure";
+    const pathFragment = encodeURIComponent(draftKey);
+    failMovePathFragments.add(pathFragment);
+    failDeletePathFragments.add(pathFragment);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await persistComposerDraftKeys(
+        { [draftKey]: { text: "draft", attachments: [] } },
+        new Set([draftKey]),
+      );
+      throw new Error("Expected persistence to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ComposerDraftBatchPersistenceError);
+      const failure =
+        error instanceof ComposerDraftBatchPersistenceError
+          ? error.failures.get(draftKey)
+          : undefined;
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure instanceof Error ? failure.message : "").toContain("move failed");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries an attachment hash after a cached hash promise rejects", async () => {
@@ -295,6 +395,146 @@ describe("composer draft record split", () => {
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({ [draftKey]: legacyDraft });
     expect(persistedFiles.has("file:///document/composer-drafts/drafts.json")).toBe(false);
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({ [draftKey]: legacyDraft });
+  });
+
+  it("short-circuits hashing when the stored data URL byte size is corrupt", async () => {
+    const draftKey = "environment-1:thread-size-mismatch";
+    const contentHash = testContentHash(DATA_URL);
+    persistedFiles.set(
+      draftRecordPath(draftKey),
+      JSON.stringify(splitRecord(draftKey, contentHash)),
+    );
+    persistedFiles.set(attachmentPath(contentHash), `${DATA_URL}!`);
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({
+      [draftKey]: { text: "draft", attachments: [] },
+    });
+
+    expect(hashMetrics.calls).toBe(0);
+    const repaired = JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null") as {
+      readonly draft?: { readonly attachments?: ReadonlyArray<unknown> };
+    } | null;
+    expect(repaired?.draft?.attachments).toEqual([]);
+    expect(persistedFiles.has(attachmentPath(contentHash))).toBe(false);
+  });
+
+  it("preserves unavailable attachment references and suppresses the load-time sweep", async () => {
+    const draftKey = "environment-1:thread-unavailable";
+    const contentHash = testContentHash(DATA_URL);
+    const record = splitRecord(draftKey, contentHash);
+    const orphanPath = attachmentPath("orphan");
+    persistedFiles.set(draftRecordPath(draftKey), JSON.stringify(record));
+    persistedFiles.set(attachmentPath(contentHash), DATA_URL);
+    persistedFiles.set(orphanPath, DATA_URL);
+    failReadPathFragments.add(`${contentHash}.attachment`);
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({
+      [draftKey]: { text: "draft", attachments: [] },
+    });
+
+    expect(JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null")).toEqual(record);
+    expect(persistedFiles.has(attachmentPath(contentHash))).toBe(true);
+    expect(persistedFiles.has(orphanPath)).toBe(true);
+  });
+
+  it("repairs proven corruption without dropping unavailable references", async () => {
+    const draftKey = "environment-1:thread-mixed-hydration";
+    const corruptHash = testContentHash("different");
+    const unavailableHash = testContentHash(DATA_URL);
+    const record = splitRecord(draftKey, corruptHash);
+    record.draft.attachments.push({
+      ...record.draft.attachments[0]!,
+      id: `${draftKey}:unavailable`,
+      contentHash: unavailableHash,
+    });
+    persistedFiles.set(draftRecordPath(draftKey), JSON.stringify(record));
+    persistedFiles.set(attachmentPath(corruptHash), `${DATA_URL}!`);
+    persistedFiles.set(attachmentPath(unavailableHash), DATA_URL);
+    failReadPathFragments.add(`${unavailableHash}.attachment`);
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({
+      [draftKey]: { text: "draft", attachments: [] },
+    });
+
+    const repaired = JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null") as {
+      readonly draft?: {
+        readonly attachments?: ReadonlyArray<{ readonly contentHash?: string }>;
+      };
+    } | null;
+    expect(repaired?.draft?.attachments).toEqual([
+      expect.objectContaining({ contentHash: unavailableHash }),
+    ]);
+    expect(persistedFiles.has(attachmentPath(unavailableHash))).toBe(true);
+  });
+
+  it("keeps legacy data until an unavailable split draft can be verified", async () => {
+    const unavailableKey = "environment-1:thread-unavailable-migration";
+    const safeKey = "environment-1:thread-safe-migration";
+    const contentHash = testContentHash(DATA_URL);
+    const unavailableRecord = splitRecord(unavailableKey, contentHash, "split draft");
+    const unavailableLegacyDraft: ComposerDraft = {
+      text: "legacy draft",
+      attachments: [image("legacy")],
+    };
+    const safeLegacyDraft: ComposerDraft = { text: "safe draft", attachments: [] };
+    const legacyPath = "file:///document/composer-drafts/drafts.json";
+    persistedFiles.set(draftRecordPath(unavailableKey), JSON.stringify(unavailableRecord));
+    persistedFiles.set(attachmentPath(contentHash), DATA_URL);
+    persistedFiles.set(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        drafts: {
+          [unavailableKey]: unavailableLegacyDraft,
+          [safeKey]: safeLegacyDraft,
+        },
+      }),
+    );
+    failReadPathFragments.add(`${contentHash}.attachment`);
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({
+      [unavailableKey]: unavailableLegacyDraft,
+      [safeKey]: safeLegacyDraft,
+    });
+
+    expect(persistedFiles.has(legacyPath)).toBe(true);
+    expect(JSON.parse(persistedFiles.get(draftRecordPath(unavailableKey)) ?? "null")).toEqual(
+      unavailableRecord,
+    );
+    expect(persistedFiles.has(draftRecordPath(safeKey))).toBe(true);
+  });
+
+  it("hydrates attachment records with at most two concurrent hashes", async () => {
+    const contentHash = testContentHash(DATA_URL);
+    persistedFiles.set(attachmentPath(contentHash), DATA_URL);
+    const expected: Record<string, ComposerDraft> = {};
+    for (let index = 0; index < 5; index += 1) {
+      const draftKey = `environment-1:thread-concurrency-${index}`;
+      persistedFiles.set(
+        draftRecordPath(draftKey),
+        JSON.stringify(splitRecord(draftKey, contentHash)),
+      );
+      expected[draftKey] = {
+        text: "draft",
+        attachments: [
+          {
+            id: `${draftKey}:image`,
+            type: "image",
+            name: "image.png",
+            mimeType: "image/png",
+            sizeBytes: 3,
+            dataUrl: DATA_URL,
+            previewUri: DATA_URL,
+          },
+        ],
+      };
+    }
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual(expected);
+
+    expect(hashMetrics.calls).toBe(5);
+    expect(hashMetrics.maxActive).toBeGreaterThan(1);
+    expect(hashMetrics.maxActive).toBeLessThanOrEqual(2);
   });
 
   it("quarantines corrupt legacy JSON without deleting its payload", async () => {

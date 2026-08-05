@@ -14,6 +14,7 @@ import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 import {
+  ComposerDraftBatchPersistenceError,
   ComposerDraftPersistenceError,
   decodePersistedComposerDrafts,
   loadPersistedComposerDrafts,
@@ -70,7 +71,7 @@ let loadPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistMaxDelayTimer: ReturnType<typeof setTimeout> | null = null;
 let hydrationComplete = false;
-let persistRetryCount = 0;
+const persistRetryAttempts = new Map<string, number>();
 const draftKeysMutatedBeforeHydration = new Set<string>();
 const persistenceQueue = new SerializedAsyncQueue();
 
@@ -124,7 +125,51 @@ async function persistDraftKeys(
   draftKeys: ReadonlySet<string>,
   options?: { readonly verify?: boolean; readonly sweepAttachments?: boolean },
 ): Promise<void> {
-  await persistenceQueue.run(() => persistComposerDraftKeys(drafts, draftKeys, options));
+  try {
+    await persistenceQueue.run(() => persistComposerDraftKeys(drafts, draftKeys, options));
+    for (const draftKey of draftKeys) {
+      persistRetryAttempts.delete(draftKey);
+    }
+  } catch (error) {
+    const failed = failedDraftKeys(error, draftKeys);
+    for (const draftKey of draftKeys) {
+      if (!failed.has(draftKey)) {
+        persistRetryAttempts.delete(draftKey);
+      }
+    }
+    throw error;
+  }
+}
+
+function failedDraftKeys(
+  error: unknown,
+  attemptedDraftKeys: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return error instanceof ComposerDraftBatchPersistenceError
+    ? error.failedDraftKeys
+    : attemptedDraftKeys;
+}
+
+function retryDelay(draftKeys: ReadonlySet<string>): number {
+  let delay = PERSIST_RETRY_MAX_DELAY_MS;
+  for (const draftKey of draftKeys) {
+    const attempts = persistRetryAttempts.get(draftKey) ?? 1;
+    const keyDelay =
+      attempts >= PERSIST_RETRY_MAX_ATTEMPTS
+        ? PERSIST_RETRY_MAX_DELAY_MS
+        : PERSIST_DEBOUNCE_MS * 2 ** (attempts - 1);
+    delay = Math.min(delay, keyDelay);
+  }
+  return delay;
+}
+
+function requeueFailedDrafts(draftKeys: ReadonlySet<string>, sweepAttachments: boolean): void {
+  for (const draftKey of draftKeys) {
+    pendingDraftKeys.add(draftKey);
+    persistRetryAttempts.set(draftKey, (persistRetryAttempts.get(draftKey) ?? 0) + 1);
+  }
+  pendingAttachmentSweep ||= sweepAttachments && draftKeys.size > 0;
+  schedulePersistenceRetry();
 }
 
 async function savePendingComposerDrafts(): Promise<void> {
@@ -139,13 +184,17 @@ async function savePendingComposerDrafts(): Promise<void> {
         sweepAttachments: pending.sweepAttachments,
       }),
     );
-    persistRetryCount = 0;
-  } catch (error) {
     for (const draftKey of pending.draftKeys) {
-      pendingDraftKeys.add(draftKey);
+      persistRetryAttempts.delete(draftKey);
     }
-    pendingAttachmentSweep ||= pending.sweepAttachments;
-    schedulePersistenceRetry();
+  } catch (error) {
+    const failed = failedDraftKeys(error, pending.draftKeys);
+    for (const draftKey of pending.draftKeys) {
+      if (!failed.has(draftKey)) {
+        persistRetryAttempts.delete(draftKey);
+      }
+    }
+    requeueFailedDrafts(failed, pending.sweepAttachments);
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.
   }
@@ -177,17 +226,19 @@ function ensurePersistenceTimers(): void {
 
 function schedulePersistenceRetry(): void {
   clearPersistenceTimers();
-  if (persistRetryCount >= PERSIST_RETRY_MAX_ATTEMPTS) {
+  if (pendingDraftKeys.size === 0) {
     return;
   }
-  const delay = Math.min(PERSIST_DEBOUNCE_MS * 2 ** persistRetryCount, PERSIST_RETRY_MAX_DELAY_MS);
-  persistRetryCount += 1;
-  persistTimer = setTimeout(startPendingPersistence, delay);
+  persistTimer = setTimeout(startPendingPersistence, retryDelay(pendingDraftKeys));
 }
 
 export async function flushComposerDrafts(): Promise<void> {
   clearPersistenceTimers();
   await savePendingComposerDrafts();
+  clearPersistenceTimers();
+  if (pendingDraftKeys.size > 0 || pendingAttachmentSweep) {
+    await savePendingComposerDrafts();
+  }
 }
 
 function schedulePersistComposerDraft(
@@ -196,7 +247,7 @@ function schedulePersistComposerDraft(
 ): void {
   pendingDraftKeys.add(draftKey);
   pendingAttachmentSweep ||= options?.sweepAttachments === true;
-  persistRetryCount = 0;
+  persistRetryAttempts.delete(draftKey);
   if (options?.immediate === true) {
     startPendingPersistence();
     return;
@@ -209,7 +260,7 @@ function removePendingDraftKey(draftKey: string): void {
 }
 
 function requeueDraftPersistence(draftKey: string, sweepAttachments = false): void {
-  schedulePersistComposerDraft(draftKey, { sweepAttachments });
+  requeueFailedDrafts(new Set([draftKey]), sweepAttachments);
 }
 
 /** Resets module persistence state between isolated unit tests. */
@@ -217,7 +268,7 @@ export function resetComposerDraftPersistenceForTests(): void {
   clearPersistenceTimers();
   loadPromise = null;
   hydrationComplete = false;
-  persistRetryCount = 0;
+  persistRetryAttempts.clear();
   draftKeysMutatedBeforeHydration.clear();
   pendingDraftKeys.clear();
   pendingAttachmentSweep = false;
@@ -824,9 +875,7 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
       sweepAttachments: true,
     });
   } catch (error) {
-    for (const draftKey of removedDraftKeys) {
-      requeueDraftPersistence(draftKey, true);
-    }
+    requeueFailedDrafts(failedDraftKeys(error, new Set(removedDraftKeys)), true);
     throw error;
   }
 }

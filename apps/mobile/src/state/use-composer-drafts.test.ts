@@ -5,6 +5,8 @@ import { vi } from "vite-plus/test";
 const persistedFiles = new Map<string, string>();
 const corruptNextWrite = { value: false };
 const failNextMove = { value: false };
+const failMovePathFragments = new Set<string>();
+const moveAttempts = new Map<string, number>();
 const readGate: {
   uri: string | null;
   promise: Promise<void> | null;
@@ -31,6 +33,10 @@ vi.mock("expo-file-system", () => {
       return persistedFiles.has(this.uri);
     }
 
+    get size(): number {
+      return persistedFiles.get(this.uri)?.length ?? 0;
+    }
+
     create(options?: { readonly overwrite?: boolean }): void {
       if (this.exists && options?.overwrite !== true) {
         throw new Error(`file already exists: ${this.uri}`);
@@ -48,7 +54,11 @@ vi.mock("expo-file-system", () => {
     }
 
     moveSync(destination: { uri: string }, options?: { readonly overwrite?: boolean }): void {
-      if (failNextMove.value) {
+      moveAttempts.set(destination.uri, (moveAttempts.get(destination.uri) ?? 0) + 1);
+      if (
+        failNextMove.value ||
+        [...failMovePathFragments].some((fragment) => destination.uri.includes(fragment))
+      ) {
         failNextMove.value = false;
         throw new Error("move failed");
       }
@@ -143,6 +153,8 @@ afterEach(() => {
   persistedFiles.clear();
   corruptNextWrite.value = false;
   failNextMove.value = false;
+  failMovePathFragments.clear();
+  moveAttempts.clear();
   readGate.uri = null;
   readGate.promise = null;
   readGate.notifyStarted = null;
@@ -475,7 +487,7 @@ describe("appendedComposerDraftText", () => {
 });
 
 describe("appendComposerDraftContentDurably", () => {
-  it("requeues every pending draft after a debounced batch failure", async () => {
+  it("retries only failed batch keys during the flush final attempt", async () => {
     const firstKey = "environment-1:thread-retry-first";
     const secondKey = "environment-1:thread-retry-second";
     setComposerDraftText(firstKey, "first");
@@ -483,11 +495,60 @@ describe("appendComposerDraftContentDurably", () => {
     failNextMove.value = true;
 
     await flushComposerDrafts();
-    await flushComposerDrafts();
 
-    for (const draftKey of [firstKey, secondKey]) {
+    const firstPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(firstKey)}.json`;
+    const secondPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(secondKey)}.json`;
+    expect(persistedFiles.has(firstPath)).toBe(true);
+    expect(persistedFiles.has(secondPath)).toBe(true);
+    expect(moveAttempts.get(firstPath)).toBe(2);
+    expect(moveAttempts.get(secondPath)).toBe(1);
+  });
+
+  it("keeps a failed flush queued after its final immediate attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      const draftKey = "environment-1:thread-flush-retry";
       const path = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
-      expect(persistedFiles.has(path)).toBe(true);
+      failMovePathFragments.add(encodeURIComponent(draftKey));
+      setComposerDraftText(draftKey, "draft");
+
+      await flushComposerDrafts();
+      expect(moveAttempts.get(path)).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(moveAttempts.get(path)).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(moveAttempts.get(path)).toBe(3);
+    } finally {
+      resetComposerDraftPersistenceForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves per-key backoff across durable requeues and retries every 30 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const draftKey = "environment-1:thread-long-retry";
+      const path = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+      failMovePathFragments.add(encodeURIComponent(draftKey));
+
+      for (let index = 0; index < 5; index += 1) {
+        await appendComposerDraftContentDurably(draftKey, {
+          text: `attempt-${index}`,
+          attachments: [],
+        });
+      }
+      expect(moveAttempts.get(path)).toBe(5);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(moveAttempts.get(path)).toBe(5);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(moveAttempts.get(path)).toBe(6);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(moveAttempts.get(path)).toBe(7);
+    } finally {
+      resetComposerDraftPersistenceForTests();
+      vi.useRealTimers();
     }
   });
 
