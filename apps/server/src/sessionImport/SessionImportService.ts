@@ -335,6 +335,11 @@ export const makeSessionImportService = Effect.gen(function* () {
       if (!instance.enabled) continue;
       const listImportable = instance.adapter.listImportableSessions;
       if (listImportable === undefined) continue;
+      let providerDisplayName = instance.displayName;
+      if (providerDisplayName === undefined) {
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        providerDisplayName = snapshot.displayName ?? instance.driverKind;
+      }
       const boundNativeIds = boundNativeIdsByInstance.get(instance.instanceId);
       const sessions = yield* listImportable({ cwd: effectiveCwd }).pipe(
         Effect.mapError(
@@ -355,7 +360,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         candidates.push({
           instanceId: instance.instanceId,
           provider: instance.driverKind,
-          providerDisplayName: instance.displayName ?? instance.driverKind,
+          providerDisplayName,
           nativeSessionId: session.nativeSessionId,
           name: session.name !== null ? session.name.slice(0, PREVIEW_MAX_CHARS) : null,
           preview: session.preview.slice(0, PREVIEW_MAX_CHARS),

@@ -1524,6 +1524,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       providerInstanceId: boundInstanceId,
       cwd: input.cwd ?? process.cwd(),
       binaryPath: codexConfig.binaryPath,
+      launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
       ...(options?.environment ? { environment: options.environment } : {}),
       ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
       forkResumeCursor: input.sourceResumeCursor,
@@ -1816,6 +1817,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const importReaderOptions = (cwd: string) => ({
     binaryPath: codexConfig.binaryPath,
+    launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
     ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
     ...(options?.environment ? { environment: options.environment } : {}),
     cwd,

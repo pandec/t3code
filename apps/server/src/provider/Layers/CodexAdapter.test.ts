@@ -34,6 +34,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -188,6 +189,31 @@ function makeRuntimeFactory() {
   };
 }
 
+function makeForkRuntimeFactory() {
+  let lastRuntime: FakeCodexRuntime | undefined;
+  const factory = vi.fn((options: CodexSessionRuntimeOptions) => {
+    const runtime = new FakeCodexRuntime(options);
+    runtime.startImpl.mockResolvedValue({
+      provider: ProviderDriverKind.make("codex"),
+      status: "ready",
+      runtimeMode: options.runtimeMode,
+      threadId: options.threadId,
+      cwd: options.cwd,
+      resumeCursor: { threadId: "forked-provider-thread" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    lastRuntime = runtime;
+    return Effect.succeed(runtime);
+  });
+  return {
+    factory,
+    get lastRuntime(): FakeCodexRuntime | undefined {
+      return lastRuntime;
+    },
+  };
+}
+
 function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolean }) {
   const runtimes: Array<FakeCodexRuntime> = [];
   const releasedThreadIds: Array<ThreadId> = [];
@@ -241,6 +267,29 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
   listThreadIds: () => Effect.succeed([]),
   listBindings: () => Effect.succeed([]),
 });
+
+function makeForkLaunchArgsLayer(input: {
+  readonly launchArgs: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}) {
+  const runtimeFactory = makeForkRuntimeFactory();
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({ launchArgs: input.launchArgs });
+      return yield* makeCodexAdapter(codexConfig, {
+        environment: input.environment ?? {},
+        makeRuntime: runtimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return { layer, runtimeFactory };
+}
 
 const validationRuntimeFactory = makeRuntimeFactory();
 const validationLayer = it.layer(
@@ -385,6 +434,94 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+});
+
+it.effect("passes configured launch args into the fork runtime", () => {
+  const { layer, runtimeFactory } = makeForkLaunchArgsLayer({
+    launchArgs: "--strict-config --enable settings-feature",
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    yield* adapter.forkSession!({
+      sourceThreadId: asThreadId("fork-source-settings"),
+      destinationThreadId: asThreadId("fork-destination-settings"),
+      sourceResumeCursor: { threadId: "source-provider-thread" },
+      cwd: "/tmp/project",
+      runtimeMode: "full-access",
+    });
+
+    NodeAssert.equal(
+      runtimeFactory.lastRuntime?.options.launchArgs,
+      "--strict-config --enable settings-feature",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for the fork runtime", () => {
+  const { layer, runtimeFactory } = makeForkLaunchArgsLayer({
+    launchArgs: "--enable settings-feature",
+    environment: { T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --enable env-feature " },
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    yield* adapter.forkSession!({
+      sourceThreadId: asThreadId("fork-source-env"),
+      destinationThreadId: asThreadId("fork-destination-env"),
+      sourceResumeCursor: { threadId: "source-provider-thread" },
+      cwd: "/tmp/project",
+      runtimeMode: "full-access",
+    });
+
+    NodeAssert.equal(
+      runtimeFactory.lastRuntime?.options.launchArgs,
+      "--strict-config --enable env-feature",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("passes resolved launch args to the import reader app server", () => {
+  let spawned: ChildProcess.StandardCommand | undefined;
+  const spawnerLayer = Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        NodeAssert.equal(ChildProcess.isStandardCommand(command), true);
+        if (!ChildProcess.isStandardCommand(command)) {
+          throw new Error("Expected a standard command");
+        }
+        spawned = command;
+        throw new Error("Stop after capturing the command");
+      }),
+    ),
+  );
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({ launchArgs: "--enable settings-feature" });
+      return yield* makeCodexAdapter(codexConfig, {
+        environment: {
+          T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --enable env-feature ",
+        },
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(Layer.merge(NodeServices.layer, spawnerLayer)),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    yield* adapter.listSkills!({ cwd: process.cwd() }).pipe(Effect.exit);
+
+    NodeAssert.deepStrictEqual(spawned?.args, [
+      "app-server",
+      "--strict-config",
+      "--enable",
+      "env-feature",
+    ]);
+  }).pipe(Effect.provide(layer));
 });
 
 const sessionRuntimeFactory = makeRuntimeFactory();

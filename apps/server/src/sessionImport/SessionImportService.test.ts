@@ -43,6 +43,7 @@ interface HarnessOptions {
     readonly createdAt: string;
   }>;
   readonly importedModel?: string | null;
+  readonly instanceDisplayName?: string | null;
   readonly listedSessionName?: string | null;
   readonly metaUpdateFails?: boolean;
   readonly models?: ReadonlyArray<{
@@ -63,6 +64,7 @@ interface HarnessOptions {
   readonly releaseBinding?: Deferred.Deferred<void>;
   readonly releaseDispatch?: Deferred.Deferred<void>;
   readonly sessionName?: string | null;
+  readonly snapshotDisplayName?: string;
   readonly yieldBeforeRead?: boolean;
 }
 
@@ -91,10 +93,14 @@ const makeHarness = (options?: HarnessOptions) => {
       driverKind: ProviderDriverKind.make("claudeAgent"),
       continuationKey: "claude:home:/tmp/.claude",
     },
-    displayName: "Claude",
+    displayName:
+      options?.instanceDisplayName === null
+        ? undefined
+        : (options?.instanceDisplayName ?? "Claude"),
     enabled: true,
     snapshot: {
       getSnapshot: Effect.succeed({
+        displayName: options?.snapshotDisplayName ?? "Claude",
         models: options?.models ?? [{ slug: "claude-sonnet-5" }, { slug: "claude-opus-4-8" }],
       }),
     },
@@ -314,6 +320,20 @@ const makeGitWorktree = Effect.fn("makeGitWorktree")(function* () {
 });
 
 it.layer(NodeServices.layer)("SessionImportService", (it) => {
+  it.effect("uses the provider snapshot name when an instance has no custom display name", () =>
+    Effect.gen(function* () {
+      const { layer } = makeHarness({
+        instanceDisplayName: null,
+        snapshotDisplayName: "Claude Code",
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const candidates = yield* service.listCandidates({ projectId });
+
+      expect(candidates[0]?.providerDisplayName).toBe("Claude Code");
+    }),
+  );
+
   it.effect("imports a session: binding first, then dispatch, with stopped-binding fields", () =>
     Effect.gen(function* () {
       const { state, layer } = makeHarness();

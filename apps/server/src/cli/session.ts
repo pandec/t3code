@@ -311,6 +311,10 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
   };
 });
 
+export function formatProviderInstanceLabel(displayName: string, instanceId: string): string {
+  return `${displayName} [${instanceId}]`;
+}
+
 export const resolveImportInstance = Effect.fn("resolveImportInstance")(function* (input: {
   readonly catalog: ProviderCatalogResult;
   readonly provider: SniffedSession["provider"];
@@ -346,7 +350,7 @@ export const resolveImportInstance = Effect.fn("resolveImportInstance")(function
   }
   return yield* new SessionCliError({
     operation: "resolveImportInstance",
-    detail: `Multiple ${input.provider} provider instances support session import (${eligible.map((instance) => instance.instanceId).join(", ")}). Pass --instance.`,
+    detail: `Multiple ${input.provider} provider instances support session import (${eligible.map((instance) => formatProviderInstanceLabel(instance.displayName, instance.instanceId)).join(", ")}). Pass --instance.`,
   });
 });
 
@@ -996,7 +1000,7 @@ const sessionCandidatesCommand = Command.make("candidates", {
               : result.candidates
                   .map(
                     (candidate) =>
-                      `${candidate.nativeSessionId}\t${candidate.providerDisplayName}\t${candidate.updatedAt}\t${candidate.preview}`,
+                      `${candidate.nativeSessionId}\t${formatProviderInstanceLabel(candidate.providerDisplayName, candidate.instanceId)}\t${candidate.updatedAt}\t${candidate.preview}`,
                   )
                   .join("\n"),
         );

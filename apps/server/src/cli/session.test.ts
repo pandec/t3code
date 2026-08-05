@@ -25,6 +25,7 @@ import {
   deriveSessionDestination,
   deriveSessionWorktreePath,
   ensureWorktree,
+  formatProviderInstanceLabel,
   placeSessionFile,
   resolveCliModelSelection,
   resolveImportInstance,
@@ -203,6 +204,12 @@ it.effect("rejects malformed and unknown transcript formats", () =>
   }),
 );
 
+it("formats provider instance labels for CLI output", () => {
+  expect(formatProviderInstanceLabel("Claude Work", "claude_work")).toBe(
+    "Claude Work [claude_work]",
+  );
+});
+
 it.effect("resolves explicit provider homes and reports same-driver ambiguity", () =>
   Effect.gen(function* () {
     const catalog: ProviderCatalogResult = {
@@ -210,11 +217,13 @@ it.effect("resolves explicit provider homes and reports same-driver ambiguity", 
         providerInstance({
           instanceId: ProviderInstanceId.make("claude_personal"),
           driverKind: ProviderDriverKind.make("claudeAgent"),
+          displayName: "Claude Personal",
           home: "/homes/personal/.claude",
         }),
         providerInstance({
           instanceId: ProviderInstanceId.make("claude_work"),
           driverKind: ProviderDriverKind.make("claudeAgent"),
+          displayName: "Claude Work",
           home: "/homes/work/.claude",
         }),
       ],
@@ -223,7 +232,9 @@ it.effect("resolves explicit provider homes and reports same-driver ambiguity", 
       catalog,
       provider: "claudeAgent",
     }).pipe(Effect.flip);
-    expect(ambiguous.detail).toContain("claude_personal, claude_work");
+    expect(ambiguous.detail).toContain(
+      "Claude Personal [claude_personal], Claude Work [claude_work]",
+    );
 
     const explicit = yield* resolveImportInstance({
       catalog,
