@@ -17,8 +17,12 @@ import type {
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Platform, View, type GestureResponderEvent } from "react-native";
-import { KeyboardController, KeyboardStickyView } from "react-native-keyboard-controller";
+import { Platform, View, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
+import {
+  KeyboardController,
+  KeyboardStickyView,
+  useKeyboardState,
+} from "react-native-keyboard-controller";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -46,6 +50,7 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
+import { resolveThreadFeedInsetBaseline } from "./threadFeedInsets";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
@@ -187,6 +192,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const lastScrolledAnchorMessageIdRef = useRef<MessageId | null>(null);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
+  const [measuredComposerOverlay, setMeasuredComposerOverlay] = useState<{
+    readonly threadKey: string;
+    readonly height: number;
+  } | null>(null);
+  const measuredComposerOverlayHeight =
+    measuredComposerOverlay?.threadKey === selectedThreadKey
+      ? measuredComposerOverlay.height
+      : null;
+  const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const composerBottomInset = composerExpanded ? 0 : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
@@ -218,11 +232,33 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   // its end-scroll math matches the real resting position.
   const nativeInsetOvercount =
     props.usesAutomaticContentInsets === true && Platform.OS === "ios" ? insets.bottom : 0;
+  const estimatedContentInsetBaseline = resolveThreadFeedInsetBaseline({
+    measuredOverlayHeight: null,
+    estimatedOverlayHeight,
+    nativeInsetOvercount,
+  });
+  const contentInsetBaseline = resolveThreadFeedInsetBaseline({
+    measuredOverlayHeight: measuredComposerOverlayHeight,
+    estimatedOverlayHeight,
+    nativeInsetOvercount,
+  });
   const { contentInsetEndAdjustment, onComposerLayout } = useKeyboardChatComposerInset(
     listRef,
     composerOverlayRef,
-    Math.max(0, estimatedOverlayHeight - nativeInsetOvercount),
+    estimatedContentInsetBaseline,
     -nativeInsetOvercount,
+  );
+  const handleComposerLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const height = event.nativeEvent.layout.height;
+      setMeasuredComposerOverlay((current) =>
+        current?.threadKey === selectedThreadKey && current.height === height
+          ? current
+          : { threadKey: selectedThreadKey, height },
+      );
+      onComposerLayout(event);
+    },
+    [onComposerLayout, selectedThreadKey],
   );
   const { freeze, scrollMessageToEnd } = useKeyboardScrollToEnd({ listRef });
   const showContent = props.showContent ?? true;
@@ -389,6 +425,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             freeze={freeze}
             anchorMessageId={anchorMessageId}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
+            contentInsetBaseline={contentInsetBaseline}
+            keyboardVisible={keyboardVisible}
             contentTopInset={0}
             contentBottomInset={estimatedOverlayHeight}
             contentMaxWidth={contentMaxWidth}
@@ -411,7 +449,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           {/* No paddingTop here: the overlay's measured height becomes the
               list's bottom inset, so any padding above the pill/composer
               pushes the resting content floor up by the same amount. */}
-          <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
+          <View ref={composerOverlayRef} onLayout={handleComposerLayout} className="w-full">
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <Animated.View

@@ -113,6 +113,7 @@ import {
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
+import { resolveThreadFeedInsetReport, type ThreadFeedInsetReport } from "./threadFeedInsets";
 import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
@@ -189,6 +190,8 @@ export interface ThreadFeedProps {
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
   readonly contentInsetEndAdjustment: SharedValue<number>;
+  readonly contentInsetBaseline: number;
+  readonly keyboardVisible: boolean;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly contentMaxWidth?: number;
@@ -211,17 +214,27 @@ function MessageAttachmentImage(props: {
     attachmentId: props.attachmentId,
   });
 
-  if (uri === null) {
-    return (
-      <View className={`${props.className} items-center justify-center`}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
-
+  // A View — not the touchable — carries the frame (aspect ratio, radius,
+  // placeholder tint): gesture-handler's TouchableOpacity forwards only a fixed
+  // prop allow-list plus `style` to its inner view, so `className` on it never
+  // reaches a styled node. Both states fill that one frame, so the row measures
+  // identically before and after the asset URL lands and the image never
+  // contributes its intrinsic size.
   return (
-    <TouchableOpacity activeOpacity={0.7} onPress={() => props.onPressImage(uri)}>
-      <Image source={{ uri }} className={props.className} resizeMode="cover" />
+    <TouchableOpacity
+      activeOpacity={0.7}
+      disabled={uri === null}
+      onPress={uri === null ? undefined : () => props.onPressImage(uri)}
+    >
+      <View className={cn(props.className, "overflow-hidden")}>
+        {uri === null ? (
+          <View className="h-full w-full items-center justify-center">
+            <ActivityIndicator />
+          </View>
+        ) : (
+          <Image source={{ uri }} className="h-full w-full" resizeMode="cover" />
+        )}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -1813,6 +1826,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const foldSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
+  const lastContentInsetReportRef = useRef<ThreadFeedInsetReport | null>(null);
   const previousLatestTurnRef = useRef(props.latestTurn);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
@@ -1954,7 +1968,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // invisible — animating it is exactly what made cold upward scrolls slide
   // and jump. Near the end the slide stays on: streaming growth and sends
   // shift rows at rest, where the animation is the thing preventing a hard
-  // visual snap.
+  // visual snap. Dimensions still land synchronously so a growing row cannot
+  // overlap the following row while its measured height catches up.
   const feedItemLayoutTransition = useMemo(() => {
     return (values: LayoutAnimationsValues) => {
       "worklet";
@@ -1963,14 +1978,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         initialValues: {
           originX: values.currentOriginX,
           originY: values.currentOriginY,
-          width: values.currentWidth,
-          height: values.currentHeight,
         },
         animations: {
           originX: withTiming(values.targetOriginX, { duration }),
           originY: withTiming(values.targetOriginY, { duration }),
-          width: withTiming(values.targetWidth, { duration }),
-          height: withTiming(values.targetHeight, { duration }),
         },
       };
     };
@@ -2014,19 +2025,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   // The empty↔filled key below remounts the list, which resets its imperative
-  // content-inset override — and useKeyboardChatComposerInset (mounted above
-  // the remount boundary) deduplicates by height, so it never re-reports the
-  // composer inset to the fresh instance. Without this, the remounted list's
-  // initial scroll-to-end computes with a zero end inset and rests one
-  // composer-height short of the end. Layout effect: it must land before the
-  // list's first positioning tick or the one-shot initial scroll misses it.
+  // content-inset override.
   const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
-  useLayoutEffect(() => {
-    const bottom = props.contentInsetEndAdjustment.value;
-    if (bottom > 0) {
-      props.listRef.current?.reportContentInset({ bottom });
-    }
-  }, [listMountKey, props.contentInsetEndAdjustment, props.listRef]);
 
   const anchoredEndSpace = useMemo(
     () =>
@@ -2038,6 +2038,38 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ),
     [presentedFeed, props.anchorMessageId, anchorTopInset],
   );
+
+  // Re-report the measured closed-keyboard baseline to each list mount before
+  // its first positioning tick, and again when the floating composer changes
+  // height. The keyboard integration owns the override whenever the keyboard
+  // or an anchored end space is in play — see resolveThreadFeedInsetReport.
+  useLayoutEffect(() => {
+    const report = resolveThreadFeedInsetReport({
+      listMountKey,
+      baseline: props.contentInsetBaseline,
+      keyboardVisible: props.keyboardVisible,
+      anchoredEndSpaceActive: anchoredEndSpace !== undefined,
+      lastReported: lastContentInsetReportRef.current,
+    });
+    if (report === null) {
+      return;
+    }
+
+    const list = props.listRef.current;
+    if (list === null) {
+      return;
+    }
+
+    list.reportContentInset({ bottom: report.baseline });
+    lastContentInsetReportRef.current = report;
+  }, [
+    anchoredEndSpace,
+    listMountKey,
+    props.contentInsetBaseline,
+    props.keyboardVisible,
+    props.listRef,
+  ]);
+
   const terminalAssistantMessageIds = useMemo(() => {
     const terminalIdsByTurn = new Map<TurnId, string>();
     for (const entry of props.feed) {
