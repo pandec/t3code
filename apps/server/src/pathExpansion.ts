@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -21,4 +22,15 @@ export function expandHomePath(value: string): string {
     return NodePath.join(NodeOS.homedir(), value.slice(2));
   }
   return value;
+}
+
+/**
+ * Whether `value` currently resolves to a directory.
+ *
+ * Used before reusing a persisted working directory: a worktree can be removed
+ * between sessions, and spawning a provider in a directory that no longer
+ * exists fails at process start rather than surfacing a usable error.
+ */
+export function isExistingDirectory(value: string): boolean {
+  return NodeFS.statSync(value, { throwIfNoEntry: false })?.isDirectory() === true;
 }

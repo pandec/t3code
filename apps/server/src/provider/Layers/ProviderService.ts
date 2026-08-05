@@ -55,6 +55,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import { isExistingDirectory } from "../../pathExpansion.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -128,7 +129,7 @@ function toRuntimePayloadFromSession(
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly clearHasPendingWork?: boolean;
-    readonly preserveImportedCwd?: boolean;
+    readonly preserveCwdAuthority?: CwdAuthority;
   },
 ): Record<string, unknown> {
   return {
@@ -145,7 +146,9 @@ function toRuntimePayloadFromSession(
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
-    ...(extra?.preserveImportedCwd === true ? { cwdAuthority: "imported-session" } : {}),
+    ...(extra?.preserveCwdAuthority !== undefined
+      ? { cwdAuthority: extra.preserveCwdAuthority }
+      : {}),
   };
 }
 
@@ -179,28 +182,40 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function shouldUsePersistedImportedCwd(
+/**
+ * Why a binding's persisted cwd outranks the workspace the thread nominally
+ * belongs to.
+ *
+ * `imported-session` — the conversation came from an external transcript that
+ * ran somewhere else, so the import decided the directory.
+ * `runtime-observed` — the live session moved itself (the agent entered or left
+ * a worktree). The provider stores the resumable transcript under the project
+ * directory derived from that cwd, so resuming anywhere else cannot find the
+ * conversation.
+ */
+const CWD_AUTHORITIES = ["imported-session", "runtime-observed"] as const;
+type CwdAuthority = (typeof CWD_AUTHORITIES)[number];
+
+function readDurableCwdAuthority(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): CwdAuthority | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw = "cwdAuthority" in runtimePayload ? runtimePayload.cwdAuthority : undefined;
+  return CWD_AUTHORITIES.find((authority) => authority === raw);
+}
+
+function shouldUsePersistedCwd(
   runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
 ): boolean {
   if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
     return false;
   }
   return (
-    ("cwdAuthority" in runtimePayload && runtimePayload.cwdAuthority === "imported-session") ||
+    readDurableCwdAuthority(runtimePayload) !== undefined ||
     ("lastRuntimeEvent" in runtimePayload &&
       runtimePayload.lastRuntimeEvent === "provider.importConversation")
-  );
-}
-
-function hasDurableImportedCwdAuthority(
-  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
-): boolean {
-  return (
-    runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload) &&
-    "cwdAuthority" in runtimePayload &&
-    runtimePayload.cwdAuthority === "imported-session"
   );
 }
 
@@ -394,55 +409,77 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
     event: ProviderRuntimeEvent,
   ) {
-    if (event.type !== "turn.completed" && event.type !== "session.exited") {
-      return;
-    }
-
-    const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-    if (!binding) {
-      return;
-    }
-    const eventGenerationId = event.payload.sessionGenerationId;
-    const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
     if (
-      binding.provider !== source.provider ||
-      binding.providerInstanceId !== source.instanceId ||
-      bindingGenerationId !== eventGenerationId
+      event.type !== "turn.completed" &&
+      event.type !== "session.exited" &&
+      event.type !== "session.cwd.changed"
     ) {
-      yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
-        threadId: event.threadId,
-        eventProvider: source.provider,
-        eventProviderInstanceId: source.instanceId,
-        bindingProvider: binding.provider,
-        bindingProviderInstanceId: binding.providerInstanceId,
-        bindingGenerationId,
-        eventGenerationId,
-      });
       return;
     }
 
-    if (binding.status === "stopped") return;
+    // A cwd observation is one-shot and cannot be reconstructed from a later
+    // event: if it is dropped, the binding keeps a directory the session has
+    // already left. `refreshIfUnchanged` reports a lost compare-and-swap by
+    // returning false rather than failing, so `Effect.retry` never sees it —
+    // re-read the binding and reapply instead.
+    const conflictAttempts = event.type === "session.cwd.changed" ? 3 : 1;
 
-    const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
-    const runtimePayloadPatch =
-      event.type === "session.exited"
-        ? { hasPendingWork: false, activeTurnId: null }
-        : hasPendingWork !== undefined
-          ? { hasPendingWork }
-          : undefined;
-    const refreshed = yield* directory
-      .refreshIfUnchanged({
-        binding,
-        ...(event.type === "session.exited" ? { status: "stopped" as const } : {}),
-        ...(runtimePayloadPatch !== undefined ? { runtimePayloadPatch } : {}),
-      })
-      .pipe(Effect.retry({ times: 2 }));
-    if (!refreshed) {
+    for (let attempt = 1; attempt <= conflictAttempts; attempt += 1) {
+      const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+      if (!binding) {
+        return;
+      }
+      const eventGenerationId = event.payload.sessionGenerationId;
+      const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
+      if (
+        binding.provider !== source.provider ||
+        binding.providerInstanceId !== source.instanceId ||
+        bindingGenerationId !== eventGenerationId
+      ) {
+        yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
+          threadId: event.threadId,
+          eventProvider: source.provider,
+          eventProviderInstanceId: source.instanceId,
+          bindingProvider: binding.provider,
+          bindingProviderInstanceId: binding.providerInstanceId,
+          bindingGenerationId,
+          eventGenerationId,
+        });
+        return;
+      }
+
+      if (binding.status === "stopped") return;
+
+      const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
+      const runtimePayloadPatch =
+        event.type === "session.exited"
+          ? { hasPendingWork: false, activeTurnId: null }
+          : event.type === "session.cwd.changed"
+            ? // Claim authority over the cwd so a later resume follows the
+              // session into the directory it actually ran in, instead of
+              // resetting to the thread's workspace root.
+              { cwd: event.payload.cwd, cwdAuthority: "runtime-observed" }
+            : hasPendingWork !== undefined
+              ? { hasPendingWork }
+              : undefined;
+      const refreshed = yield* directory
+        .refreshIfUnchanged({
+          binding,
+          ...(event.type === "session.exited" ? { status: "stopped" as const } : {}),
+          ...(runtimePayloadPatch !== undefined ? { runtimePayloadPatch } : {}),
+        })
+        .pipe(Effect.retry({ times: 2 }));
+      if (refreshed) {
+        return;
+      }
+
       yield* Effect.logDebug("provider.session.runtime-event-binding-changed", {
         threadId: event.threadId,
         eventProvider: source.provider,
         eventProviderInstanceId: source.instanceId,
         expectedLastSeenAt: binding.lastSeenAt,
+        attempt,
+        remainingAttempts: conflictAttempts - attempt,
       });
     }
   });
@@ -473,7 +510,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
       readonly clearHasPendingWork?: boolean;
-      readonly preserveImportedCwd?: boolean;
+      readonly preserveCwdAuthority?: CwdAuthority;
     },
   ) =>
     Effect.gen(function* () {
@@ -508,10 +545,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ownerContinuationKey !== undefined &&
         previousContinuationKey !== undefined &&
         previousContinuationKey === ownerContinuationKey;
-      const preserveImportedCwd =
+      const preserveCwdAuthority =
         previousBinding?.provider === session.provider &&
-        (previousInstanceId === providerInstanceId || continuationCompatible) &&
-        hasDurableImportedCwdAuthority(previousBinding.runtimePayload);
+        (previousInstanceId === providerInstanceId || continuationCompatible)
+          ? readDurableCwdAuthority(previousBinding.runtimePayload)
+          : undefined;
       yield* directory.upsert({
         threadId,
         provider: session.provider,
@@ -523,7 +561,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimePayload: {
           ...toRuntimePayloadFromSession(session, {
             ...extra,
-            preserveImportedCwd,
+            ...(preserveCwdAuthority !== undefined ? { preserveCwdAuthority } : {}),
           }),
           ...(ownerContinuationKey !== undefined ? { continuationKey: ownerContinuationKey } : {}),
         },
@@ -922,10 +960,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const persistedCwd = reusePersistedState
           ? readPersistedCwd(persistedBinding?.runtimePayload)
           : undefined;
-        const effectiveCwd =
+        const persistedCwdOutranksRequest =
           persistedCwd !== undefined &&
           persistedBinding !== undefined &&
-          shouldUsePersistedImportedCwd(persistedBinding.runtimePayload)
+          shouldUsePersistedCwd(persistedBinding.runtimePayload);
+        // A directory the session wandered into only outranks the requested one
+        // while it still exists: an agent-created worktree can be removed
+        // between sessions, and nothing downgrades the authority on its own, so
+        // the thread would keep being started somewhere that is gone. The
+        // imported-session authority keeps its existing behavior — there the
+        // recorded directory is the whole point of the import.
+        const persistedCwdMissing =
+          persistedCwdOutranksRequest &&
+          readDurableCwdAuthority(persistedBinding?.runtimePayload) === "runtime-observed" &&
+          !isExistingDirectory(persistedCwd);
+        if (persistedCwdMissing) {
+          yield* Effect.logWarning("provider.session.observed-cwd-missing", {
+            threadId,
+            persistedCwd,
+            fallbackCwd: input.cwd ?? null,
+          });
+        }
+        const effectiveCwd =
+          persistedCwdOutranksRequest && !persistedCwdMissing
             ? persistedCwd
             : (input.cwd ?? persistedCwd);
         yield* Effect.annotateCurrentSpan({
