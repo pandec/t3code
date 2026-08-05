@@ -75,6 +75,7 @@ let hydrationComplete = false;
 const persistRetryAttempts = new Map<string, number>();
 const draftKeysMutatedBeforeHydration = new Set<string>();
 const partialDraftKeys = new Set<string>();
+const partialVisibleAttachmentIds = new Map<string, ReadonlySet<string>>();
 const persistenceQueue = new SerializedAsyncQueue();
 
 function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
@@ -109,30 +110,35 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
 }
 
 const pendingDraftKeys = new Set<string>();
-const pendingPartialOverwriteKeys = new Set<string>();
+const pendingDiscardPartialKeys = new Set<string>();
 let pendingAttachmentSweep = false;
 
 function takePendingPersistence(): {
   readonly draftKeys: ReadonlySet<string>;
-  readonly partialOverwriteKeys: ReadonlySet<string>;
+  readonly discardPartialKeys: ReadonlySet<string>;
   readonly sweepAttachments: boolean;
 } {
   const draftKeys = new Set(pendingDraftKeys);
-  const partialOverwriteKeys = new Set(pendingPartialOverwriteKeys);
+  const discardPartialKeys = new Set(pendingDiscardPartialKeys);
   const sweepAttachments = pendingAttachmentSweep;
   pendingDraftKeys.clear();
-  pendingPartialOverwriteKeys.clear();
+  pendingDiscardPartialKeys.clear();
   pendingAttachmentSweep = false;
-  return { draftKeys, partialOverwriteKeys, sweepAttachments };
+  return { draftKeys, discardPartialKeys, sweepAttachments };
 }
 
 function mergeRecoveredAttachments(
   recovered: ReadonlyArray<DraftComposerImageAttachment>,
   latest: ReadonlyArray<DraftComposerImageAttachment>,
+  previouslyVisibleIds: ReadonlySet<string>,
 ): ReadonlyArray<DraftComposerImageAttachment> {
-  const attachmentIds = new Set(recovered.map((attachment) => attachment.id));
+  const latestIds = new Set(latest.map((attachment) => attachment.id));
+  const retainedRecovered = recovered.filter(
+    (attachment) => !previouslyVisibleIds.has(attachment.id) || latestIds.has(attachment.id),
+  );
+  const attachmentIds = new Set(retainedRecovered.map((attachment) => attachment.id));
   return [
-    ...recovered,
+    ...retainedRecovered,
     ...latest.filter((attachment) => {
       if (attachmentIds.has(attachment.id)) {
         return false;
@@ -149,7 +155,7 @@ async function persistDraftKeysNow(
   options?: {
     readonly verify?: boolean;
     readonly sweepAttachments?: boolean;
-    readonly partialOverwriteKeys?: ReadonlySet<string>;
+    readonly discardPartialKeys?: ReadonlySet<string>;
   },
 ): Promise<void> {
   const draftsToPersist = { ...drafts };
@@ -157,7 +163,11 @@ async function persistDraftKeysNow(
   const failures = new Map<string, unknown>();
 
   for (const draftKey of draftKeys) {
-    if (!partialDraftKeys.has(draftKey) || options?.partialOverwriteKeys?.has(draftKey)) {
+    if (!partialDraftKeys.has(draftKey) || options?.discardPartialKeys?.has(draftKey)) {
+      if (options?.discardPartialKeys?.has(draftKey)) {
+        partialDraftKeys.delete(draftKey);
+        partialVisibleAttachmentIds.delete(draftKey);
+      }
       readyDraftKeys.add(draftKey);
       continue;
     }
@@ -175,13 +185,18 @@ async function persistDraftKeysNow(
         if (latest) {
           const merged = {
             ...latest,
-            attachments: mergeRecoveredAttachments(hydrated.draft.attachments, latest.attachments),
+            attachments: mergeRecoveredAttachments(
+              hydrated.draft.attachments,
+              latest.attachments,
+              partialVisibleAttachmentIds.get(draftKey) ?? new Set(),
+            ),
           };
           const next = { ...current, [draftKey]: merged };
           appAtomRegistry.set(composerDraftsAtom, next);
           draftsToPersist[draftKey] = merged;
         }
       }
+      partialVisibleAttachmentIds.delete(draftKey);
     } catch (error) {
       failures.set(draftKey, error);
     }
@@ -210,13 +225,17 @@ async function persistDraftKeysNow(
 async function persistDraftKeys(
   drafts: Record<string, ComposerDraft>,
   draftKeys: ReadonlySet<string>,
-  options?: { readonly verify?: boolean; readonly sweepAttachments?: boolean },
+  options?: {
+    readonly verify?: boolean;
+    readonly sweepAttachments?: boolean;
+    readonly discardPartial?: boolean;
+  },
 ): Promise<void> {
   try {
     await persistenceQueue.run(() =>
       persistDraftKeysNow(drafts, draftKeys, {
         ...options,
-        partialOverwriteKeys: options?.sweepAttachments === true ? draftKeys : new Set<string>(),
+        discardPartialKeys: options?.discardPartial === true ? draftKeys : new Set<string>(),
       }),
     );
     for (const draftKey of draftKeys) {
@@ -258,12 +277,12 @@ function retryDelay(draftKeys: ReadonlySet<string>): number {
 function requeueFailedDrafts(
   draftKeys: ReadonlySet<string>,
   sweepAttachments: boolean,
-  partialOverwriteKeys: ReadonlySet<string> = new Set(),
+  discardPartialKeys: ReadonlySet<string> = new Set(),
 ): void {
   for (const draftKey of draftKeys) {
     pendingDraftKeys.add(draftKey);
-    if (partialOverwriteKeys.has(draftKey)) {
-      pendingPartialOverwriteKeys.add(draftKey);
+    if (discardPartialKeys.has(draftKey)) {
+      pendingDiscardPartialKeys.add(draftKey);
     }
     persistRetryAttempts.set(draftKey, (persistRetryAttempts.get(draftKey) ?? 0) + 1);
   }
@@ -281,7 +300,7 @@ async function savePendingComposerDrafts(): Promise<void> {
     await persistenceQueue.run(() =>
       persistDraftKeysNow(appAtomRegistry.get(composerDraftsAtom), pending.draftKeys, {
         sweepAttachments: pending.sweepAttachments,
-        partialOverwriteKeys: pending.partialOverwriteKeys,
+        discardPartialKeys: pending.discardPartialKeys,
       }),
     );
     for (const draftKey of pending.draftKeys) {
@@ -294,7 +313,7 @@ async function savePendingComposerDrafts(): Promise<void> {
         persistRetryAttempts.delete(draftKey);
       }
     }
-    requeueFailedDrafts(failed, pending.sweepAttachments, pending.partialOverwriteKeys);
+    requeueFailedDrafts(failed, pending.sweepAttachments, pending.discardPartialKeys);
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.
   }
@@ -343,11 +362,15 @@ export async function flushComposerDrafts(): Promise<void> {
 
 function schedulePersistComposerDraft(
   draftKey: string,
-  options?: { readonly sweepAttachments?: boolean; readonly immediate?: boolean },
+  options?: {
+    readonly sweepAttachments?: boolean;
+    readonly immediate?: boolean;
+    readonly discardPartial?: boolean;
+  },
 ): void {
   pendingDraftKeys.add(draftKey);
-  if (options?.sweepAttachments === true) {
-    pendingPartialOverwriteKeys.add(draftKey);
+  if (options?.discardPartial === true) {
+    pendingDiscardPartialKeys.add(draftKey);
   }
   pendingAttachmentSweep ||= options?.sweepAttachments === true;
   persistRetryAttempts.delete(draftKey);
@@ -360,12 +383,19 @@ function schedulePersistComposerDraft(
 
 function removePendingDraftKey(draftKey: string): void {
   pendingDraftKeys.delete(draftKey);
-  pendingPartialOverwriteKeys.delete(draftKey);
+  pendingDiscardPartialKeys.delete(draftKey);
 }
 
-function requeueDraftPersistence(draftKey: string, sweepAttachments = false): void {
+function requeueDraftPersistence(
+  draftKey: string,
+  options?: { readonly sweepAttachments?: boolean; readonly discardPartial?: boolean },
+): void {
   const draftKeys = new Set([draftKey]);
-  requeueFailedDrafts(draftKeys, sweepAttachments, sweepAttachments ? draftKeys : new Set());
+  requeueFailedDrafts(
+    draftKeys,
+    options?.sweepAttachments === true,
+    options?.discardPartial === true ? draftKeys : new Set(),
+  );
 }
 
 /** Resets module persistence state between isolated unit tests. */
@@ -376,8 +406,9 @@ export function resetComposerDraftPersistenceForTests(): void {
   persistRetryAttempts.clear();
   draftKeysMutatedBeforeHydration.clear();
   partialDraftKeys.clear();
+  partialVisibleAttachmentIds.clear();
   pendingDraftKeys.clear();
-  pendingPartialOverwriteKeys.clear();
+  pendingDiscardPartialKeys.clear();
   pendingAttachmentSweep = false;
 }
 
@@ -403,8 +434,13 @@ export function ensureComposerDraftsLoaded(): void {
     .run(() => loadPersistedComposerDraftState())
     .then((persisted) => {
       partialDraftKeys.clear();
+      partialVisibleAttachmentIds.clear();
       for (const draftKey of persisted.unavailableDraftKeys) {
         partialDraftKeys.add(draftKey);
+        partialVisibleAttachmentIds.set(
+          draftKey,
+          new Set(persisted.drafts[draftKey]?.attachments.map((attachment) => attachment.id) ?? []),
+        );
       }
       const current = appAtomRegistry.get(composerDraftsAtom);
       appAtomRegistry.set(
@@ -433,14 +469,25 @@ export function ensureComposerDraftsLoaded(): void {
 function updateComposerDrafts(
   draftKey: string,
   update: (current: Record<string, ComposerDraft>) => Record<string, ComposerDraft>,
-  options?: { readonly sweepAttachments?: boolean; readonly immediate?: boolean },
+  options?: {
+    readonly sweepAttachments?: boolean;
+    readonly immediate?: boolean;
+    readonly discardPartial?: boolean;
+    readonly discardPartialOnlyWhenChanged?: boolean;
+  },
 ): void {
-  const next = update(appAtomRegistry.get(composerDraftsAtom));
+  const current = appAtomRegistry.get(composerDraftsAtom);
+  const next = update(current);
   appAtomRegistry.set(composerDraftsAtom, next);
   if (!hydrationComplete) {
     draftKeysMutatedBeforeHydration.add(draftKey);
   }
-  schedulePersistComposerDraft(draftKey, options);
+  schedulePersistComposerDraft(draftKey, {
+    ...options,
+    discardPartial:
+      options?.discardPartial === true &&
+      (!options.discardPartialOnlyWhenChanged || next !== current),
+  });
 }
 
 export function setComposerDraftText(
@@ -592,7 +639,7 @@ export async function revertComposerDraftAppend(
     });
     return { fullyReverted, persisted: true };
   } catch (error) {
-    requeueDraftPersistence(draftKey, true);
+    requeueDraftPersistence(draftKey, { sweepAttachments: true });
     console.warn("[composer-drafts] failed to durably revert queued message append", error);
     return { fullyReverted, persisted: false };
   }
@@ -911,7 +958,7 @@ export async function restoreComposerDraftSnapshot(
       sweepAttachments: true,
     });
   } catch (error) {
-    requeueDraftPersistence(draftKey, true);
+    requeueDraftPersistence(draftKey, { sweepAttachments: true });
     throw error;
   }
 }
@@ -923,7 +970,7 @@ export function clearComposerDraftContent(
   updateComposerDrafts(
     draftKey,
     (current) => clearComposerDraftContentState(current, draftKey, options),
-    { immediate: true, sweepAttachments: true },
+    { immediate: true, sweepAttachments: true, discardPartial: true },
   );
 }
 
@@ -934,7 +981,12 @@ export function clearComposerDraftContentIfUnchanged(
   updateComposerDrafts(
     draftKey,
     (current) => clearComposerDraftContentIfUnchangedState(current, draftKey, expected),
-    { immediate: true, sweepAttachments: true },
+    {
+      immediate: true,
+      sweepAttachments: true,
+      discardPartial: true,
+      discardPartialOnlyWhenChanged: true,
+    },
   );
 }
 
@@ -949,7 +1001,7 @@ export function clearComposerDraft(draftKey: string): void {
       delete next[draftKey];
       return next;
     },
-    { immediate: true, sweepAttachments: true },
+    { immediate: true, sweepAttachments: true, discardPartial: true },
   );
 }
 
@@ -984,6 +1036,7 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     await persistDraftKeys(next, new Set(removedDraftKeys), {
       verify: true,
       sweepAttachments: true,
+      discardPartial: true,
     });
   } catch (error) {
     const failed = failedDraftKeys(error, new Set(removedDraftKeys));

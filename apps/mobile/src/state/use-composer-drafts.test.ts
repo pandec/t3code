@@ -139,9 +139,12 @@ import {
   type ComposerDraft,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
+  removeComposerDraftAttachment,
   removeComposerDraftsForEnvironment,
+  replaceComposerDraftAttachments,
   resetComposerDraftPersistenceForTests,
   revertComposerDraftAppend,
+  restoreComposerDraftSnapshot,
   restoreComposerDraftSnapshotState,
   setComposerDraftText,
 } from "./use-composer-drafts";
@@ -156,6 +159,83 @@ function testContentHash(value: string): string {
     .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
     .toString(16)
     .padStart(64, "0");
+}
+
+function testImage(id: string, dataUrl: string) {
+  return {
+    id,
+    type: "image" as const,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    sizeBytes: 3,
+    dataUrl,
+    previewUri: dataUrl,
+  };
+}
+
+function draftRecordPath(draftKey: string): string {
+  return `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+}
+
+function attachmentPath(contentHash: string): string {
+  return `file:///document/composer-drafts/attachments/${contentHash}.attachment`;
+}
+
+function seedPartiallyAvailableDraft(draftKey: string): {
+  readonly available: ReturnType<typeof testImage>;
+  readonly unavailable: ReturnType<typeof testImage>;
+  readonly recordPath: string;
+  readonly unavailablePath: string;
+} {
+  const available = testImage("available", "data:image/png;base64,YWJj");
+  const unavailable = testImage("unavailable", "data:image/png;base64,ZGVm");
+  const availableHash = testContentHash(available.dataUrl);
+  const unavailableHash = testContentHash(unavailable.dataUrl);
+  const recordPath = draftRecordPath(draftKey);
+  const unavailablePath = attachmentPath(unavailableHash);
+  persistedFiles.set(
+    recordPath,
+    JSON.stringify({
+      schemaVersion: 2,
+      draftKey,
+      draft: {
+        text: "draft",
+        attachments: [
+          {
+            id: available.id,
+            type: available.type,
+            name: available.name,
+            mimeType: available.mimeType,
+            sizeBytes: available.sizeBytes,
+            contentHash: availableHash,
+          },
+          {
+            id: unavailable.id,
+            type: unavailable.type,
+            name: unavailable.name,
+            mimeType: unavailable.mimeType,
+            sizeBytes: unavailable.sizeBytes,
+            contentHash: unavailableHash,
+          },
+        ],
+      },
+    }),
+  );
+  persistedFiles.set(attachmentPath(availableHash), available.dataUrl);
+  persistedFiles.set(unavailablePath, unavailable.dataUrl);
+  failReadPathFragments.add(`${unavailableHash}.attachment`);
+  return { available, unavailable, recordPath, unavailablePath };
+}
+
+function persistedAttachmentIds(recordPath: string): ReadonlyArray<string> {
+  const record = JSON.parse(persistedFiles.get(recordPath) ?? "null") as {
+    readonly draft?: { readonly attachments?: ReadonlyArray<{ readonly id?: string }> };
+  } | null;
+  return (
+    record?.draft?.attachments?.flatMap((attachment) =>
+      attachment.id === undefined ? [] : [attachment.id],
+    ) ?? []
+  );
 }
 
 afterEach(() => {
@@ -500,6 +580,101 @@ describe("mobile composer drafts", () => {
         attachments: [{ contentHash }],
       },
     });
+  });
+
+  it("keeps an unavailable attachment when a different attachment is removed", async () => {
+    const draftKey = "environment-1:thread-partial-remove";
+    const seeded = seedPartiallyAvailableDraft(draftKey);
+
+    ensureComposerDraftsLoaded();
+    await flushComposerDrafts();
+    expect(getComposerDraftSnapshot(draftKey).attachments).toEqual([seeded.available]);
+
+    removeComposerDraftAttachment(draftKey, seeded.available.id);
+    await flushComposerDrafts();
+    expect(persistedAttachmentIds(seeded.recordPath)).toEqual([
+      seeded.available.id,
+      seeded.unavailable.id,
+    ]);
+    expect(persistedFiles.has(seeded.unavailablePath)).toBe(true);
+
+    failReadPathFragments.clear();
+    await flushComposerDrafts();
+    expect(getComposerDraftSnapshot(draftKey).attachments).toEqual([seeded.unavailable]);
+    expect(persistedAttachmentIds(seeded.recordPath)).toEqual([seeded.unavailable.id]);
+    expect(persistedFiles.has(seeded.unavailablePath)).toBe(true);
+  });
+
+  it("recovers unavailable attachments around replace, revert, and restore operations", async () => {
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly mutate: (
+        draftKey: string,
+        available: ReturnType<typeof testImage>,
+        replacement: ReturnType<typeof testImage>,
+      ) => Promise<void>;
+    }> = [
+      {
+        name: "replace",
+        mutate: async (draftKey, _available, replacement) => {
+          replaceComposerDraftAttachments(draftKey, [replacement]);
+          await flushComposerDrafts();
+        },
+      },
+      {
+        name: "revert",
+        mutate: async (draftKey) => {
+          const available = getComposerDraftSnapshot(draftKey).attachments[0]!;
+          await revertComposerDraftAppend(draftKey, {
+            before: { text: "draft", attachments: [] },
+            appended: { text: "draft", attachments: [available] },
+          });
+        },
+      },
+      {
+        name: "restore",
+        mutate: async (draftKey, _available, replacement) => {
+          await expect(
+            restoreComposerDraftSnapshot(draftKey, {
+              text: "restored",
+              attachments: [replacement],
+            }),
+          ).rejects.toThrow();
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      resetComposerDraftPersistenceForTests();
+      appAtomRegistry.set(composerDraftsAtom, {});
+      persistedFiles.clear();
+      failReadPathFragments.clear();
+      const draftKey = `environment-1:thread-partial-${testCase.name}`;
+      const seeded = seedPartiallyAvailableDraft(draftKey);
+      const replacement = testImage(
+        `replacement-${testCase.name}`,
+        `data:image/png;base64,${testCase.name}`,
+      );
+
+      ensureComposerDraftsLoaded();
+      await flushComposerDrafts();
+      await testCase.mutate(draftKey, seeded.available, replacement);
+      expect(persistedAttachmentIds(seeded.recordPath)).toEqual([
+        seeded.available.id,
+        seeded.unavailable.id,
+      ]);
+      expect(persistedFiles.has(seeded.unavailablePath)).toBe(true);
+
+      failReadPathFragments.clear();
+      await flushComposerDrafts();
+      expect(
+        getComposerDraftSnapshot(draftKey).attachments.map((attachment) => attachment.id),
+      ).toEqual([seeded.unavailable.id, ...(testCase.name === "revert" ? [] : [replacement.id])]);
+      expect(persistedAttachmentIds(seeded.recordPath)).toEqual([
+        seeded.unavailable.id,
+        ...(testCase.name === "revert" ? [] : [replacement.id]),
+      ]);
+    }
   });
 
   it("allows an explicit clear to remove unavailable attachment references", async () => {
