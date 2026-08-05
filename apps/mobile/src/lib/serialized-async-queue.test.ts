@@ -42,4 +42,20 @@ describe("SerializedAsyncQueue", () => {
     await expect(first).rejects.toThrow("failed");
     await expect(second).resolves.toBe("recovered");
   });
+
+  it("drains every operation queued before shutdown", async () => {
+    const queue = new SerializedAsyncQueue();
+    const gate = deferred();
+    let complete = false;
+    void queue.run(async () => {
+      await gate.promise;
+      complete = true;
+    });
+
+    const drained = queue.drain();
+    expect(complete).toBe(false);
+    gate.resolve();
+    await drained;
+    expect(complete).toBe(true);
+  });
 });

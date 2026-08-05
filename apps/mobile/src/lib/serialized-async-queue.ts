@@ -13,4 +13,8 @@ export class SerializedAsyncQueue {
     );
     return result;
   }
+
+  drain(): Promise<void> {
+    return this.tail;
+  }
 }

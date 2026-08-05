@@ -8,6 +8,7 @@ import type { SQLiteDatabase } from "expo-sqlite";
 
 import { diagnosticEnvironmentKey } from "../diagnostics/events";
 import { recordMobileDiagnostic } from "../diagnostics/journal";
+import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 
 const DATABASE_NAME = "t3code-client.db";
 const DATABASE_SCHEMA_VERSION = 2;
@@ -324,18 +325,16 @@ export async function loadCacheRecord(
     identity.cacheKey,
   );
   if (row !== null) {
-    void database
-      .runAsync(
-        `UPDATE client_cache
-         SET updated_at = ?
-         WHERE environment_id = ? AND kind = ? AND cache_key = ? AND updated_at < ?`,
-        now,
-        identity.environmentId,
-        identity.kind,
-        identity.cacheKey,
-        now - CACHE_LRU_TOUCH_INTERVAL_MS,
-      )
-      .catch(() => undefined);
+    await database.runAsync(
+      `UPDATE client_cache
+       SET updated_at = ?
+       WHERE environment_id = ? AND kind = ? AND cache_key = ? AND updated_at < ?`,
+      now,
+      identity.environmentId,
+      identity.kind,
+      identity.cacheKey,
+      now - CACHE_LRU_TOUCH_INTERVAL_MS,
+    );
   }
   return row;
 }
@@ -406,12 +405,13 @@ async function ensureIncrementalAutoVacuum(database: SQLiteDatabase): Promise<vo
   const autoVacuum = row?.autoVacuum ?? 0;
   if (autoVacuum === 2) return;
   if (autoVacuum === 0) {
-    await database.execAsync(
-      `PRAGMA journal_mode = DELETE;
-       PRAGMA auto_vacuum = INCREMENTAL;
-       VACUUM;
-       PRAGMA journal_mode = WAL;`,
-    );
+    try {
+      await database.execAsync("PRAGMA journal_mode = DELETE;");
+      await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+      await database.execAsync("VACUUM;");
+    } finally {
+      await database.execAsync("PRAGMA journal_mode = WAL;");
+    }
   } else {
     await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
   }
@@ -552,6 +552,7 @@ export class MobileDatabase extends Context.Service<
 >()("@t3tools/mobile/persistence/MobileDatabase") {}
 
 const makeAvailable = Effect.gen(function* () {
+  const cacheOperations = new SerializedAsyncQueue();
   const database = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
@@ -560,7 +561,11 @@ const makeAvailable = Effect.gen(function* () {
       },
       catch: databaseError("open"),
     }),
-    (openDatabase) => Effect.promise(() => openDatabase.closeAsync()).pipe(Effect.ignore),
+    (openDatabase) =>
+      Effect.promise(async () => {
+        await cacheOperations.drain();
+        await openDatabase.closeAsync();
+      }).pipe(Effect.ignore),
   );
 
   yield* Effect.tryPromise({
@@ -664,18 +669,21 @@ const makeAvailable = Effect.gen(function* () {
     catch: databaseError("migrate"),
   });
 
-  yield* Effect.tryPromise(() => runStartupCacheMaintenance(database)).pipe(
-    Effect.catch((cause) => {
+  void cacheOperations.run(async () => {
+    try {
+      await runStartupCacheMaintenance(database);
+    } catch (cause) {
       const reason = cause instanceof Error ? cause.name : "Unknown";
       recordMobileDiagnostic("cache", { op: "maintenance-failed", reason });
-      return Effect.logWarning("Could not complete mobile cache startup maintenance.", { reason });
-    }),
-  );
+      console.warn("[mobile-database] could not complete cache startup maintenance", { reason });
+    }
+  });
 
   return MobileDatabase.of({
     loadCache: Effect.fn("MobileDatabase.loadCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
-        try: () => loadCacheRecord(database, { environmentId, kind, cacheKey }),
+        try: () =>
+          cacheOperations.run(() => loadCacheRecord(database, { environmentId, kind, cacheKey })),
         catch: databaseError("load-cache"),
       }).pipe(Effect.map((row) => Option.fromNullishOr(row?.payload))),
     ),
@@ -683,13 +691,15 @@ const makeAvailable = Effect.gen(function* () {
       (environmentId, kind, cacheKey, schemaVersion, payload) =>
         Effect.tryPromise({
           try: () =>
-            saveBoundedCacheRecord(database, {
-              environmentId,
-              kind,
-              cacheKey,
-              schemaVersion,
-              payload,
-            }),
+            cacheOperations.run(() =>
+              saveBoundedCacheRecord(database, {
+                environmentId,
+                kind,
+                cacheKey,
+                schemaVersion,
+                payload,
+              }),
+            ),
           catch: databaseError("save-cache"),
         }).pipe(
           Effect.tap((result) => {
@@ -711,12 +721,14 @@ const makeAvailable = Effect.gen(function* () {
     removeCache: Effect.fn("MobileDatabase.removeCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
         try: () =>
-          database.runAsync(
-            `DELETE FROM client_cache
-                     WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
-            environmentId,
-            kind,
-            cacheKey,
+          cacheOperations.run(() =>
+            database.runAsync(
+              `DELETE FROM client_cache
+                       WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
+              environmentId,
+              kind,
+              cacheKey,
+            ),
           ),
         catch: databaseError("remove-cache"),
       }).pipe(Effect.asVoid),
@@ -724,10 +736,12 @@ const makeAvailable = Effect.gen(function* () {
     clearCacheKind: Effect.fn("MobileDatabase.clearCacheKind")((environmentId, kind) =>
       Effect.tryPromise({
         try: () =>
-          database.runAsync(
-            "DELETE FROM client_cache WHERE environment_id = ? AND kind = ?",
-            environmentId,
-            kind,
+          cacheOperations.run(() =>
+            database.runAsync(
+              "DELETE FROM client_cache WHERE environment_id = ? AND kind = ?",
+              environmentId,
+              kind,
+            ),
           ),
         catch: databaseError("clear-cache-kind"),
       }).pipe(Effect.asVoid),
@@ -735,17 +749,20 @@ const makeAvailable = Effect.gen(function* () {
     clearEnvironmentCache: Effect.fn("MobileDatabase.clearEnvironmentCache")((environmentId) =>
       Effect.tryPromise({
         try: () =>
-          database.runAsync("DELETE FROM client_cache WHERE environment_id = ?", environmentId),
+          cacheOperations.run(() =>
+            database.runAsync("DELETE FROM client_cache WHERE environment_id = ?", environmentId),
+          ),
         catch: databaseError("clear-environment-cache"),
       }).pipe(Effect.asVoid),
     ),
     clearAllCaches: Effect.tryPromise({
-      try: () => database.runAsync("DELETE FROM client_cache"),
+      try: () => cacheOperations.run(() => database.runAsync("DELETE FROM client_cache")),
       catch: databaseError("clear-all-caches"),
     }).pipe(Effect.asVoid),
     inspectCaches: Effect.tryPromise({
       try: () =>
-        database.getAllAsync<unknown>(`
+        cacheOperations.run(() =>
+          database.getAllAsync<unknown>(`
                 SELECT
                   environment_id AS environmentId,
                   kind,
@@ -755,6 +772,7 @@ const makeAvailable = Effect.gen(function* () {
                 GROUP BY environment_id, kind
                 ORDER BY environment_id, kind
               `),
+        ),
       catch: databaseError("inspect-caches"),
     }).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(ClientCacheSummaryRows)),
