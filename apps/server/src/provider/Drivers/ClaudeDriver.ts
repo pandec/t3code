@@ -41,6 +41,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
+import { withExpandedProviderBinaryPath } from "../ProviderBinaryPath.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
@@ -135,7 +136,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         driverKind: DRIVER_KIND,
         instanceId,
       });
-      const effectiveConfig = { ...config, enabled } satisfies ClaudeSettings;
+      const effectiveConfig = withExpandedProviderBinaryPath({
+        ...config,
+        enabled,
+      } satisfies ClaudeSettings);
       const toDriverError = (cause: ClaudeShadowHomeError) =>
         new ProviderDriverError({
           driver: DRIVER_KIND,
