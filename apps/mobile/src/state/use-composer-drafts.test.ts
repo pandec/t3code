@@ -5,22 +5,14 @@ import { vi } from "vite-plus/test";
 const persistedFiles = new Map<string, string>();
 const corruptNextWrite = { value: false };
 
-vi.mock("expo-file-system", () => ({
-  Paths: { document: "file:///document" },
-  Directory: class {
-    readonly uri: string;
-
-    constructor(base: string, name: string) {
-      this.uri = `${base}/${name}`;
-    }
-
-    create(): void {}
-  },
-  File: class {
-    readonly uri: string;
+vi.mock("expo-file-system", () => {
+  class File {
+    uri: string;
+    readonly name: string;
 
     constructor(directory: { uri: string }, name: string) {
       this.uri = `${directory.uri}/${name}`;
+      this.name = name;
     }
 
     get exists(): boolean {
@@ -36,10 +28,53 @@ vi.mock("expo-file-system", () => ({
       corruptNextWrite.value = false;
     }
 
+    delete(): void {
+      persistedFiles.delete(this.uri);
+    }
+
+    moveSync(destination: { uri: string }): void {
+      const content = persistedFiles.get(this.uri) ?? "";
+      persistedFiles.delete(this.uri);
+      persistedFiles.set(destination.uri, content);
+      this.uri = destination.uri;
+    }
+
     async text(): Promise<string> {
       return persistedFiles.get(this.uri) ?? "";
     }
-  },
+  }
+
+  class Directory {
+    uri: string;
+
+    constructor(base: string | { uri: string }, name: string) {
+      this.uri = `${typeof base === "string" ? base : base.uri}/${name}`;
+    }
+
+    create(): void {}
+
+    list(): ReadonlyArray<File> {
+      const prefix = `${this.uri}/`;
+      return [...persistedFiles.keys()]
+        .filter((uri) => uri.startsWith(prefix) && !uri.slice(prefix.length).includes("/"))
+        .map((uri) => new File(this, uri.slice(prefix.length)));
+    }
+  }
+
+  return {
+    Paths: { document: "file:///document" },
+    Directory,
+    File,
+  };
+});
+
+vi.mock("expo-crypto", () => ({
+  CryptoDigestAlgorithm: { SHA256: "SHA-256" },
+  digestStringAsync: async (_algorithm: string, value: string) =>
+    [...value]
+      .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
+      .toString(16)
+      .padStart(64, "0"),
 }));
 
 import { appAtomRegistry } from "./atom-registry";
