@@ -2,22 +2,28 @@ import { afterEach, describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
 const persistedFiles = new Map<string, string>();
+const failNextHash = { value: false };
 
 vi.mock("expo-file-system", () => {
   class File {
     uri: string;
-    readonly name: string;
 
     constructor(directory: { uri: string }, name: string) {
       this.uri = `${directory.uri}/${name}`;
-      this.name = name;
+    }
+
+    get name(): string {
+      return this.uri.slice(this.uri.lastIndexOf("/") + 1);
     }
 
     get exists(): boolean {
       return persistedFiles.has(this.uri);
     }
 
-    create(): void {
+    create(options?: { readonly overwrite?: boolean }): void {
+      if (this.exists && options?.overwrite !== true) {
+        throw new Error(`file already exists: ${this.uri}`);
+      }
       persistedFiles.set(this.uri, "");
     }
 
@@ -29,7 +35,10 @@ vi.mock("expo-file-system", () => {
       persistedFiles.delete(this.uri);
     }
 
-    moveSync(destination: { uri: string }): void {
+    moveSync(destination: { uri: string }, options?: { readonly overwrite?: boolean }): void {
+      if (persistedFiles.has(destination.uri) && options?.overwrite !== true) {
+        throw new Error(`destination already exists: ${destination.uri}`);
+      }
       const content = persistedFiles.get(this.uri) ?? "";
       persistedFiles.delete(this.uri);
       persistedFiles.set(destination.uri, content);
@@ -67,11 +76,16 @@ vi.mock("expo-file-system", () => {
 
 vi.mock("expo-crypto", () => ({
   CryptoDigestAlgorithm: { SHA256: "SHA-256" },
-  digestStringAsync: async (_algorithm: string, value: string) =>
-    [...value]
+  digestStringAsync: async (_algorithm: string, value: string) => {
+    if (failNextHash.value) {
+      failNextHash.value = false;
+      throw new Error("hash failed");
+    }
+    return [...value]
       .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
       .toString(16)
-      .padStart(64, "0"),
+      .padStart(64, "0");
+  },
 }));
 
 import {
@@ -100,6 +114,7 @@ function image(id: string) {
 
 afterEach(() => {
   persistedFiles.clear();
+  failNextHash.value = false;
 });
 
 describe("composer draft record split", () => {
@@ -129,6 +144,31 @@ describe("composer draft record split", () => {
         contentHash: "shared-content-hash",
       },
     ]);
+  });
+
+  it("keeps the destination payload after the temporary file handle moves", async () => {
+    const draftKey = "environment-1:thread-atomic";
+    const draft: ComposerDraft = { text: "atomic draft", attachments: [] };
+
+    await persistComposerDraftKeys({ [draftKey]: draft }, new Set([draftKey]), { verify: true });
+
+    const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+    expect(JSON.parse(persistedFiles.get(recordPath) ?? "null")).toMatchObject({
+      schemaVersion: 2,
+      draftKey,
+      draft: { text: "atomic draft" },
+    });
+    expect([...persistedFiles.keys()].some((path) => path.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("retries an attachment hash after a cached hash promise rejects", async () => {
+    const draftKey = "environment-1:thread-hash-retry";
+    const attachment = image("retry");
+    const drafts = { [draftKey]: { text: "draft", attachments: [attachment] } };
+    failNextHash.value = true;
+
+    await expect(persistComposerDraftKeys(drafts, new Set([draftKey]))).rejects.toThrow();
+    await expect(persistComposerDraftKeys(drafts, new Set([draftKey]))).resolves.toBeUndefined();
   });
 
   it("migrates the legacy aggregate document without dropping draft content", async () => {
@@ -162,6 +202,30 @@ describe("composer draft record split", () => {
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({
       "environment-1:thread-legacy": draft,
     });
+  });
+
+  it("quarantines corrupt legacy JSON without deleting its payload", async () => {
+    const legacyPath = "file:///document/composer-drafts/drafts.json";
+    const corruptPayload = "{not valid json";
+    persistedFiles.set(legacyPath, corruptPayload);
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({});
+
+    expect(persistedFiles.has(legacyPath)).toBe(false);
+    const quarantined = [...persistedFiles.entries()].find(([path]) =>
+      path.includes("/composer-drafts/drafts.corrupt-"),
+    );
+    expect(quarantined?.[1]).toBe(corruptPayload);
+  });
+
+  it("sweeps stale temporary draft records during load", async () => {
+    const temporaryPath =
+      "file:///document/composer-drafts/drafts/environment-1%3Athread-1.json.123.tmp";
+    persistedFiles.set(temporaryPath, "partial record");
+
+    await expect(loadPersistedComposerDrafts()).resolves.toEqual({});
+
+    expect(persistedFiles.has(temporaryPath)).toBe(false);
   });
 });
 

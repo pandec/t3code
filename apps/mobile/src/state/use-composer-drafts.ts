@@ -127,9 +127,11 @@ async function savePendingComposerDrafts(): Promise<void> {
     return;
   }
   try {
-    await persistDraftKeys(appAtomRegistry.get(composerDraftsAtom), pending.draftKeys, {
-      sweepAttachments: pending.sweepAttachments,
-    });
+    await persistenceQueue.run(() =>
+      persistComposerDraftKeys(appAtomRegistry.get(composerDraftsAtom), pending.draftKeys, {
+        sweepAttachments: pending.sweepAttachments,
+      }),
+    );
   } catch (error) {
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.

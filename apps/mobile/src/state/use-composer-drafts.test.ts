@@ -4,22 +4,31 @@ import { vi } from "vite-plus/test";
 
 const persistedFiles = new Map<string, string>();
 const corruptNextWrite = { value: false };
+const hashGate: {
+  promise: Promise<void> | null;
+  notifyStarted: (() => void) | null;
+} = { promise: null, notifyStarted: null };
 
 vi.mock("expo-file-system", () => {
   class File {
     uri: string;
-    readonly name: string;
 
     constructor(directory: { uri: string }, name: string) {
       this.uri = `${directory.uri}/${name}`;
-      this.name = name;
+    }
+
+    get name(): string {
+      return this.uri.slice(this.uri.lastIndexOf("/") + 1);
     }
 
     get exists(): boolean {
       return persistedFiles.has(this.uri);
     }
 
-    create(): void {
+    create(options?: { readonly overwrite?: boolean }): void {
+      if (this.exists && options?.overwrite !== true) {
+        throw new Error(`file already exists: ${this.uri}`);
+      }
       persistedFiles.set(this.uri, "");
     }
 
@@ -32,7 +41,10 @@ vi.mock("expo-file-system", () => {
       persistedFiles.delete(this.uri);
     }
 
-    moveSync(destination: { uri: string }): void {
+    moveSync(destination: { uri: string }, options?: { readonly overwrite?: boolean }): void {
+      if (persistedFiles.has(destination.uri) && options?.overwrite !== true) {
+        throw new Error(`destination already exists: ${destination.uri}`);
+      }
       const content = persistedFiles.get(this.uri) ?? "";
       persistedFiles.delete(this.uri);
       persistedFiles.set(destination.uri, content);
@@ -70,11 +82,16 @@ vi.mock("expo-file-system", () => {
 
 vi.mock("expo-crypto", () => ({
   CryptoDigestAlgorithm: { SHA256: "SHA-256" },
-  digestStringAsync: async (_algorithm: string, value: string) =>
-    [...value]
+  digestStringAsync: async (_algorithm: string, value: string) => {
+    hashGate.notifyStarted?.();
+    if (hashGate.promise) {
+      await hashGate.promise;
+    }
+    return [...value]
       .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
       .toString(16)
-      .padStart(64, "0"),
+      .padStart(64, "0");
+  },
 }));
 
 import { appAtomRegistry } from "./atom-registry";
@@ -86,12 +103,14 @@ import {
   composerDraftStillContainsAppend,
   composerDraftsAtom,
   decodePersistedComposerDrafts,
+  flushComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
   removeComposerDraftsForEnvironment,
   revertComposerDraftAppend,
   restoreComposerDraftSnapshotState,
+  setComposerDraftText,
 } from "./use-composer-drafts";
 
 const DRAFT: ComposerDraft = {
@@ -103,6 +122,8 @@ afterEach(() => {
   appAtomRegistry.set(composerDraftsAtom, {});
   persistedFiles.clear();
   corruptNextWrite.value = false;
+  hashGate.promise = null;
+  hashGate.notifyStarted = null;
 });
 
 describe("mobile composer drafts", () => {
@@ -400,6 +421,47 @@ describe("appendedComposerDraftText", () => {
 });
 
 describe("appendComposerDraftContentDurably", () => {
+  it("reads debounced draft state only when its queued write starts", async () => {
+    const blockingDraftKey = "environment-1:thread-blocking";
+    const pendingDraftKey = "environment-1:thread-pending";
+    let releaseHash: () => void = () => undefined;
+    hashGate.promise = new Promise<void>((resolve) => {
+      releaseHash = resolve;
+    });
+    const hashStarted = new Promise<void>((resolve) => {
+      hashGate.notifyStarted = resolve;
+    });
+    const durableWrite = appendComposerDraftContentDurably(blockingDraftKey, {
+      text: "blocking",
+      attachments: [
+        {
+          id: "blocking",
+          type: "image",
+          name: "blocking.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          dataUrl: "data:image/png;base64,YWJj",
+          previewUri: "data:image/png;base64,YWJj",
+        },
+      ],
+    });
+    await hashStarted;
+
+    setComposerDraftText(pendingDraftKey, "queued snapshot");
+    const flush = flushComposerDrafts();
+    setComposerDraftText(pendingDraftKey, "latest snapshot");
+    releaseHash();
+
+    await durableWrite;
+    await flush;
+    await flushComposerDrafts();
+    const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(pendingDraftKey)}.json`;
+    const record = JSON.parse(persistedFiles.get(recordPath) ?? "null") as {
+      readonly draft?: { readonly text?: string };
+    } | null;
+    expect(record?.draft?.text).toBe("latest snapshot");
+  });
+
   it("rejects a non-throwing partial write after readback", async () => {
     const draftKey = "environment-1:thread-durable";
     corruptNextWrite.value = true;

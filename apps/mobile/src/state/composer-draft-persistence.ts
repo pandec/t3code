@@ -36,6 +36,7 @@ export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<Compo
       "verify",
       "remove",
       "migrate",
+      "quarantine",
       "sweep",
       "hydrate",
     ]),
@@ -246,6 +247,11 @@ function cachedAttachmentContentHash(
   }
   const hash = hashAttachmentContent(content);
   attachmentContentHashes.set(attachment, hash);
+  void hash.catch(() => {
+    if (attachmentContentHashes.get(attachment) === hash) {
+      attachmentContentHashes.delete(attachment);
+    }
+  });
   return hash;
 }
 
@@ -257,7 +263,26 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
     operation = "list";
     const documents: PersistedComposerDraftRecord[] = [];
     for (const entry of records.list()) {
-      if (!(entry instanceof File) || !entry.name.endsWith(DRAFT_RECORD_SUFFIX)) {
+      if (!(entry instanceof File)) {
+        continue;
+      }
+      if (entry.name.endsWith(TEMP_FILE_SUFFIX)) {
+        try {
+          entry.delete();
+        } catch (cause) {
+          console.warn(
+            "[composer-drafts] failed to remove temporary draft record",
+            new ComposerDraftPersistenceError({
+              operation: "sweep",
+              directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+              fileName: entry.name,
+              cause,
+            }),
+          );
+        }
+        continue;
+      }
+      if (!entry.name.endsWith(DRAFT_RECORD_SUFFIX)) {
         continue;
       }
       try {
@@ -352,7 +377,22 @@ async function loadLegacyDrafts(): Promise<{
         cause,
       }),
     );
-    return { drafts: {}, exists: true, valid: false };
+    const quarantineFileName = `drafts.corrupt-${Date.now()}.json`;
+    try {
+      file.moveSync(new File(root, quarantineFileName));
+      return { drafts: {}, exists: false, valid: false };
+    } catch (quarantineCause) {
+      console.warn(
+        "[composer-drafts] failed to quarantine invalid legacy draft document",
+        new ComposerDraftPersistenceError({
+          operation: "quarantine",
+          directory: COMPOSER_DRAFTS_DIRECTORY,
+          fileName: quarantineFileName,
+          cause: quarantineCause,
+        }),
+      );
+      return { drafts: {}, exists: true, valid: false };
+    }
   }
 }
 
@@ -368,6 +408,10 @@ async function writeFileAtomically(
   try {
     temporary.create({ intermediates: true, overwrite: true });
     temporary.write(content);
+    // Expo's iOS overwrite path removes the destination immediately before the
+    // move rather than using an atomic replace. We accept that narrow crash
+    // window here: records are isolated per draft and attachment payloads land
+    // first, while outbox/share transfer boundaries still require verification.
     temporary.moveSync(destination, { overwrite: true });
     moved = true;
   } finally {
