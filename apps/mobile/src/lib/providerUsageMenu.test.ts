@@ -17,7 +17,6 @@ function makeSnapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageS
     providerInstanceId: null,
     windows: [],
     status: "ok",
-    constrainedWindow: null,
     updatedAt: "2026-07-25T00:00:00.000Z",
     ...overrides,
   };
@@ -25,43 +24,35 @@ function makeSnapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageS
 
 describe("providerUsageTriggerLabel", () => {
   it("stays quiet while usage is unremarkable", () => {
-    expect(providerUsageTriggerLabel(makeSnapshot({}))).toBe("Usage");
+    expect(providerUsageTriggerLabel(null)).toBe("Usage");
   });
 
-  it("surfaces the constrained window with its percentage", () => {
-    const label = providerUsageTriggerLabel(
-      makeSnapshot({
+  it("surfaces the primary window with its percentage", () => {
+    expect(
+      providerUsageTriggerLabel({
+        id: "five_hour",
+        group: "session",
+        label: "Session (5h)",
+        shortLabel: "5h",
+        usedPercent: 88,
+        resetsAt: null,
         status: "warning",
-        constrainedWindow: {
-          id: "five_hour",
-          group: "session",
-          label: "Session (5h)",
-          shortLabel: "5h",
-          usedPercent: 88,
-          resetsAt: null,
-          status: "warning",
-        },
       }),
-    );
-    expect(label).toBe("5h 88%");
+    ).toBe("5h 88%");
   });
 
-  it("omits the percentage for numberless constrained windows", () => {
-    const label = providerUsageTriggerLabel(
-      makeSnapshot({
+  it("omits the percentage for a numberless primary window", () => {
+    expect(
+      providerUsageTriggerLabel({
+        id: "five_hour",
+        group: "session",
+        label: "Session (5h)",
+        shortLabel: "5h",
+        usedPercent: null,
+        resetsAt: null,
         status: "warning",
-        constrainedWindow: {
-          id: "five_hour",
-          group: "session",
-          label: "Session (5h)",
-          shortLabel: "5h",
-          usedPercent: null,
-          resetsAt: null,
-          status: "warning",
-        },
       }),
-    );
-    expect(label).toBe("5h");
+    ).toBe("5h");
   });
 });
 
@@ -126,6 +117,27 @@ describe("providerUsageAccountMenuActions", () => {
     expect(actions[0]?.subtitle).toContain("Limit warning");
     expect(actions[0]?.subtitle).toContain("updated 4m ago");
     expect(actions[1]?.subtitle).toContain("No usage data");
+  });
+
+  it("adds a distinct row for the account that would serve Fable next", () => {
+    const fableWindow = {
+      id: "seven_day_fable",
+      group: "weekly" as const,
+      label: "Weekly (Fable)",
+      shortLabel: "Fable",
+      usedPercent: 42,
+      resetsAt: null,
+      status: "ok" as const,
+    };
+    const actions = providerUsageAccountMenuActions([], NOW_MS, {
+      fableUsage: { accountName: "next@example.com", window: fableWindow },
+    });
+
+    expect(actions[0]).toEqual({
+      id: "usage-fable",
+      title: "Weekly (Fable)",
+      subtitle: "next@example.com · 42% used",
+    });
   });
 
   it("describes exhausted numberless windows as limit reached", () => {

@@ -1255,10 +1255,16 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
+    const initialize = yield* Effect.cached(
+      Effect.gen(function* () {
+        yield* client.request("initialize", buildCodexInitializeParams());
+        yield* client.notify("initialized", undefined);
+      }),
+    );
+
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      yield* client.request("initialize", buildCodexInitializeParams());
-      yield* client.notify("initialized", undefined);
+      yield* initialize;
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
@@ -1408,7 +1414,9 @@ export const makeCodexSessionRuntime = (
           });
           return parseThreadSnapshot(response);
         }),
-      readAccountUsage: client.request("account/rateLimits/read", undefined),
+      readAccountUsage: initialize.pipe(
+        Effect.andThen(client.request("account/rateLimits/read", undefined)),
+      ),
       respondToRequest: (requestId, decision) =>
         Effect.gen(function* () {
           const pending = (yield* Ref.get(pendingApprovalsRef)).get(requestId);

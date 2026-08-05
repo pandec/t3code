@@ -23,6 +23,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -190,6 +191,7 @@ function makeRuntimeFactory() {
 function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolean }) {
   const runtimes: Array<FakeCodexRuntime> = [];
   const releasedThreadIds: Array<ThreadId> = [];
+  let nextFailure: "construction" | "read" | undefined;
 
   const factory = vi.fn((runtimeOptions: CodexSessionRuntimeOptions) =>
     Effect.gen(function* () {
@@ -200,7 +202,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
         }),
       );
 
-      if (options?.failConstruction) {
+      const failure = nextFailure;
+      nextFailure = undefined;
+      if (options?.failConstruction || failure === "construction") {
         return yield* new CodexErrors.CodexAppServerSpawnError({
           command: `${runtimeOptions.binaryPath} app-server`,
           cause: new Error("runtime construction failed"),
@@ -208,6 +212,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
       }
 
       const runtime = new FakeCodexRuntime(runtimeOptions);
+      if (failure === "read") {
+        runtime.readAccountUsageImpl.mockRejectedValue(new Error("usage failed"));
+      }
       runtimes.push(runtime);
       return runtime;
     }),
@@ -216,6 +223,9 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
   return {
     factory,
     releasedThreadIds,
+    failNext(failure: "construction" | "read") {
+      nextFailure = failure;
+    },
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
     },
@@ -251,12 +261,42 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
-  it.effect("does not spawn an app server just to read account usage", () =>
+  it.effect("reads account usage through a short-lived standalone runtime", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
-      NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
-      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+      NodeAssert.deepStrictEqual(yield* adapter.readAccountUsage!(), {
+        rateLimits: {
+          primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        },
+      });
+      const runtime = validationRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(runtime.startImpl.mock.calls.length, 0);
+      NodeAssert.equal(runtime.readAccountUsageImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("closes the standalone usage runtime when interrupted", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const readStarted = yield* Deferred.make<void>();
+      let interruptedRuntime: FakeCodexRuntime | undefined;
+      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
+        interruptedRuntime = new FakeCodexRuntime(options);
+        interruptedRuntime.readAccountUsage = Deferred.succeed(readStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+        );
+        return Effect.succeed(interruptedRuntime);
+      });
+
+      const fiber = yield* adapter.readAccountUsage!().pipe(Effect.forkChild);
+      yield* Deferred.await(readStarted);
+      yield* Fiber.interrupt(fiber);
+      NodeAssert.equal(interruptedRuntime?.closeImpl.mock.calls.length, 1);
     }),
   );
 
@@ -1269,6 +1309,22 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
         asThreadId("thread-stop"),
       ]);
       NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
+    }),
+  );
+
+  it.effect("closes the standalone account-usage scope on read and construction failures", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+
+      for (const failure of ["read", "construction"] as const) {
+        scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+        scopedLifecycleRuntimeFactory.failNext(failure);
+
+        NodeAssert.equal(yield* adapter.readAccountUsage!(), undefined);
+        NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
+          asThreadId("account-usage-probe"),
+        ]);
+      }
     }),
   );
 });

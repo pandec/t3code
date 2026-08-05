@@ -38,14 +38,6 @@ export function getProviderSnapshot(
   return providers.find((candidate) => candidate.instanceId === defaultInstanceId);
 }
 
-export function getProviderDisplayName(
-  providers: ReadonlyArray<ServerProvider>,
-  provider: ProviderDriverKind,
-): string {
-  const snapshot = getProviderSnapshot(providers, provider);
-  return snapshot?.displayName?.trim() || formatProviderDriverKindLabel(provider);
-}
-
 export function getProviderInteractionModeToggle(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,

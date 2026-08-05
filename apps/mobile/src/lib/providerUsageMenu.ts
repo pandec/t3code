@@ -10,12 +10,10 @@ import type {
  * tap-opened `ControlPillMenu` with the account facts in each row's subtitle.
  */
 
-export function providerUsageTriggerLabel(snapshot: ProviderUsageSnapshot): string {
-  const constrained = snapshot.constrainedWindow;
-  if (constrained) {
-    const percent =
-      constrained.usedPercent !== null ? ` ${Math.round(constrained.usedPercent)}%` : "";
-    return `${constrained.shortLabel}${percent}`;
+export function providerUsageTriggerLabel(window: ProviderUsageWindow | null): string {
+  if (window?.status === "warning" || window?.status === "critical") {
+    const percent = window.usedPercent !== null ? ` ${Math.round(window.usedPercent)}%` : "";
+    return `${window.shortLabel}${percent}`;
   }
   return "Usage";
 }
@@ -32,7 +30,7 @@ function formatResetTime(resetsAt: number | null, nowMs: number): string | null 
   }).format(new Date(resetMs));
 }
 
-function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
+function describeWindowDetail(window: ProviderUsageWindow, nowMs: number): string {
   const usage =
     window.usedPercent !== null
       ? `${Math.round(window.usedPercent)}% used`
@@ -40,8 +38,11 @@ function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
         ? "Limit reached"
         : "Limit warning";
   const resetTime = formatResetTime(window.resetsAt, nowMs);
-  const detail = resetTime ? `${usage} · resets ${resetTime}` : usage;
-  return `${window.label}: ${detail}`;
+  return resetTime ? `${usage} · resets ${resetTime}` : usage;
+}
+
+function describeWindow(window: ProviderUsageWindow, nowMs: number): string {
+  return `${window.label}: ${describeWindowDetail(window, nowMs)}`;
 }
 
 export interface ProviderUsageMenuAccount {
@@ -97,7 +98,13 @@ export function canStartProviderUsageRefresh(lastStartedAtMs: number, nowMs: num
 export function providerUsageAccountMenuActions(
   accounts: ReadonlyArray<ProviderUsageMenuAccount>,
   nowMs: number,
-  options?: { readonly refreshing?: boolean },
+  options?: {
+    readonly refreshing?: boolean;
+    readonly fableUsage?: {
+      readonly accountName: string;
+      readonly window: ProviderUsageWindow;
+    } | null;
+  },
 ): Array<{ id: string; title: string; subtitle: string }> {
   const rows = accounts.map((account) => {
     const windows =
@@ -121,8 +128,16 @@ export function providerUsageAccountMenuActions(
         .join(" · "),
     };
   });
+  const fableRow = options?.fableUsage
+    ? {
+        id: "usage-fable",
+        title: "Weekly (Fable)",
+        subtitle: `${options.fableUsage.accountName} · ${describeWindowDetail(options.fableUsage.window, nowMs)}`,
+      }
+    : null;
   return [
     ...rows,
+    ...(fableRow ? [fableRow] : []),
     {
       id: PROVIDER_USAGE_REFRESH_ACTION_ID,
       title: options?.refreshing === true ? "Refreshing…" : "Refresh",

@@ -1,6 +1,8 @@
 import {
   applyProviderUsageThresholds,
+  applyProviderUsageWindowThresholds,
   primaryProviderUsageWindow,
+  providerUsageRingStatus,
   type ProviderUsageSnapshot,
   type ProviderUsageStatus,
   type ProviderUsageWindow,
@@ -41,15 +43,6 @@ const QUOTA_TEXT_CLASS: Record<ProviderUsageStatus, string> = {
   critical: "text-destructive",
 };
 
-const QUOTA_STATUS_RANK: Record<ProviderUsageStatus, number> = { ok: 0, warning: 1, critical: 2 };
-
-function maxProviderUsageStatus(
-  a: ProviderUsageStatus,
-  b: ProviderUsageStatus,
-): ProviderUsageStatus {
-  return QUOTA_STATUS_RANK[b] > QUOTA_STATUS_RANK[a] ? b : a;
-}
-
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
     return null;
@@ -58,6 +51,12 @@ function formatPercentage(value: number | null): string | null {
     return `${value.toFixed(1).replace(/\.0$/, "")}%`;
   }
   return `${Math.round(value)}%`;
+}
+
+function meterPercentage(window: ProviderUsageWindow | null): number {
+  if (window === null) return 0;
+  if (window.usedPercent === null) return window.status === "ok" ? 0 : 100;
+  return Math.max(0, Math.min(100, window.usedPercent));
 }
 
 function formatResetTime(resetsAt: number | null, nowMs: number): string | null {
@@ -93,6 +92,28 @@ function MeterRing(props: {
         strokeDashoffset={circumference * (1 - props.percentage / 100)}
         className="transition-[stroke-dashoffset,stroke] duration-500 ease-out motion-reduce:transition-none"
       />
+    </>
+  );
+}
+
+function MeterPie(props: { readonly percentage: number; readonly color: string }) {
+  const radius = 2.5;
+  const angle = (props.percentage / 100) * Math.PI * 2;
+  const endX = 12 + radius * Math.cos(angle);
+  const endY = 12 + radius * Math.sin(angle);
+
+  return (
+    <>
+      <circle cx="12" cy="12" r={radius} fill={RING_TRACK} />
+      {props.percentage >= 100 ? (
+        <circle cx="12" cy="12" r={radius} fill={props.color} />
+      ) : props.percentage > 0 ? (
+        <path
+          d={`M 12 12 L ${12 + radius} 12 A ${radius} ${radius} 0 ${props.percentage > 50 ? 1 : 0} 1 ${endX} ${endY} Z`}
+          fill={props.color}
+          className="transition-colors duration-500 motion-reduce:transition-none"
+        />
+      ) : null}
     </>
   );
 }
@@ -167,6 +188,8 @@ function formatRelativeAge(observedAt: number | null, nowMs: number): string {
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot | null;
   providerUsage?: ProviderUsageSnapshot | null;
+  fableUsage?: ProviderUsageWindow | null;
+  fableAccountName?: string | null;
   providerUsageAccounts?: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing?: boolean;
   /**
@@ -197,6 +220,13 @@ export function ContextWindowMeter(props: {
       })),
     [props.providerUsageAccounts, usageThresholds],
   );
+  const fableUsage = useMemo(
+    () =>
+      props.fableUsage
+        ? applyProviderUsageWindowThresholds(props.fableUsage, usageThresholds)
+        : null,
+    [props.fableUsage, usageThresholds],
+  );
   const nowMs = Date.now();
   const newestObservedAt = providerUsageAccounts.reduce<number | null>(
     (newest, account) =>
@@ -217,23 +247,17 @@ export function ContextWindowMeter(props: {
       : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   const quotaWindow = providerUsage ? primaryProviderUsageWindow(providerUsage) : null;
-  // Colour by the worst window, not just the featured one: the ring must never
-  // render a calmer state than the snapshot as a whole.
-  const quotaStatus = maxProviderUsageStatus(
-    providerUsage?.status ?? "ok",
-    quotaWindow?.status ?? "ok",
-  );
+  // The value stays on the primary session/weekly window, but the ring must
+  // never render a calmer state than the windows it is the only signal for.
+  // Fable is excluded: its own sub-ring carries that signal.
+  const quotaStatus = providerUsageRingStatus(providerUsage, fableUsage?.id ?? null);
   const quotaColor = QUOTA_RING_COLOR[quotaStatus];
-  // A window with a state but no number (Claude reports `rejected` without
-  // utilization) still has to be visible — fill the ring rather than drawing a
-  // zero-length arc that paints nothing.
-  const quotaPercentage =
-    quotaWindow?.usedPercent === null || quotaWindow?.usedPercent === undefined
-      ? quotaWindow !== null && quotaStatus !== "ok"
-        ? 100
-        : 0
-      : Math.max(0, Math.min(100, quotaWindow.usedPercent));
+  const quotaPercentage = meterPercentage(quotaWindow);
   const quotaPercentLabel = quotaWindow ? formatPercentage(quotaWindow.usedPercent) : null;
+  const fablePercentage = meterPercentage(fableUsage);
+  const fableAriaLabel = fableUsage
+    ? `Weekly Fable${props.fableAccountName ? ` on ${props.fableAccountName}` : ""} at ${formatPercentage(fableUsage.usedPercent) ?? (fableUsage.status === "critical" ? "limit reached" : "limit warning")}`
+    : null;
   const quotaAriaLabel = quotaWindow
     ? quotaPercentLabel
       ? `${providerUsage?.providerLabel ?? "Provider"} ${quotaWindow.label} at ${quotaPercentLabel}`
@@ -250,11 +274,12 @@ export function ContextWindowMeter(props: {
 
   const ariaLabel = [
     usage
-      ? usage.maxTokens !== null && usedPercentage
+      ? usage.maxTokens !== null && usedPercentage !== null
         ? `Context window ${usedPercentage} used`
         : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
       : null,
     quotaAriaLabel,
+    fableAriaLabel,
   ]
     .filter(Boolean)
     .join(", ");
@@ -301,6 +326,12 @@ export function ContextWindowMeter(props: {
                 {quotaWindow ? (
                   <MeterRing radius={6} percentage={quotaPercentage} color={quotaColor} />
                 ) : null}
+                {fableUsage ? (
+                  <MeterPie
+                    percentage={fablePercentage}
+                    color={QUOTA_RING_COLOR[fableUsage.status]}
+                  />
+                ) : null}
               </svg>
             </span>
           </button>
@@ -345,6 +376,14 @@ export function ContextWindowMeter(props: {
                   </button>
                 ) : null}
               </div>
+              {fableUsage && props.fableAccountName ? (
+                <div className="flex items-center justify-between gap-3 text-[11px]">
+                  <span className="text-muted-foreground/70">Fable next</span>
+                  <span className="truncate font-medium text-muted-foreground/90">
+                    {props.fableAccountName}
+                  </span>
+                </div>
+              ) : null}
               {providerUsageAccounts.map((account) => {
                 const stale =
                   account.observedAt === null || nowMs - account.observedAt > 5 * 60_000;
@@ -407,7 +446,7 @@ export function ContextWindowMeter(props: {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-3">
                 <div className="font-medium text-muted-foreground text-xs">Context Window</div>
-                {usage.maxTokens !== null && usedPercentage ? (
+                {usage.maxTokens !== null && usedPercentage !== null ? (
                   <div className="text-[11px] tabular-nums text-muted-foreground/70">
                     <span>{usedPercentage}</span>
                     <span className="mx-1">·</span>

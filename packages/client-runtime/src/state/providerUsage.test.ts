@@ -17,9 +17,13 @@ import {
   normalizeProviderUsageThresholds,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
+  providerUsageFableWindow,
+  providerUsageRingStatus,
+  resolveProviderUsageFableRing,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
+  selectProviderUsageFableAccount,
 } from "./providerUsage.ts";
 
 function makeActivity(
@@ -66,7 +70,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
     expect(snapshot?.providerLabel).toBe("Claude");
     expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.constrainedWindow).toBeNull();
     expect(snapshot?.windows).toEqual([
       {
         id: "five_hour",
@@ -281,7 +284,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
     expect(snapshot?.windows.map((w) => w.label)).toEqual(["Session (5h)", "Weekly"]);
     expect(snapshot?.status).toBe("critical");
-    expect(snapshot?.constrainedWindow?.label).toBe("Weekly");
   });
 
   it("keeps one weekly Codex window when it moves from primary to secondary", () => {
@@ -660,28 +662,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
     expect(snapshot?.updatedAt).toBe("2026-07-25T00:01:00.000Z");
   });
 
-  it("selects the highest-status constrained window before comparing percentages", () => {
-    const snapshot = deriveLatestProviderUsageSnapshot([
-      claudeActivity("a1", {
-        status: "allowed",
-        rateLimitType: "seven_day",
-        utilization: 0.7,
-      }),
-      claudeActivity(
-        "a2",
-        {
-          status: "allowed_warning",
-          rateLimitType: "five_hour",
-        },
-        "2026-07-25T00:01:00.000Z",
-      ),
-    ]);
-
-    expect(snapshot?.status).toBe("warning");
-    expect(snapshot?.constrainedWindow?.id).toBe("five_hour");
-    expect(snapshot?.constrainedWindow?.usedPercent).toBeNull();
-  });
-
   it("drops windows whose reset time has already passed", () => {
     const resetsAt = Math.floor(Date.parse("2026-07-25T01:00:00.000Z") / 1_000);
     const activities = [
@@ -799,31 +779,7 @@ describe("deriveLatestProviderUsageSnapshot", () => {
       ]);
     });
 
-    it("prefers the provider's active window over the highest percentage", () => {
-      // Equal severity: the provider knows which window actually binds, so its
-      // flag wins over the raw percentage.
-      const limits = {
-        limits: [
-          { kind: "session", percent: 88, severity: "normal", resets_at: null, is_active: false },
-          {
-            kind: "weekly_scoped",
-            percent: 85,
-            severity: "normal",
-            resets_at: null,
-            scope: { model: { display_name: "Fable" } },
-            is_active: true,
-          },
-        ],
-      };
-      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
-
-      expect(snapshot?.status).toBe("warning");
-      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (Fable)");
-    });
-
-    it("never lets the active flag downgrade severity", () => {
-      // A compact surface renders only the constrained window, so an active
-      // warning must not hide a critical window elsewhere.
+    it("uses the highest window severity for the snapshot", () => {
       const limits = {
         limits: [
           { kind: "session", percent: 97, severity: "normal", resets_at: null, is_active: false },
@@ -840,8 +796,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
       const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
 
       expect(snapshot?.status).toBe("critical");
-      expect(snapshot?.constrainedWindow?.label).toBe("Session (5h)");
-      expect(snapshot?.constrainedWindow?.status).toBe("critical");
     });
 
     it("keeps the flat map usable when an empty limits array is also present", () => {
@@ -854,24 +808,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
       expect(snapshot?.windows.map((w) => w.id)).toEqual(["five_hour"]);
       expect(snapshot?.windows[0]?.usedPercent).toBe(42);
-    });
-
-    it("falls back to the worst window when no window is flagged active", () => {
-      const limits = {
-        limits: [
-          { kind: "session", percent: 97, severity: "normal", resets_at: null, is_active: false },
-          {
-            kind: "weekly_all",
-            percent: 85,
-            severity: "normal",
-            resets_at: null,
-            is_active: false,
-          },
-        ],
-      };
-      const snapshot = deriveLatestProviderUsageSnapshot([usageActivity("a1", limits)]);
-
-      expect(snapshot?.constrainedWindow?.label).toBe("Session (5h)");
     });
 
     it("replaces windows from earlier events — the usage API is authoritative", () => {
@@ -937,6 +873,32 @@ describe("deriveLatestProviderUsageSnapshot", () => {
       expect(snapshot).toBeNull();
     });
 
+    it("recognizes versioned Fable display names", () => {
+      const snapshot = deriveLatestProviderUsageSnapshot([
+        usageActivity("a1", {
+          limits: [
+            {
+              kind: "weekly_scoped",
+              percent: 20,
+              scope: { model: { display_name: "Fable 5" } },
+            },
+          ],
+        }),
+      ]);
+
+      expect(providerUsageFableWindow(snapshot)?.shortLabel).toBe("Fable 5");
+      expect(
+        resolveProviderUsageFableRing({
+          upstreamProvider: "claude",
+          accounts: null,
+          snapshot,
+        }),
+      ).toMatchObject({ accountName: "Claude", window: { shortLabel: "Fable 5" } });
+      expect(
+        resolveProviderUsageFableRing({ upstreamProvider: "codex", accounts: null, snapshot }),
+      ).toBeNull();
+    });
+
     it("keeps repeated scoped windows distinct using stable scope metadata", () => {
       const snapshot = deriveLatestProviderUsageSnapshot([
         usageActivity("a1", {
@@ -976,7 +938,6 @@ describe("deriveLatestProviderUsageSnapshot", () => {
 
       expect(snapshot?.windows.map((w) => w.id)).toEqual(["five_hour", "seven_day"]);
       expect(snapshot?.status).toBe("warning");
-      expect(snapshot?.constrainedWindow?.label).toBe("Weekly (all models)");
     });
 
     it("escalates a window the provider marks critical", () => {
@@ -1051,6 +1012,7 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: null,
         model: "claude-opus-5",
         isCustom: false,
+        driver: ProviderDriverKind.make("claudeAgent"),
       }),
     ).toBe("claude");
     expect(
@@ -1058,6 +1020,7 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
         model: "gpt-5.6-sol",
         isCustom: true,
+        driver: ProviderDriverKind.make("claudeAgent"),
       }),
     ).toBe("codex");
     expect(
@@ -1065,13 +1028,40 @@ describe("resolveProviderUsageUpstreamProvider", () => {
         payload: { modelProviders: { "gpt-5.6-sol": "codex" } },
         model: "gpt-5.6-sol",
         isCustom: false,
+        driver: ProviderDriverKind.make("claudeAgent"),
+      }),
+    ).toBe("codex");
+    expect(
+      resolveProviderUsageUpstreamProvider({
+        payload: null,
+        model: "gpt-5.6-sol",
+        isCustom: false,
+        driver: ProviderDriverKind.make("codex"),
       }),
     ).toBe("codex");
   });
 
+  it("returns null for drivers without provider usage support", () => {
+    for (const driver of [ProviderDriverKind.make("opencode"), null]) {
+      expect(
+        resolveProviderUsageUpstreamProvider({
+          payload: null,
+          model: "some-model",
+          isCustom: false,
+          driver,
+        }),
+      ).toBeNull();
+    }
+  });
+
   it("returns null for an unknown custom model or malformed mapping", () => {
     const resolve = (payload: unknown) =>
-      resolveProviderUsageUpstreamProvider({ payload, model: "gpt-5.6-sol", isCustom: true });
+      resolveProviderUsageUpstreamProvider({
+        payload,
+        model: "gpt-5.6-sol",
+        isCustom: true,
+        driver: ProviderDriverKind.make("claudeAgent"),
+      });
     expect(resolve({})).toBeNull();
     expect(resolve({ modelProviders: [] })).toBeNull();
     expect(resolve({ modelProviders: { "gpt-5.6-sol": 42 } })).toBeNull();
@@ -1163,6 +1153,165 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
     expect(featuredProviderUsageAccount(pool?.accounts ?? [], null)).toBeNull();
   });
 
+  it("never features disabled accounts", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot(gatewaySnapshot);
+    const base = pool?.accounts[0];
+    expect(base).toBeDefined();
+    expect(
+      featuredProviderUsageAccount([
+        ...(pool?.accounts ?? []),
+        { ...base!, id: "disabled.json", priority: 1_000, state: "disabled" },
+      ])?.id,
+    ).toBe("claude-tier2.json");
+  });
+
+  it("selects the highest-priority available Fable account with headroom", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot({
+      ...gatewaySnapshot,
+      payload: {
+        source: "cliproxyapi.management",
+        accounts: [
+          {
+            id: "exhausted.json",
+            label: "exhausted@example.com",
+            provider: "claude",
+            priority: 100,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 100,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            id: "full-headroom.json",
+            label: "full-headroom@example.com",
+            provider: "claude",
+            priority: 90,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [{ kind: "session", percent: 10 }],
+              },
+            },
+          },
+          {
+            id: "headroom.json",
+            label: "headroom@example.com",
+            provider: "claude",
+            priority: 75,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 42,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            id: "lower-headroom.json",
+            label: "lower-headroom@example.com",
+            provider: "claude",
+            priority: 50,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 1,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            id: "disabled.json",
+            label: "disabled@example.com",
+            provider: "claude",
+            priority: 1_000,
+            state: "disabled",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 1,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(selectProviderUsageFableAccount(pool?.accounts ?? [])).toMatchObject({
+      account: { id: "full-headroom.json" },
+      window: { usedPercent: 0 },
+    });
+    expect(
+      resolveProviderUsageFableRing({
+        upstreamProvider: "claude",
+        accounts: pool?.accounts ?? [],
+        snapshot: null,
+      }),
+    ).toMatchObject({ accountName: "full-headroom.json", window: { usedPercent: 0 } });
+  });
+
+  it("falls back to the featured account's exhausted Fable window", () => {
+    const pool = deriveProviderUsageAccountsFromServerSnapshot({
+      ...gatewaySnapshot,
+      payload: {
+        source: "cliproxyapi.management",
+        accounts: [
+          {
+            id: "featured.json",
+            label: "featured@example.com",
+            provider: "claude",
+            priority: 100,
+            state: "available",
+            usage: {
+              source: "claude.usage-api",
+              rateLimits: {
+                limits: [
+                  {
+                    kind: "weekly_scoped",
+                    percent: 100,
+                    scope: { model: { display_name: "Fable" } },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(selectProviderUsageFableAccount(pool?.accounts ?? [])).toMatchObject({
+      account: { id: "featured.json" },
+      window: { usedPercent: 100 },
+    });
+  });
+
   it("falls back to the highest-priority cooled-down account when the pool is exhausted", () => {
     const pool = deriveProviderUsageAccountsFromServerSnapshot({
       ...gatewaySnapshot,
@@ -1252,6 +1401,40 @@ describe("resolveProviderUsageModel", () => {
   });
 });
 
+describe("providerUsageRingStatus", () => {
+  function claudeSnapshot(limits: ReadonlyArray<Record<string, unknown>>) {
+    return deriveLatestProviderUsageSnapshot([
+      makeActivity("a1", {
+        rateLimits: { source: "claude.usage-api", subscriptionType: "max", rateLimits: { limits } },
+      }),
+    ]);
+  }
+
+  it("stays calm for a spent window that is rendered separately", () => {
+    const snapshot = claudeSnapshot([
+      { kind: "session", percent: 3, resets_at: null },
+      {
+        kind: "weekly",
+        percent: 100,
+        resets_at: null,
+        scope: { model: { display_name: "Fable" } },
+      },
+    ]);
+    const fable = snapshot && providerUsageFableWindow(snapshot);
+
+    expect(providerUsageRingStatus(snapshot, fable?.id ?? null)).toBe("ok");
+  });
+
+  it("reports a spent window that nothing else renders", () => {
+    const snapshot = claudeSnapshot([
+      { kind: "session", percent: 3, resets_at: null },
+      { kind: "weekly_all", percent: 100, resets_at: null },
+    ]);
+
+    expect(providerUsageRingStatus(snapshot, null)).toBe("critical");
+  });
+});
+
 describe("primaryProviderUsageWindow", () => {
   function usageApiSnapshot(limits: ReadonlyArray<Record<string, unknown>>) {
     return deriveLatestProviderUsageSnapshot([
@@ -1286,7 +1469,7 @@ describe("primaryProviderUsageWindow", () => {
     expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly");
   });
 
-  it("surfaces a constrained window even when a calm session window exists", () => {
+  it("keeps the session window when a Fable window is constrained", () => {
     const snapshot = usageApiSnapshot([
       { kind: "session", percent: 3, resets_at: null },
       {
@@ -1297,7 +1480,7 @@ describe("primaryProviderUsageWindow", () => {
       },
     ]);
 
-    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Weekly (Fable)");
+    expect(snapshot && primaryProviderUsageWindow(snapshot)?.label).toBe("Session (5h)");
   });
 
   it("returns null for a snapshot with no windows", () => {
@@ -1307,7 +1490,6 @@ describe("primaryProviderUsageWindow", () => {
         providerInstanceId: null,
         windows: [],
         status: "ok",
-        constrainedWindow: null,
         updatedAt: "2026-07-25T00:00:00.000Z",
       }),
     ).toBeNull();
@@ -1324,18 +1506,29 @@ describe("collectProviderUsageAlerts", () => {
     }),
   ]);
 
+  it("fires a numberless provider warning", () => {
+    const snapshot = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a1", {
+        status: "allowed_warning",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
+      }),
+    ]);
+
+    expect(collectProviderUsageAlerts(snapshot, new Set())).toHaveLength(1);
+  });
+
   it("fires a warning alert once per window per reset period", () => {
     const first = collectProviderUsageAlerts(warningSnapshot, new Set());
     expect(first).toHaveLength(1);
-    expect(first[0]?.threshold).toBe("warning");
 
-    const fired = new Set(first.flatMap((alert) => alert.keys));
+    const fired = new Set(first.map((alert) => alert.key));
     expect(collectProviderUsageAlerts(warningSnapshot, fired)).toHaveLength(0);
   });
 
   it("fires again after the window resets to a new period", () => {
     const fired = new Set(
-      collectProviderUsageAlerts(warningSnapshot, new Set()).flatMap((alert) => alert.keys),
+      collectProviderUsageAlerts(warningSnapshot, new Set()).map((alert) => alert.key),
     );
     const nextPeriod = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
@@ -1351,13 +1544,13 @@ describe("collectProviderUsageAlerts", () => {
 
   it("de-duplicates within an environment without suppressing another environment", () => {
     const environmentA = collectProviderUsageAlerts(warningSnapshot, new Set(), "environment-a");
-    const fired = new Set(environmentA.flatMap((alert) => alert.keys));
+    const fired = new Set(environmentA.map((alert) => alert.key));
 
     expect(collectProviderUsageAlerts(warningSnapshot, fired, "environment-a")).toHaveLength(0);
     expect(collectProviderUsageAlerts(warningSnapshot, fired, "environment-b")).toHaveLength(1);
   });
 
-  it("collapses a jump past both thresholds into one critical alert", () => {
+  it("keeps the warning alert when usage jumps past the configured critical threshold", () => {
     const criticalSnapshot = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
         status: "allowed",
@@ -1367,51 +1560,44 @@ describe("collectProviderUsageAlerts", () => {
       }),
     ]);
 
-    const alerts = collectProviderUsageAlerts(criticalSnapshot, new Set());
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]?.threshold).toBe("critical");
-    // The skipped warning key is marked too, so no late warning ever fires.
-    expect(alerts[0]?.keys).toHaveLength(2);
-
-    const fired = new Set(alerts.flatMap((alert) => alert.keys));
-    expect(collectProviderUsageAlerts(criticalSnapshot, fired)).toHaveLength(0);
-    expect(collectProviderUsageAlerts(warningSnapshot, fired)).toHaveLength(0);
+    expect(collectProviderUsageAlerts(criticalSnapshot, new Set())).toHaveLength(1);
   });
 
-  it("escalates from warning to critical as usage grows", () => {
-    const fired = new Set(
-      collectProviderUsageAlerts(warningSnapshot, new Set()).flatMap((alert) => alert.keys),
-    );
-    const criticalSnapshot = deriveLatestProviderUsageSnapshot([
+  it("does not alert after the limit is reached or the provider rejects usage", () => {
+    const reached = deriveLatestProviderUsageSnapshot([
       claudeActivity("a1", {
         status: "allowed",
         resetsAt: 1784970000,
         rateLimitType: "five_hour",
-        utilization: 0.96,
+        utilization: 1,
+      }),
+    ]);
+    const rejected = deriveLatestProviderUsageSnapshot([
+      claudeActivity("a2", {
+        status: "rejected",
+        resetsAt: 1784970000,
+        rateLimitType: "five_hour",
       }),
     ]);
 
-    const alerts = collectProviderUsageAlerts(criticalSnapshot, fired);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]?.threshold).toBe("critical");
+    expect(collectProviderUsageAlerts(reached, new Set())).toHaveLength(0);
+    expect(collectProviderUsageAlerts(rejected, new Set())).toHaveLength(0);
   });
 
   it("builds stable keys", () => {
     const window = warningSnapshot?.windows[0];
     expect(window).toBeDefined();
     if (!window) return;
-    expect(providerUsageAlertKey("Claude", window, "warning")).toBe(
-      "Claude:five_hour:warning:1784970000",
-    );
-    expect(providerUsageAlertKey("Claude", window, "warning", "claude-work")).toBe(
+    expect(providerUsageAlertKey("Claude", window)).toBe("Claude:five_hour:warning:1784970000");
+    expect(providerUsageAlertKey("Claude", window, "claude-work")).toBe(
       "Claude@claude-work:five_hour:warning:1784970000",
     );
-    expect(providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-a")).toBe(
+    expect(providerUsageAlertKey("Claude", window, "claude-work", "environment-a")).toBe(
       "environment-a:Claude@claude-work:five_hour:warning:1784970000",
     );
-    expect(
-      providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-b"),
-    ).not.toBe(providerUsageAlertKey("Claude", window, "warning", "claude-work", "environment-a"));
+    expect(providerUsageAlertKey("Claude", window, "claude-work", "environment-b")).not.toBe(
+      providerUsageAlertKey("Claude", window, "claude-work", "environment-a"),
+    );
   });
 });
 
@@ -1458,7 +1644,6 @@ describe("provider usage thresholds", () => {
       { thresholds: { warningPercent: 50, criticalPercent: 90 } },
     );
     expect(snapshot?.status).toBe("warning");
-    expect(snapshot?.constrainedWindow?.id).toBe("five_hour");
   });
 
   it("re-evaluates an existing snapshot without re-deriving it", () => {

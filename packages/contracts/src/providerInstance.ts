@@ -127,7 +127,7 @@ export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Typ
  * and blanks it (setting `managementKeyRedacted`) on the way to clients,
  * mirroring sensitive environment variables. `managementUrl` is optional;
  * when absent the server derives it from the instance's environment (for
- * `cliproxyapi`, the origin of `ANTHROPIC_BASE_URL`).
+ * `cliproxyapi`, the Anthropic- or OpenAI-compatible base URL origin).
  */
 export const ProviderInstanceUsageSource = Schema.Struct({
   kind: slugSchema,
