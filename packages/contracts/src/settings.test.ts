@@ -100,6 +100,7 @@ describe("ClientSettings sidebar v2", () => {
     expect(settings.sidebarV2CompactCards).toBe(false);
     expect(settings.sidebarV2SortActiveByLatestUserMessage).toBe(false);
     expect(settings.sidebarV2NewThreadButtonInProjectRow).toBe(false);
+    expect(settings.threadAutoSettleEnabled).toBe(true);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
   });
 
@@ -142,6 +143,12 @@ describe("ClientSettings sidebar v2", () => {
     });
     expect(patch.sidebarV2Enabled).toBe(false);
     expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  });
+
+  it("accepts disabling all automatic settling", () => {
+    expect(
+      decodeClientSettingsPatch({ threadAutoSettleEnabled: false }).threadAutoSettleEnabled,
+    ).toBe(false);
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {

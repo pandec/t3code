@@ -346,9 +346,9 @@ export function buildThreadListV2ListItems(input: {
 /**
  * Partitions visible threads into the active card block (manual/creation
  * recency) and the settled recency tail, matching the web v2 list.
- * `autoSettleAfterDays` mirrors the web default of 3 — mobile has no
- * client-settings sync yet, so the default is fixed here rather than
- * user-configurable.
+ * `autoSettleAfterDays` mirrors the web default of 3, and automatic settling
+ * is always on — mobile has no client-settings sync yet, so both mirror the
+ * web defaults here rather than being user-configurable.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -457,7 +457,12 @@ export function buildThreadListV2Items(input: {
     }
     if (
       supportsSettlement &&
-      effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+      effectiveSettled(thread, {
+        now,
+        autoSettleEnabled: true,
+        autoSettleAfterDays,
+        changeRequestState,
+      })
     ) {
       settled.push(thread);
     } else {

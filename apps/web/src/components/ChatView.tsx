@@ -4033,6 +4033,7 @@ function ChatViewContent(props: ChatViewProps) {
   // partition (same shell, same capability gate, same PR auto-settle input)
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  const autoSettleEnabled = useClientSettings((settings) => settings.threadAutoSettleEnabled);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const activeThreadPr = resolveThreadPr({
     threadBranch: activeThread?.branch ?? null,
@@ -4061,6 +4062,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeThreadShell === null || !supportsSettlement) return false;
     return effectiveSettled(activeThreadShell, {
       now: `${nowMinute}:00.000Z`,
+      autoSettleEnabled,
       autoSettleAfterDays,
       changeRequestState: activeThreadPr?.state ?? null,
     });
@@ -4068,6 +4070,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadPr?.state,
     activeThreadShell,
     autoSettleAfterDays,
+    autoSettleEnabled,
     nowMinute,
     supportsSettlement,
   ]);

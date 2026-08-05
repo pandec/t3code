@@ -147,6 +147,7 @@ describe("effectiveSettled", () => {
       expect(
         effectiveSettled(shell, {
           now: NOW,
+          autoSettleEnabled: true,
           autoSettleAfterDays: 3,
           ...changeRequestOptions,
         }),
@@ -159,6 +160,7 @@ describe("effectiveSettled", () => {
     expect(
       effectiveSettled(shell, {
         now: NOW,
+        autoSettleEnabled: true,
         autoSettleAfterDays: null,
         changeRequestState: "closed",
       }),
@@ -171,6 +173,7 @@ describe("effectiveSettled", () => {
       expect(
         effectiveSettled(recentlyActive, {
           now: NOW,
+          autoSettleEnabled: true,
           autoSettleAfterDays: null,
           changeRequestState,
         }),
@@ -178,11 +181,34 @@ describe("effectiveSettled", () => {
     }
   });
 
+  it("disables every automatic settle path without blocking manual settling", () => {
+    const stale = makeShell({ activityAt: STALE });
+    expect(
+      effectiveSettled(stale, {
+        now: NOW,
+        autoSettleEnabled: false,
+        autoSettleAfterDays: 3,
+        changeRequestState: "merged",
+      }),
+    ).toBe(false);
+
+    const settled = makeShell({ settledOverride: "settled", activityAt: STALE });
+    expect(
+      effectiveSettled(settled, {
+        now: NOW,
+        autoSettleEnabled: false,
+        autoSettleAfterDays: 3,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
+  });
+
   it("never auto-settles a stale thread with an open change request", () => {
     const stale = makeShell({ activityAt: STALE });
     expect(
       effectiveSettled(stale, {
         now: NOW,
+        autoSettleEnabled: true,
         autoSettleAfterDays: 3,
         changeRequestState: "open",
       }),
@@ -192,6 +218,7 @@ describe("effectiveSettled", () => {
     expect(
       effectiveSettled(settled, {
         now: NOW,
+        autoSettleEnabled: true,
         autoSettleAfterDays: 3,
         changeRequestState: "open",
       }),
@@ -206,6 +233,7 @@ describe("effectiveSettled", () => {
     expect(
       effectiveSettled(shell, {
         now: NOW,
+        autoSettleEnabled: true,
         autoSettleAfterDays: null,
         changeRequestState: "merged",
       }),
@@ -221,6 +249,7 @@ describe("effectiveSettled", () => {
     expect(
       effectiveSettled(shell, {
         now: NOW,
+        autoSettleEnabled: true,
         autoSettleAfterDays: 3,
         changeRequestState: "merged",
       }),
@@ -265,6 +294,7 @@ describe("effectiveSettled", () => {
       expect(
         effectiveSettled(shell, {
           now: transitionNow,
+          autoSettleEnabled: true,
           autoSettleAfterDays: 3,
           changeRequestState: "merged",
         }),
@@ -278,8 +308,12 @@ describe("effectiveSettled", () => {
     });
     const stale = makeShell({ activityAt: STALE });
 
-    expect(effectiveSettled(boundary, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
-    expect(effectiveSettled(stale, { now: NOW, autoSettleAfterDays: null })).toBe(false);
+    expect(
+      effectiveSettled(boundary, { now: NOW, autoSettleEnabled: true, autoSettleAfterDays: 3 }),
+    ).toBe(false);
+    expect(
+      effectiveSettled(stale, { now: NOW, autoSettleEnabled: true, autoSettleAfterDays: null }),
+    ).toBe(false);
   });
 });
 
@@ -383,6 +417,7 @@ describe("canSettle", () => {
     expect(
       effectiveSettled(queued, {
         now: justAfter,
+        autoSettleEnabled: true,
         autoSettleAfterDays: 3,
         changeRequestState: "merged",
       }),
@@ -406,9 +441,13 @@ describe("canSettle", () => {
       settledAt: "2026-04-09T12:02:10.000Z",
     };
     expect(hasQueuedTurnStart(settledAfterMessage, { now: flooredNow })).toBe(true);
-    expect(effectiveSettled(settledAfterMessage, { now: flooredNow, autoSettleAfterDays: 3 })).toBe(
-      true,
-    );
+    expect(
+      effectiveSettled(settledAfterMessage, {
+        now: flooredNow,
+        autoSettleEnabled: true,
+        autoSettleAfterDays: 3,
+      }),
+    ).toBe(true);
 
     // A message NEWER than settledAt is genuinely new work: still blocked
     // until the server's auto-unsettle lands.
@@ -420,6 +459,7 @@ describe("canSettle", () => {
     expect(
       effectiveSettled(messageAfterSettle, {
         now: "2026-04-09T12:03:30.000Z",
+        autoSettleEnabled: true,
         autoSettleAfterDays: 3,
       }),
     ).toBe(false);
@@ -434,6 +474,8 @@ describe("canSettle", () => {
       pending: "user-input",
     });
     expect(canSettle(blocked, { now: NOW })).toBe(false);
-    expect(effectiveSettled(blocked, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
+    expect(
+      effectiveSettled(blocked, { now: NOW, autoSettleEnabled: true, autoSettleAfterDays: 3 }),
+    ).toBe(false);
   });
 });

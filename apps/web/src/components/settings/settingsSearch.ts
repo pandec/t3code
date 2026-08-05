@@ -200,6 +200,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/extras",
   },
   {
+    id: "auto-settle-threads",
+    title: "Auto-settle threads",
+    to: "/settings/extras",
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",
