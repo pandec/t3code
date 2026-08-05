@@ -8,13 +8,14 @@ import type { SQLiteDatabase } from "expo-sqlite";
 
 import { diagnosticEnvironmentKey } from "../diagnostics/events";
 import { recordMobileDiagnostic } from "../diagnostics/journal";
-import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
+import { type ScheduledAsyncOperation, SerializedAsyncQueue } from "../lib/serialized-async-queue";
 
 const DATABASE_NAME = "t3code-client.db";
 const DATABASE_SCHEMA_VERSION = 2;
 const CACHE_INCREMENTAL_VACUUM_PAGES = 256;
 const CACHE_STARTUP_VACUUM_PASSES = 32;
 const CACHE_LRU_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+const CACHE_STARTUP_MAINTENANCE_DELAY_MS = 1_000;
 const MEBIBYTE = 1024 * 1024;
 
 export const MOBILE_CACHE_MAX_ROW_BYTES = 4 * MEBIBYTE;
@@ -433,17 +434,27 @@ export async function runStartupCacheMaintenance(
   const pruneResult = await pruneCacheToBudget(database, {
     maxTotalBytes: options.maxTotalBytes,
   });
-  await ensureIncrementalAutoVacuum(database);
+  let incrementalVacuumAvailable = true;
+  try {
+    await ensureIncrementalAutoVacuum(database);
+  } catch (cause) {
+    incrementalVacuumAvailable = false;
+    const reason = cause instanceof Error ? cause.name : "Unknown";
+    recordMobileDiagnostic("cache", { op: "auto-vacuum-failed", reason });
+    console.warn("[mobile-database] could not enable incremental auto-vacuum", { reason });
+  }
   await database.execAsync("PRAGMA wal_checkpoint(TRUNCATE);");
 
-  const vacuumPasses = options.vacuumPasses ?? CACHE_STARTUP_VACUUM_PASSES;
-  for (let pass = 0; pass < vacuumPasses; pass += 1) {
-    const row = await database.getFirstAsync<{ readonly freePages: number }>(
-      "SELECT freelist_count AS freePages FROM pragma_freelist_count()",
-    );
-    if ((row?.freePages ?? 0) === 0) break;
-    await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  if (incrementalVacuumAvailable) {
+    const vacuumPasses = options.vacuumPasses ?? CACHE_STARTUP_VACUUM_PASSES;
+    for (let pass = 0; pass < vacuumPasses; pass += 1) {
+      const row = await database.getFirstAsync<{ readonly freePages: number }>(
+        "SELECT freelist_count AS freePages FROM pragma_freelist_count()",
+      );
+      if ((row?.freePages ?? 0) === 0) break;
+      await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   await database.execAsync("PRAGMA optimize;");
@@ -553,6 +564,7 @@ export class MobileDatabase extends Context.Service<
 
 const makeAvailable = Effect.gen(function* () {
   const cacheOperations = new SerializedAsyncQueue();
+  let startupMaintenance: ScheduledAsyncOperation | null = null;
   const database = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
@@ -563,6 +575,8 @@ const makeAvailable = Effect.gen(function* () {
     }),
     (openDatabase) =>
       Effect.promise(async () => {
+        startupMaintenance?.cancel();
+        await startupMaintenance?.done;
         await cacheOperations.drain();
         await openDatabase.closeAsync();
       }).pipe(Effect.ignore),
@@ -669,7 +683,7 @@ const makeAvailable = Effect.gen(function* () {
     catch: databaseError("migrate"),
   });
 
-  void cacheOperations.run(async () => {
+  startupMaintenance = cacheOperations.schedule(CACHE_STARTUP_MAINTENANCE_DELAY_MS, async () => {
     try {
       await runStartupCacheMaintenance(database);
     } catch (cause) {

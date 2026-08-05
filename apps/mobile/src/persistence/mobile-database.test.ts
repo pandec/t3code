@@ -23,8 +23,14 @@ function sqliteValue(value: unknown): NodeSqlite.SQLInputValue {
   throw new Error("Unsupported SQLite test parameter.");
 }
 
-function makeCacheDatabase(options: { readonly incrementalAutoVacuum?: boolean } = {}) {
+function makeCacheDatabase(
+  options: {
+    readonly incrementalAutoVacuum?: boolean;
+    readonly failAutoVacuumConversion?: boolean;
+  } = {},
+) {
   const sqlite = new NodeSqlite.DatabaseSync(":memory:");
+  const executedSql: string[] = [];
   if (options.incrementalAutoVacuum !== false) {
     sqlite.exec("PRAGMA auto_vacuum = INCREMENTAL;");
   }
@@ -42,6 +48,10 @@ function makeCacheDatabase(options: { readonly incrementalAutoVacuum?: boolean }
   `);
   const database = {
     execAsync: (sql: string) => {
+      executedSql.push(sql);
+      if (options.failAutoVacuumConversion === true && sql === "VACUUM;") {
+        return Promise.reject(new Error("vacuum unavailable"));
+      }
       sqlite.exec(sql);
       return Promise.resolve();
     },
@@ -86,6 +96,7 @@ function makeCacheDatabase(options: { readonly incrementalAutoVacuum?: boolean }
         | undefined;
       return row?.auto_vacuum ?? 0;
     },
+    executedSql,
     close: () => sqlite.close(),
   };
 }
@@ -173,6 +184,28 @@ describe("mobile database cache budgets", () => {
       expect(cache.autoVacuum()).toBe(2);
       expect(cache.rows().map((row) => row.cacheKey)).toEqual(["thread-2", "thread-3"]);
     } finally {
+      cache.close();
+    }
+  });
+
+  it("restores WAL and continues maintenance when auto-vacuum conversion fails", async () => {
+    const cache = makeCacheDatabase({
+      incrementalAutoVacuum: false,
+      failAutoVacuumConversion: true,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await runStartupCacheMaintenance(cache.database, { vacuumPasses: 2 });
+
+      expect(cache.executedSql).toContain("PRAGMA journal_mode = WAL;");
+      expect(cache.executedSql).toContain("PRAGMA wal_checkpoint(TRUNCATE);");
+      expect(cache.executedSql).toContain("PRAGMA optimize;");
+      expect(warn).toHaveBeenCalledWith(
+        "[mobile-database] could not enable incremental auto-vacuum",
+        { reason: "Error" },
+      );
+    } finally {
+      warn.mockRestore();
       cache.close();
     }
   });

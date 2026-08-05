@@ -1,3 +1,8 @@
+export interface ScheduledAsyncOperation {
+  readonly done: Promise<void>;
+  readonly cancel: () => void;
+}
+
 /**
  * Runs asynchronous operations in call order while keeping the queue usable
  * after an individual operation rejects.
@@ -12,6 +17,27 @@ export class SerializedAsyncQueue {
       () => undefined,
     );
     return result;
+  }
+
+  schedule(delayMs: number, operation: () => Promise<void>): ScheduledAsyncOperation {
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      void this.run(operation).then(resolveDone, resolveDone);
+    }, delayMs);
+
+    return {
+      done,
+      cancel: () => {
+        if (timer === null) return;
+        clearTimeout(timer);
+        timer = null;
+        resolveDone();
+      },
+    };
   }
 
   drain(): Promise<void> {

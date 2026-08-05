@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import { SerializedAsyncQueue } from "./serialized-async-queue";
 
@@ -57,5 +58,54 @@ describe("SerializedAsyncQueue", () => {
     gate.resolve();
     await drained;
     expect(complete).toBe(true);
+  });
+
+  it("lets initial work finish before delayed maintenance gates later work", async () => {
+    vi.useFakeTimers();
+    try {
+      const queue = new SerializedAsyncQueue();
+      const maintenanceGate = deferred();
+      const events: string[] = [];
+      const maintenance = queue.schedule(1_000, async () => {
+        events.push("maintenance:start");
+        await maintenanceGate.promise;
+        events.push("maintenance:end");
+      });
+
+      await queue.run(async () => {
+        events.push("initial-read");
+      });
+      expect(events).toEqual(["initial-read"]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const laterRead = queue.run(async () => {
+        events.push("later-read");
+      });
+      await Promise.resolve();
+      expect(events).toEqual(["initial-read", "maintenance:start"]);
+
+      maintenanceGate.resolve();
+      await Promise.all([maintenance.done, laterRead]);
+      expect(events).toEqual([
+        "initial-read",
+        "maintenance:start",
+        "maintenance:end",
+        "later-read",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels maintenance that has not started", async () => {
+    const queue = new SerializedAsyncQueue();
+    let ran = false;
+    const scheduled = queue.schedule(60_000, async () => {
+      ran = true;
+    });
+
+    scheduled.cancel();
+    await scheduled.done;
+    expect(ran).toBe(false);
   });
 });
