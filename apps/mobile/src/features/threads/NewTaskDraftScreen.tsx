@@ -49,6 +49,7 @@ import {
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import {
   clearComposerDraftContent,
+  flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
   restoreComposerDraftSnapshot,
@@ -1056,7 +1057,10 @@ export function NewTaskDraftScreen(props: {
       selection={promptSelection}
       onSelectionChange={setPromptSelection}
       onFocus={() => setIsComposerFocused(true)}
-      onBlur={() => setIsComposerFocused(false)}
+      onBlur={() => {
+        setIsComposerFocused(false);
+        void flushComposerDrafts();
+      }}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
       placeholder={`Describe a coding task in ${selectedProject.title}`}
       // Same collapsed centering as ThreadComposer: native vertical gravity

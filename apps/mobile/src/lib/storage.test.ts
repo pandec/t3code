@@ -38,12 +38,40 @@ const mocks = vi.hoisted(() => {
       closeAsync: vi.fn(() => Promise.resolve()),
       execAsync: vi.fn(() => Promise.resolve()),
       withExclusiveTransactionAsync: vi.fn(
-        (run: (transaction: { execAsync: () => Promise<void> }) => Promise<void>) =>
-          run({ execAsync: () => Promise.resolve() }),
+        (
+          run: (transaction: {
+            execAsync: () => Promise<void>;
+            runAsync: () => Promise<{ changes: number }>;
+          }) => Promise<void>,
+        ) =>
+          run({
+            execAsync: () => Promise.resolve(),
+            runAsync: () => Promise.resolve({ changes: 0 }),
+          }),
       ),
       getFirstAsync: vi.fn((sql: string) => {
         if (sql.includes("PRAGMA user_version")) {
-          return Promise.resolve({ user_version: 1 });
+          return Promise.resolve({ user_version: 2 });
+        }
+        if (sql.includes("pragma_table_info")) {
+          return Promise.resolve({ present: 1 });
+        }
+        if (sql.includes("FROM client_meta")) {
+          return Promise.resolve(null);
+        }
+        if (sql.includes("pragma_auto_vacuum")) {
+          return Promise.resolve({ autoVacuum: 2 });
+        }
+        if (sql.includes("pragma_freelist_count")) {
+          return Promise.resolve({ freePages: 0 });
+        }
+        if (sql.includes("pragma_page_count")) {
+          return Promise.resolve({
+            cacheBytes: 0,
+            allocatedBytes: 0,
+            freePages: 0,
+            pageSize: 4096,
+          });
         }
         if (loadPreferencesFails) {
           return Promise.reject(new Error("database unavailable"));
@@ -54,7 +82,10 @@ const mocks = vi.hoisted(() => {
             : { payload: preferencesJson, updatedAt: preferencesUpdatedAt },
         );
       }),
-      runAsync: vi.fn((_sql: string, payload?: unknown, updatedAt?: unknown) => {
+      runAsync: vi.fn((sql: string, payload?: unknown, updatedAt?: unknown) => {
+        if (sql.includes("client_meta")) {
+          return Promise.resolve({ changes: 1, lastInsertRowId: 0 });
+        }
         if (savePreferencesFails) {
           return Promise.reject(new Error("database unavailable"));
         }
@@ -64,7 +95,7 @@ const mocks = vi.hoisted(() => {
         if (typeof updatedAt === "number") {
           preferencesUpdatedAt = updatedAt;
         }
-        return Promise.resolve();
+        return Promise.resolve({ changes: 1, lastInsertRowId: 1 });
       }),
     },
   };

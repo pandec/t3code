@@ -24,7 +24,7 @@ import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import { applyThreadDetailEvent, retainRecentThreadHistory } from "./threadReducer.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
@@ -95,7 +95,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     ),
   );
-  const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
+  const cachedThread = Option.map(cached, (snapshot) => retainRecentThreadHistory(snapshot.thread));
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
@@ -188,18 +188,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
   ) {
+    const retainedThread = retainRecentThreadHistory(thread);
     const waiting = yield* Ref.get(awaitingCompletion);
     yield* SubscriptionRef.set(state, {
-      data: Option.some(thread),
+      data: Option.some(retainedThread),
       status: waiting ? "synchronizing" : "live",
       error: Option.none(),
     });
     // Active threads can update many times per second and retain large tool
     // payloads. The server remains the source of truth while a turn is active;
     // persist once it settles so cache encoding stays off the streaming path.
-    if (shouldPersistThread(thread)) {
+    if (shouldPersistThread(retainedThread)) {
       const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
-      yield* Queue.offer(persistence, { snapshotSequence, thread });
+      yield* Queue.offer(persistence, { snapshotSequence, thread: retainedThread });
     }
   });
 

@@ -25,8 +25,7 @@ const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]
 
 const checkpointOrder = O.mapInput(
   O.Number,
-  (cp: OrchestrationThread["checkpoints"][number]) =>
-    cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
+  (cp: OrchestrationThread["checkpoints"][number]) => cp.checkpointTurnCount,
 );
 
 const activityOrder = O.combineAll<OrchestrationThreadActivity>([
@@ -34,6 +33,45 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
   O.mapInput(O.String, (a) => a.createdAt),
   O.mapInput(O.String, (a) => a.id),
 ]);
+
+const THREAD_HISTORY_RETENTION_LIMIT = 500;
+
+function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
+  return entries.length > THREAD_HISTORY_RETENTION_LIMIT
+    ? entries.slice(-THREAD_HISTORY_RETENTION_LIMIT)
+    : entries;
+}
+
+function retainRecentActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  if (activities.length <= THREAD_HISTORY_RETENTION_LIMIT) return activities;
+
+  const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
+  let latestContextWindow: OrchestrationThreadActivity | undefined;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index]!;
+    if (isResolvableContextWindowActivity(activity)) {
+      latestContextWindow = activity;
+      break;
+    }
+  }
+  if (latestContextWindow === undefined || recent.includes(latestContextWindow)) return recent;
+
+  return pipe(recent.slice(1), Arr.append(latestContextWindow), Arr.sort(activityOrder));
+}
+
+/**
+ * Bounds memory and cache growth for thread snapshots from any source.
+ * TODO: Add paged thread history before clients need access beyond these recent entries.
+ */
+export function retainRecentThreadHistory(thread: OrchestrationThread): OrchestrationThread {
+  const activities = retainRecentActivities(thread.activities);
+  const checkpoints = retainRecent(thread.checkpoints);
+  return activities === thread.activities && checkpoints === thread.checkpoints
+    ? thread
+    : { ...thread, activities, checkpoints };
+}
 
 /**
  * Matches the validity rule in `deriveLatestContextWindowSnapshot` (and the
@@ -520,11 +558,13 @@ export function applyThreadDetailEvent(
         return { kind: "unchanged" };
       }
 
-      const checkpoints = pipe(
-        thread.checkpoints,
-        Arr.filter((entry) => entry.turnId !== checkpoint.turnId),
-        Arr.append(checkpoint),
-        Arr.sort(checkpointOrder),
+      const checkpoints = retainRecent(
+        pipe(
+          thread.checkpoints,
+          Arr.filter((entry) => entry.turnId !== checkpoint.turnId),
+          Arr.append(checkpoint),
+          Arr.sort(checkpointOrder),
+        ),
       );
 
       // Mid-turn diff updates produce placeholder checkpoints; record the
@@ -589,16 +629,15 @@ export function applyThreadDetailEvent(
     case "thread.reverted": {
       const checkpoints = pipe(
         thread.checkpoints,
-        Arr.filter(
-          (entry) =>
-            entry.checkpointTurnCount !== undefined &&
-            entry.checkpointTurnCount <= event.payload.turnCount,
-        ),
+        Arr.filter((entry) => entry.checkpointTurnCount <= event.payload.turnCount),
         Arr.sort(checkpointOrder),
       );
-
       const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
-      const messages = retainMessagesAfterRevert(thread.messages, retainedTurnIds);
+      const messages = retainMessagesAfterRevert(
+        thread.messages,
+        retainedTurnIds,
+        event.payload.turnCount,
+      );
       const retainedMessageIds = new Set(Arr.map(messages, (message) => message.id));
       const proposedPlans = pipe(
         thread.proposedPlans,
@@ -647,23 +686,25 @@ export function applyThreadDetailEvent(
       // array backwards), and providers stream these updates continuously, so
       // retaining the history grows the thread by thousands of rows over a
       // long session. Mirrors the server-side snapshot rule in
-      // dropStaleContextWindowActivities; retention stays per turn so a
-      // thread.reverted that discards turns can still resolve a value from
-      // the turns that survive.
+      // dropStaleContextWindowActivities. Supersession stays per turn, while
+      // the strict global 500-row cap separately preserves the latest
+      // resolvable context-window snapshot.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      const activities = pipe(
-        thread.activities,
-        Arr.filter(
-          (entry) =>
-            entry.id !== activity.id &&
-            !(
-              supersedesContextWindow &&
-              entry.turnId === activity.turnId &&
-              isResolvableContextWindowActivity(entry)
-            ),
+      const activities = retainRecentActivities(
+        pipe(
+          thread.activities,
+          Arr.filter(
+            (entry) =>
+              entry.id !== activity.id &&
+              !(
+                supersedesContextWindow &&
+                entry.turnId === activity.turnId &&
+                isResolvableContextWindowActivity(entry)
+              ),
+          ),
+          Arr.append(activity),
+          Arr.sort(activityOrder),
         ),
-        Arr.append(activity),
-        Arr.sort(activityOrder),
       );
 
       return {
@@ -764,16 +805,39 @@ function rebindCheckpointAssistantMessage(
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
+  turnCount: number,
 ): OrchestrationMessage[] {
-  // Keep messages that belong to a retained turn, plus system messages and
-  // messages without a turn binding (pre-turn-0 user messages).
-  return Arr.filter(messages, (message) => {
+  const retainedMessageIds = new Set<MessageId>();
+  for (const message of messages) {
     if (message.role === "system") {
-      return true;
+      retainedMessageIds.add(message.id);
+    } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
+      retainedMessageIds.add(message.id);
     }
-    if (message.turnId === null) {
-      return true;
-    }
-    return retainedTurnIds.has(message.turnId);
-  });
+  }
+
+  const retainFallbackMessages = (role: "user" | "assistant") => {
+    const retainedCount = messages.filter(
+      (message) => message.role === role && retainedMessageIds.has(message.id),
+    ).length;
+    const missingCount = Math.max(0, turnCount - retainedCount);
+    const fallbackMessages = messages
+      .filter(
+        (message) =>
+          message.role === role &&
+          !retainedMessageIds.has(message.id) &&
+          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+      )
+      // The filtered copy is safe to sort in place; Hermes does not support toSorted.
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      )
+      .slice(0, missingCount);
+    for (const message of fallbackMessages) retainedMessageIds.add(message.id);
+  };
+
+  retainFallbackMessages("user");
+  retainFallbackMessages("assistant");
+  return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

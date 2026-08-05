@@ -121,6 +121,7 @@ import { useAssetUrlState } from "../../assets/assetUrls";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import {
+  beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
   rememberMessageSpeech,
   rememberMessageSummary,
@@ -1153,21 +1154,26 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;
     setSpeechPhase("preparing");
-    const result = await synthesize({
-      environmentId: ctx.activeThreadEnvironmentId,
-      input: { messageId: row.message.id },
-    });
-    setSpeechPhase("idle");
-    if (result._tag === "Success") {
-      rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
-      setSpeechExpanded(true);
-      return;
+    const endRequest = beginMessageArtifactRequest(ctx.activeThreadEnvironmentId, row.message.id);
+    try {
+      const result = await synthesize({
+        environmentId: ctx.activeThreadEnvironmentId,
+        input: { messageId: row.message.id },
+      });
+      setSpeechPhase("idle");
+      if (result._tag === "Success") {
+        rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
+        setSpeechExpanded(true);
+        return;
+      }
+      toastManager.add({
+        type: "error",
+        title: "Listening version unavailable",
+        description: "T3 Code could not prepare audio for this message. Try again in a moment.",
+      });
+    } finally {
+      endRequest();
     }
-    toastManager.add({
-      type: "error",
-      title: "Listening version unavailable",
-      description: "T3 Code could not prepare audio for this message. Try again in a moment.",
-    });
   }, [ctx.activeThreadEnvironmentId, row.message.id, row.message.text, speechPhase, synthesize]);
 
   const onToggleSpeech = useCallback(async () => {
@@ -1185,21 +1191,26 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     }
     if (summaryPhase === "preparing") return;
     setSummaryPhase("preparing");
-    const result = await summarize({
-      environmentId: ctx.activeThreadEnvironmentId,
-      input: { messageId: row.message.id },
-    });
-    setSummaryPhase("idle");
-    if (result._tag === "Success") {
-      rememberMessageSummary(ctx.activeThreadEnvironmentId, row.message.text, result.value);
-      setSummaryExpanded(true);
-      return;
+    const endRequest = beginMessageArtifactRequest(ctx.activeThreadEnvironmentId, row.message.id);
+    try {
+      const result = await summarize({
+        environmentId: ctx.activeThreadEnvironmentId,
+        input: { messageId: row.message.id },
+      });
+      setSummaryPhase("idle");
+      if (result._tag === "Success") {
+        rememberMessageSummary(ctx.activeThreadEnvironmentId, row.message.text, result.value);
+        setSummaryExpanded(true);
+        return;
+      }
+      toastManager.add({
+        type: "error",
+        title: "Summary unavailable",
+        description: "T3 Code could not summarize this message. Try again in a moment.",
+      });
+    } finally {
+      endRequest();
     }
-    toastManager.add({
-      type: "error",
-      title: "Summary unavailable",
-      description: "T3 Code could not summarize this message. Try again in a moment.",
-    });
   }, [
     ctx.activeThreadEnvironmentId,
     row.message.id,
