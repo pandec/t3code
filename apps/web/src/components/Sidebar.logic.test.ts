@@ -39,7 +39,9 @@ import {
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  toggleSidebarProjectHidden,
   toggleSidebarProjectScope,
+  toggleSidebarProjectSelection,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -72,6 +74,43 @@ describe("Sidebar V2 project scope", () => {
 
     expect(allCurrent).toEqual(new Set(["project-a", "project-b"]));
     expect(allCurrent).not.toBeNull();
+  });
+
+  it("makes the latest show or hide action win", () => {
+    const hidden = toggleSidebarProjectHidden(
+      { scope: new Set(["project-a", "project-b"]), hidden: new Set() },
+      "project-a",
+    );
+    expect(hidden).toEqual({
+      scope: new Set(["project-b"]),
+      hidden: new Set(["project-a"]),
+    });
+
+    const shown = toggleSidebarProjectSelection(hidden, "project-a");
+    expect(shown).toEqual({
+      scope: new Set(["project-b", "project-a"]),
+      hidden: new Set(),
+    });
+  });
+
+  it("unhides a project without changing an unrelated explicit scope", () => {
+    expect(
+      toggleSidebarProjectHidden(
+        { scope: new Set(["project-a"]), hidden: new Set(["project-b"]) },
+        "project-b",
+      ),
+    ).toEqual({ scope: new Set(["project-a"]), hidden: new Set() });
+  });
+
+  it("drops unavailable scope entries before hiding the last visible selection", () => {
+    const resolvedScope = resolveSidebarProjectScope(
+      [{ projectKey: "project-a" }],
+      new Set(["project-a", "project-unavailable"]),
+    );
+
+    expect(
+      toggleSidebarProjectHidden({ scope: resolvedScope, hidden: new Set() }, "project-a"),
+    ).toEqual({ scope: null, hidden: new Set(["project-a"]) });
   });
 
   it("builds an order-independent scope signature", () => {
