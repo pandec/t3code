@@ -465,7 +465,20 @@ async function ensureIncrementalAutoVacuum(
     await saveAutoVacuumConversionOutcome(database, "succeeded");
     return true;
   } catch (cause) {
-    await saveAutoVacuumConversionOutcome(database, "failed");
+    try {
+      await saveAutoVacuumConversionOutcome(database, "failed");
+    } catch (markerCause) {
+      const reason = markerCause instanceof Error ? markerCause.name : "Unknown";
+      recordMobileDiagnostic("cache", {
+        op: "auto-vacuum-outcome-write-failed",
+        outcome: "failed",
+        reason,
+      });
+      console.warn("[mobile-database] could not persist auto-vacuum conversion outcome", {
+        outcome: "failed",
+        reason,
+      });
+    }
     throw cause;
   }
 }

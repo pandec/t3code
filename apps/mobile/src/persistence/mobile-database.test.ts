@@ -38,6 +38,7 @@ function makeCacheDatabase(
   options: {
     readonly incrementalAutoVacuum?: boolean;
     readonly failAutoVacuumConversion?: boolean;
+    readonly failAutoVacuumOutcomeWrite?: boolean;
     readonly preferenceWriteGate?: Promise<void>;
     readonly onPreferenceWriteStarted?: () => void;
     readonly onPreferenceWriteFinished?: () => void;
@@ -78,7 +79,9 @@ function makeCacheDatabase(
     execAsync: (sql: string) => {
       executedSql.push(sql);
       if (options.failAutoVacuumConversion === true && sql === "VACUUM;") {
-        return Promise.reject(new Error("vacuum unavailable"));
+        const cause = new Error("vacuum unavailable");
+        cause.name = "VacuumConversionError";
+        return Promise.reject(cause);
       }
       sqlite.exec(sql);
       return Promise.resolve();
@@ -88,6 +91,11 @@ function makeCacheDatabase(
       return Promise.resolve(row === undefined ? null : (row as T));
     },
     runAsync: async (sql: string, ...params: ReadonlyArray<unknown>) => {
+      if (options.failAutoVacuumOutcomeWrite === true && sql.includes("INSERT INTO client_meta")) {
+        const cause = new Error("meta unavailable");
+        cause.name = "MarkerPersistenceError";
+        throw cause;
+      }
       if (sql.includes("INSERT INTO client_preferences")) {
         options.onPreferenceWriteStarted?.();
         await options.preferenceWriteGate;
@@ -260,7 +268,37 @@ describe("mobile database cache budgets", () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         "[mobile-database] could not enable incremental auto-vacuum",
-        { reason: "Error" },
+        { reason: "VacuumConversionError" },
+      );
+    } finally {
+      warn.mockRestore();
+      cache.close();
+    }
+  });
+
+  it("preserves the conversion cause when recording its failed outcome also fails", async () => {
+    const cache = makeCacheDatabase({
+      incrementalAutoVacuum: false,
+      failAutoVacuumConversion: true,
+      failAutoVacuumOutcomeWrite: true,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await runStartupCacheMaintenance(cache.database, {
+        vacuumPasses: 0,
+        autoVacuumMinAllocatedBytes: 0,
+      });
+
+      expect(cache.autoVacuumOutcome()).toBeNull();
+      expect(warn).toHaveBeenNthCalledWith(
+        1,
+        "[mobile-database] could not persist auto-vacuum conversion outcome",
+        { outcome: "failed", reason: "MarkerPersistenceError" },
+      );
+      expect(warn).toHaveBeenNthCalledWith(
+        2,
+        "[mobile-database] could not enable incremental auto-vacuum",
+        { reason: "VacuumConversionError" },
       );
     } finally {
       warn.mockRestore();
