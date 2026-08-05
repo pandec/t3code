@@ -6,8 +6,18 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { SQLiteDatabase } from "expo-sqlite";
 
+import { diagnosticEnvironmentKey } from "../diagnostics/events";
+import { recordMobileDiagnostic } from "../diagnostics/journal";
+
 const DATABASE_NAME = "t3code-client.db";
-const DATABASE_SCHEMA_VERSION = 1;
+const DATABASE_SCHEMA_VERSION = 2;
+const CACHE_INCREMENTAL_VACUUM_PAGES = 256;
+const CACHE_STARTUP_VACUUM_PASSES = 32;
+const CACHE_LRU_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+const MEBIBYTE = 1024 * 1024;
+
+export const MOBILE_CACHE_MAX_ROW_BYTES = 4 * MEBIBYTE;
+export const MOBILE_CACHE_MAX_TOTAL_BYTES = 128 * MEBIBYTE;
 const LEGACY_CACHE_DIRECTORIES = [
   "connection-shell-snapshots",
   "shell-snapshots",
@@ -82,6 +92,254 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+export function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit < 0x80) {
+      bytes += 1;
+    } else if (codeUnit < 0x800) {
+      bytes += 2;
+    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+export type CacheSqliteDatabase = Pick<SQLiteDatabase, "execAsync" | "getFirstAsync" | "runAsync">;
+
+export interface CacheIdentity {
+  readonly environmentId: EnvironmentId;
+  readonly kind: ClientCacheKind;
+  readonly cacheKey: string;
+}
+
+interface DatabaseStorageStats {
+  readonly cacheBytes: number;
+  readonly allocatedBytes: number;
+  readonly freePages: number;
+  readonly pageSize: number;
+}
+
+export interface CachePruneResult extends DatabaseStorageStats {
+  readonly removedRows: number;
+  readonly withinBudget: boolean;
+}
+
+export interface CacheSaveResult extends CachePruneResult {
+  readonly skipped: boolean;
+  readonly payloadBytes: number;
+}
+
+function cachePayloadSizeBucket(payloadBytes: number): string {
+  const payloadMebibytes = Math.ceil(payloadBytes / MEBIBYTE);
+  if (payloadMebibytes <= 8) return "4-8MiB";
+  if (payloadMebibytes <= 16) return "9-16MiB";
+  if (payloadMebibytes <= 32) return "17-32MiB";
+  if (payloadMebibytes <= 64) return "33-64MiB";
+  return ">64MiB";
+}
+
+function recordCacheWriteSkipped(
+  environmentId: string,
+  kind: ClientCacheKind,
+  payloadBytes: number,
+): void {
+  recordMobileDiagnostic("cache", {
+    op: "skip-oversized",
+    env: diagnosticEnvironmentKey(environmentId as EnvironmentId),
+    kind,
+    payloadSize: cachePayloadSizeBucket(payloadBytes),
+    limitMiB: MOBILE_CACHE_MAX_ROW_BYTES / MEBIBYTE,
+  });
+}
+
+function recordCachePruned(result: CachePruneResult, source: "save" | "startup"): void {
+  if (result.removedRows === 0 && result.withinBudget) return;
+  recordMobileDiagnostic("cache", {
+    op: "prune",
+    source,
+    removedRows: result.removedRows,
+    cacheMiB: Math.ceil(result.cacheBytes / MEBIBYTE),
+    allocatedMiB: Math.ceil(result.allocatedBytes / MEBIBYTE),
+    withinBudget: result.withinBudget,
+  });
+}
+
+async function databaseStorageStats(database: CacheSqliteDatabase): Promise<DatabaseStorageStats> {
+  const row = await database.getFirstAsync<DatabaseStorageStats>(`
+    SELECT
+      (SELECT COALESCE(SUM(payload_bytes), 0) FROM client_cache) AS cacheBytes,
+      page_count * page_size AS allocatedBytes,
+      freelist_count AS freePages,
+      page_size AS pageSize
+    FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size()
+  `);
+  return {
+    cacheBytes: Math.max(0, row?.cacheBytes ?? 0),
+    allocatedBytes: Math.max(0, row?.allocatedBytes ?? 0),
+    freePages: Math.max(0, row?.freePages ?? 0),
+    pageSize: Math.max(0, row?.pageSize ?? 0),
+  };
+}
+
+export async function pruneCacheToBudget(
+  database: CacheSqliteDatabase,
+  options: {
+    readonly maxTotalBytes?: number;
+    readonly protectedIdentity?: CacheIdentity;
+  } = {},
+): Promise<CachePruneResult> {
+  const maxTotalBytes = options.maxTotalBytes ?? MOBILE_CACHE_MAX_TOTAL_BYTES;
+  const stats = await databaseStorageStats(database);
+  if (stats.cacheBytes <= maxTotalBytes) {
+    return { ...stats, removedRows: 0, withinBudget: true };
+  }
+
+  const protectedIdentity = options.protectedIdentity;
+  const result = await database.runAsync(
+    `WITH candidates AS (
+       SELECT
+         environment_id,
+         kind,
+         cache_key,
+         COALESCE(
+           SUM(payload_bytes) OVER (
+             ORDER BY updated_at ASC, environment_id ASC, kind ASC, cache_key ASC
+             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+           ),
+           0
+         ) AS bytes_before
+       FROM client_cache
+       WHERE ? IS NULL OR NOT (environment_id = ? AND kind = ? AND cache_key = ?)
+     )
+     DELETE FROM client_cache
+     WHERE (environment_id, kind, cache_key) IN (
+       SELECT environment_id, kind, cache_key
+       FROM candidates
+       WHERE bytes_before < ?
+     )`,
+    protectedIdentity?.environmentId ?? null,
+    protectedIdentity?.environmentId ?? "",
+    protectedIdentity?.kind ?? "",
+    protectedIdentity?.cacheKey ?? "",
+    stats.cacheBytes - maxTotalBytes,
+  );
+  const prunedStats = await databaseStorageStats(database);
+  return {
+    ...prunedStats,
+    removedRows: result.changes,
+    withinBudget: prunedStats.cacheBytes <= maxTotalBytes,
+  };
+}
+
+export async function saveBoundedCacheRecord(
+  database: CacheSqliteDatabase,
+  input: CacheIdentity & {
+    readonly schemaVersion: number;
+    readonly payload: string;
+  },
+  options: {
+    readonly maxRowBytes?: number;
+    readonly maxTotalBytes?: number;
+    readonly now?: number;
+  } = {},
+): Promise<CacheSaveResult> {
+  const payloadBytes = utf8ByteLength(input.payload);
+  const maxRowBytes = options.maxRowBytes ?? MOBILE_CACHE_MAX_ROW_BYTES;
+  if (payloadBytes > maxRowBytes) {
+    const removed = await database.runAsync(
+      `DELETE FROM client_cache
+       WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
+      input.environmentId,
+      input.kind,
+      input.cacheKey,
+    );
+    if (removed.changes > 0) {
+      await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
+    }
+    const stats = await databaseStorageStats(database);
+    return {
+      ...stats,
+      payloadBytes,
+      removedRows: removed.changes,
+      skipped: true,
+      withinBudget: stats.cacheBytes <= (options.maxTotalBytes ?? MOBILE_CACHE_MAX_TOTAL_BYTES),
+    };
+  }
+
+  const now = options.now ?? Date.now();
+  await database.runAsync(
+    `INSERT INTO client_cache
+      (environment_id, kind, cache_key, schema_version, payload, payload_bytes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (environment_id, kind, cache_key) DO UPDATE SET
+       schema_version = excluded.schema_version,
+       payload = excluded.payload,
+       payload_bytes = excluded.payload_bytes,
+       updated_at = excluded.updated_at`,
+    input.environmentId,
+    input.kind,
+    input.cacheKey,
+    input.schemaVersion,
+    input.payload,
+    payloadBytes,
+    now,
+  );
+  const pruneResult = await pruneCacheToBudget(database, {
+    maxTotalBytes: options.maxTotalBytes,
+    protectedIdentity: input,
+  });
+  if (pruneResult.removedRows > 0) {
+    await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
+  }
+
+  return {
+    ...pruneResult,
+    payloadBytes,
+    skipped: false,
+  };
+}
+
+export async function loadCacheRecord(
+  database: CacheSqliteDatabase,
+  identity: CacheIdentity,
+  now = Date.now(),
+): Promise<{ readonly payload: string } | null> {
+  const row = await database.getFirstAsync<{ readonly payload: string }>(
+    `SELECT payload
+     FROM client_cache
+     WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
+    identity.environmentId,
+    identity.kind,
+    identity.cacheKey,
+  );
+  if (row !== null) {
+    void database
+      .runAsync(
+        `UPDATE client_cache
+         SET updated_at = ?
+         WHERE environment_id = ? AND kind = ? AND cache_key = ? AND updated_at < ?`,
+        now,
+        identity.environmentId,
+        identity.kind,
+        identity.cacheKey,
+        now - CACHE_LRU_TOUCH_INTERVAL_MS,
+      )
+      .catch(() => undefined);
+  }
+  return row;
+}
+
 export function decodeLegacyCacheRecord(
   directoryName: (typeof LEGACY_CACHE_DIRECTORIES)[number],
   payload: string,
@@ -141,6 +399,61 @@ export function decodeLegacyCacheRecord(
   }
 }
 
+async function ensureIncrementalAutoVacuum(database: SQLiteDatabase): Promise<void> {
+  const row = await database.getFirstAsync<{ readonly autoVacuum: number }>(
+    "SELECT auto_vacuum AS autoVacuum FROM pragma_auto_vacuum()",
+  );
+  const autoVacuum = row?.autoVacuum ?? 0;
+  if (autoVacuum === 2) return;
+  if (autoVacuum === 0) {
+    await database.execAsync(
+      `PRAGMA journal_mode = DELETE;
+       PRAGMA auto_vacuum = INCREMENTAL;
+       VACUUM;
+       PRAGMA journal_mode = WAL;`,
+    );
+  } else {
+    await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+  }
+  const converted = await database.getFirstAsync<{ readonly autoVacuum: number }>(
+    "SELECT auto_vacuum AS autoVacuum FROM pragma_auto_vacuum()",
+  );
+  if ((converted?.autoVacuum ?? 0) !== 2) {
+    throw new Error("SQLite incremental auto-vacuum conversion did not persist.");
+  }
+}
+
+export async function runStartupCacheMaintenance(
+  database: SQLiteDatabase,
+  options: {
+    readonly maxTotalBytes?: number;
+    readonly vacuumPasses?: number;
+  } = {},
+): Promise<void> {
+  const pruneResult = await pruneCacheToBudget(database, {
+    maxTotalBytes: options.maxTotalBytes,
+  });
+  await ensureIncrementalAutoVacuum(database);
+  await database.execAsync("PRAGMA wal_checkpoint(TRUNCATE);");
+
+  const vacuumPasses = options.vacuumPasses ?? CACHE_STARTUP_VACUUM_PASSES;
+  for (let pass = 0; pass < vacuumPasses; pass += 1) {
+    const row = await database.getFirstAsync<{ readonly freePages: number }>(
+      "SELECT freelist_count AS freePages FROM pragma_freelist_count()",
+    );
+    if ((row?.freePages ?? 0) === 0) break;
+    await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+
+  await database.execAsync("PRAGMA optimize;");
+  const finalStats = await databaseStorageStats(database);
+  recordCachePruned(
+    { ...finalStats, removedRows: pruneResult.removedRows, withinBudget: pruneResult.withinBudget },
+    "startup",
+  );
+}
+
 async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolean> {
   try {
     const { Directory, File, Paths } = await import("expo-file-system");
@@ -158,16 +471,27 @@ async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolea
           const payload = await file.text();
           const record = decodeLegacyCacheRecord(directoryName, payload);
           if (record === null) continue;
+          const payloadBytes = utf8ByteLength(record.payload);
+          if (payloadBytes > MOBILE_CACHE_MAX_ROW_BYTES) {
+            recordCacheWriteSkipped(record.environmentId, record.kind, payloadBytes);
+            console.warn("[mobile-database] skipped oversized legacy cache record", {
+              environmentId: diagnosticEnvironmentKey(record.environmentId as EnvironmentId),
+              kind: record.kind,
+              payloadSize: cachePayloadSizeBucket(payloadBytes),
+            });
+            continue;
+          }
           await database.runAsync(
             `INSERT INTO client_cache
-              (environment_id, kind, cache_key, schema_version, payload, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+              (environment_id, kind, cache_key, schema_version, payload, payload_bytes, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (environment_id, kind, cache_key) DO NOTHING`,
             record.environmentId,
             record.kind,
             record.cacheKey,
             record.schemaVersion,
             record.payload,
+            payloadBytes,
             Date.now(),
           );
         }
@@ -241,11 +565,18 @@ const makeAvailable = Effect.gen(function* () {
 
   yield* Effect.tryPromise({
     try: async () => {
-      await database.execAsync("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
       const schema = await database.getFirstAsync<{ readonly user_version: number }>(
         "PRAGMA user_version",
       );
+      const schemaVersion = schema?.user_version ?? 0;
+      if (schemaVersion === 0) {
+        await database.execAsync("PRAGMA auto_vacuum = INCREMENTAL;");
+      }
+      await database.execAsync(
+        "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;",
+      );
       await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.execAsync("PRAGMA busy_timeout = 3000;");
         await transaction.execAsync(`
               CREATE TABLE IF NOT EXISTS client_cache (
                 environment_id TEXT NOT NULL,
@@ -253,6 +584,7 @@ const makeAvailable = Effect.gen(function* () {
                 cache_key TEXT NOT NULL,
                 schema_version INTEGER NOT NULL,
                 payload TEXT NOT NULL,
+                payload_bytes INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (environment_id, kind, cache_key)
               ) WITHOUT ROWID;
@@ -267,28 +599,83 @@ const makeAvailable = Effect.gen(function* () {
               );
             `);
       });
-      if ((schema?.user_version ?? 0) < DATABASE_SCHEMA_VERSION) {
-        const migrated = await migrateLegacyFileCaches(database);
-        if (migrated) {
-          await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
-        }
+      const payloadBytesColumn = await database.getFirstAsync<{ readonly present: number }>(
+        `SELECT 1 AS present
+         FROM pragma_table_info('client_cache')
+         WHERE name = 'payload_bytes'`,
+      );
+      if (payloadBytesColumn === null) {
+        await database.withExclusiveTransactionAsync(async (transaction) => {
+          await transaction.execAsync("PRAGMA busy_timeout = 3000;");
+          await transaction.runAsync(
+            "DELETE FROM client_cache WHERE LENGTH(CAST(payload AS BLOB)) > ?",
+            MOBILE_CACHE_MAX_ROW_BYTES,
+          );
+          await transaction.runAsync(
+            `WITH sized AS (
+               SELECT
+                 environment_id,
+                 kind,
+                 cache_key,
+                 updated_at,
+                 LENGTH(CAST(payload AS BLOB)) AS payload_bytes
+               FROM client_cache
+             ),
+             candidates AS (
+               SELECT
+                 environment_id,
+                 kind,
+                 cache_key,
+                 COALESCE(
+                   SUM(payload_bytes) OVER (
+                     ORDER BY updated_at ASC, environment_id ASC, kind ASC, cache_key ASC
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                   ),
+                   0
+                 ) AS bytes_before,
+                 SUM(payload_bytes) OVER () AS total_bytes
+               FROM sized
+             )
+             DELETE FROM client_cache
+             WHERE (environment_id, kind, cache_key) IN (
+               SELECT environment_id, kind, cache_key
+               FROM candidates
+               WHERE bytes_before < total_bytes - ?
+             )`,
+            MOBILE_CACHE_MAX_TOTAL_BYTES,
+          );
+          await transaction.execAsync(
+            `ALTER TABLE client_cache
+               ADD COLUMN payload_bytes INTEGER NOT NULL DEFAULT 0;
+             UPDATE client_cache
+               SET payload_bytes = LENGTH(CAST(payload AS BLOB));`,
+          );
+        });
+      }
+      await database.execAsync(
+        `CREATE INDEX IF NOT EXISTS client_cache_lru
+           ON client_cache (updated_at ASC, environment_id, kind, cache_key, payload_bytes);`,
+      );
+      const migrated = schemaVersion >= 1 || (await migrateLegacyFileCaches(database));
+      if (migrated && schemaVersion < DATABASE_SCHEMA_VERSION) {
+        await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
       }
     },
     catch: databaseError("migrate"),
   });
 
+  yield* Effect.tryPromise(() => runStartupCacheMaintenance(database)).pipe(
+    Effect.catch((cause) => {
+      const reason = cause instanceof Error ? cause.name : "Unknown";
+      recordMobileDiagnostic("cache", { op: "maintenance-failed", reason });
+      return Effect.logWarning("Could not complete mobile cache startup maintenance.", { reason });
+    }),
+  );
+
   return MobileDatabase.of({
     loadCache: Effect.fn("MobileDatabase.loadCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
-        try: () =>
-          database.getFirstAsync<{ readonly payload: string }>(
-            `SELECT payload
-                     FROM client_cache
-                     WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
-            environmentId,
-            kind,
-            cacheKey,
-          ),
+        try: () => loadCacheRecord(database, { environmentId, kind, cacheKey }),
         catch: databaseError("load-cache"),
       }).pipe(Effect.map((row) => Option.fromNullishOr(row?.payload))),
     ),
@@ -296,23 +683,30 @@ const makeAvailable = Effect.gen(function* () {
       (environmentId, kind, cacheKey, schemaVersion, payload) =>
         Effect.tryPromise({
           try: () =>
-            database.runAsync(
-              `INSERT INTO client_cache
-                      (environment_id, kind, cache_key, schema_version, payload, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?)
-                     ON CONFLICT (environment_id, kind, cache_key) DO UPDATE SET
-                       schema_version = excluded.schema_version,
-                       payload = excluded.payload,
-                       updated_at = excluded.updated_at`,
+            saveBoundedCacheRecord(database, {
               environmentId,
               kind,
               cacheKey,
               schemaVersion,
               payload,
-              Date.now(),
-            ),
+            }),
           catch: databaseError("save-cache"),
-        }).pipe(Effect.asVoid),
+        }).pipe(
+          Effect.tap((result) => {
+            if (result.skipped) {
+              recordCacheWriteSkipped(environmentId, kind, result.payloadBytes);
+              return Effect.logWarning("Skipped oversized mobile client cache record.", {
+                environmentId: diagnosticEnvironmentKey(environmentId),
+                kind,
+                payloadSize: cachePayloadSizeBucket(result.payloadBytes),
+                limitMiB: MOBILE_CACHE_MAX_ROW_BYTES / MEBIBYTE,
+              });
+            }
+            recordCachePruned(result, "save");
+            return Effect.void;
+          }),
+          Effect.asVoid,
+        ),
     ),
     removeCache: Effect.fn("MobileDatabase.removeCache")((environmentId, kind, cacheKey) =>
       Effect.tryPromise({
@@ -356,7 +750,7 @@ const makeAvailable = Effect.gen(function* () {
                   environment_id AS environmentId,
                   kind,
                   COUNT(*) AS recordCount,
-                  COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS payloadBytes
+                  COALESCE(SUM(payload_bytes), 0) AS payloadBytes
                 FROM client_cache
                 GROUP BY environment_id, kind
                 ORDER BY environment_id, kind

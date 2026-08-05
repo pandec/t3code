@@ -1,12 +1,182 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import type { SQLiteDatabase } from "expo-sqlite";
+import * as NodeSqlite from "node:sqlite";
 import { vi } from "vite-plus/test";
 
 const openDatabaseAsync = vi.hoisted(() => vi.fn());
 
 vi.mock("expo-sqlite", () => ({ openDatabaseAsync }));
 
-import { decodeLegacyCacheRecord, make } from "./mobile-database";
+import {
+  decodeLegacyCacheRecord,
+  loadCacheRecord,
+  make,
+  runStartupCacheMaintenance,
+  saveBoundedCacheRecord,
+  utf8ByteLength,
+} from "./mobile-database";
+
+function sqliteValue(value: unknown): NodeSqlite.SQLInputValue {
+  if (value === null || typeof value === "string" || typeof value === "number") return value;
+  throw new Error("Unsupported SQLite test parameter.");
+}
+
+function makeCacheDatabase(options: { readonly incrementalAutoVacuum?: boolean } = {}) {
+  const sqlite = new NodeSqlite.DatabaseSync(":memory:");
+  if (options.incrementalAutoVacuum !== false) {
+    sqlite.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+  }
+  sqlite.exec(`
+    CREATE TABLE client_cache (
+      environment_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      payload_bytes INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (environment_id, kind, cache_key)
+    ) WITHOUT ROWID;
+  `);
+  const database = {
+    execAsync: (sql: string) => {
+      sqlite.exec(sql);
+      return Promise.resolve();
+    },
+    getFirstAsync: <T>(sql: string, ...params: ReadonlyArray<unknown>): Promise<T | null> => {
+      const row = sqlite.prepare(sql).get(...params.map(sqliteValue));
+      return Promise.resolve(row === undefined ? null : (row as T));
+    },
+    runAsync: (sql: string, ...params: ReadonlyArray<unknown>) => {
+      const result = sqlite.prepare(sql).run(...params.map(sqliteValue));
+      return Promise.resolve({
+        changes: result.changes,
+        lastInsertRowId: Number(result.lastInsertRowid),
+      });
+    },
+    withExclusiveTransactionAsync: async (run: (transaction: SQLiteDatabase) => Promise<void>) => {
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        await run(database as unknown as SQLiteDatabase);
+        sqlite.exec("COMMIT");
+      } catch (cause) {
+        sqlite.exec("ROLLBACK");
+        throw cause;
+      }
+    },
+  };
+
+  return {
+    database: database as unknown as SQLiteDatabase,
+    rows: () =>
+      sqlite
+        .prepare(
+          "SELECT cache_key AS cacheKey, payload, schema_version AS schemaVersion FROM client_cache ORDER BY cache_key",
+        )
+        .all() as unknown as ReadonlyArray<{
+        readonly cacheKey: string;
+        readonly payload: string;
+        readonly schemaVersion: number;
+      }>,
+    autoVacuum: () => {
+      const row = sqlite.prepare("PRAGMA auto_vacuum").get() as
+        | { readonly auto_vacuum: number }
+        | undefined;
+      return row?.auto_vacuum ?? 0;
+    },
+    close: () => sqlite.close(),
+  };
+}
+
+describe("mobile database cache budgets", () => {
+  const environmentId = EnvironmentId.make("environment-1");
+
+  it("counts UTF-8 bytes without allocating an encoded copy", () => {
+    expect(utf8ByteLength("cache")).toBe(5);
+    expect(utf8ByteLength("é😀")).toBe(6);
+  });
+
+  it("skips oversized rows and removes the superseded snapshot", async () => {
+    const cache = makeCacheDatabase();
+    try {
+      const identity = { environmentId, kind: "thread", cacheKey: "thread-1" } as const;
+      await saveBoundedCacheRecord(
+        cache.database,
+        { ...identity, schemaVersion: 1, payload: "old" },
+        { maxRowBytes: 4, maxTotalBytes: 16, now: 1 },
+      );
+
+      const result = await saveBoundedCacheRecord(
+        cache.database,
+        { ...identity, schemaVersion: 2, payload: "oversized" },
+        { maxRowBytes: 4, maxTotalBytes: 16, now: 2 },
+      );
+
+      expect(result.skipped).toBe(true);
+      expect(cache.rows()).toEqual([]);
+      expect(await loadCacheRecord(cache.database, identity, 3)).toBeNull();
+    } finally {
+      cache.close();
+    }
+  });
+
+  it("evicts the least recently accessed row and replaces superseded snapshots", async () => {
+    const cache = makeCacheDatabase();
+    try {
+      const save = (cacheKey: string, payload: string, now: number) =>
+        saveBoundedCacheRecord(
+          cache.database,
+          { environmentId, kind: "thread", cacheKey, schemaVersion: 1, payload },
+          { maxRowBytes: 8, maxTotalBytes: 8, now },
+        );
+
+      await save("thread-1", "1111", 1);
+      await save("thread-2", "2222", 2);
+      await loadCacheRecord(
+        cache.database,
+        { environmentId, kind: "thread", cacheKey: "thread-1" },
+        400_000,
+      );
+      const result = await save("thread-3", "3333", 400_001);
+
+      expect(result.removedRows).toBe(1);
+      expect(cache.rows()).toEqual([
+        { cacheKey: "thread-1", payload: "1111", schemaVersion: 1 },
+        { cacheKey: "thread-3", payload: "3333", schemaVersion: 1 },
+      ]);
+
+      await save("thread-3", "new", 400_002);
+      expect(cache.rows()).toEqual([
+        { cacheKey: "thread-1", payload: "1111", schemaVersion: 1 },
+        { cacheKey: "thread-3", payload: "new", schemaVersion: 1 },
+      ]);
+    } finally {
+      cache.close();
+    }
+  });
+
+  it("prunes an upgraded cache and enables future incremental vacuuming", async () => {
+    const cache = makeCacheDatabase({ incrementalAutoVacuum: false });
+    try {
+      for (const [index, cacheKey] of ["thread-1", "thread-2", "thread-3"].entries()) {
+        await saveBoundedCacheRecord(
+          cache.database,
+          { environmentId, kind: "thread", cacheKey, schemaVersion: 1, payload: "data" },
+          { maxRowBytes: 8, maxTotalBytes: 100, now: index + 1 },
+        );
+      }
+
+      await runStartupCacheMaintenance(cache.database, { maxTotalBytes: 8, vacuumPasses: 2 });
+
+      expect(cache.autoVacuum()).toBe(2);
+      expect(cache.rows().map((row) => row.cacheKey)).toEqual(["thread-2", "thread-3"]);
+    } finally {
+      cache.close();
+    }
+  });
+});
 
 describe("mobile database legacy cache migration", () => {
   it.effect("keeps acquisition failures typed on database operations", () =>
