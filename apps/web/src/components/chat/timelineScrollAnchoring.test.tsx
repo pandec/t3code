@@ -4,6 +4,7 @@ import {
   getRowBottom,
   isTimelineDetachedForThread,
   resolveTimelineFollowDecision,
+  shouldPositionTimelineAnchor,
 } from "./timelineScrollAnchoring";
 
 function buildState({
@@ -40,6 +41,30 @@ describe("timeline scroll anchoring", () => {
   it("scopes detached state to the thread where the user left the live edge", () => {
     expect(isTimelineDetachedForThread("thread-a", "thread-a")).toBe(true);
     expect(isTimelineDetachedForThread("thread-a", "thread-b")).toBe(false);
+  });
+
+  it("stops positioning after manual detach and does not re-arm on re-attach", () => {
+    expect(
+      shouldPositionTimelineAnchor({
+        scrollMode: "anchoring-new-turn",
+        anchorUserScrollGeneration: 1,
+        liveFollowUserScrollGeneration: 1,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPositionTimelineAnchor({
+        scrollMode: "free-scrolling",
+        anchorUserScrollGeneration: 2,
+        liveFollowUserScrollGeneration: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPositionTimelineAnchor({
+        scrollMode: "following-end",
+        anchorUserScrollGeneration: 2,
+        liveFollowUserScrollGeneration: 2,
+      }),
+    ).toBe(false);
   });
 
   it("measures row bottoms from LegendList row position and size", () => {
