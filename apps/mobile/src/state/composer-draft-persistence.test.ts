@@ -397,25 +397,30 @@ describe("composer draft record split", () => {
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({ [draftKey]: legacyDraft });
   });
 
-  it("short-circuits hashing when the stored data URL byte size is corrupt", async () => {
-    const draftKey = "environment-1:thread-size-mismatch";
-    const contentHash = testContentHash(DATA_URL);
-    persistedFiles.set(
-      draftRecordPath(draftKey),
-      JSON.stringify(splitRecord(draftKey, contentHash)),
-    );
-    persistedFiles.set(attachmentPath(contentHash), `${DATA_URL}!`);
+  it("accepts valid unpadded base64 with a non-canonical data URL prefix", async () => {
+    const draftKey = "environment-1:thread-data-url-variation";
+    const dataUrl = "data:image/png;charset=utf-8;base64,YWI";
+    const contentHash = testContentHash(dataUrl);
+    const record = splitRecord(draftKey, contentHash);
+    record.draft.attachments[0]!.sizeBytes = 2;
+    persistedFiles.set(draftRecordPath(draftKey), JSON.stringify(record));
+    persistedFiles.set(attachmentPath(contentHash), dataUrl);
 
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({
-      [draftKey]: { text: "draft", attachments: [] },
+      [draftKey]: {
+        text: "draft",
+        attachments: [
+          expect.objectContaining({
+            sizeBytes: 2,
+            dataUrl,
+            previewUri: dataUrl,
+          }),
+        ],
+      },
     });
 
-    expect(hashMetrics.calls).toBe(0);
-    const repaired = JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null") as {
-      readonly draft?: { readonly attachments?: ReadonlyArray<unknown> };
-    } | null;
-    expect(repaired?.draft?.attachments).toEqual([]);
-    expect(persistedFiles.has(attachmentPath(contentHash))).toBe(false);
+    expect(hashMetrics.calls).toBe(1);
+    expect(JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null")).toEqual(record);
   });
 
   it("preserves unavailable attachment references and suppresses the load-time sweep", async () => {

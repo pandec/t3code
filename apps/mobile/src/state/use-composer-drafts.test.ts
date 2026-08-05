@@ -6,6 +6,7 @@ const persistedFiles = new Map<string, string>();
 const corruptNextWrite = { value: false };
 const failNextMove = { value: false };
 const failMovePathFragments = new Set<string>();
+const failReadPathFragments = new Set<string>();
 const moveAttempts = new Map<string, number>();
 const readGate: {
   uri: string | null;
@@ -72,6 +73,9 @@ vi.mock("expo-file-system", () => {
     }
 
     async text(): Promise<string> {
+      if ([...failReadPathFragments].some((fragment) => this.uri.includes(fragment))) {
+        throw new Error(`read failed: ${this.uri}`);
+      }
       if (readGate.uri === this.uri) {
         readGate.notifyStarted?.();
         if (readGate.promise) {
@@ -147,6 +151,13 @@ const DRAFT: ComposerDraft = {
   attachments: [],
 };
 
+function testContentHash(value: string): string {
+  return [...value]
+    .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0)
+    .toString(16)
+    .padStart(64, "0");
+}
+
 afterEach(() => {
   resetComposerDraftPersistenceForTests();
   appAtomRegistry.set(composerDraftsAtom, {});
@@ -154,6 +165,7 @@ afterEach(() => {
   corruptNextWrite.value = false;
   failNextMove.value = false;
   failMovePathFragments.clear();
+  failReadPathFragments.clear();
   moveAttempts.clear();
   readGate.uri = null;
   readGate.promise = null;
@@ -428,6 +440,105 @@ describe("mobile composer drafts", () => {
       [`${retainedEnvironmentId}:thread-local`]: DRAFT,
       [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
     });
+  });
+
+  it("preserves unavailable attachment references across text edits until recovery", async () => {
+    const draftKey = "environment-1:thread-partial-edit";
+    const dataUrl = "data:image/png;base64,YWJj";
+    const contentHash = testContentHash(dataUrl);
+    const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+    const attachmentPath = `file:///document/composer-drafts/attachments/${contentHash}.attachment`;
+    const record = {
+      schemaVersion: 2,
+      draftKey,
+      draft: {
+        text: "before",
+        attachments: [
+          {
+            id: "persisted-image",
+            type: "image",
+            name: "image.png",
+            mimeType: "image/png",
+            sizeBytes: 3,
+            contentHash,
+          },
+        ],
+      },
+    };
+    persistedFiles.set(recordPath, JSON.stringify(record));
+    persistedFiles.set(attachmentPath, dataUrl);
+    failReadPathFragments.add(`${contentHash}.attachment`);
+
+    ensureComposerDraftsLoaded();
+    await flushComposerDrafts();
+    expect(getComposerDraftSnapshot(draftKey)).toEqual({ text: "before", attachments: [] });
+
+    setComposerDraftText(draftKey, "edited while unavailable");
+    await flushComposerDrafts();
+    expect(JSON.parse(persistedFiles.get(recordPath) ?? "null")).toEqual(record);
+
+    failReadPathFragments.clear();
+    await flushComposerDrafts();
+
+    expect(getComposerDraftSnapshot(draftKey)).toEqual({
+      text: "edited while unavailable",
+      attachments: [
+        {
+          id: "persisted-image",
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          dataUrl,
+          previewUri: dataUrl,
+        },
+      ],
+    });
+    expect(JSON.parse(persistedFiles.get(recordPath) ?? "null")).toMatchObject({
+      draft: {
+        text: "edited while unavailable",
+        attachments: [{ contentHash }],
+      },
+    });
+  });
+
+  it("allows an explicit clear to remove unavailable attachment references", async () => {
+    const draftKey = "environment-1:thread-partial-clear";
+    const dataUrl = "data:image/png;base64,YWJj";
+    const contentHash = testContentHash(dataUrl);
+    const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+    persistedFiles.set(
+      recordPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        draftKey,
+        draft: {
+          text: "clear me",
+          attachments: [
+            {
+              id: "persisted-image",
+              type: "image",
+              name: "image.png",
+              mimeType: "image/png",
+              sizeBytes: 3,
+              contentHash,
+            },
+          ],
+        },
+      }),
+    );
+    persistedFiles.set(
+      `file:///document/composer-drafts/attachments/${contentHash}.attachment`,
+      dataUrl,
+    );
+    failReadPathFragments.add(`${contentHash}.attachment`);
+
+    ensureComposerDraftsLoaded();
+    await flushComposerDrafts();
+    clearComposerDraft(draftKey);
+    await flushComposerDrafts();
+
+    expect(persistedFiles.has(recordPath)).toBe(false);
   });
 
   it("does not resurrect a draft cleared while hydration is reading it", async () => {

@@ -372,12 +372,6 @@ interface HydratedComposerDraftRecord {
   readonly repairedRecord: PersistedComposerDraftRecord | null;
 }
 
-function expectedAttachmentStorageBytes(attachment: PersistedAttachmentReference): number {
-  const dataUrlPrefixBytes = `data:${attachment.mimeType};base64,`.length;
-  const base64Bytes = Math.ceil(attachment.sizeBytes / 3) * 4;
-  return dataUrlPrefixBytes + base64Bytes;
-}
-
 function warnAttachmentHydrationFailure(message: string, fileName: string, cause: unknown): void {
   console.warn(
     message,
@@ -404,14 +398,6 @@ async function hydrateAttachment(
         "[composer-drafts] ignored corrupt persisted attachment",
         fileName,
         new Error("Attachment content file is missing."),
-      );
-      return { state: "corrupt" };
-    }
-    if (file.size !== expectedAttachmentStorageBytes(attachment)) {
-      warnAttachmentHydrationFailure(
-        "[composer-drafts] ignored corrupt persisted attachment",
-        fileName,
-        new Error("Attachment content file size did not match its persisted byte size."),
       );
       return { state: "corrupt" };
     }
@@ -770,7 +756,36 @@ async function repairCorruptRecord(hydrated: HydratedComposerDraftRecord): Promi
   await writeDraftRecord(repairedRecord, true);
 }
 
-export async function loadPersistedComposerDrafts(): Promise<Record<string, ComposerDraft>> {
+export type PersistedComposerDraftHydration =
+  | { readonly state: "ready"; readonly draft: ComposerDraft }
+  | { readonly state: "unavailable" }
+  | { readonly state: "missing" };
+
+export async function hydratePersistedComposerDraftKey(
+  draftKey: string,
+): Promise<PersistedComposerDraftHydration> {
+  const { File } = await loadExpoFileSystem();
+  const { records, attachments } = await getStorageDirectories();
+  const file = new File(records, draftRecordFileName(draftKey));
+  if (!file.exists) {
+    return { state: "missing" };
+  }
+  const record = decodeComposerDraftRecordDocument(JSON.parse(await file.text()) as unknown);
+  const hydrated = await hydrateRecord(record, attachments);
+  if (hydrated.repairedRecord !== null) {
+    await repairCorruptRecord(hydrated);
+  }
+  return hydrated.state === "unavailable"
+    ? { state: "unavailable" }
+    : { state: "ready", draft: hydrated.draft };
+}
+
+export interface LoadedComposerDraftState {
+  readonly drafts: Record<string, ComposerDraft>;
+  readonly unavailableDraftKeys: ReadonlySet<string>;
+}
+
+export async function loadPersistedComposerDraftState(): Promise<LoadedComposerDraftState> {
   const records = await loadRecordDocuments();
   const { attachments: attachmentDirectory } = await getStorageDirectories();
   const hydratedRecords = await mapWithConcurrency(records, 2, async (record) => ({
@@ -851,5 +866,9 @@ export async function loadPersistedComposerDrafts(): Promise<Record<string, Comp
       console.warn("[composer-drafts] failed to sweep orphan attachments on load", error);
     }
   }
-  return drafts;
+  return { drafts, unavailableDraftKeys: unavailableRecordKeys };
+}
+
+export async function loadPersistedComposerDrafts(): Promise<Record<string, ComposerDraft>> {
+  return (await loadPersistedComposerDraftState()).drafts;
 }
