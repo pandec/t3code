@@ -57,6 +57,7 @@ function AutoSettleDaysInput({
 
 export function BetaSettingsPanel() {
   const sidebarV2Enabled = useSidebarV2Enabled();
+  const threadAutoSettleEnabled = useClientSettings((settings) => settings.threadAutoSettleEnabled);
   const sidebarAutoSettleAfterDays = useClientSettings(
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
@@ -87,10 +88,15 @@ export function BetaSettingsPanel() {
           <>
             <SettingsRow
               title={searchableSetting("auto-settle-inactive-threads").title}
-              description="Threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."
+              description={
+                threadAutoSettleEnabled
+                  ? "Threads with no activity for this long settle automatically."
+                  : "Automatic thread settling is disabled in Extras."
+              }
               control={
                 <Switch
-                  checked={sidebarAutoSettleAfterDays !== null}
+                  checked={threadAutoSettleEnabled && sidebarAutoSettleAfterDays !== null}
+                  disabled={!threadAutoSettleEnabled}
                   onCheckedChange={(checked) =>
                     updateSettings({
                       sidebarAutoSettleAfterDays: checked ? AUTO_SETTLE_DEFAULT_DAYS : null,
@@ -100,7 +106,7 @@ export function BetaSettingsPanel() {
                 />
               }
             />
-            {sidebarAutoSettleAfterDays !== null ? (
+            {threadAutoSettleEnabled && sidebarAutoSettleAfterDays !== null ? (
               <SettingsRow
                 title="Days of inactivity before auto-settle"
                 description="Any new activity un-settles a thread automatically."

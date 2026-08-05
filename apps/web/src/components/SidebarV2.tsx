@@ -1406,6 +1406,7 @@ export default function SidebarV2() {
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
@@ -2070,7 +2071,12 @@ export default function SidebarV2() {
           pinned.push(thread);
         } else if (
           supportsSettlement &&
-          effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+          effectiveSettled(thread, {
+            now,
+            autoSettleEnabled,
+            autoSettleAfterDays,
+            changeRequestState,
+          })
         ) {
           settled.push(thread);
         } else {
@@ -2090,6 +2096,7 @@ export default function SidebarV2() {
       };
     }, [
       autoSettleAfterDays,
+      autoSettleEnabled,
       changeRequestStateByKey,
       effectiveAttentionFilterState,
       nowMinute,

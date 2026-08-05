@@ -642,6 +642,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       Object.keys(settings.sidebarProjectAccentColors).length > 0
         ? ["Project accent colors"]
         : []),
+      ...(settings.threadAutoSettleEnabled !== DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled
+        ? ["Automatic thread settling"]
+        : []),
       ...(settings.sidebarThreadProviderIconVisibility !==
       DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
         ? ["Thread provider icon"]
@@ -779,6 +782,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
+      settings.threadAutoSettleEnabled,
       settings.sidebarV2CompactCards,
       settings.sidebarV2SortActiveByLatestUserMessage,
       settings.sidebarV2NewThreadButtonInProjectRow,
@@ -811,6 +815,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectAccentColors: {},
+      threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,

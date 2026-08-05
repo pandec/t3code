@@ -422,6 +422,32 @@ function SidebarExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-sidebar")}>
       <SettingsRow
+        {...searchableSetting("auto-settle-threads")}
+        description="Automatically settle threads after inactivity or when their pull request is merged or closed. Manual settling remains available when disabled."
+        resetAction={
+          settings.threadAutoSettleEnabled !== DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled ? (
+            <SettingResetButton
+              label="automatic thread settling"
+              onClick={() =>
+                updateSettings({
+                  threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.threadAutoSettleEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ threadAutoSettleEnabled: Boolean(checked) })
+            }
+            aria-label="Automatically settle threads"
+          />
+        }
+      />
+
+      <SettingsRow
         title="Thread provider icon"
         description="Choose whether thread rows show their provider only on hover, at all times, or never."
         resetAction={
