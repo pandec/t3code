@@ -1,42 +1,33 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  ModelSelection as ModelSelectionSchema,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  ProviderInteractionMode as ProviderInteractionModeSchema,
-  RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
   type ModelSelection,
   MessageInputOrigin,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
 import { useEffect } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
-import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
+import {
+  ComposerDraftBatchPersistenceError,
+  ComposerDraftPersistenceError,
+  decodePersistedComposerDrafts,
+  hydratePersistedComposerDraftKey,
+  loadPersistedComposerDraftState,
+  persistComposerDraftKeys,
+} from "./composer-draft-persistence";
 
-const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
-const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
-const COMPOSER_DRAFTS_FILE = "drafts.json";
-const PERSIST_DEBOUNCE_MS = 200;
+export { ComposerDraftPersistenceError, decodePersistedComposerDrafts };
 
-export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<ComposerDraftPersistenceError>()(
-  "ComposerDraftPersistenceError",
-  {
-    operation: Schema.Literals(["open", "read", "decode", "encode", "write", "verify", "hydrate"]),
-    directory: Schema.String,
-    fileName: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Composer draft persistence operation ${this.operation} failed for ${this.directory}/${this.fileName}.`;
-  }
-}
+const PERSIST_DEBOUNCE_MS = 1_000;
+const PERSIST_MAX_DELAY_MS = 5_000;
+const PERSIST_RETRY_MAX_ATTEMPTS = 5;
+const PERSIST_RETRY_MAX_DELAY_MS = 30_000;
 
 export interface ComposerDraft {
   readonly text: string;
@@ -67,33 +58,6 @@ export type ComposerDraftSettingsUpdate = Pick<
   "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection"
 >;
 
-const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
-  mode: Schema.Literals(["local", "worktree"]),
-  branch: Schema.NullOr(Schema.String),
-  worktreePath: Schema.NullOr(Schema.String),
-  startFromOrigin: Schema.optional(Schema.Boolean),
-});
-
-const ComposerDraftSchema = Schema.Struct({
-  text: Schema.String,
-  inputOrigin: Schema.optional(MessageInputOrigin),
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
-  importedShareIds: Schema.optional(Schema.Array(Schema.String)),
-  modelSelection: Schema.optional(ModelSelectionSchema),
-  runtimeMode: Schema.optional(RuntimeModeSchema),
-  interactionMode: Schema.optional(ProviderInteractionModeSchema),
-  workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
-});
-
-const PersistedComposerDraftsSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(COMPOSER_DRAFTS_SCHEMA_VERSION),
-  drafts: Schema.Record(Schema.String, ComposerDraftSchema),
-});
-
-const decodePersistedComposerDraftsDocument = Schema.decodeUnknownSync(
-  PersistedComposerDraftsSchema,
-);
-
 const EMPTY_DRAFT: ComposerDraft = {
   text: "",
   attachments: [],
@@ -106,6 +70,12 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
 
 let loadPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistMaxDelayTimer: ReturnType<typeof setTimeout> | null = null;
+let hydrationComplete = false;
+const persistRetryAttempts = new Map<string, number>();
+const draftKeysMutatedBeforeHydration = new Set<string>();
+const partialDraftKeys = new Set<string>();
+const partialVisibleAttachmentIds = new Map<string, ReadonlySet<string>>();
 const persistenceQueue = new SerializedAsyncQueue();
 
 function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
@@ -139,156 +109,387 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
   );
 }
 
-export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
-  const parsed = decodePersistedComposerDraftsDocument(value);
-  return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isEmptyDraft(draft)),
+const pendingDraftKeys = new Set<string>();
+const pendingDiscardPartialKeys = new Set<string>();
+let pendingAttachmentSweep = false;
+
+function takePendingPersistence(): {
+  readonly draftKeys: ReadonlySet<string>;
+  readonly discardPartialKeys: ReadonlySet<string>;
+  readonly sweepAttachments: boolean;
+} {
+  const draftKeys = new Set(pendingDraftKeys);
+  const discardPartialKeys = new Set(pendingDiscardPartialKeys);
+  const sweepAttachments = pendingAttachmentSweep;
+  pendingDraftKeys.clear();
+  pendingDiscardPartialKeys.clear();
+  pendingAttachmentSweep = false;
+  return { draftKeys, discardPartialKeys, sweepAttachments };
+}
+
+function mergeRecoveredAttachments(
+  recovered: ReadonlyArray<DraftComposerImageAttachment>,
+  latest: ReadonlyArray<DraftComposerImageAttachment>,
+  previouslyVisibleIds: ReadonlySet<string>,
+): ReadonlyArray<DraftComposerImageAttachment> {
+  const visibleIds = new Set<string>();
+  const visible = latest
+    .filter((attachment) => {
+      if (visibleIds.has(attachment.id)) {
+        return false;
+      }
+      visibleIds.add(attachment.id);
+      return true;
+    })
+    .slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
+  const retainedRecovered = recovered.filter(
+    (attachment) => !visibleIds.has(attachment.id) && !previouslyVisibleIds.has(attachment.id),
   );
+  return [
+    ...retainedRecovered.slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - visible.length),
+    ...visible,
+  ];
 }
 
-async function getComposerDraftsFile() {
-  const { Directory, File, Paths } = await import("expo-file-system");
-  const directory = new Directory(Paths.document, COMPOSER_DRAFTS_DIRECTORY);
-  directory.create({ idempotent: true, intermediates: true });
-  return new File(directory, COMPOSER_DRAFTS_FILE);
-}
+async function persistDraftKeysNow(
+  drafts: Record<string, ComposerDraft>,
+  draftKeys: ReadonlySet<string>,
+  options?: {
+    readonly verify?: boolean;
+    readonly sweepAttachments?: boolean;
+    readonly discardPartialKeys?: ReadonlySet<string>;
+  },
+): Promise<void> {
+  const draftsToPersist = { ...drafts };
+  const readyDraftKeys = new Set<string>();
+  const failures = new Map<string, unknown>();
 
-async function loadPersistedComposerDrafts(): Promise<Record<string, ComposerDraft>> {
-  let operation: ComposerDraftPersistenceError["operation"] = "open";
-  try {
-    const file = await getComposerDraftsFile();
-    if (!file.exists) {
-      return {};
+  for (const draftKey of draftKeys) {
+    if (!partialDraftKeys.has(draftKey) || options?.discardPartialKeys?.has(draftKey)) {
+      if (options?.discardPartialKeys?.has(draftKey)) {
+        partialDraftKeys.delete(draftKey);
+        partialVisibleAttachmentIds.delete(draftKey);
+      }
+      readyDraftKeys.add(draftKey);
+      continue;
     }
-    operation = "read";
-    const raw = await file.text();
-    operation = "decode";
-    return decodePersistedComposerDrafts(JSON.parse(raw) as unknown);
-  } catch (cause) {
-    console.warn(
-      "[composer-drafts] ignored persisted draft failure",
-      new ComposerDraftPersistenceError({
-        operation,
-        directory: COMPOSER_DRAFTS_DIRECTORY,
-        fileName: COMPOSER_DRAFTS_FILE,
-        cause,
+    try {
+      const hydrated = await hydratePersistedComposerDraftKey(draftKey);
+      if (hydrated.state === "unavailable") {
+        failures.set(draftKey, new Error("Persisted composer attachments remain unavailable."));
+        continue;
+      }
+      partialDraftKeys.delete(draftKey);
+      readyDraftKeys.add(draftKey);
+      if (hydrated.state === "ready") {
+        const current = appAtomRegistry.get(composerDraftsAtom);
+        const latest = current[draftKey];
+        if (latest) {
+          const merged = {
+            ...latest,
+            attachments: mergeRecoveredAttachments(
+              hydrated.draft.attachments,
+              latest.attachments,
+              partialVisibleAttachmentIds.get(draftKey) ?? new Set(),
+            ),
+          };
+          const next = { ...current, [draftKey]: merged };
+          appAtomRegistry.set(composerDraftsAtom, next);
+          draftsToPersist[draftKey] = merged;
+        }
+      }
+      partialVisibleAttachmentIds.delete(draftKey);
+    } catch (error) {
+      failures.set(draftKey, error);
+    }
+  }
+
+  if (readyDraftKeys.size > 0) {
+    try {
+      await persistComposerDraftKeys(draftsToPersist, readyDraftKeys, options);
+    } catch (error) {
+      for (const draftKey of failedDraftKeys(error, readyDraftKeys)) {
+        failures.set(draftKey, error);
+      }
+    }
+  }
+
+  for (const draftKey of readyDraftKeys) {
+    if (!failures.has(draftKey)) {
+      partialDraftKeys.delete(draftKey);
+    }
+  }
+  if (failures.size > 0) {
+    throw new ComposerDraftBatchPersistenceError(failures);
+  }
+}
+
+async function persistDraftKeys(
+  drafts: Record<string, ComposerDraft>,
+  draftKeys: ReadonlySet<string>,
+  options?: {
+    readonly verify?: boolean;
+    readonly sweepAttachments?: boolean;
+    readonly discardPartial?: boolean;
+  },
+): Promise<void> {
+  try {
+    await persistenceQueue.run(() =>
+      persistDraftKeysNow(drafts, draftKeys, {
+        ...options,
+        discardPartialKeys: options?.discardPartial === true ? draftKeys : new Set<string>(),
       }),
     );
-    return {};
-  }
-}
-
-async function writePersistedComposerDrafts(drafts: Record<string, ComposerDraft>): Promise<void> {
-  let operation: ComposerDraftPersistenceError["operation"] = "open";
-  try {
-    const file = await getComposerDraftsFile();
-    operation = "encode";
-    const nonEmptyDrafts = Object.fromEntries(
-      Object.entries(drafts).filter(([, draft]) => !isEmptyDraft(draft)),
-    );
-    const document = {
-      schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
-      drafts: nonEmptyDrafts,
-    } as const;
-    const encoded = JSON.stringify(document);
-    operation = "write";
-    if (!file.exists) {
-      file.create({ intermediates: true, overwrite: true });
+    for (const draftKey of draftKeys) {
+      persistRetryAttempts.delete(draftKey);
     }
-    file.write(encoded);
-  } catch (cause) {
-    throw new ComposerDraftPersistenceError({
-      operation,
-      directory: COMPOSER_DRAFTS_DIRECTORY,
-      fileName: COMPOSER_DRAFTS_FILE,
-      cause,
-    });
-  }
-}
-
-async function writeAndVerifyPersistedComposerDrafts(
-  drafts: Record<string, ComposerDraft>,
-): Promise<void> {
-  await writePersistedComposerDrafts(drafts);
-  const expected = decodePersistedComposerDrafts({
-    schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
-    drafts: Object.fromEntries(Object.entries(drafts).filter(([, draft]) => !isEmptyDraft(draft))),
-  });
-  let operation: ComposerDraftPersistenceError["operation"] = "open";
-  try {
-    const file = await getComposerDraftsFile();
-    operation = "read";
-    const raw = await file.text();
-    operation = "decode";
-    const persisted = decodePersistedComposerDrafts(JSON.parse(raw) as unknown);
-    operation = "verify";
-    if (JSON.stringify(persisted) !== JSON.stringify(expected)) {
-      throw new Error("Persisted composer draft snapshot did not match the requested write.");
-    }
-  } catch (cause) {
-    throw new ComposerDraftPersistenceError({
-      operation,
-      directory: COMPOSER_DRAFTS_DIRECTORY,
-      fileName: COMPOSER_DRAFTS_FILE,
-      cause,
-    });
-  }
-}
-
-async function savePersistedComposerDrafts(drafts: Record<string, ComposerDraft>): Promise<void> {
-  try {
-    await persistenceQueue.run(() => writePersistedComposerDrafts(drafts));
   } catch (error) {
+    const failed = failedDraftKeys(error, draftKeys);
+    for (const draftKey of draftKeys) {
+      if (!failed.has(draftKey)) {
+        persistRetryAttempts.delete(draftKey);
+      }
+    }
+    throw error;
+  }
+}
+
+function failedDraftKeys(
+  error: unknown,
+  attemptedDraftKeys: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return error instanceof ComposerDraftBatchPersistenceError
+    ? error.failedDraftKeys
+    : attemptedDraftKeys;
+}
+
+function retryDelay(draftKeys: ReadonlySet<string>): number {
+  let delay = PERSIST_RETRY_MAX_DELAY_MS;
+  for (const draftKey of draftKeys) {
+    const attempts = persistRetryAttempts.get(draftKey) ?? 1;
+    const keyDelay =
+      attempts >= PERSIST_RETRY_MAX_ATTEMPTS
+        ? PERSIST_RETRY_MAX_DELAY_MS
+        : PERSIST_DEBOUNCE_MS * 2 ** (attempts - 1);
+    delay = Math.min(delay, keyDelay);
+  }
+  return delay;
+}
+
+function requeueFailedDrafts(
+  draftKeys: ReadonlySet<string>,
+  sweepAttachments: boolean,
+  discardPartialKeys: ReadonlySet<string> = new Set(),
+): void {
+  for (const draftKey of draftKeys) {
+    pendingDraftKeys.add(draftKey);
+    if (discardPartialKeys.has(draftKey)) {
+      pendingDiscardPartialKeys.add(draftKey);
+    }
+    persistRetryAttempts.set(draftKey, (persistRetryAttempts.get(draftKey) ?? 0) + 1);
+  }
+  pendingAttachmentSweep ||= sweepAttachments && draftKeys.size > 0;
+  schedulePersistenceRetry();
+}
+
+async function savePendingComposerDrafts(): Promise<void> {
+  const pending = takePendingPersistence();
+  if (pending.draftKeys.size === 0 && !pending.sweepAttachments) {
+    await persistenceQueue.run(async () => undefined);
+    return;
+  }
+  try {
+    await persistenceQueue.run(() =>
+      persistDraftKeysNow(appAtomRegistry.get(composerDraftsAtom), pending.draftKeys, {
+        sweepAttachments: pending.sweepAttachments,
+        discardPartialKeys: pending.discardPartialKeys,
+      }),
+    );
+    for (const draftKey of pending.draftKeys) {
+      persistRetryAttempts.delete(draftKey);
+    }
+  } catch (error) {
+    const failed = failedDraftKeys(error, pending.draftKeys);
+    for (const draftKey of pending.draftKeys) {
+      if (!failed.has(draftKey)) {
+        persistRetryAttempts.delete(draftKey);
+      }
+    }
+    requeueFailedDrafts(failed, pending.sweepAttachments, pending.discardPartialKeys);
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.
   }
 }
 
-function schedulePersistComposerDrafts(drafts: Record<string, ComposerDraft>): void {
+function clearPersistenceTimers(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (persistMaxDelayTimer !== null) {
+    clearTimeout(persistMaxDelayTimer);
+    persistMaxDelayTimer = null;
+  }
+}
+
+function startPendingPersistence(): void {
+  clearPersistenceTimers();
+  void savePendingComposerDrafts();
+}
+
+function ensurePersistenceTimers(): void {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
   }
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    void savePersistedComposerDrafts(drafts);
-  }, PERSIST_DEBOUNCE_MS);
+  persistTimer = setTimeout(startPendingPersistence, PERSIST_DEBOUNCE_MS);
+  persistMaxDelayTimer ??= setTimeout(startPendingPersistence, PERSIST_MAX_DELAY_MS);
+}
+
+function schedulePersistenceRetry(): void {
+  clearPersistenceTimers();
+  if (pendingDraftKeys.size === 0) {
+    return;
+  }
+  persistTimer = setTimeout(startPendingPersistence, retryDelay(pendingDraftKeys));
+}
+
+export async function flushComposerDrafts(): Promise<void> {
+  clearPersistenceTimers();
+  await savePendingComposerDrafts();
+  clearPersistenceTimers();
+  if (pendingDraftKeys.size > 0 || pendingAttachmentSweep) {
+    await savePendingComposerDrafts();
+  }
+}
+
+function schedulePersistComposerDraft(
+  draftKey: string,
+  options?: {
+    readonly sweepAttachments?: boolean;
+    readonly immediate?: boolean;
+    readonly discardPartial?: boolean;
+  },
+): void {
+  pendingDraftKeys.add(draftKey);
+  if (options?.discardPartial === true) {
+    pendingDiscardPartialKeys.add(draftKey);
+  }
+  pendingAttachmentSweep ||= options?.sweepAttachments === true;
+  persistRetryAttempts.delete(draftKey);
+  if (options?.immediate === true) {
+    startPendingPersistence();
+    return;
+  }
+  ensurePersistenceTimers();
+}
+
+function removePendingDraftKey(draftKey: string): void {
+  pendingDraftKeys.delete(draftKey);
+  pendingDiscardPartialKeys.delete(draftKey);
+}
+
+function requeueDraftPersistence(
+  draftKey: string,
+  options?: { readonly sweepAttachments?: boolean; readonly discardPartial?: boolean },
+): void {
+  const draftKeys = new Set([draftKey]);
+  requeueFailedDrafts(
+    draftKeys,
+    options?.sweepAttachments === true,
+    options?.discardPartial === true ? draftKeys : new Set(),
+  );
+}
+
+/** Resets module persistence state between isolated unit tests. */
+export function resetComposerDraftPersistenceForTests(): void {
+  clearPersistenceTimers();
+  loadPromise = null;
+  hydrationComplete = false;
+  persistRetryAttempts.clear();
+  draftKeysMutatedBeforeHydration.clear();
+  partialDraftKeys.clear();
+  partialVisibleAttachmentIds.clear();
+  pendingDraftKeys.clear();
+  pendingDiscardPartialKeys.clear();
+  pendingAttachmentSweep = false;
+}
+
+export function mergeHydratedComposerDrafts(
+  persistedDrafts: Record<string, ComposerDraft>,
+  currentDrafts: Record<string, ComposerDraft>,
+  mutatedDraftKeys: ReadonlySet<string>,
+): Record<string, ComposerDraft> {
+  const retainedPersistedDrafts = Object.fromEntries(
+    Object.entries(persistedDrafts).filter(([draftKey]) => !mutatedDraftKeys.has(draftKey)),
+  );
+  return {
+    ...retainedPersistedDrafts,
+    ...currentDrafts,
+  };
 }
 
 export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
   }
-  loadPromise = loadPersistedComposerDrafts()
-    .then((persistedDrafts) => {
-      if (Object.keys(persistedDrafts).length === 0) {
-        return;
+  loadPromise = persistenceQueue
+    .run(() => loadPersistedComposerDraftState())
+    .then((persisted) => {
+      partialDraftKeys.clear();
+      partialVisibleAttachmentIds.clear();
+      for (const draftKey of persisted.unavailableDraftKeys) {
+        partialDraftKeys.add(draftKey);
+        partialVisibleAttachmentIds.set(
+          draftKey,
+          new Set(persisted.drafts[draftKey]?.attachments.map((attachment) => attachment.id) ?? []),
+        );
       }
       const current = appAtomRegistry.get(composerDraftsAtom);
-      appAtomRegistry.set(composerDraftsAtom, {
-        ...persistedDrafts,
-        ...current,
-      });
+      appAtomRegistry.set(
+        composerDraftsAtom,
+        mergeHydratedComposerDrafts(persisted.drafts, current, draftKeysMutatedBeforeHydration),
+      );
     })
     .catch((cause) => {
       console.warn(
         "[composer-drafts] failed to hydrate drafts",
         new ComposerDraftPersistenceError({
           operation: "hydrate",
-          directory: COMPOSER_DRAFTS_DIRECTORY,
-          fileName: COMPOSER_DRAFTS_FILE,
+          directory: "composer-drafts",
+          fileName: "*",
           cause,
         }),
       );
       // Draft loading is best-effort; in-memory drafts still keep working.
+    })
+    .finally(() => {
+      hydrationComplete = true;
+      draftKeysMutatedBeforeHydration.clear();
     });
 }
 
 function updateComposerDrafts(
+  draftKey: string,
   update: (current: Record<string, ComposerDraft>) => Record<string, ComposerDraft>,
+  options?: {
+    readonly sweepAttachments?: boolean;
+    readonly immediate?: boolean;
+    readonly discardPartial?: boolean;
+    readonly discardPartialOnlyWhenChanged?: boolean;
+  },
 ): void {
-  const next = update(appAtomRegistry.get(composerDraftsAtom));
+  const current = appAtomRegistry.get(composerDraftsAtom);
+  const next = update(current);
   appAtomRegistry.set(composerDraftsAtom, next);
-  schedulePersistComposerDrafts(next);
+  if (!hydrationComplete) {
+    draftKeysMutatedBeforeHydration.add(draftKey);
+  }
+  schedulePersistComposerDraft(draftKey, {
+    ...options,
+    discardPartial:
+      options?.discardPartial === true &&
+      (!options.discardPartialOnlyWhenChanged || next !== current),
+  });
 }
 
 export function setComposerDraftText(
@@ -296,7 +497,7 @@ export function setComposerDraftText(
   value: string,
   inputOrigin?: MessageInputOrigin,
 ): void {
-  updateComposerDrafts((current) => {
+  updateComposerDrafts(draftKey, (current) => {
     const existing = normalizeDraft(current[draftKey]);
     const { inputOrigin: existingInputOrigin, ...existingWithoutInputOrigin } = existing;
     const nextInputOrigin = value.length === 0 ? undefined : (inputOrigin ?? existingInputOrigin);
@@ -353,11 +554,6 @@ export async function appendComposerDraftContentDurably(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-
   const current = appAtomRegistry.get(composerDraftsAtom);
   const before = normalizeDraft(current[draftKey]);
   const appended: ComposerDraft = {
@@ -371,10 +567,12 @@ export async function appendComposerDraftContentDurably(
   };
   appAtomRegistry.set(composerDraftsAtom, next);
 
+  removePendingDraftKey(draftKey);
   try {
-    await persistenceQueue.run(() => writeAndVerifyPersistedComposerDrafts(next));
+    await persistDraftKeys(next, new Set([draftKey]), { verify: true });
     return { before, appended, status: "committed" };
   } catch (error) {
+    requeueDraftPersistence(draftKey);
     console.warn("[composer-drafts] failed to durably append queued message", error);
     return { before, appended, status: "persist-failed" };
   }
@@ -396,7 +594,7 @@ export async function revertComposerDraftAppend(
   transaction: Pick<DurableComposerDraftAppend, "before" | "appended">,
 ): Promise<DurableComposerDraftRevert> {
   let fullyReverted = true;
-  updateComposerDrafts((current) => {
+  updateComposerDrafts(draftKey, (current) => {
     const latest = normalizeDraft(current[draftKey]);
     const appendedAttachments = transaction.appended.attachments.slice(
       transaction.before.attachments.length,
@@ -435,16 +633,15 @@ export async function revertComposerDraftAppend(
       [draftKey]: draft,
     };
   });
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+  removePendingDraftKey(draftKey);
   try {
-    await persistenceQueue.run(() =>
-      writeAndVerifyPersistedComposerDrafts(appAtomRegistry.get(composerDraftsAtom)),
-    );
+    await persistDraftKeys(appAtomRegistry.get(composerDraftsAtom), new Set([draftKey]), {
+      verify: true,
+      sweepAttachments: true,
+    });
     return { fullyReverted, persisted: true };
   } catch (error) {
+    requeueDraftPersistence(draftKey, { sweepAttachments: true });
     console.warn("[composer-drafts] failed to durably revert queued message append", error);
     return { fullyReverted, persisted: false };
   }
@@ -479,7 +676,7 @@ export function composerDraftStillContainsAppend(
 }
 
 export function appendComposerDraftText(draftKey: string, value: string): void {
-  updateComposerDrafts((current) => {
+  updateComposerDrafts(draftKey, (current) => {
     const existing = normalizeDraft(current[draftKey]);
     return {
       ...current,
@@ -498,7 +695,7 @@ export function appendComposerDraftAttachments(
   if (attachments.length === 0) {
     return;
   }
-  updateComposerDrafts((current) => {
+  updateComposerDrafts(draftKey, (current) => {
     const existing = normalizeDraft(current[draftKey]);
     return {
       ...current,
@@ -514,47 +711,55 @@ export function replaceComposerDraftAttachments(
   draftKey: string,
   attachments: ReadonlyArray<DraftComposerImageAttachment>,
 ): void {
-  updateComposerDrafts((current) => {
-    const draft = {
-      ...normalizeDraft(current[draftKey]),
-      attachments,
-    };
-    if (isEmptyDraft(draft)) {
-      const next = { ...current };
-      delete next[draftKey];
-      return next;
-    }
-    return {
-      ...current,
-      [draftKey]: draft,
-    };
-  });
+  updateComposerDrafts(
+    draftKey,
+    (current) => {
+      const draft = {
+        ...normalizeDraft(current[draftKey]),
+        attachments,
+      };
+      if (isEmptyDraft(draft)) {
+        const next = { ...current };
+        delete next[draftKey];
+        return next;
+      }
+      return {
+        ...current,
+        [draftKey]: draft,
+      };
+    },
+    { sweepAttachments: true },
+  );
 }
 
 export function removeComposerDraftAttachment(draftKey: string, imageId: string): void {
-  updateComposerDrafts((current) => {
-    const existing = normalizeDraft(current[draftKey]);
-    const draft = {
-      ...existing,
-      attachments: existing.attachments.filter((image) => image.id !== imageId),
-    };
-    if (isEmptyDraft(draft)) {
-      const next = { ...current };
-      delete next[draftKey];
-      return next;
-    }
-    return {
-      ...current,
-      [draftKey]: draft,
-    };
-  });
+  updateComposerDrafts(
+    draftKey,
+    (current) => {
+      const existing = normalizeDraft(current[draftKey]);
+      const draft = {
+        ...existing,
+        attachments: existing.attachments.filter((image) => image.id !== imageId),
+      };
+      if (isEmptyDraft(draft)) {
+        const next = { ...current };
+        delete next[draftKey];
+        return next;
+      }
+      return {
+        ...current,
+        [draftKey]: draft,
+      };
+    },
+    { sweepAttachments: true },
+  );
 }
 
 export function updateComposerDraftSettings(
   draftKey: string,
   settings: Partial<ComposerDraftSettingsUpdate>,
 ): void {
-  updateComposerDrafts((current) => {
+  updateComposerDrafts(draftKey, (current) => {
     const draft = {
       ...normalizeDraft(current[draftKey]),
       ...settings,
@@ -705,10 +910,6 @@ export async function mergeComposerDraftContent(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = mergeComposerDraftContentState(current, draftKey, content);
   const currentAttachmentIds = new Set(
@@ -727,8 +928,14 @@ export async function mergeComposerDraftContent(
   if (next !== current) {
     appAtomRegistry.set(composerDraftsAtom, next);
   }
-  await persistenceQueue.run(() => writePersistedComposerDrafts(next));
-  return { skippedAttachmentCount };
+  removePendingDraftKey(draftKey);
+  try {
+    await persistDraftKeys(next, new Set([draftKey]), { verify: true });
+    return { skippedAttachmentCount };
+  } catch (error) {
+    requeueDraftPersistence(draftKey);
+    throw error;
+  }
 }
 
 /** Restores the exact content/settings captured before an interrupted import. */
@@ -740,44 +947,64 @@ export async function restoreComposerDraftSnapshot(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
   const next = restoreComposerDraftSnapshotState(
     appAtomRegistry.get(composerDraftsAtom),
     draftKey,
     snapshot,
   );
   appAtomRegistry.set(composerDraftsAtom, next);
-  await persistenceQueue.run(() => writePersistedComposerDrafts(next));
+  removePendingDraftKey(draftKey);
+  try {
+    await persistDraftKeys(next, new Set([draftKey]), {
+      verify: true,
+      sweepAttachments: true,
+    });
+  } catch (error) {
+    requeueDraftPersistence(draftKey, { sweepAttachments: true });
+    throw error;
+  }
 }
 
 export function clearComposerDraftContent(
   draftKey: string,
   options?: { readonly clearWorkspaceSelection?: boolean },
 ): void {
-  updateComposerDrafts((current) => clearComposerDraftContentState(current, draftKey, options));
+  updateComposerDrafts(
+    draftKey,
+    (current) => clearComposerDraftContentState(current, draftKey, options),
+    { immediate: true, sweepAttachments: true, discardPartial: true },
+  );
 }
 
 export function clearComposerDraftContentIfUnchanged(
   draftKey: string,
   expected: Pick<ComposerDraft, "text" | "attachments">,
 ): void {
-  updateComposerDrafts((current) =>
-    clearComposerDraftContentIfUnchangedState(current, draftKey, expected),
+  updateComposerDrafts(
+    draftKey,
+    (current) => clearComposerDraftContentIfUnchangedState(current, draftKey, expected),
+    {
+      immediate: true,
+      sweepAttachments: true,
+      discardPartial: true,
+      discardPartialOnlyWhenChanged: true,
+    },
   );
 }
 
 export function clearComposerDraft(draftKey: string): void {
-  updateComposerDrafts((current) => {
-    if (!current[draftKey]) {
-      return current;
-    }
-    const next = { ...current };
-    delete next[draftKey];
-    return next;
-  });
+  updateComposerDrafts(
+    draftKey,
+    (current) => {
+      if (!current[draftKey]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[draftKey];
+      return next;
+    },
+    { immediate: true, sweepAttachments: true, discardPartial: true },
+  );
 }
 
 export function removeComposerDraftsForEnvironment(
@@ -800,17 +1027,24 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     await loadPromise;
   }
 
-  const next = removeComposerDraftsForEnvironment(
-    appAtomRegistry.get(composerDraftsAtom),
-    environmentId,
-  );
-
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
+  const current = appAtomRegistry.get(composerDraftsAtom);
+  const next = removeComposerDraftsForEnvironment(current, environmentId);
+  const removedDraftKeys = Object.keys(current).filter((draftKey) => !(draftKey in next));
+  for (const draftKey of removedDraftKeys) {
+    removePendingDraftKey(draftKey);
   }
   appAtomRegistry.set(composerDraftsAtom, next);
-  await writePersistedComposerDrafts(next);
+  try {
+    await persistDraftKeys(next, new Set(removedDraftKeys), {
+      verify: true,
+      sweepAttachments: true,
+      discardPartial: true,
+    });
+  } catch (error) {
+    const failed = failedDraftKeys(error, new Set(removedDraftKeys));
+    requeueFailedDrafts(failed, true, failed);
+    throw error;
+  }
 }
 
 export function useComposerDraft(draftKey: string | null): ComposerDraft {

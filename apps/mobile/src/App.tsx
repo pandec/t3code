@@ -2,7 +2,7 @@ import { BlurTargetView } from "expo-blur";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { StatusBar, useColorScheme } from "react-native";
+import { AppState, StatusBar, useColorScheme } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -20,6 +20,7 @@ import {
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { useThreadPrewarm } from "./state/prewarm";
+import { ensureComposerDraftsLoaded, flushComposerDrafts } from "./state/use-composer-drafts";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { appBlurTargetRef } from "./lib/appBlurTarget";
 import { useThemeColor } from "./lib/useThemeColor";
@@ -64,6 +65,19 @@ function ThreadPrewarmCoordinator() {
   return null;
 }
 
+function ComposerDraftPersistenceCoordinator() {
+  useEffect(() => {
+    ensureComposerDraftsLoaded();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        void flushComposerDrafts();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+  return null;
+}
+
 export default function App() {
   const colorScheme = useColorScheme();
   const statusBarBg = useThemeColor("--color-status-bar");
@@ -74,6 +88,7 @@ export default function App() {
         <AppearancePreferencesProvider>
           <SplashScreenCoordinator />
           <ThreadPrewarmCoordinator />
+          <ComposerDraftPersistenceCoordinator />
           <MobileDiagnosticsCoordinator />
           <GestureHandlerRootView className="flex-1">
             <KeyboardProvider statusBarTranslucent>

@@ -591,7 +591,7 @@ the build's debug or device access. There is deliberately no in-app UI, export f
 
 Every record has `t` (wall clock ms), `m` (monotonic ms), `k` (kind), and `d` (flat scalar details).
 Kinds: `meta`, `app`, `network`, `runtime-network`, `connection`, `js-stall`, `header`,
-`memory-warning`, and `journal` (self-reporting for events dropped under buffer pressure).
+`memory-warning`, `cache`, and `journal` (self-reporting for events dropped under buffer pressure).
 
 Events are buffered in memory (bounded, oldest dropped first) and flushed every 30s, on backgrounding,
 on a memory warning, and immediately after a stall of at least

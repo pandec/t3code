@@ -80,6 +80,7 @@ import {
   providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
 } from "../../lib/providerUsageMenu";
+import { flushComposerDrafts } from "../../state/use-composer-drafts";
 import type { SendMessageOptions } from "../../state/use-thread-composer-state";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -356,6 +357,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const handleBlur = useCallback(() => {
     setIsFocused(false);
     onExpandedChange?.(false);
+    void flushComposerDrafts();
   }, [onExpandedChange]);
   const showStopAction =
     props.selectedThread.session?.status === "running" ||
