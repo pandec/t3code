@@ -565,21 +565,13 @@ function GeneralSettingsSection() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const hydrated = AsyncResult.isSuccess(preferencesResult);
-  const projectGroupingEnabled = hydrated
-    ? preferencesResult.value.projectGroupingEnabled !== false
-    : true;
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const threadListV2Enabled = useThreadListV2Enabled();
 
   return (
     <SettingsSection title="General">
-      <SettingsSwitchRow
-        icon="folder"
-        label="Project Grouping"
-        value={projectGroupingEnabled}
-        onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
-      />
+      <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsSliderRow
         description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
         disabled={!hydrated}

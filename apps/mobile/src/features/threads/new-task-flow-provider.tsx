@@ -27,7 +27,6 @@ import {
   groupByProvider,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
-import { groupProjectsByRepository } from "../../lib/repositoryGroups";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
@@ -62,6 +61,12 @@ import {
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
+import {
+  buildHomeProjectScopes,
+  sortHomeProjectScopes,
+  type HomeProjectScope,
+} from "../home/homeThreadList";
+import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -112,10 +117,7 @@ export function branchBadgeLabel(input: {
 }
 
 type NewTaskFlowContextValue = {
-  readonly logicalProjects: ReadonlyArray<{
-    readonly key: string;
-    readonly project: EnvironmentProject;
-  }>;
+  readonly projectScopes: ReadonlyArray<HomeProjectScope>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
@@ -178,32 +180,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const projects = useProjects();
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
-
-  const repositoryGroups = useMemo(
-    () => groupProjectsByRepository({ projects, threads }),
-    [projects, threads],
-  );
-  const logicalProjects = useMemo(
+  const groupingSettings = useMobileProjectGroupingSettings();
+  const projectScopes = useMemo(
     () =>
-      pipe(
-        repositoryGroups,
-        Arr.map((group) => {
-          const primaryProject = group.projects[0]?.project;
-          if (!primaryProject) {
-            return null;
-          }
-          return { key: group.key, project: primaryProject };
+      sortHomeProjectScopes({
+        scopes: buildHomeProjectScopes({
+          projects,
+          environmentId: null,
+          projectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
         }),
-        Arr.filter(
-          (
-            entry,
-          ): entry is {
-            readonly key: string;
-            readonly project: EnvironmentProject;
-          } => entry !== null,
-        ),
-      ),
-    [repositoryGroups],
+        threads,
+        pendingTasks: [],
+        projectSortOrder: "updated_at",
+      }),
+    [groupingSettings.sidebarProjectGroupingMode, projects, threads],
   );
 
   const [selectedEnvironmentIdOverride, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
@@ -865,7 +855,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const value = useMemo<NewTaskFlowContextValue>(
     () => ({
-      logicalProjects,
+      projectScopes,
       selectedEnvironmentId,
       selectedProjectKey,
       selectedModelKey,
@@ -931,7 +921,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       finishEditingPendingTask,
       interactionMode,
       loadBranches,
-      logicalProjects,
+      projectScopes,
       modelOptions,
       prompt,
       providerGroups,
