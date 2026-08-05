@@ -328,7 +328,7 @@ importers:
         specifier: ~56.0.23
         version: 56.0.23(expo@56.0.12)
       expo-image-picker:
-        specifier: ~56.0.18
+        specifier: 56.0.18
         version: 56.0.18(patch_hash=14695f23a28ddaf690584c26af6b3da56fde32223414d806642f099b07c29be2)(expo@56.0.12)
       expo-linking:
         specifier: ~56.0.14

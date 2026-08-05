@@ -234,6 +234,19 @@ describe("ProviderRuntimeIngestion", () => {
   // clock without reading Date.now(), which the effect lint bans.
   const FAR_FUTURE_RESETS_AT_SECONDS = 4_000_000_000;
 
+  function makeLinkedWorktree(input: {
+    readonly workspaceRoot: string;
+    readonly name: string;
+    readonly branch: string;
+  }): string {
+    const worktree = makeTempDir(`t3-provider-worktree-${input.name}-`);
+    const gitDir = NodePath.join(input.workspaceRoot, ".git", "worktrees", input.name);
+    NodeFS.mkdirSync(gitDir, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(gitDir, "HEAD"), `ref: refs/heads/${input.branch}\n`);
+    NodeFS.writeFileSync(NodePath.join(worktree, ".git"), `gitdir: ${gitDir}\n`);
+    return worktree;
+  }
+
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     providerInstanceHealth?: ProviderInstanceHealthShape;
@@ -349,6 +362,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     return {
       engine,
+      workspaceRoot,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
@@ -2795,6 +2809,126 @@ describe("ProviderRuntimeIngestion", () => {
         (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
       ),
     ).toBe(true);
+  });
+
+  it("mirrors a session cwd change onto the thread's worktree and branch", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const worktreePath = makeLinkedWorktree({
+      workspaceRoot: harness.workspaceRoot,
+      name: "entered",
+      branch: "feature/entered",
+    });
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-entered"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: worktreePath, previousCwd: harness.workspaceRoot },
+    });
+    await harness.drain();
+
+    const entered = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    // Stored canonically: elsewhere worktree paths are compared with strict
+    // equality, so an alias such as /var for /private/var would silently miss.
+    expect(entered.worktreePath).toBe(NodeFS.realpathSync(worktreePath));
+    expect(entered.branch).toBe("feature/entered");
+
+    // Leaving the worktree must clear both fields, otherwise the thread keeps
+    // pointing at a directory the session no longer uses (and which the agent
+    // may have deleted on its way out).
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-left"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: harness.workspaceRoot, previousCwd: worktreePath },
+    });
+    await harness.drain();
+
+    const left = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(left.worktreePath).toBeNull();
+    expect(left.branch).toBeNull();
+  });
+
+  it("ignores a cwd change outside the project's repository", async () => {
+    const harness = await createHarness();
+    const plainDirectory = makeTempDir("t3-provider-plain-");
+    // A checkout of an unrelated repository must not become this thread's
+    // worktree: diffs, checkpoints and git status would silently retarget.
+    const foreignCheckout = makeTempDir("t3-provider-foreign-");
+    NodeFS.mkdirSync(NodePath.join(foreignCheckout, ".git"));
+    NodeFS.writeFileSync(NodePath.join(foreignCheckout, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-plain"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: plainDirectory, previousCwd: harness.workspaceRoot },
+    });
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-foreign"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { cwd: foreignCheckout, previousCwd: harness.workspaceRoot },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.worktreePath).toBeNull();
+    expect(thread.branch).toBeNull();
+  });
+
+  it("ignores a cwd change emitted by a superseded session generation", async () => {
+    const harness = await createHarness();
+    const worktreePath = makeLinkedWorktree({
+      workspaceRoot: harness.workspaceRoot,
+      name: "stale",
+      branch: "stale",
+    });
+
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      status: "ready",
+      runtimeMode: "approval-required",
+      threadId: asThreadId("thread-1"),
+      sessionGenerationId: "generation-2",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    harness.emit({
+      type: "session.cwd.changed",
+      eventId: asEventId("evt-session-cwd-stale"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        cwd: worktreePath,
+        previousCwd: harness.workspaceRoot,
+        sessionGenerationId: "generation-1",
+      },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.worktreePath).toBeNull();
+    expect(thread.branch).toBeNull();
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
