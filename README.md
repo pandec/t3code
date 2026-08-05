@@ -38,6 +38,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### Agents & skills
 
 - **Project-aware Codex skills** — Codex skill discovery respects the active project.
+- **Home-relative provider binaries** — explicit Binary path settings for Claude, Codex, Cursor, Grok, Hermes, and OpenCode accept `~` or `~/…`; T3 expands them against the server user's home directory at runtime without rewriting the saved setting.
 - **Claude skill picker** — the `$` composer skill picker discovers workspace and user-invocable
   manual-only skills for Claude, and makes references to them work anywhere in a message. Claude
   Code only parses `/name` as a command at the start of a message, so a `$name` reference to a
@@ -59,6 +60,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### Reliability
 
+- Mobile new-thread image sends compact oversized screenshot payloads before transmission, and a connection drop during thread creation warns the user while preserving the draft for retry.
 - Bounded catch-up for stale clients reconnecting to the server.
 - The session reaper spares provider sessions that still have pending deliverables.
 - A turn interrupted by a shutdown or provider exit is reported to the resumed agent as stranded, not as a user rejection, so it continues instead of halting and apologising.

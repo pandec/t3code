@@ -65,7 +65,8 @@ from.
 Each provider CLI must be on the server's `PATH`, or have an explicit binary path set in
 **Settings** → the provider instance → **Binary path**. Use the explicit path when a version
 manager or a non-standard install location keeps the CLI off the `PATH` of the shell that
-started T3 Code.
+started T3 Code. Home-relative paths using `~` or `~/…` are expanded against the server user's
+home directory at runtime without changing the saved setting; `~user` paths are not supported.
 
 ### When Auth Is Needed
 
