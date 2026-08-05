@@ -35,6 +35,26 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
   O.mapInput(O.String, (a) => a.id),
 ]);
 
+const THREAD_HISTORY_RETENTION_LIMIT = 500;
+
+function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
+  return entries.length > THREAD_HISTORY_RETENTION_LIMIT
+    ? entries.slice(-THREAD_HISTORY_RETENTION_LIMIT)
+    : entries;
+}
+
+/**
+ * Bounds memory and cache growth for thread snapshots from any source.
+ * TODO: Add paged thread history before clients need access beyond these recent entries.
+ */
+export function retainRecentThreadHistory(thread: OrchestrationThread): OrchestrationThread {
+  const activities = retainRecent(thread.activities);
+  const checkpoints = retainRecent(thread.checkpoints);
+  return activities === thread.activities && checkpoints === thread.checkpoints
+    ? thread
+    : { ...thread, activities, checkpoints };
+}
+
 /**
  * Matches the validity rule in `deriveLatestContextWindowSnapshot` (and the
  * server's snapshot-side `dropStaleContextWindowActivities`): rows without a
@@ -520,11 +540,13 @@ export function applyThreadDetailEvent(
         return { kind: "unchanged" };
       }
 
-      const checkpoints = pipe(
-        thread.checkpoints,
-        Arr.filter((entry) => entry.turnId !== checkpoint.turnId),
-        Arr.append(checkpoint),
-        Arr.sort(checkpointOrder),
+      const checkpoints = retainRecent(
+        pipe(
+          thread.checkpoints,
+          Arr.filter((entry) => entry.turnId !== checkpoint.turnId),
+          Arr.append(checkpoint),
+          Arr.sort(checkpointOrder),
+        ),
       );
 
       // Mid-turn diff updates produce placeholder checkpoints; record the
@@ -651,19 +673,21 @@ export function applyThreadDetailEvent(
       // thread.reverted that discards turns can still resolve a value from
       // the turns that survive.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      const activities = pipe(
-        thread.activities,
-        Arr.filter(
-          (entry) =>
-            entry.id !== activity.id &&
-            !(
-              supersedesContextWindow &&
-              entry.turnId === activity.turnId &&
-              isResolvableContextWindowActivity(entry)
-            ),
+      const activities = retainRecent(
+        pipe(
+          thread.activities,
+          Arr.filter(
+            (entry) =>
+              entry.id !== activity.id &&
+              !(
+                supersedesContextWindow &&
+                entry.turnId === activity.turnId &&
+                isResolvableContextWindowActivity(entry)
+              ),
+          ),
+          Arr.append(activity),
+          Arr.sort(activityOrder),
         ),
-        Arr.append(activity),
-        Arr.sort(activityOrder),
       );
 
       return {

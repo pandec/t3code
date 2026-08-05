@@ -13,7 +13,7 @@ import {
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import { applyThreadDetailEvent, retainRecentThreadHistory } from "./threadReducer.ts";
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),
@@ -47,6 +47,37 @@ const baseThread: OrchestrationThread = {
   checkpoints: [],
   session: null,
 };
+
+describe("retainRecentThreadHistory", () => {
+  it("caps snapshot activities and checkpoints", () => {
+    const activities = Array.from({ length: 501 }, (_, index) => ({
+      id: EventId.make(`activity-${index}`),
+      tone: "tool" as const,
+      kind: "command",
+      summary: `Ran command ${index}`,
+      payload: {},
+      turnId: TurnId.make(`turn-${index}`),
+      sequence: index,
+      createdAt: "2026-04-01T00:00:00.000Z",
+    }));
+    const checkpoints = Array.from({ length: 501 }, (_, index) => ({
+      turnId: TurnId.make(`turn-${index}`),
+      checkpointTurnCount: index,
+      checkpointRef: CheckpointRef.make(`ref-${index}`),
+      status: "ready" as const,
+      files: [],
+      assistantMessageId: null,
+      completedAt: "2026-04-01T00:00:00.000Z",
+    }));
+
+    const retained = retainRecentThreadHistory({ ...baseThread, activities, checkpoints });
+
+    expect(retained.activities).toHaveLength(500);
+    expect(retained.activities[0]?.id).toBe("activity-1");
+    expect(retained.checkpoints).toHaveLength(500);
+    expect(retained.checkpoints[0]?.turnId).toBe("turn-1");
+  });
+});
 
 describe("applyThreadDetailEvent", () => {
   describe("project events", () => {
@@ -915,8 +946,8 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
-    it("preserves the complete activity history when live events arrive", () => {
-      const existingActivities = Array.from({ length: 129 }, (_, index) => ({
+    it("retains only the 500 most recent activities", () => {
+      const existingActivities = Array.from({ length: 500 }, (_, index) => ({
         id: EventId.make(`activity-${index}`),
         tone: "tool" as const,
         kind: "command",
@@ -930,7 +961,7 @@ describe("applyThreadDetailEvent", () => {
         { ...baseThread, activities: existingActivities },
         {
           ...baseEventFields,
-          sequence: 130,
+          sequence: 501,
           occurredAt: "2026-04-01T11:01:00.000Z",
           aggregateKind: "thread",
           aggregateId: ThreadId.make("thread-1"),
@@ -938,13 +969,13 @@ describe("applyThreadDetailEvent", () => {
           payload: {
             threadId: ThreadId.make("thread-1"),
             activity: {
-              id: EventId.make("activity-129"),
+              id: EventId.make("activity-500"),
               tone: "tool",
               kind: "command",
-              summary: "Ran command 129",
+              summary: "Ran command 500",
               payload: {},
               turnId: TurnId.make("turn-1"),
-              sequence: 129,
+              sequence: 500,
               createdAt: "2026-04-01T11:01:00.000Z",
             },
           },
@@ -953,8 +984,9 @@ describe("applyThreadDetailEvent", () => {
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.activities).toHaveLength(130);
-        expect(result.thread.activities[0]?.id).toBe("activity-0");
+        expect(result.thread.activities).toHaveLength(500);
+        expect(result.thread.activities[0]?.id).toBe("activity-1");
+        expect(result.thread.activities.at(-1)?.id).toBe("activity-500");
       }
     });
 
@@ -1073,6 +1105,46 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.checkpoints).toHaveLength(1);
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
         expect(result.thread.latestTurn?.state).toBe("completed");
+      }
+    });
+
+    it("retains only the 500 most recent checkpoints", () => {
+      const existingCheckpoints = Array.from({ length: 500 }, (_, index) => ({
+        turnId: TurnId.make(`turn-${index}`),
+        checkpointTurnCount: index,
+        checkpointRef: CheckpointRef.make(`ref-${index}`),
+        status: "ready" as const,
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-04-01T12:00:00.000Z",
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, checkpoints: existingCheckpoints },
+        {
+          ...baseEventFields,
+          sequence: 501,
+          occurredAt: "2026-04-01T12:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.turn-diff-completed",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            turnId: TurnId.make("turn-500"),
+            checkpointTurnCount: 500,
+            checkpointRef: CheckpointRef.make("ref-500"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("msg-500"),
+            completedAt: "2026-04-01T12:01:00.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.checkpoints).toHaveLength(500);
+        expect(result.thread.checkpoints[0]?.turnId).toBe("turn-1");
+        expect(result.thread.checkpoints.at(-1)?.turnId).toBe("turn-500");
       }
     });
 

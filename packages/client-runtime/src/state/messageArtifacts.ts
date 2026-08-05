@@ -56,7 +56,10 @@ export function subscribeMessageArtifactSession(
   sessionArtifactListeners.set(key, listeners);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) sessionArtifactListeners.delete(key);
+    if (listeners.size === 0 && sessionArtifactListeners.get(key) === listeners) {
+      sessionArtifactListeners.delete(key);
+      sessionArtifacts.delete(key);
+    }
   };
 }
 
@@ -67,6 +70,9 @@ function updateMessageArtifactSession(
   update: Partial<MessageArtifactSessionSnapshot>,
 ) {
   const key = artifactKey(environmentId, messageId);
+  const listeners = sessionArtifactListeners.get(key);
+  if (listeners === undefined) return;
+
   const current = sessionArtifacts.get(key);
   sessionArtifacts.set(key, {
     sourceText,
@@ -74,7 +80,7 @@ function updateMessageArtifactSession(
     speech: current?.sourceText === sourceText ? current.speech : null,
     ...update,
   });
-  for (const listener of sessionArtifactListeners.get(key) ?? []) listener();
+  for (const listener of listeners) listener();
 }
 
 export const rememberMessageSummary = (
