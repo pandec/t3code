@@ -2,6 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { SQLiteDatabase } from "expo-sqlite";
 import * as NodeSqlite from "node:sqlite";
@@ -291,46 +292,46 @@ describe("mobile database cache budgets", () => {
 });
 
 describe("mobile database operation ordering", () => {
-  it("waits for queued preference saves before closing the database", async () => {
-    const writeGate = deferred();
-    const writeStarted = deferred();
-    const events: string[] = [];
-    const cache = makeCacheDatabase({
-      preferenceWriteGate: writeGate.promise,
-      onPreferenceWriteStarted: () => {
-        events.push("preference:start");
-        writeStarted.resolve();
-      },
-      onPreferenceWriteFinished: () => {
-        events.push("preference:end");
-      },
-      onClose: () => {
-        events.push("close");
-      },
-    });
-    openDatabaseAsync.mockResolvedValueOnce(cache.database);
-    const scope = await Effect.runPromise(Scope.make());
-    let close: Promise<void> | null = null;
+  it.effect("waits for queued preference saves before closing the database", () =>
+    Effect.gen(function* () {
+      const writeGate = deferred();
+      const writeStarted = deferred();
+      const events: string[] = [];
+      const cache = makeCacheDatabase({
+        preferenceWriteGate: writeGate.promise,
+        onPreferenceWriteStarted: () => {
+          events.push("preference:start");
+          writeStarted.resolve();
+        },
+        onPreferenceWriteFinished: () => {
+          events.push("preference:end");
+        },
+        onClose: () => {
+          events.push("close");
+        },
+      });
+      openDatabaseAsync.mockResolvedValueOnce(cache.database);
+      const scope = yield* Scope.make();
 
-    try {
-      const database = await Effect.runPromise(
-        make.pipe(Effect.provideService(Scope.Scope, scope)),
+      yield* Effect.gen(function* () {
+        const database = yield* make.pipe(Effect.provideService(Scope.Scope, scope));
+        const saveFiber = yield* database.savePreferencesJson("{}", 1).pipe(Effect.forkChild);
+        yield* Effect.promise(() => writeStarted.promise);
+
+        const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        expect(events).toEqual(["preference:start"]);
+
+        writeGate.resolve();
+        yield* Fiber.join(saveFiber);
+        yield* Fiber.join(closeFiber);
+        expect(events).toEqual(["preference:start", "preference:end", "close"]);
+      }).pipe(
+        Effect.ensuring(Effect.sync(writeGate.resolve)),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
       );
-      const save = Effect.runPromise(database.savePreferencesJson("{}", 1));
-      await writeStarted.promise;
-
-      close = Effect.runPromise(Scope.close(scope, Exit.void));
-      await Promise.resolve();
-      expect(events).toEqual(["preference:start"]);
-
-      writeGate.resolve();
-      await Promise.all([save, close]);
-      expect(events).toEqual(["preference:start", "preference:end", "close"]);
-    } finally {
-      writeGate.resolve();
-      await (close ?? Effect.runPromise(Scope.close(scope, Exit.void)));
-    }
-  });
+    }),
+  );
 });
 
 describe("mobile database legacy cache migration", () => {
