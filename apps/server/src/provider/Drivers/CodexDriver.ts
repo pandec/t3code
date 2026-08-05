@@ -40,6 +40,7 @@ import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/Co
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
+import { withExpandedProviderBinaryPath } from "../ProviderBinaryPath.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
@@ -139,11 +140,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
-      const effectiveConfig = {
+      const effectiveConfig = withExpandedProviderBinaryPath({
         ...config,
         enabled,
         homePath: homeLayout.effectiveHomePath ?? "",
-      } satisfies CodexSettings;
+      } satisfies CodexSettings);
       const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
