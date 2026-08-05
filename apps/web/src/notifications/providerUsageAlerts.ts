@@ -11,9 +11,9 @@ import { useClientSettings, useProviderUsageThresholds } from "../hooks/useSetti
 import { showSystemNotification } from "./turnCompletion";
 
 /**
- * Threshold notifications for the provider usage meter: fires once per window
- * per threshold per reset period when subscription usage crosses the warning
- * or critical threshold. De-dupe keys are persisted in localStorage (keyed by
+ * Warning notifications for the provider usage meter: fires once per window
+ * per reset period when subscription usage approaches its limit. De-dupe keys
+ * are persisted in localStorage (keyed by
  * the window's reset time) so reloads and event replay stay silent; entries
  * expire with their reset period, or after a bounded 24h fallback when the
  * provider omits reset metadata.
@@ -79,15 +79,10 @@ export function buildProviderUsageAlertCopy(
   const percent =
     alert.window.usedPercent !== null ? `${Math.round(alert.window.usedPercent)}%` : null;
   const resetTime = formatResetTime(alert.window.resetsAt, nowMs);
-  const title =
-    alert.threshold === "critical"
-      ? `${alert.providerLabel} rate limit ${percent ? "almost reached" : "reached"}`
-      : `${alert.providerLabel} rate limit warning`;
+  const title = `${alert.providerLabel} rate limit warning`;
   const usageDescription = percent
     ? `${alert.window.label} is at ${percent}`
-    : alert.threshold === "critical"
-      ? `${alert.window.label} has reached its limit`
-      : `${alert.window.label} is nearing its limit`;
+    : `${alert.window.label} is nearing its limit`;
   const body = [usageDescription, resetTime ? `resets ${resetTime}` : null]
     .filter(Boolean)
     .join(" — ");
@@ -123,12 +118,10 @@ export function useProviderUsageAlerts(
         alert.window.resetsAt !== null
           ? alert.window.resetsAt * 1_000
           : nowMs + UNKNOWN_RESET_TTL_MS;
-      for (const key of alert.keys) {
-        fired.set(key, expiresAtMs);
-      }
+      fired.set(alert.key, expiresAtMs);
       const { title, body } = buildProviderUsageAlertCopy(alert, nowMs);
       toastManager.add({
-        type: alert.threshold === "critical" ? "error" : "warning",
+        type: "warning",
         title,
         description: body,
       });
@@ -138,7 +131,7 @@ export function useProviderUsageAlerts(
         void showSystemNotification({
           title,
           body,
-          tag: `provider-usage:${alert.keys.at(-1) ?? alert.window.id}`,
+          tag: `provider-usage:${alert.key}`,
         });
       }
     }

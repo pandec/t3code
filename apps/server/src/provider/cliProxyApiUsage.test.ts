@@ -1,4 +1,5 @@
 import { assert, beforeEach, describe, expect, it } from "@effect/vitest";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -47,6 +48,79 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
     });
   });
 
+  it("derives Codex gateway targets from OpenAI-compatible variables", () => {
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment: [
+          {
+            name: "OPENAI_BASE_URL",
+            value: "https://codex-gateway.example.ts.net/v1",
+            sensitive: false,
+          },
+          { name: "OPENAI_API_KEY", value: "codex-client-key", sensitive: true },
+        ],
+        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toEqual({
+      managementUrl: "https://codex-gateway.example.ts.net",
+      managementKey: "mgmt",
+      clientUrl: "https://codex-gateway.example.ts.net",
+      clientKey: "codex-client-key",
+    });
+  });
+
+  it("keeps the derived management and client targets on the same env family", () => {
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment: [
+          { name: "ANTHROPIC_BASE_URL", value: "https://unused.example/v1", sensitive: false },
+          {
+            name: "OPENAI_BASE_URL",
+            value: "https://codex-gateway.example/v1",
+            sensitive: false,
+          },
+          { name: "OPENAI_API_KEY", value: "codex-client-key", sensitive: true },
+        ],
+        usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toEqual({
+      managementUrl: "https://codex-gateway.example",
+      managementKey: "mgmt",
+      clientUrl: "https://codex-gateway.example",
+      clientKey: "codex-client-key",
+    });
+  });
+
+  it("prefers OpenAI-compatible variables for a Codex driver when both families exist", () => {
+    expect(
+      resolveCliProxyApiUsageProbeTarget(
+        {
+          environment: [
+            {
+              name: "ANTHROPIC_BASE_URL",
+              value: "https://claude-gateway.example/v1",
+              sensitive: false,
+            },
+            { name: "ANTHROPIC_AUTH_TOKEN", value: "claude-client-key", sensitive: true },
+            {
+              name: "OPENAI_BASE_URL",
+              value: "https://codex-gateway.example/v1",
+              sensitive: false,
+            },
+            { name: "OPENAI_API_KEY", value: "codex-client-key", sensitive: true },
+          ],
+          usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+        },
+        ProviderDriverKind.make("codex"),
+      ),
+    ).toEqual({
+      managementUrl: "https://codex-gateway.example",
+      managementKey: "mgmt",
+      clientUrl: "https://codex-gateway.example",
+      clientKey: "codex-client-key",
+    });
+  });
+
   it("prefers an explicit management URL, reduced to its origin", () => {
     expect(
       resolveCliProxyApiUsageProbeTarget({
@@ -76,6 +150,16 @@ describe("resolveCliProxyApiUsageProbeTarget", () => {
       resolveCliProxyApiUsageProbeTarget({
         environment: [{ name: "ANTHROPIC_BASE_URL", value: "not a url", sensitive: false }],
         usageSource: { kind: "cliproxyapi", managementKey: "mgmt" },
+      }),
+    ).toBeNull();
+    expect(
+      resolveCliProxyApiUsageProbeTarget({
+        environment,
+        usageSource: {
+          kind: "cliproxyapi",
+          managementUrl: "not a url",
+          managementKey: "mgmt",
+        },
       }),
     ).toBeNull();
     expect(
@@ -206,6 +290,44 @@ describe("makeCliProxyApiUsageProbe", () => {
         expect(modelsRequests).toBe(2);
       });
     },
+  );
+
+  it.effect("single-flights rejected client keys across instances sharing an origin", () =>
+    Effect.gen(function* () {
+      const firstModelsRequestStarted = yield* Deferred.make<void>();
+      const releaseFirstModelsRequest = yield* Deferred.make<void>();
+      let modelsRequests = 0;
+      const client = HttpClient.make((request) => {
+        if (request.url.endsWith("/v1/models")) {
+          modelsRequests += 1;
+          return Deferred.succeed(firstModelsRequestStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirstModelsRequest)),
+            Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
+          );
+        }
+        return Effect.succeed(
+          jsonResponse(request, { files: [{ name: "unknown.json", provider: "unknown" }] }),
+        );
+      });
+      const run = (managementUrl: string) =>
+        makeCliProxyApiUsageProbe({
+          managementUrl,
+          managementKey: "management-key",
+          clientUrl: "https://shared-client.example.test",
+          clientKey: "rejected-client-key",
+        })().pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const first = yield* run("https://management-a.example.test").pipe(Effect.forkChild);
+      yield* Deferred.await(firstModelsRequestStarted);
+      const second = yield* run("https://management-b.example.test").pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      expect(modelsRequests).toBe(1);
+
+      yield* Deferred.succeed(releaseFirstModelsRequest, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(modelsRequests).toBe(1);
+    }),
   );
 
   it.effect("does not hold account probes behind a stalled models request", () =>
@@ -411,4 +533,129 @@ describe("makeCliProxyApiUsageProbe", () => {
       expect(requestCount).toBeGreaterThan(spentRequests);
     });
   });
+
+  it.effect("reserves the same-origin strike budget without queueing another probe", () =>
+    Effect.gen(function* () {
+      const thirdRequestStarted = yield* Deferred.make<void>();
+      const releaseThirdRequest = yield* Deferred.make<void>();
+      const fourthCompleted = yield* Deferred.make<void>();
+      let requestCount = 0;
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          requestCount += 1;
+          if (requestCount === 3) {
+            yield* Deferred.succeed(thirdRequestStarted, undefined);
+            yield* Deferred.await(releaseThirdRequest);
+          }
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 401 }));
+        }),
+      );
+      const attempt = (key: string) =>
+        makeCliProxyApiUsageProbe({ ...target, managementKey: key })().pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.exit,
+        );
+
+      yield* attempt("wrong-1");
+      yield* attempt("wrong-2");
+      const third = yield* attempt("wrong-3").pipe(Effect.forkChild);
+      yield* Deferred.await(thirdRequestStarted);
+      const fourth = yield* attempt("wrong-4").pipe(
+        Effect.ensuring(Deferred.succeed(fourthCompleted, undefined)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      expect(requestCount).toBe(3);
+      expect(yield* Deferred.isDone(fourthCompleted)).toBe(true);
+
+      yield* Deferred.succeed(releaseThirdRequest, undefined);
+      yield* Fiber.join(third);
+      yield* Fiber.join(fourth);
+      expect(requestCount).toBe(3);
+    }),
+  );
+
+  it.effect("completes concurrent same-origin probes with real account requests", () =>
+    Effect.gen(function* () {
+      const allAccountRequestsStarted = yield* Deferred.make<void>();
+      const releaseAccountRequests = yield* Deferred.make<void>();
+      let authFilesRequests = 0;
+      let accountRequests = 0;
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/auth-files")) {
+            authFilesRequests += 1;
+            return jsonResponse(request, {
+              files: [
+                { auth_index: "claude-1", name: "claude-1.json", provider: "claude" },
+                { auth_index: "claude-2", name: "claude-2.json", provider: "claude" },
+              ],
+            });
+          }
+
+          accountRequests += 1;
+          if (accountRequests === 4) {
+            yield* Deferred.succeed(allAccountRequestsStarted, undefined);
+          }
+          yield* Deferred.await(releaseAccountRequests);
+          return jsonResponse(request, {
+            status_code: 200,
+            body: encodeJsonBody({ limits: [{ kind: "session", percent: 12 }] }),
+          });
+        }),
+      );
+      const run = (key: string) =>
+        makeCliProxyApiUsageProbe({ ...target, managementKey: key })().pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+
+      const first = yield* run("management-key-a").pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const second = yield* run("management-key-b").pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(allAccountRequestsStarted);
+      yield* Deferred.succeed(releaseAccountRequests, undefined);
+
+      const firstPayload = (yield* Fiber.join(first)) as CliProxyApiUsagePayload;
+      const secondPayload = (yield* Fiber.join(second)) as CliProxyApiUsagePayload;
+      expect(firstPayload.accounts).toHaveLength(2);
+      expect(secondPayload.accounts).toHaveLength(2);
+      expect(firstPayload.accounts.every((account) => account.usage !== null)).toBe(true);
+      expect(secondPayload.accounts.every((account) => account.usage !== null)).toBe(true);
+      expect(authFilesRequests).toBe(2);
+      expect(accountRequests).toBe(4);
+    }),
+  );
+
+  it.effect("releases a management reservation when a request times out", () =>
+    Effect.gen(function* () {
+      const requestStarted = yield* Deferred.make<void>();
+      let stall = true;
+      let requestCount = 0;
+      const client = HttpClient.make((request) => {
+        requestCount += 1;
+        if (stall) {
+          return Deferred.succeed(requestStarted, undefined).pipe(Effect.andThen(Effect.never));
+        }
+        return Effect.succeed(
+          jsonResponse(request, { files: [{ name: "unknown.json", provider: "unknown" }] }),
+        );
+      });
+      const run = (key: string) =>
+        makeCliProxyApiUsageProbe({ ...target, managementKey: key })().pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+
+      const timedOut = yield* run("stalled-key").pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(requestStarted);
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(timedOut);
+
+      stall = false;
+      const payload = (yield* run("working-key")) as CliProxyApiUsagePayload;
+      expect(payload.accounts).toHaveLength(1);
+      expect(requestCount).toBe(2);
+    }),
+  );
 });

@@ -196,7 +196,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
-import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
+import { getProviderInteractionModeToggle } from "../../providerModels";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -213,19 +213,23 @@ import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import {
   deriveLatestContextWindowSnapshot,
+  emptyContextWindowSnapshot,
   formatProviderDisplayName,
+  resolveKnownContextWindowMaxTokens,
 } from "../../lib/contextWindow";
 import {
   deriveLatestProviderUsageSnapshot,
   deriveProviderUsageAccountsFromServerSnapshot,
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
+  listProviderUsageAccountsForDisplay,
   presentProviderUsageAccount,
   providerUsageLabelForDriver,
+  resolveProviderUsageFableRing,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
   resolveProviderUsageInstanceId,
-  sortProviderUsageAccountsByPriority,
+  type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import {
@@ -441,6 +445,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeProviderUsage: ReturnType<typeof deriveLatestProviderUsageSnapshot>;
+  fableUsage: ProviderUsageWindow | null;
+  fableAccountName: string | null;
   providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
   providerUsageRefreshing: boolean;
   providerUsageUnavailable: boolean;
@@ -478,6 +484,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           providerUsage={props.activeProviderUsage}
+          fableUsage={props.fableUsage}
+          fableAccountName={props.fableAccountName}
           providerUsageAccounts={props.providerUsageAccounts}
           providerUsageRefreshing={props.providerUsageRefreshing}
           providerUsageUnavailable={props.providerUsageUnavailable}
@@ -1024,10 +1032,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Context window
   // ------------------------------------------------------------------
-  const activeContextWindow = useMemo(
-    () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
-    [activeThreadActivities],
-  );
+  const activeContextWindow = useMemo(() => {
+    const latest = deriveLatestContextWindowSnapshot(activeThreadActivities ?? []);
+    if (latest !== null) return latest;
+
+    const modelSelection = activeThread?.session
+      ? (activeThreadModelSelection ?? selectedModelSelection)
+      : selectedModelSelection;
+    const provider = providerStatuses.find(
+      (entry) => entry.instanceId === modelSelection.instanceId,
+    );
+    const model = provider?.models.find((entry) => entry.slug === modelSelection.model);
+    const maxTokens = resolveKnownContextWindowMaxTokens(model, modelSelection);
+    return maxTokens === null
+      ? null
+      : emptyContextWindowSnapshot({
+          maxTokens,
+          compactsAutomatically: provider?.driver === "claudeAgent" || provider?.driver === "codex",
+        });
+  }, [
+    activeThread?.session,
+    activeThreadActivities,
+    activeThreadModelSelection,
+    providerStatuses,
+    selectedModelSelection,
+  ]);
   const activeProviderUsageInstanceId = resolveProviderUsageInstanceId({
     liveSessionInstanceId: activeThread?.session?.providerInstanceId,
     modelSelectionInstanceId: selectedInstanceId,
@@ -1088,10 +1117,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           : providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.payload,
       model: activeProviderUsageModel,
       isCustom: models?.find((entry) => entry.slug === activeProviderUsageModel)?.isCustom === true,
+      driver: activeThreadProviderDriver,
     });
   }, [
     activeProviderUsageInstanceId,
     activeProviderUsageModel,
+    activeThreadProviderDriver,
     providerStatuses,
     providerUsageSnapshotByInstance,
   ]);
@@ -1130,6 +1161,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProviderUsageInstanceId !== null && isGatewayUsageInstance(activeProviderUsageInstanceId);
   const activeProviderUsage =
     activeServerProviderUsage ?? (activeUsageSourceOwned ? null : activityProviderUsage);
+  const fableRing = useMemo(
+    () =>
+      resolveProviderUsageFableRing({
+        upstreamProvider: activeUpstreamProvider,
+        accounts: activeGatewayUsage?.accounts ?? null,
+        snapshot: activeProviderUsage,
+      }),
+    [activeGatewayUsage, activeProviderUsage, activeUpstreamProvider],
+  );
+  const fableUsage = fableRing?.window ?? null;
+  const fableAccountName = fableRing?.accountName ?? null;
   const providerUsageLabel = providerUsageLabelForDriver(activeThreadProviderDriver);
   // A gateway pool's accounts header names the instance ("Proxy accounts"),
   // not the driver: the rows are upstream accounts of mixed providers.
@@ -1179,7 +1221,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         null;
       const observedAt =
         providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
-      return sortProviderUsageAccountsByPriority(activeGatewayUsage.accounts).map((account) => ({
+      return listProviderUsageAccountsForDisplay(activeGatewayUsage.accounts).map((account) => ({
         instanceId: activeProviderUsageInstanceId,
         accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
@@ -1276,7 +1318,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activeProviderUsageInstanceId === null) return null;
     const entry = providerStatuses.find((p) => p.instanceId === activeProviderUsageInstanceId);
     if (entry) {
-      return getProviderDisplayName(providerStatuses, entry.driver);
+      return entry.displayName?.trim() || formatProviderDisplayName(entry.driver);
     }
     return formatProviderDisplayName(activeProviderUsageInstanceId);
   }, [activeProviderUsageInstanceId, providerStatuses]);
@@ -3666,6 +3708,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
                   activeProviderUsage={activeProviderUsage}
+                  fableUsage={fableUsage}
+                  fableAccountName={fableAccountName}
                   providerUsageAccounts={providerUsageAccounts}
                   providerUsageRefreshing={isRefreshingProviderUsage}
                   providerUsageUnavailable={providerUsageQuery.error !== null}

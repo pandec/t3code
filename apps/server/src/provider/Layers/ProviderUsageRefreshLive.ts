@@ -328,7 +328,7 @@ export const ProviderUsageRefreshLive = Layer.effect(
         // driver's own probe: through a gateway that probe reports either
         // nothing or, worse, whatever unrelated account the config home is
         // logged into.
-        const target = resolveCliProxyApiUsageProbeTarget(envelope);
+        const target = resolveCliProxyApiUsageProbeTarget(envelope, instance.driverKind);
         if (target) {
           activeGatewayProbeIds.add(instance.instanceId);
         }
