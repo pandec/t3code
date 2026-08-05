@@ -46,4 +46,25 @@ describe("message artifact sessions", () => {
       speech: null,
     });
   });
+
+  it("does not let a stale unsubscribe clear a newer session", () => {
+    const environmentId = EnvironmentId.make("environment-stale-unsubscribe");
+    const messageId = MessageId.make("message-stale-unsubscribe");
+    const sourceText = "A response with a remounted listener";
+    const staleUnsubscribe = subscribeMessageArtifactSession(environmentId, messageId, () => {});
+    staleUnsubscribe();
+
+    const currentUnsubscribe = subscribeMessageArtifactSession(environmentId, messageId, () => {});
+    rememberMessageSummary(environmentId, sourceText, {
+      messageId,
+      summary: "Current summary",
+      createdAt: "2026-08-05T00:02:00.000Z",
+    });
+    staleUnsubscribe();
+
+    expect(
+      getMessageArtifactSessionSnapshot(environmentId, messageId, sourceText).summary?.summary,
+    ).toBe("Current summary");
+    currentUnsubscribe();
+  });
 });

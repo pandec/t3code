@@ -43,12 +43,31 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
     : entries;
 }
 
+function retainRecentActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  if (activities.length <= THREAD_HISTORY_RETENTION_LIMIT) return activities;
+
+  const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
+  let latestContextWindow: OrchestrationThreadActivity | undefined;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity !== undefined && isResolvableContextWindowActivity(activity)) {
+      latestContextWindow = activity;
+      break;
+    }
+  }
+  if (latestContextWindow === undefined || recent.includes(latestContextWindow)) return recent;
+
+  return pipe(recent.slice(1), Arr.append(latestContextWindow), Arr.sort(activityOrder));
+}
+
 /**
  * Bounds memory and cache growth for thread snapshots from any source.
  * TODO: Add paged thread history before clients need access beyond these recent entries.
  */
 export function retainRecentThreadHistory(thread: OrchestrationThread): OrchestrationThread {
-  const activities = retainRecent(thread.activities);
+  const activities = retainRecentActivities(thread.activities);
   const checkpoints = retainRecent(thread.checkpoints);
   return activities === thread.activities && checkpoints === thread.checkpoints
     ? thread
@@ -609,6 +628,14 @@ export function applyThreadDetailEvent(
 
     // ── Revert ──────────────────────────────────────────────────────
     case "thread.reverted": {
+      const discardedTurnIds = new Set(
+        thread.checkpoints.flatMap((entry) =>
+          entry.checkpointTurnCount !== undefined &&
+          entry.checkpointTurnCount > event.payload.turnCount
+            ? [entry.turnId]
+            : [],
+        ),
+      );
       const checkpoints = pipe(
         thread.checkpoints,
         Arr.filter(
@@ -619,16 +646,20 @@ export function applyThreadDetailEvent(
         Arr.sort(checkpointOrder),
       );
 
-      const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
-      const messages = retainMessagesAfterRevert(thread.messages, retainedTurnIds);
+      // Checkpoints are capped, so absence does not mean a turn predates the
+      // revert target. Preserve unknown older turns and remove only turns whose
+      // retained checkpoints prove they came after the target.
+      const messages = retainMessagesAfterRevert(thread.messages, discardedTurnIds);
       const retainedMessageIds = new Set(Arr.map(messages, (message) => message.id));
       const proposedPlans = pipe(
         thread.proposedPlans,
-        Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
+        Arr.filter((plan) => plan.turnId === null || !discardedTurnIds.has(plan.turnId)),
       );
       const activities = pipe(
         thread.activities,
-        Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
+        Arr.filter(
+          (activity) => activity.turnId === null || !discardedTurnIds.has(activity.turnId),
+        ),
       );
       const latestCheckpoint = checkpoints.at(-1) ?? null;
 
@@ -673,7 +704,7 @@ export function applyThreadDetailEvent(
       // thread.reverted that discards turns can still resolve a value from
       // the turns that survive.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      const activities = retainRecent(
+      const activities = retainRecentActivities(
         pipe(
           thread.activities,
           Arr.filter(
@@ -787,17 +818,11 @@ function rebindCheckpointAssistantMessage(
 
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
-  retainedTurnIds: ReadonlySet<string>,
+  discardedTurnIds: ReadonlySet<string>,
 ): OrchestrationMessage[] {
-  // Keep messages that belong to a retained turn, plus system messages and
-  // messages without a turn binding (pre-turn-0 user messages).
-  return Arr.filter(messages, (message) => {
-    if (message.role === "system") {
-      return true;
-    }
-    if (message.turnId === null) {
-      return true;
-    }
-    return retainedTurnIds.has(message.turnId);
-  });
+  return Arr.filter(
+    messages,
+    (message) =>
+      message.role === "system" || message.turnId === null || !discardedTurnIds.has(message.turnId),
+  );
 }
