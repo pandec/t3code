@@ -79,6 +79,7 @@ import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeClaudeEnvironment, resolveClaudeConfigDirPath } from "../Drivers/ClaudeHome.ts";
 import {
+  findClaudeSessionCwd,
   listClaudeSessionTranscripts,
   readClaudeSessionTranscript,
 } from "../Drivers/ClaudeSessionImport.ts";
@@ -227,6 +228,12 @@ interface ClaudeSessionContext {
   subscriptionUsageInFlight: boolean;
   subscriptionUsageRefreshPending: boolean;
   readonly scheduleSubscriptionUsage: () => void;
+  /**
+   * Claude config directory resolved when the session started. A relative
+   * CLAUDE_CONFIG_DIR/HOME resolves against the cwd, so re-resolving it after
+   * the session has moved would look for the transcript under the worktree.
+   */
+  readonly configDirPath: string;
   readonly pendingWorkState: {
     hasPendingWork: boolean | undefined;
   };
@@ -1575,6 +1582,93 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     };
   });
 
+  /**
+   * Record that the session is now running in `nextCwd`.
+   *
+   * Claude stores a session's transcript under the project directory derived
+   * from its cwd, so a move T3 does not record leaves the binding pointing at
+   * the wrong project directory and the next cold resume cannot find the
+   * conversation at all.
+   */
+  const recordSessionCwd = Effect.fn("ClaudeAdapter.recordSessionCwd")(function* (
+    context: ClaudeSessionContext,
+    nextCwd: string,
+    reportedPreviousCwd?: string,
+  ) {
+    const threadId = context.session.threadId;
+    const previousCwd = context.session.cwd;
+    if (previousCwd === nextCwd) return;
+
+    const stamp = yield* makeEventStamp();
+    context.session = {
+      ...context.session,
+      cwd: nextCwd,
+      updatedAt: stamp.createdAt,
+    };
+
+    yield* Effect.logInfo("claude.session.cwd-changed", {
+      threadId,
+      previousCwd: previousCwd ?? reportedPreviousCwd ?? null,
+      cwd: nextCwd,
+    });
+
+    yield* offerRuntimeEvent({
+      type: "session.cwd.changed",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId,
+      payload: {
+        cwd: nextCwd,
+        ...((previousCwd ?? reportedPreviousCwd)
+          ? { previousCwd: previousCwd ?? reportedPreviousCwd }
+          : {}),
+        ...(context.session.sessionGenerationId !== undefined
+          ? { sessionGenerationId: context.session.sessionGenerationId }
+          : {}),
+      },
+      providerRefs: {},
+    });
+  });
+
+  /**
+   * Tools that relocate the session itself. The SDK declares a `CwdChanged`
+   * hook, but the shipped CLI does not fire it for these, and the runtime
+   * stream carries a cwd only in `system/init` — so the move has to be noticed
+   * from the tool that caused it and resolved against the transcript on disk.
+   */
+  function movesSessionWorkingDirectory(toolName: string): boolean {
+    return toolName === "EnterWorktree" || toolName === "ExitWorktree";
+  }
+
+  const reconcileSessionCwdFromTranscript = Effect.fn(
+    "ClaudeAdapter.reconcileSessionCwdFromTranscript",
+  )(function* (context: ClaudeSessionContext) {
+    const sessionId = context.resumeSessionId;
+    if (sessionId === undefined) return;
+
+    const observedCwd = yield* findClaudeSessionCwd({
+      configDirPath: context.configDirPath,
+      sessionId,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.orElseSucceed(() => null),
+    );
+    if (observedCwd === null) {
+      // The tool reported a move but the transcript does not show one. Say so:
+      // silence here looks identical to "nothing moved", and the persisted cwd
+      // would be wrong with nothing to explain why.
+      yield* Effect.logWarning("claude.session.cwd-unresolved-after-worktree-tool", {
+        threadId: context.session.threadId,
+        sessionId,
+        cwd: context.session.cwd ?? null,
+      });
+      return;
+    }
+    yield* recordSessionCwd(context, observedCwd);
+  });
+
   const updateResumeCursor = Effect.fn("updateResumeCursor")(function* (
     context: ClaudeSessionContext,
   ) {
@@ -2652,6 +2746,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
 
+      // A subagent's own directory does not decide where the resumable
+      // transcript lives, so only the main thread's moves count.
+      if (
+        !toolResult.isError &&
+        movesSessionWorkingDirectory(tool.toolName) &&
+        message.parent_tool_use_id == null
+      ) {
+        yield* reconcileSessionCwdFromTranscript(context);
+      }
+
       context.inFlightTools.delete(index);
     }
   });
@@ -3411,6 +3515,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const pendingWorkState: ClaudeSessionContext["pendingWorkState"] = {
         hasPendingWork: undefined,
       };
+      // Pin the config directory to the cwd the session starts in: a relative
+      // CLAUDE_CONFIG_DIR/HOME resolves against the cwd, and the session's cwd
+      // moves out from under it once the agent enters a worktree.
+      const sessionConfigDirPath = yield* resolveClaudeConfigDirPath(
+        claudeSettings,
+        claudeEnvironment,
+        input.cwd,
+      ).pipe(Effect.provideService(Path.Path, path));
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -3729,58 +3841,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
        * conversation at all. Record every move so the binding follows the
        * session.
        */
-      const recordSessionCwdChange = Effect.fn("ClaudeAdapter.recordSessionCwdChange")(function* (
-        nextCwd: string,
-        reportedPreviousCwd: string | undefined,
-      ) {
-        const context = yield* Ref.get(contextRef);
-        if (!context || context.stopped) {
-          // Hooks are registered with the query before the session context is
-          // published, so a very early move has nowhere to land. Log it rather
-          // than dropping it silently — the persisted cwd would be wrong and
-          // there would be nothing to explain why.
-          yield* Effect.logWarning("claude.session.cwd-change-unrecorded", {
-            threadId,
-            cwd: nextCwd,
-            reason: context ? "session-stopped" : "context-not-ready",
-          });
-          return;
-        }
-
-        const previousCwd = context.session.cwd;
-        if (previousCwd === nextCwd) return;
-
-        const stamp = yield* makeEventStamp();
-        context.session = {
-          ...context.session,
-          cwd: nextCwd,
-          updatedAt: stamp.createdAt,
-        };
-
-        yield* Effect.logInfo("claude.session.cwd-changed", {
-          threadId,
-          previousCwd: previousCwd ?? reportedPreviousCwd ?? null,
-          cwd: nextCwd,
-        });
-
-        yield* offerRuntimeEvent({
-          type: "session.cwd.changed",
-          eventId: stamp.eventId,
-          provider: PROVIDER,
-          createdAt: stamp.createdAt,
-          threadId,
-          payload: {
-            cwd: nextCwd,
-            ...((previousCwd ?? reportedPreviousCwd)
-              ? { previousCwd: previousCwd ?? reportedPreviousCwd }
-              : {}),
-            ...(context.session.sessionGenerationId !== undefined
-              ? { sessionGenerationId: context.session.sessionGenerationId }
-              : {}),
-          },
-          providerRefs: {},
-        });
-      });
+      const recordSessionCwdChange = Effect.fn("ClaudeAdapter.recordSessionCwdChangeFromHook")(
+        function* (nextCwd: string, reportedPreviousCwd: string | undefined) {
+          const context = yield* Ref.get(contextRef);
+          if (!context || context.stopped) {
+            // Hooks are registered with the query before the session context is
+            // published, so a very early move has nowhere to land. Log it rather
+            // than dropping it silently — the persisted cwd would be wrong and
+            // there would be nothing to explain why.
+            yield* Effect.logWarning("claude.session.cwd-change-unrecorded", {
+              threadId,
+              cwd: nextCwd,
+              reason: context ? "session-stopped" : "context-not-ready",
+            });
+            return;
+          }
+          yield* recordSessionCwd(context, nextCwd, reportedPreviousCwd);
+        },
+      );
 
       const cwdChangedHook: HookCallback = async (hookInput) => {
         try {
@@ -4023,6 +4101,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           });
         },
         pendingWorkState,
+        configDirPath: sessionConfigDirPath,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
