@@ -10,6 +10,7 @@ import { createStaticNavigation, DarkTheme, DefaultTheme } from "@react-navigati
 
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
+import { KeyboardStickyResetCoordinator } from "./components/KeyboardStickyResetCoordinator";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
@@ -92,6 +93,7 @@ export default function App() {
           <MobileDiagnosticsCoordinator />
           <GestureHandlerRootView className="flex-1">
             <KeyboardProvider statusBarTranslucent>
+              <KeyboardStickyResetCoordinator />
               <SafeAreaProvider>
                 <StatusBar
                   barStyle={colorScheme === "dark" ? "light-content" : "dark-content"}
