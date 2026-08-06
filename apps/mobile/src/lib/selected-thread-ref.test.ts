@@ -43,6 +43,16 @@ describe("selectedWorkspaceThreadRef", () => {
     expectRef(state, null);
   });
 
+  it("normalizes deep-link route params before deriving the thread ref", () => {
+    const state = navState([
+      {
+        name: "GitOverview",
+        params: { environmentId: " env-a ", threadId: [" thread-a "] },
+      },
+    ]);
+    expectRef(state, { environmentId: "env-a", threadId: "thread-a" });
+  });
+
   describe("thread-scoped overlay routes, deep-linked with no underlying Thread route", () => {
     const cases: FakeRoute[] = [
       { name: "GitOverview", params: threadParams("git-overview") },
@@ -66,19 +76,9 @@ describe("selectedWorkspaceThreadRef", () => {
 
   describe("push / pop across a thread-scoped overlay", () => {
     it("promotes the overlay's thread ref when it is pushed above Thread", () => {
-      const base = navState([
-        { name: "Thread", params: threadParams("a") },
-        { name: "GitOverview", params: threadParams("a") },
-      ]);
-      expectRef(base, { environmentId: "env-a", threadId: "thread-a" });
-    });
-
-    it("keeps the overlay's own thread ref when pushed above a different thread", () => {
-      // Defensive case: if an overlay ever carried different params than the
-      // Thread route beneath it, the topmost (overlay) params win.
       const state = navState([
         { name: "Thread", params: threadParams("a") },
-        { name: "GitCommit", params: threadParams("b") },
+        { name: "GitOverview", params: threadParams("b") },
       ]);
       expectRef(state, { environmentId: "env-b", threadId: "thread-b" });
     });
@@ -86,9 +86,9 @@ describe("selectedWorkspaceThreadRef", () => {
     it("demotes back to the Thread route's ref once the overlay is popped", () => {
       const withOverlay = navState([
         { name: "Thread", params: threadParams("a") },
-        { name: "GitBranches", params: threadParams("a") },
+        { name: "GitBranches", params: threadParams("b") },
       ]);
-      expectRef(withOverlay, { environmentId: "env-a", threadId: "thread-a" });
+      expectRef(withOverlay, { environmentId: "env-b", threadId: "thread-b" });
 
       const popped = navState([{ name: "Thread", params: threadParams("a") }]);
       expectRef(popped, { environmentId: "env-a", threadId: "thread-a" });

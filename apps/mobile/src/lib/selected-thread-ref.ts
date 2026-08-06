@@ -47,7 +47,9 @@ function threadRefRoutes(state: NavigationState) {
 
 function firstRouteParam(value: unknown): string | null {
   const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === "string" && first.trim().length > 0 ? first : null;
+  if (typeof first !== "string") return null;
+  const trimmed = first.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function selectedWorkspaceThreadRef(state: NavigationState): ScopedThreadRef | null {
@@ -55,10 +57,13 @@ export function selectedWorkspaceThreadRef(state: NavigationState): ScopedThread
   const params = route?.params as Record<string, unknown> | undefined;
   const environmentId = firstRouteParam(params?.environmentId);
   const threadId = firstRouteParam(params?.threadId);
-  return environmentId === null || threadId === null
-    ? null
-    : {
-        environmentId: EnvironmentId.make(environmentId),
-        threadId: ThreadId.make(threadId),
-      };
+  if (environmentId === null || threadId === null) return null;
+  try {
+    return {
+      environmentId: EnvironmentId.make(environmentId),
+      threadId: ThreadId.make(threadId),
+    };
+  } catch {
+    return null;
+  }
 }
