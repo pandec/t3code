@@ -639,7 +639,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       current.data.value.messages.length === 0 &&
       current.data.value.messageWindow?.hasMoreOlder === true
     ) {
-      yield* loadOlderMessages();
+      // The refill's HTTP fetch must not hold up `acceptItem` — it runs inside
+      // the WS event consumption loop (`Stream.runForEach(acceptItem)`), so
+      // awaiting the page load here would stall every subsequent WS event
+      // until it settled. Fork it onto the thread's own scope instead;
+      // `loadOlderMessages`'s own mutation-lock and stale-cursor/revert-sequence
+      // guards still apply when it eventually runs.
+      yield* Effect.forkIn(loadOlderMessages(), scope);
     }
   });
 

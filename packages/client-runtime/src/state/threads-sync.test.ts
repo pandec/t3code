@@ -976,6 +976,123 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect(
+    "does not block WS event consumption while a deep-revert auto-refill's HTTP call is in flight",
+    () =>
+      Effect.gen(function* () {
+        // The auto-refill after a deep revert is triggered from inside
+        // `acceptItem`, which runs on the WS event consumption loop
+        // (`Stream.runForEach(acceptItem)`). If the refill's HTTP call were
+        // awaited there instead of forked onto its own fiber, every
+        // subsequent WS event would queue behind it until the page loader
+        // settled. Gate the loader open and prove a later structural event
+        // still applies before the gate is released.
+        const retainedMessage = {
+          ...makeThreadMessage(3),
+          turnId: TurnId.make("turn-1"),
+        };
+        const messagePageLoadGate = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          cached: {
+            ...BASE_THREAD,
+            messages: [retainedMessage],
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: retainedMessage.id,
+              totalCount: 3,
+            },
+          },
+          messageWindowLimit: 1,
+          messagePageLoadGate,
+          messagePage: Option.some({
+            threadId: THREAD_ID,
+            messages: [makeThreadMessage(1)],
+            hasMoreOlder: false,
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          }),
+        });
+        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+        yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.messages.length === 0,
+        );
+        // The refill's page loader has been called and is now blocked on the
+        // unresolved gate. A structural event queued behind it must still
+        // reach the reducer without waiting for the gate to open.
+        yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+        yield* Queue.offer(
+          harness.inputs,
+          titleUpdated("Live during refill", CACHED_SNAPSHOT_SEQUENCE + 2),
+        );
+        const live = yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.title === "Live during refill",
+        );
+        expect(Option.getOrThrow(live.data).messages).toEqual([]);
+        expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+
+        yield* Deferred.succeed(messagePageLoadGate, undefined);
+        const refilled = yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.messages[0]?.id === "message-1",
+        );
+        expect(Option.getOrThrow(refilled.data).title).toBe("Live during refill");
+      }),
+  );
+
+  it.effect(
+    "settles without looping when a deep-revert auto-refill returns a non-advancing page",
+    () =>
+      Effect.gen(function* () {
+        // A refill page that adds nothing (an empty page, or one whose
+        // messages are already present) must not leave the window stuck
+        // reporting more history than it can actually deliver: the stale
+        // guard in `prependOlderThreadMessages` forces `hasMoreOlder` false
+        // whenever the page didn't advance the message count, so the feed
+        // stops retrying the same exhausted cursor instead of looping.
+        const retainedMessage = {
+          ...makeThreadMessage(3),
+          turnId: TurnId.make("turn-1"),
+        };
+        const harness = yield* makeHarness({
+          cached: {
+            ...BASE_THREAD,
+            messages: [retainedMessage],
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: retainedMessage.id,
+              totalCount: 3,
+            },
+          },
+          messageWindowLimit: 1,
+          messagePage: Option.some({
+            threadId: THREAD_ID,
+            messages: [],
+            hasMoreOlder: true,
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          }),
+        });
+        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+        yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
+        // Wait for the refill to actually start (`isLoading` true) before
+        // waiting for it to settle, so the captured state reflects the
+        // refill's result rather than the moment right after the revert.
+        yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+        const settled = yield* awaitThreadState(
+          harness.observed,
+          (value) => !value.olderMessages.isLoading,
+        );
+
+        expect(Option.getOrThrow(settled.data).messages).toEqual([]);
+        expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(false);
+        expect(settled.olderMessages).toEqual({ isLoading: false, error: null });
+        expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+      }),
+  );
+
   it.effect("hydrates persisted message artifacts over a same-sequence cache", () =>
     Effect.gen(function* () {
       const cachedThread: OrchestrationThread = {
