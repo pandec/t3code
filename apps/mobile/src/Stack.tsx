@@ -300,9 +300,8 @@ function workspacePathFromState(state: NavigationState): string {
 }
 
 function firstRouteParam(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
-  return null;
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim().length > 0 ? first : null;
 }
 
 export function selectedWorkspaceThreadRef(state: NavigationState): ScopedThreadRef | null {
