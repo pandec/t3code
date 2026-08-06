@@ -1,8 +1,16 @@
 import type {
+  MessageId,
   OrchestrationEvent,
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadMessagePage,
 } from "@t3tools/contracts";
+
+const MAX_THREAD_MESSAGE_LIMIT = 500;
+
+function clampThreadMessageLimit(limit: number): number {
+  return Math.max(1, Math.min(MAX_THREAD_MESSAGE_LIMIT, limit));
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -249,15 +257,63 @@ function dropStaleContextWindowActivities(
 
 export function projectThreadDetailSnapshot(
   snapshot: OrchestrationThreadDetailSnapshot,
+  options: { readonly messageLimit?: number } = {},
 ): OrchestrationThreadDetailSnapshot {
+  const thread = {
+    ...snapshot.thread,
+    activities: dropStaleContextWindowActivities(snapshot.thread.activities).map(
+      projectActivityPayload,
+    ),
+  };
+  delete thread.messageWindow;
+
+  if (options.messageLimit === undefined) {
+    return { ...snapshot, thread };
+  }
+
+  const messageLimit = clampThreadMessageLimit(options.messageLimit);
+  const messages = snapshot.thread.messages.slice(-messageLimit);
   return {
     ...snapshot,
     thread: {
-      ...snapshot.thread,
-      activities: dropStaleContextWindowActivities(snapshot.thread.activities).map(
-        projectActivityPayload,
-      ),
+      ...thread,
+      messages,
+      messageWindow: {
+        hasMoreOlder: messages.length < snapshot.thread.messages.length,
+        oldestLoadedMessageId: messages[0]?.id ?? null,
+        totalCount: snapshot.thread.messages.length,
+      },
     },
+  };
+}
+
+export function projectThreadMessagePage(
+  snapshot: OrchestrationThreadDetailSnapshot,
+  options: { readonly before?: MessageId; readonly limit?: number } = {},
+): OrchestrationThreadMessagePage {
+  const messages = snapshot.thread.messages;
+  const beforeIndex =
+    options.before === undefined
+      ? messages.length
+      : messages.findIndex((message) => message.id === options.before);
+  if (options.before !== undefined && beforeIndex < 0) {
+    return {
+      threadId: snapshot.thread.id,
+      messages: [],
+      hasMoreOlder: messages.length > 0,
+      snapshotSequence: snapshot.snapshotSequence,
+    };
+  }
+
+  const endIndex = beforeIndex;
+  const limit = clampThreadMessageLimit(options.limit ?? MAX_THREAD_MESSAGE_LIMIT);
+  const startIndex = Math.max(0, endIndex - limit);
+
+  return {
+    threadId: snapshot.thread.id,
+    messages: messages.slice(startIndex, endIndex),
+    hasMoreOlder: startIndex > 0,
+    snapshotSequence: snapshot.snapshotSequence,
   };
 }
 

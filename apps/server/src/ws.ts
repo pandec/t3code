@@ -1185,7 +1185,10 @@ const makeWsRpcLayer = (
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot: projectThreadDetailSnapshot(snapshot.value),
+                  snapshot: projectThreadDetailSnapshot(
+                    snapshot.value,
+                    input.messageLimit === undefined ? {} : { messageLimit: input.messageLimit },
+                  ),
                 }),
                 afterSnapshot,
               );

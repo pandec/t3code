@@ -1,10 +1,12 @@
 import {
   EventId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
+  type OrchestrationMessage,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
@@ -17,6 +19,7 @@ import {
   projectActivityEvent,
   projectActivityPayload,
   projectThreadDetailSnapshot,
+  projectThreadMessagePage,
 } from "../src/orchestration/ActivityPayloadProjection.ts";
 
 function makeActivity(
@@ -42,7 +45,23 @@ function makeActivity(
   };
 }
 
-function makeThread(activities: ReadonlyArray<OrchestrationThreadActivity>): OrchestrationThread {
+function makeMessage(index: number): OrchestrationMessage {
+  const timestamp = `2026-07-27T00:00:${String(index).padStart(2, "0")}.000Z`;
+  return {
+    id: MessageId.make(`message-${index}`),
+    role: index % 2 === 0 ? "assistant" : "user",
+    text: `Message ${index}`,
+    turnId: TurnId.make(`turn-message-${index}`),
+    streaming: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function makeThread(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  messages: ReadonlyArray<OrchestrationMessage> = [],
+): OrchestrationThread {
   return {
     id: ThreadId.make("thread-projection"),
     projectId: ProjectId.make("project-projection"),
@@ -62,7 +81,7 @@ function makeThread(activities: ReadonlyArray<OrchestrationThreadActivity>): Orc
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
-    messages: [],
+    messages,
     proposedPlans: [],
     activities,
     checkpoints: [],
@@ -230,6 +249,87 @@ describe("projectActivityPayload", () => {
         : undefined,
     ).toEqual(projectActivityPayload(activity));
     expect(event.payload.activity).toBe(activity);
+  });
+});
+
+describe("thread message projection", () => {
+  const messages = Array.from({ length: 5 }, (_, index) => makeMessage(index + 1));
+  const snapshot = {
+    snapshotSequence: 17,
+    thread: makeThread([], messages),
+  };
+
+  it("preserves full history without message window metadata when no limit is requested", () => {
+    const projected = projectThreadDetailSnapshot(snapshot);
+
+    expect(projected.thread.messages).toEqual(messages);
+    expect(Object.hasOwn(projected.thread, "messageWindow")).toBe(false);
+  });
+
+  it("keeps the newest clamped message window with an authoritative total", () => {
+    const projected = projectThreadDetailSnapshot(snapshot, { messageLimit: 2 });
+    expect(projected.thread.messages.map((message) => message.id)).toEqual([
+      messages[3]!.id,
+      messages[4]!.id,
+    ]);
+    expect(projected.thread.messageWindow).toEqual({
+      hasMoreOlder: true,
+      oldestLoadedMessageId: messages[3]!.id,
+      totalCount: 5,
+    });
+
+    const minimum = projectThreadDetailSnapshot(snapshot, { messageLimit: 0 });
+    expect(minimum.thread.messages.map((message) => message.id)).toEqual([messages[4]!.id]);
+
+    const manyMessages = Array.from({ length: 501 }, (_, index) => makeMessage(index + 1));
+    const maximum = projectThreadDetailSnapshot(
+      { snapshotSequence: 18, thread: makeThread([], manyMessages) },
+      { messageLimit: 1_000 },
+    );
+    expect(maximum.thread.messages).toHaveLength(500);
+    expect(maximum.thread.messages[0]?.id).toBe(manyMessages[1]!.id);
+    expect(maximum.thread.messageWindow?.totalCount).toBe(501);
+  });
+
+  it("pages older messages before an exclusive message id", () => {
+    const page = projectThreadMessagePage(snapshot, {
+      before: messages[3]!.id,
+      limit: 2,
+    });
+
+    expect(page).toEqual({
+      threadId: snapshot.thread.id,
+      messages: [messages[1], messages[2]],
+      hasMoreOlder: true,
+      snapshotSequence: 17,
+    });
+
+    const oldestPage = projectThreadMessagePage(snapshot, {
+      before: messages[1]!.id,
+      limit: 0,
+    });
+    expect(oldestPage.messages).toEqual([messages[0]]);
+    expect(oldestPage.hasMoreOlder).toBe(false);
+  });
+
+  it("keeps paging available when a stale cursor is no longer present", () => {
+    const messages = [makeMessage(1), makeMessage(2)];
+    const snapshot = {
+      snapshotSequence: 18,
+      thread: { ...makeThread([]), messages },
+    };
+
+    expect(
+      projectThreadMessagePage(snapshot, {
+        before: MessageId.make("message-reverted"),
+        limit: 1,
+      }),
+    ).toEqual({
+      threadId: snapshot.thread.id,
+      messages: [],
+      hasMoreOlder: true,
+      snapshotSequence: 18,
+    });
   });
 });
 
