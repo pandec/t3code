@@ -2719,6 +2719,72 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect("keeps non-abort Claude terminal reasons failed", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const errorMessage = "Model error.";
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: [errorMessage],
+        terminal_reason: "model_error",
+        session_id: "sdk-session-model-error",
+        uuid: "result-model-error",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "thread.started",
+          "runtime.error",
+          "turn.completed",
+        ],
+      );
+
+      const runtimeError = runtimeEvents[runtimeEvents.length - 2];
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(runtimeError.payload.message, errorMessage);
+      }
+
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(turnCompleted.payload.errorMessage, errorMessage);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("treats user-aborted Claude results as interrupted without a runtime error", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
