@@ -10,7 +10,7 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef } from "react";
 import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useResolveClassNames } from "uniwind";
@@ -61,6 +61,7 @@ import {
   EMPTY_INCOMING_SHARE_PRESENTATION_STATE,
   transitionIncomingSharePresentation,
 } from "./features/sharing/incoming-share-presentation";
+import { selectedWorkspaceThreadRef, WORKSPACE_OVERLAY_ROUTES } from "./lib/selected-thread-ref";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { useForegroundThreadEventPriority } from "./state/thread-event-priority";
@@ -264,23 +265,6 @@ const NewTaskSheetStack = createNativeStackNavigator({
   },
 });
 
-// Routes presented as sheets/overlays ON TOP of the workspace. They must not
-// influence the adaptive workspace layout: opening Settings over Home should
-// not flip the sidebar in or change the active thread.
-const WORKSPACE_OVERLAY_ROUTES = new Set([
-  "ConnectOnboarding",
-  "Connections",
-  "ConnectionsNew",
-  "GitBranches",
-  "GitCommit",
-  "GitConfirm",
-  "GitOverview",
-  "NewTaskSheet",
-  "SettingsLegal",
-  "SettingsSheet",
-  "ThreadReviewComment",
-]);
-
 /**
  * Pathname of the topmost NON-overlay route — the screen the workspace is
  * actually "on", regardless of any sheets floating above it.
@@ -297,24 +281,6 @@ function workspacePathFromState(state: NavigationState): string {
       : state;
   const path = getPathFromState(effectiveState, navigationPathConfig);
   return path.startsWith("/") ? path : `/${path}`;
-}
-
-function firstRouteParam(value: unknown): string | null {
-  const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === "string" && first.trim().length > 0 ? first : null;
-}
-
-export function selectedWorkspaceThreadRef(state: NavigationState): ScopedThreadRef | null {
-  const route = workspaceRoutes(state).at(-1);
-  const params = route?.params as Record<string, unknown> | undefined;
-  const environmentId = firstRouteParam(params?.environmentId);
-  const threadId = firstRouteParam(params?.threadId);
-  return environmentId === null || threadId === null
-    ? null
-    : {
-        environmentId: EnvironmentId.make(environmentId),
-        threadId: ThreadId.make(threadId),
-      };
 }
 
 function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThreadRef | null }) {
