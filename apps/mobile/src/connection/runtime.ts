@@ -1,6 +1,7 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
 import {
+  threadEventCoalescingLayer,
   threadHistoryWindowLayer,
   threadMessagePageLoaderLayer,
   threadPrewarmTriggersLayer,
@@ -31,12 +32,16 @@ const snapshotLoaderLayer = Layer.mergeAll(
 // demand as the feed is scrolled up. See MOBILE_THREAD_HISTORY_WINDOW for why
 // the phone budget is smaller than the desktop one.
 const mobileThreadHistoryWindowLayer = threadHistoryWindowLayer(MOBILE_THREAD_HISTORY_WINDOW);
+const mobileThreadEventCoalescingLayer = threadEventCoalescingLayer({
+  defaultPriority: "background",
+});
 
 type ConnectionLayerSource =
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
   | typeof threadPrewarmTriggersLayer
   | typeof mobileThreadHistoryWindowLayer
+  | typeof mobileThreadEventCoalescingLayer
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
@@ -46,6 +51,7 @@ const providedClientConnectionLayer = Layer.mergeAll(
   Connection.layer,
   snapshotLoaderLayer,
   threadPrewarmTriggersLayer,
+  mobileThreadEventCoalescingLayer,
 ).pipe(
   Layer.provideMerge(
     Layer.mergeAll(

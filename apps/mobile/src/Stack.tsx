@@ -10,7 +10,8 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { useEffect, useMemo, useRef } from "react";
 import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -62,6 +63,7 @@ import {
 } from "./features/sharing/incoming-share-presentation";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
+import { useForegroundThreadEventPriority } from "./state/thread-event-priority";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
@@ -283,14 +285,42 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
  * Pathname of the topmost NON-overlay route — the screen the workspace is
  * actually "on", regardless of any sheets floating above it.
  */
+function workspaceRoutes(state: NavigationState) {
+  return state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
+}
+
 function workspacePathFromState(state: NavigationState): string {
-  const routes = state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
+  const routes = workspaceRoutes(state);
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
       : state;
   const path = getPathFromState(effectiveState, navigationPathConfig);
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+function firstRouteParam(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+  return null;
+}
+
+export function selectedWorkspaceThreadRef(state: NavigationState): ScopedThreadRef | null {
+  const route = workspaceRoutes(state).at(-1);
+  const params = route?.params as Record<string, unknown> | undefined;
+  const environmentId = firstRouteParam(params?.environmentId);
+  const threadId = firstRouteParam(params?.threadId);
+  return environmentId === null || threadId === null
+    ? null
+    : {
+        environmentId: EnvironmentId.make(environmentId),
+        threadId: ThreadId.make(threadId),
+      };
+}
+
+function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThreadRef | null }) {
+  useForegroundThreadEventPriority(props.threadRef);
+  return null;
 }
 
 // The drain hook subscribes to the outbox, all thread shells, projects, and
@@ -334,9 +364,11 @@ function RootStackLayout(props: {
   const path = getPathFromState(props.state, navigationPathConfig);
   const pathname = path.startsWith("/") ? path : `/${path}`;
   const workspacePathname = workspacePathFromState(props.state);
+  const selectedThreadRef = useMemo(() => selectedWorkspaceThreadRef(props.state), [props.state]);
 
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
+      <ThreadEventPriorityCoordinator threadRef={selectedThreadRef} />
       <ThreadOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ClerkSettingsSheetDetentProvider initiallyExpanded={false}>
