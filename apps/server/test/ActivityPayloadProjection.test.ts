@@ -19,7 +19,6 @@ import {
   projectActivityEvent,
   projectActivityPayload,
   projectThreadDetailSnapshot,
-  projectThreadMessagePage,
 } from "../src/orchestration/ActivityPayloadProjection.ts";
 
 function makeActivity(
@@ -291,46 +290,10 @@ describe("thread message projection", () => {
     expect(maximum.thread.messageWindow?.totalCount).toBe(501);
   });
 
-  it("pages older messages before an exclusive message id", () => {
-    const page = projectThreadMessagePage(snapshot, {
-      before: messages[3]!.id,
-      limit: 2,
-    });
-
-    expect(page).toEqual({
-      threadId: snapshot.thread.id,
-      messages: [messages[1], messages[2]],
-      hasMoreOlder: true,
-      snapshotSequence: 17,
-    });
-
-    const oldestPage = projectThreadMessagePage(snapshot, {
-      before: messages[1]!.id,
-      limit: 0,
-    });
-    expect(oldestPage.messages).toEqual([messages[0]]);
-    expect(oldestPage.hasMoreOlder).toBe(false);
-  });
-
-  it("keeps paging available when a stale cursor is no longer present", () => {
-    const messages = [makeMessage(1), makeMessage(2)];
-    const snapshot = {
-      snapshotSequence: 18,
-      thread: { ...makeThread([]), messages },
-    };
-
-    expect(
-      projectThreadMessagePage(snapshot, {
-        before: MessageId.make("message-reverted"),
-        limit: 1,
-      }),
-    ).toEqual({
-      threadId: snapshot.thread.id,
-      messages: [],
-      hasMoreOlder: true,
-      snapshotSequence: 18,
-    });
-  });
+  // Cursor+limit paging for GET /api/orchestration/threads/:threadId/messages
+  // is now served by a dedicated bounded SQL query
+  // (ProjectionSnapshotQuery.getThreadMessagePage) rather than this in-memory
+  // projection — see ProjectionSnapshotQuery.test.ts for that coverage.
 });
 
 describe("context-window snapshot dedup", () => {

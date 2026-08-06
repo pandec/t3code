@@ -532,6 +532,8 @@ export const EnvironmentOrchestrationThreadMessagesUrlParams = Schema.Struct({
   before: Schema.optionalKey(MessageId),
   limit: Schema.optionalKey(NonNegativeInt),
 });
+export type EnvironmentOrchestrationThreadMessagesUrlParams =
+  typeof EnvironmentOrchestrationThreadMessagesUrlParams.Type;
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(

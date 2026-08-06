@@ -1,14 +1,18 @@
 import type {
-  MessageId,
   OrchestrationEvent,
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadMessagePage,
 } from "@t3tools/contracts";
 
-const MAX_THREAD_MESSAGE_LIMIT = 500;
+/**
+ * Upper bound on message pages, shared with the dedicated bounded SQL query
+ * behind `GET /api/orchestration/threads/:threadId/messages`
+ * (ProjectionSnapshotQuery.getThreadMessagePage) and the `messageLimit`
+ * window used here for the thread-detail snapshot.
+ */
+export const MAX_THREAD_MESSAGE_LIMIT = 500;
 
-function clampThreadMessageLimit(limit: number): number {
+export function clampThreadMessageLimit(limit: number): number {
   return Math.max(1, Math.min(MAX_THREAD_MESSAGE_LIMIT, limit));
 }
 
@@ -284,36 +288,6 @@ export function projectThreadDetailSnapshot(
         totalCount: snapshot.thread.messages.length,
       },
     },
-  };
-}
-
-export function projectThreadMessagePage(
-  snapshot: OrchestrationThreadDetailSnapshot,
-  options: { readonly before?: MessageId; readonly limit?: number } = {},
-): OrchestrationThreadMessagePage {
-  const messages = snapshot.thread.messages;
-  const beforeIndex =
-    options.before === undefined
-      ? messages.length
-      : messages.findIndex((message) => message.id === options.before);
-  if (options.before !== undefined && beforeIndex < 0) {
-    return {
-      threadId: snapshot.thread.id,
-      messages: [],
-      hasMoreOlder: messages.length > 0,
-      snapshotSequence: snapshot.snapshotSequence,
-    };
-  }
-
-  const endIndex = beforeIndex;
-  const limit = clampThreadMessageLimit(options.limit ?? MAX_THREAD_MESSAGE_LIMIT);
-  const startIndex = Math.max(0, endIndex - limit);
-
-  return {
-    threadId: snapshot.thread.id,
-    messages: messages.slice(startIndex, endIndex),
-    hasMoreOlder: startIndex > 0,
-    snapshotSequence: snapshot.snapshotSequence,
   };
 }
 
