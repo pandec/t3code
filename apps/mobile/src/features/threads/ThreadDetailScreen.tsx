@@ -28,7 +28,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
+import { flushMobileDiagnostics, recordMobileDiagnostic } from "../../diagnostics/journal";
+import { awaitBoundedKeyboardDismiss } from "../../lib/boundedKeyboardDismiss";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import { requestKeyboardStickyReset } from "../../lib/keyboardStickyResetRequests";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import type {
@@ -312,22 +315,66 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         return;
       }
       lastScrolledAnchorMessageIdRef.current = anchorMessageId;
-      // Wait for the keyboard dismissal (started by blur() on send) to finish
-      // before scrolling: scrollMessageToEnd freezes keyboard-driven inset
-      // updates while it runs, and a close event swallowed by that freeze
-      // leaves the keyboard padding permanently applied — overshooting the
-      // anchor and leaving a phantom bottom inset once the reply streams in.
-      void KeyboardController.dismiss()
-        .then(() => {
-          if (
-            selectedThreadKeyRef.current !== targetThreadKey ||
-            lastScrolledAnchorMessageIdRef.current !== anchorMessageId
-          ) {
+      // On iOS, keep keyboard-driven inset updates alive through both the
+      // deterministic reconciliation deadline and a bounded native dismiss.
+      // Android retains its direct dismiss flow and aborts scrolling on failure.
+      const scrollAfterKeyboardDismiss = async () => {
+        recordMobileDiagnostic("keyboard-sticky", {
+          event: "dismiss-start",
+          trigger: "anchor-scroll",
+          reason: "message-send",
+        });
+        if (Platform.OS === "ios") {
+          const dismissOutcome = await awaitBoundedKeyboardDismiss(
+            Promise.resolve().then(() => KeyboardController.dismiss()),
+          );
+          recordMobileDiagnostic("keyboard-sticky", {
+            event: "dismiss-outcome",
+            trigger: "anchor-scroll",
+            reason: "message-send",
+            outcome: dismissOutcome,
+          });
+          if (dismissOutcome !== "settled") {
+            void flushMobileDiagnostics();
+          }
+        } else {
+          try {
+            await KeyboardController.dismiss();
+            recordMobileDiagnostic("keyboard-sticky", {
+              event: "dismiss-outcome",
+              trigger: "anchor-scroll",
+              reason: "message-send",
+              outcome: "settled",
+            });
+          } catch {
+            recordMobileDiagnostic("keyboard-sticky", {
+              event: "dismiss-outcome",
+              trigger: "anchor-scroll",
+              reason: "message-send",
+              outcome: "rejected",
+            });
+            void flushMobileDiagnostics();
+            if (
+              selectedThreadKeyRef.current === targetThreadKey &&
+              lastScrolledAnchorMessageIdRef.current === anchorMessageId
+            ) {
+              lastScrolledAnchorMessageIdRef.current = null;
+              freeze.set(false);
+            }
             return;
           }
-          return scrollMessageToEnd({ animated: true, closeKeyboard: false });
-        })
-        .catch(() => {
+        }
+
+        if (
+          selectedThreadKeyRef.current !== targetThreadKey ||
+          lastScrolledAnchorMessageIdRef.current !== anchorMessageId
+        ) {
+          return;
+        }
+
+        try {
+          await scrollMessageToEnd({ animated: true, closeKeyboard: false });
+        } catch {
           if (
             selectedThreadKeyRef.current !== targetThreadKey ||
             lastScrolledAnchorMessageIdRef.current !== anchorMessageId
@@ -336,7 +383,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           }
           lastScrolledAnchorMessageIdRef.current = null;
           freeze.set(false);
-        });
+        }
+      };
+      void scrollAfterKeyboardDismiss();
     });
     return () => cancelAnimationFrame(frame);
   }, [
@@ -362,6 +411,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
       setAnchorMessageId(messageId);
       composerEditorRef.current?.blur();
+      const stickyResetHandled = requestKeyboardStickyReset("message-send");
+      recordMobileDiagnostic("keyboard-sticky", {
+        event: "request-dispatched",
+        trigger: "message-send",
+        reason: "message-send",
+        handled: stickyResetHandled,
+      });
       return messageId;
     },
     [props.onSendMessage, selectedThreadKey],
