@@ -9,6 +9,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -27,6 +28,12 @@ import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadMessagePageLoader } from "./threadMessagesHttp.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
+import {
+  coalesceThreadStreamItems,
+  isStructuralThreadStreamItem,
+  THREAD_EVENT_FOREGROUND_WINDOW_MS,
+  ThreadEventCoalescing,
+} from "./threadEventCoalescing.ts";
 import {
   applyThreadDetailEvent,
   prependOlderThreadMessages,
@@ -133,6 +140,7 @@ function mergeThreadMessageArtifacts(
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
 ) {
+  const scope = yield* Effect.scope;
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
@@ -143,6 +151,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     messageOlderPageSize: DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
   }));
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
+  const eventCoalescing = yield* Effect.serviceOption(ThreadEventCoalescing);
   const environmentId = supervisor.target.environmentId;
   const cached = yield* cache.loadThread(environmentId, threadId).pipe(
     Effect.catch((error) =>
@@ -176,6 +185,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const lastRevertSequence = yield* Ref.make(0);
   const loadedOlderMessageCount = yield* Ref.make(0);
   const mutationLock = yield* Semaphore.make(1);
+  const pendingItems = yield* Ref.make<Array<OrchestrationThreadStreamItem>>([]);
+  const flushGeneration = yield* Ref.make(0);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
   const artifactRefreshes = yield* Queue.sliding<PreparedConnection>(1);
 
@@ -305,6 +316,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const loadOlderMessages = Effect.fn("EnvironmentThreadState.loadOlderMessages")(function* () {
     const request = yield* mutationLock.withPermits(1)(
       Effect.gen(function* () {
+        yield* flushPendingUnlocked();
         const current = yield* SubscriptionRef.get(state);
         if (
           current.status === "deleted" ||
@@ -351,6 +363,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
     yield* mutationLock.withPermits(1)(
       Effect.gen(function* () {
+        yield* flushPendingUnlocked();
         const current = yield* SubscriptionRef.get(state);
         if (current.status === "deleted" || Option.isNone(current.data)) return;
 
@@ -400,65 +413,152 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  const applyItemUnlocked = Effect.fn("EnvironmentThreadState.applyItemUnlocked")(function* (
-    item: OrchestrationThreadStreamItem,
+  const applyItemsUnlocked = Effect.fn("EnvironmentThreadState.applyItemsUnlocked")(function* (
+    items: ReadonlyArray<OrchestrationThreadStreamItem>,
   ) {
-    if (item.kind === "synchronized") {
+    if (items.length === 0) return;
+
+    const initialSequence = yield* SubscriptionRef.get(lastSequence);
+    const initialRevertSequence = yield* Ref.get(lastRevertSequence);
+    const initialLoadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+    const initialState = yield* SubscriptionRef.get(state);
+    let sequence = initialSequence;
+    let revertSequence = initialRevertSequence;
+    let loadedOlderCount = initialLoadedOlderCount;
+    let data = initialState.data;
+    let threadChanged = false;
+    let deleted = false;
+    let synchronized = false;
+
+    for (const item of coalesceThreadStreamItems(items)) {
+      if (item.kind === "synchronized") {
+        synchronized = true;
+        continue;
+      }
+      if (item.kind === "snapshot") {
+        sequence = item.snapshot.snapshotSequence;
+        loadedOlderCount = 0;
+        data = Option.some(item.snapshot.thread);
+        threadChanged = true;
+        deleted = false;
+        continue;
+      }
+      if (item.event.sequence <= sequence) continue;
+      sequence = item.event.sequence;
+      if (item.event.type === "thread.reverted") {
+        revertSequence = item.event.sequence;
+      }
+
+      if (Option.isNone(data)) {
+        if (item.event.type === "thread.deleted") deleted = true;
+        continue;
+      }
+      const retainedLimit =
+        historyWindow.messageWindowLimit === null
+          ? null
+          : historyWindow.messageWindowLimit + loadedOlderCount;
+      const result = applyThreadDetailEvent(data.value, item.event, {
+        messageWindowLimit: retainedLimit,
+      });
+      if (result.kind === "updated") {
+        if (item.event.type === "thread.reverted") {
+          loadedOlderCount = Math.min(loadedOlderCount, result.thread.messages.length);
+        }
+        data = Option.some(result.thread);
+        threadChanged = true;
+      } else if (result.kind === "deleted") {
+        data = Option.none();
+        threadChanged = false;
+        deleted = true;
+      }
+    }
+
+    if (sequence !== initialSequence) {
+      yield* SubscriptionRef.set(lastSequence, sequence);
+    }
+    if (revertSequence !== initialRevertSequence) {
+      yield* Ref.set(lastRevertSequence, revertSequence);
+    }
+    if (loadedOlderCount !== initialLoadedOlderCount) {
+      yield* Ref.set(loadedOlderMessageCount, loadedOlderCount);
+    }
+    if (deleted) {
+      yield* setDeleted();
+    } else if (threadChanged && Option.isSome(data)) {
+      const retainedLimit =
+        historyWindow.messageWindowLimit === null
+          ? null
+          : historyWindow.messageWindowLimit + loadedOlderCount;
+      yield* setThread(data.value, retainedLimit);
+    }
+    if (synchronized) {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
         Option.isSome(current.data) && current.status !== "deleted"
           ? { ...current, status: "live" as const, error: Option.none() }
           : current,
       );
-      return;
-    }
-
-    if (item.kind === "snapshot") {
-      yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
-      yield* Ref.set(loadedOlderMessageCount, 0);
-      yield* setThread(item.snapshot.thread);
-      return;
-    }
-
-    const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.event.sequence <= sequence) {
-      return;
-    }
-    yield* SubscriptionRef.set(lastSequence, item.event.sequence);
-    if (item.event.type === "thread.reverted") {
-      yield* Ref.set(lastRevertSequence, item.event.sequence);
-    }
-
-    const current = yield* SubscriptionRef.get(state);
-    if (Option.isNone(current.data)) {
-      if (item.event.type === "thread.deleted") {
-        yield* setDeleted();
-      }
-      return;
-    }
-    const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
-    const retainedLimit =
-      historyWindow.messageWindowLimit === null
-        ? null
-        : historyWindow.messageWindowLimit + loadedOlderCount;
-    const result = applyThreadDetailEvent(current.data.value, item.event, {
-      messageWindowLimit: retainedLimit,
-    });
-    if (result.kind === "updated") {
-      if (item.event.type === "thread.reverted") {
-        yield* Ref.update(loadedOlderMessageCount, (count) =>
-          Math.min(count, result.thread.messages.length),
-        );
-      }
-      yield* setThread(result.thread, retainedLimit);
-    } else if (result.kind === "deleted") {
-      yield* setDeleted();
     }
   });
-  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
+
+  const flushPendingUnlocked = Effect.fn("EnvironmentThreadState.flushPendingUnlocked")(
+    function* () {
+      yield* Ref.update(flushGeneration, (generation) => generation + 1);
+      const pending = yield* Ref.getAndSet(pendingItems, []);
+      yield* applyItemsUnlocked(pending);
+    },
+  );
+  const flushPending = mutationLock.withPermits(1)(flushPendingUnlocked());
+  const scheduleFlush = Effect.fn("EnvironmentThreadState.scheduleFlush")(function* (
+    generation: number,
+    windowMs: number,
+  ) {
+    yield* Effect.sleep(Duration.millis(windowMs));
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if ((yield* Ref.get(flushGeneration)) !== generation) return;
+        yield* flushPendingUnlocked();
+      }),
+    );
+  });
+  const acceptItem = Effect.fn("EnvironmentThreadState.acceptItem")(function* (
     item: OrchestrationThreadStreamItem,
   ) {
-    yield* mutationLock.withPermits(1)(applyItemUnlocked(item));
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (isStructuralThreadStreamItem(item)) {
+          const pending = yield* Ref.getAndSet(pendingItems, []);
+          yield* Ref.update(flushGeneration, (generation) => generation + 1);
+          yield* applyItemsUnlocked([...pending, item]);
+          return;
+        }
+
+        const priority = yield* Option.match(eventCoalescing, {
+          onNone: () => Effect.succeed("foreground" as const),
+          onSome: (service) =>
+            service.priority({
+              environmentId,
+              threadId,
+            }),
+        });
+        const windowMs = Option.match(eventCoalescing, {
+          onNone: () => THREAD_EVENT_FOREGROUND_WINDOW_MS,
+          onSome: (service) => service.windowMs(priority),
+        });
+        if (windowMs <= 0) {
+          yield* applyItemsUnlocked([item]);
+          return;
+        }
+
+        const pending = yield* Ref.get(pendingItems);
+        const wasEmpty = pending.length === 0;
+        pending.push(item);
+        if (wasEmpty) {
+          const generation = yield* Ref.updateAndGet(flushGeneration, (current) => current + 1);
+          yield* Effect.forkIn(scheduleFlush(generation, windowMs), scope);
+        }
+      }),
+    );
     if (item.kind !== "event" || item.event.type !== "thread.reverted") return;
 
     const current = yield* SubscriptionRef.get(state);
@@ -484,6 +584,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (Option.isNone(httpSnapshot)) return;
     yield* mutationLock.withPermits(1)(
       Effect.gen(function* () {
+        yield* flushPendingUnlocked();
         const currentState = yield* SubscriptionRef.get(state);
         if (currentState.status === "deleted" || Option.isNone(currentState.data)) return;
 
@@ -530,15 +631,27 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
+  if (Option.isSome(eventCoalescing)) {
+    yield* eventCoalescing.value.changes.pipe(
+      Stream.filter(
+        (change) =>
+          change.threadRef.environmentId === environmentId &&
+          change.threadRef.threadId === threadId,
+      ),
+      Stream.runForEach(() => flushPending),
+      Effect.forkScoped,
+    );
+  }
+
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
       switch (connectionProjectionPhase(connectionState)) {
         case "synchronizing":
-          return setSynchronizing;
+          return flushPending.pipe(Effect.andThen(setSynchronizing));
         case "disconnected":
-          return setDisconnected;
+          return flushPending.pipe(Effect.andThen(setDisconnected));
         case "ready":
-          return setReady;
+          return flushPending.pipe(Effect.andThen(setReady));
       }
     }),
     Effect.forkScoped,
@@ -561,6 +674,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         );
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
+        yield* flushPending;
 
         let current = yield* SubscriptionRef.get(state);
         if (current.status !== "deleted") {
@@ -587,7 +701,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 : { messageLimit: historyWindow.messageWindowLimit },
             );
             if (Option.isSome(httpSnapshot)) {
-              yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+              yield* acceptItem({ kind: "snapshot", snapshot: httpSnapshot.value });
               current = yield* SubscriptionRef.get(state);
             }
           } else {
@@ -615,15 +729,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onExpectedFailure: setStreamError,
+        onExpectedFailure: (cause) => flushPending.pipe(Effect.andThen(setStreamError(cause))),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(Stream.runForEach(acceptItem)),
   );
 
   yield* Effect.addFinalizer(() =>
-    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
+    flushPending.pipe(
+      Effect.andThen(Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)])),
       Effect.flatMap(([current, snapshotSequence]) =>
         Option.match(current.data, {
           onNone: () => Effect.void,
@@ -726,6 +841,7 @@ export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
 export * from "./threadDetail.ts";
+export * from "./threadEventCoalescing.ts";
 export * from "./threadReducer.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

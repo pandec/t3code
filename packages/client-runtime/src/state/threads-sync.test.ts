@@ -36,10 +36,12 @@ import * as RpcSession from "../rpc/session.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
+  ThreadEventCoalescing,
   ThreadHistoryWindow,
   ThreadMessagePageLoader,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
+  type ThreadEventPriority,
 } from "./threads.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -157,10 +159,14 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly messageWindowLimit?: number;
   readonly messageOlderPageSize?: number;
   readonly completionMarker?: boolean;
+  readonly initialEventPriority?: ThreadEventPriority;
+  readonly foregroundWindowMs?: number;
+  readonly backgroundWindowMs?: number;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
   const latest = yield* Ref.make<EnvironmentThreadState>(EMPTY_ENVIRONMENT_THREAD_STATE);
+  const publicationCount = yield* Ref.make(0);
   const retryCount = yield* Ref.make(0);
   const subscriptionCount = yield* Ref.make(0);
   const loaderCalls = yield* Ref.make(0);
@@ -180,6 +186,38 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   );
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
   const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
+  const eventPriority = yield* Ref.make<ThreadEventPriority>(
+    options?.initialEventPriority ?? "foreground",
+  );
+  const eventPriorityChanges = yield* Queue.unbounded<{
+    readonly threadRef: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+    readonly priority: ThreadEventPriority;
+  }>();
+  const eventCoalescing = ThreadEventCoalescing.of({
+    changes: Stream.fromQueue(eventPriorityChanges),
+    priority: () => Ref.get(eventPriority),
+    windowMs: (priority) =>
+      priority === "foreground"
+        ? (options?.foregroundWindowMs ?? 50)
+        : (options?.backgroundWindowMs ?? 750),
+    setPriority: (threadRef, priority) =>
+      Ref.set(eventPriority, priority).pipe(
+        Effect.andThen(Queue.offer(eventPriorityChanges, { threadRef, priority })),
+        Effect.asVoid,
+      ),
+    setForeground: (threadRef) => {
+      const priority = threadRef === null ? "background" : "foreground";
+      return Ref.set(eventPriority, priority).pipe(
+        Effect.andThen(
+          Queue.offer(eventPriorityChanges, {
+            threadRef: threadRef ?? { environmentId: TARGET.environmentId, threadId: THREAD_ID },
+            priority,
+          }),
+        ),
+        Effect.asVoid,
+      );
+    },
+  });
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
     AVAILABLE_CONNECTION_STATE,
   );
@@ -286,6 +324,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         messageOlderPageSize: options?.messageOlderPageSize ?? 200,
       }),
     ),
+    Effect.provideService(ThreadEventCoalescing, eventCoalescing),
     Effect.provideService(
       ConnectionWakeups.ConnectionWakeups,
       ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
@@ -293,7 +332,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   );
   yield* SubscriptionRef.changes(threadHandle.state).pipe(
     Stream.runForEach((state) =>
-      Ref.set(latest, state).pipe(Effect.andThen(Queue.offer(observed, state))),
+      Ref.set(latest, state).pipe(
+        Effect.andThen(Ref.update(publicationCount, (count) => count + 1)),
+        Effect.andThen(Queue.offer(observed, state)),
+      ),
     ),
     Effect.forkScoped,
   );
@@ -303,6 +345,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     observed,
     loadOlderMessages: threadHandle.loadOlderMessages,
     latest,
+    publicationCount,
     retryCount,
     subscriptionCount,
     loaderCalls,
@@ -317,6 +360,11 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     cachedThreadSnapshot,
     removedThreads,
     wakeups,
+    setEventPriority: (priority: ThreadEventPriority) =>
+      eventCoalescing.setPriority(
+        { environmentId: TARGET.environmentId, threadId: THREAD_ID },
+        priority,
+      ),
     replaceSession: SubscriptionRef.set(
       supervisorSession,
       Option.some(
@@ -359,6 +407,64 @@ const titleUpdated = (title: string, sequence = 2): OrchestrationThreadStreamIte
       threadId: THREAD_ID,
       title,
       updatedAt: "2026-04-01T01:00:00.000Z",
+    },
+  },
+});
+
+const messageDelta = (
+  text: string,
+  sequence: number,
+  messageId = MessageId.make("message-streaming"),
+): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-message-${sequence}`),
+    sequence,
+    occurredAt: `2026-04-01T01:00:${String(sequence).padStart(2, "0")}.000Z`,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.message-sent",
+    payload: {
+      threadId: THREAD_ID,
+      messageId,
+      role: "assistant",
+      text,
+      turnId: TurnId.make("turn-1"),
+      streaming: true,
+      createdAt: "2026-04-01T01:00:00.000Z",
+      updatedAt: `2026-04-01T01:00:${String(sequence).padStart(2, "0")}.000Z`,
+    },
+  },
+});
+
+const sessionSettled = (sequence: number): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-session-${sequence}`),
+    sequence,
+    occurredAt: "2026-04-01T01:01:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.session-set",
+    payload: {
+      threadId: THREAD_ID,
+      session: {
+        threadId: THREAD_ID,
+        status: "idle",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-04-01T01:01:00.000Z",
+      },
     },
   },
 });
@@ -743,6 +849,157 @@ describe("EnvironmentThreads", () => {
       expect((yield* Ref.get(harness.savedThreads)).at(-1)?.snapshotSequence).toBe(
         CACHED_SNAPSHOT_SEQUENCE + 2,
       );
+    }),
+  );
+
+  it.effect("coalesces consecutive streaming deltas into one publication", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: ACTIVE_THREAD });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Ref.set(harness.publicationCount, 0);
+
+      yield* Queue.offer(harness.inputs, messageDelta("Hello", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* Queue.offer(harness.inputs, messageDelta(" world", CACHED_SNAPSHOT_SEQUENCE + 2));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages).toEqual([]);
+      yield* TestClock.adjust("50 millis");
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      expect(yield* Ref.get(harness.publicationCount)).toBe(1);
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages[0]?.text).toBe(
+        "Hello world",
+      );
+    }),
+  );
+
+  it.effect("applies events immediately when coalescing is disabled", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        foregroundWindowMs: 0,
+        backgroundWindowMs: 0,
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Ref.set(harness.publicationCount, 0);
+
+      yield* Queue.offer(harness.inputs, messageDelta("First", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages[0]?.text === "First",
+      );
+      yield* Queue.offer(harness.inputs, messageDelta(" second", CACHED_SNAPSHOT_SEQUENCE + 2));
+      const final = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) && value.data.value.messages[0]?.text === "First second",
+      );
+
+      expect(Option.getOrThrow(final.data).messages[0]?.text).toBe("First second");
+      expect(yield* Ref.get(harness.publicationCount)).toBe(2);
+    }),
+  );
+
+  it.effect("flushes buffered deltas before structural settle events", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: ACTIVE_THREAD });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+
+      yield* Queue.offer(harness.inputs, messageDelta("Completed", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* Queue.offer(harness.inputs, sessionSettled(CACHED_SNAPSHOT_SEQUENCE + 2));
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.session?.status === "idle" &&
+          value.data.value.messages[0]?.text === "Completed",
+      );
+      expect(Option.getOrThrow(settled.data).messages[0]?.text).toBe("Completed");
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
+      expect(saved?.snapshotSequence).toBe(CACHED_SNAPSHOT_SEQUENCE + 2);
+      expect(saved?.thread.messages[0]?.text).toBe("Completed");
+    }),
+  );
+
+  it.effect("flushes before a replacement session reads the resume cursor", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: ACTIVE_THREAD, completionMarker: true });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "synchronizing" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, messageDelta("Buffered", CACHED_SNAPSHOT_SEQUENCE + 1));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages).toEqual([]);
+
+      yield* harness.replaceSession;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages[0]?.text).toBe(
+        "Buffered",
+      );
+    }),
+  );
+
+  it.effect("uses the longer background coalescing window", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        initialEventPriority: "background",
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, messageDelta("Background", CACHED_SNAPSHOT_SEQUENCE + 1));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      yield* TestClock.adjust("50 millis");
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages).toEqual([]);
+      yield* TestClock.adjust("700 millis");
+      const flushed = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages.length === 1,
+      );
+      expect(Option.getOrThrow(flushed.data).messages[0]?.text).toBe("Background");
+    }),
+  );
+
+  it.effect("flushes promptly when a background thread becomes foreground", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        initialEventPriority: "background",
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, messageDelta("Focused", CACHED_SNAPSHOT_SEQUENCE + 1));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      yield* harness.setEventPriority("foreground");
+      const flushed = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages.length === 1,
+      );
+      expect(Option.getOrThrow(flushed.data).messages[0]?.text).toBe("Focused");
     }),
   );
 
