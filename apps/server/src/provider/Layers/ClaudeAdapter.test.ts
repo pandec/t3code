@@ -2650,6 +2650,75 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect.each<{ terminalReason: string }>([
+    { terminalReason: "interrupted" },
+    { terminalReason: "aborted_tools" },
+    { terminalReason: "aborted_streaming" },
+  ])(
+    "treats Claude $terminalReason results as interrupted without a runtime error",
+    ({ terminalReason }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello",
+          attachments: [],
+        });
+
+        const diagnostic =
+          "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use";
+        harness.query.emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          errors: [diagnostic],
+          stop_reason: "tool_use",
+          terminal_reason: terminalReason,
+          session_id: "sdk-session-terminal-abort",
+          uuid: `result-${terminalReason}`,
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        assert.deepEqual(
+          runtimeEvents.map((event) => event.type),
+          [
+            "session.started",
+            "session.configured",
+            "session.state.changed",
+            "turn.started",
+            "thread.started",
+            "turn.completed",
+          ],
+        );
+
+        const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+        assert.equal(turnCompleted?.type, "turn.completed");
+        if (turnCompleted?.type === "turn.completed") {
+          assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+          assert.equal(turnCompleted.payload.state, "interrupted");
+          assert.equal(turnCompleted.payload.errorMessage, diagnostic);
+          assert.equal(turnCompleted.payload.stopReason, "tool_use");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("treats user-aborted Claude results as interrupted without a runtime error", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

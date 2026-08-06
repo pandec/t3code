@@ -368,6 +368,16 @@ function resultErrorsText(result: SDKResultMessage): string {
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
+  // Some runtime versions emit `interrupted` before the SDK type union includes it.
+  const terminalReason = result.terminal_reason as string | undefined;
+  if (
+    terminalReason === "interrupted" ||
+    terminalReason === "aborted_tools" ||
+    terminalReason === "aborted_streaming"
+  ) {
+    return true;
+  }
+
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
