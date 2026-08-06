@@ -123,9 +123,10 @@ commands intentionally require a thread id so automation cannot act on an ambigu
 `full-access`) and `--interaction-mode` (`default`, `plan`). Both default to the product defaults,
 which means **`--runtime-mode full-access`**: the agent edits files and runs commands without asking
 for approval. Pass `--runtime-mode approval-required` for unattended automation you do not fully
-trust. `--runtime-mode auto` runs with AI-reviewed approvals: the agent requests approval on-request
-and an automated reviewer decides, which is not suitable for fully unattended runs.
-`thread send` inherits the mode the thread was created with and cannot change it.
+trust. `--runtime-mode auto` is provider-specific: Codex sends on-request approvals to its AI
+reviewer, Claude uses Claude Code's native Auto permission mode, and providers without Auto support
+continue prompting the user. It is not equivalent to full access and is not suitable for fully
+unattended runs. `thread send` inherits the mode the thread was created with and cannot change it.
 
 ### Workspaces
 

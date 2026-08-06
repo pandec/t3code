@@ -2613,6 +2613,19 @@ describe("ProviderRuntimeIngestion", () => {
     });
 
     harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-dynamic-request-opened"),
+      provider: ProviderDriverKind.make("hermes"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      requestId: ApprovalRequestId.make("req-dynamic"),
+      payload: {
+        requestType: "dynamic_tool_call",
+        detail: "Run provider tool",
+      },
+    });
+
+    harness.emit({
       type: "request.resolved",
       eventId: asEventId("evt-request-resolved"),
       provider: ProviderDriverKind.make("codex"),
@@ -2649,6 +2662,16 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
     expect(requestedPayload?.requestKind).toBe("command");
     expect(requestedPayload?.requestType).toBe("command_execution_approval");
+
+    const dynamicRequested = thread?.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-dynamic-request-opened",
+    );
+    const dynamicRequestedPayload =
+      dynamicRequested?.payload && typeof dynamicRequested.payload === "object"
+        ? (dynamicRequested.payload as Record<string, unknown>)
+        : undefined;
+    expect(dynamicRequestedPayload?.requestKind).toBe("command");
+    expect(dynamicRequestedPayload?.requestType).toBe("dynamic_tool_call");
 
     const resolved = thread?.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-request-resolved",

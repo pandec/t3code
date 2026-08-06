@@ -184,7 +184,7 @@ The workflow enforces this ordering:
 3. `deploy_web` depends on `release` before moving the hosted channel to the new client.
 
 Preserve these dependencies when changing the release graph. Publishing a client first would leave
-the **Update server** action targeting a package version that does not exist yet.
+the **Update** action targeting a package version that does not exist yet.
 
 For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
 connect the new client to a server on the previous version and verify that the update action

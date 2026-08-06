@@ -21,7 +21,10 @@ import type {
   SidebarThreadProviderIconVisibility,
   ThreadId,
 } from "@t3tools/contracts";
-import { clampArchivedSectionVisibleCount } from "@t3tools/contracts/settings";
+import {
+  clampArchivedSectionVisibleCount,
+  type TimestampFormat,
+} from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -388,13 +391,19 @@ function SnoozePopoverButton(props: {
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: SnoozePreset) => void;
   untilWokenSupported: boolean;
+  timestampFormat: TimestampFormat;
 }) {
-  const { open, onOpenChange, onSnooze, untilWokenSupported } = props;
+  const { open, onOpenChange, onSnooze, timestampFormat, untilWokenSupported } = props;
   // Presets resolve at open time so "In 1 hour" is relative to the click,
   // not to when the row mounted.
   const presets = useMemo(
-    () => (open ? resolveSnoozePresets(new Date(), { untilWoken: untilWokenSupported }) : []),
-    [open, untilWokenSupported],
+    () =>
+      open
+        ? resolveSnoozePresets(new Date(), timestampFormat, {
+            untilWoken: untilWokenSupported,
+          })
+        : [],
+    [open, timestampFormat, untilWokenSupported],
   );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -495,6 +504,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   compactCards: boolean;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
   providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
+  timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
@@ -1179,6 +1189,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                         onOpenChange={setSnoozeMenuOpen}
                         onSnooze={handleSnoozePreset}
                         untilWokenSupported={props.snoozeUntilWokenSupported}
+                        timestampFormat={props.timestampFormat}
                       />
                     ) : null}
                     {props.settlementSupported ? (
@@ -1442,6 +1453,7 @@ export default function SidebarV2() {
   const archivedSectionVisibleCount = useClientSettings((s) =>
     clampArchivedSectionVisibleCount(s.archivedSectionVisibleCount),
   );
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     attemptArchiveThread,
@@ -2783,7 +2795,11 @@ export default function SidebarV2() {
               title:
                 preset.snoozedUntil === null
                   ? "Snoozed until you wake it"
-                  : `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+                  : `Snoozed until ${snoozeWakeDescription(
+                      preset.snoozedUntil,
+                      new Date(),
+                      timestampFormat,
+                    )}`,
               timeout: 5_000,
               actionProps: {
                 children: "Undo",
@@ -2801,7 +2817,7 @@ export default function SidebarV2() {
         }
       })();
     },
-    [attemptUnsnooze, planForwardNavigation, snoozeThread],
+    [attemptUnsnooze, planForwardNavigation, snoozeThread, timestampFormat],
   );
 
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
@@ -2845,7 +2861,7 @@ export default function SidebarV2() {
       // The indefinite preset needs every selected environment to support
       // it; a mixed selection would half-apply the same way blocked work
       // would.
-      const snoozePresets = resolveSnoozePresets(selectionNow, {
+      const snoozePresets = resolveSnoozePresets(selectionNow, timestampFormat, {
         untilWoken: selectedThreads.every(
           (thread) =>
             serverConfigs.get(thread.environmentId)?.environment.capabilities
@@ -2988,6 +3004,7 @@ export default function SidebarV2() {
       removeFromSelection,
       serverConfigs,
       updateThreadMetadata,
+      timestampFormat,
     ],
   );
 
@@ -3030,7 +3047,7 @@ export default function SidebarV2() {
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         // Presets resolve at menu-open time (same as the popover).
-        const snoozePresets = resolveSnoozePresets(new Date(), {
+        const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
           untilWoken:
             serverConfigs.get(thread.environmentId)?.environment.capabilities
               .threadSnoozeIndefinite === true,
@@ -3272,6 +3289,7 @@ export default function SidebarV2() {
       serverConfigs,
       startThreadRename,
       updateThreadMetadata,
+      timestampFormat,
     ],
   );
 
@@ -3754,7 +3772,9 @@ export default function SidebarV2() {
                         snoozeWakeLabelText={
                           section === "snoozed"
                             ? thread.snoozedUntil != null
-                              ? snoozeWakeLabel(thread.snoozedUntil, new Date())
+                              ? snoozeWakeLabel(thread.snoozedUntil, {
+                                  now: new Date().toISOString(),
+                                })
                               : "parked"
                             : null
                         }
@@ -3784,6 +3804,7 @@ export default function SidebarV2() {
                         compactCards={compactCards}
                         providerIconVisibility={providerIconVisibility}
                         providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}
+                        timestampFormat={timestampFormat}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}
                         onStartRename={startThreadRename}
