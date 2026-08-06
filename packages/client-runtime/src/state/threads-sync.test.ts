@@ -360,6 +360,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     cachedThreadSnapshot,
     removedThreads,
     wakeups,
+    eventPriority,
     setEventPriority: (priority: ThreadEventPriority) =>
       eventCoalescing.setPriority(
         { environmentId: TARGET.environmentId, threadId: THREAD_ID },
@@ -906,6 +907,33 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("preserves buffered order when the active window becomes zero", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        initialEventPriority: "background",
+        foregroundWindowMs: 0,
+        backgroundWindowMs: 750,
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, messageDelta("Buffered", CACHED_SNAPSHOT_SEQUENCE + 1));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      yield* Ref.set(harness.eventPriority, "foreground");
+      yield* Queue.offer(harness.inputs, messageDelta(" immediate", CACHED_SNAPSHOT_SEQUENCE + 2));
+      const final = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) && value.data.value.messages[0]?.text === "Buffered immediate",
+      );
+
+      expect(Option.getOrThrow(final.data).messages[0]?.text).toBe("Buffered immediate");
+    }),
+  );
+
   it.effect("flushes buffered deltas before structural settle events", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: ACTIVE_THREAD });
@@ -1000,6 +1028,30 @@ describe("EnvironmentThreads", () => {
         (value) => Option.isSome(value.data) && value.data.value.messages.length === 1,
       );
       expect(Option.getOrThrow(flushed.data).messages[0]?.text).toBe("Focused");
+    }),
+  );
+
+  it.effect("flushes pending events before teardown persistence", () =>
+    Effect.gen(function* () {
+      const savedThreads = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ cached: BASE_THREAD });
+          yield* awaitThreadState(
+            harness.observed,
+            (value) => value.status === "live" && Option.isSome(value.data),
+          );
+          yield* Queue.offer(
+            harness.inputs,
+            messageDelta("Persist on close", CACHED_SNAPSHOT_SEQUENCE + 1),
+          );
+          for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+          return harness.savedThreads;
+        }),
+      );
+
+      const saved = (yield* Ref.get(savedThreads)).at(-1);
+      expect(saved?.snapshotSequence).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
+      expect(saved?.thread.messages[0]?.text).toBe("Persist on close");
     }),
   );
 

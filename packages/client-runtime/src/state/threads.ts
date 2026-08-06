@@ -546,7 +546,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           onSome: (service) => service.windowMs(priority),
         });
         if (windowMs <= 0) {
-          yield* applyItemsUnlocked([item]);
+          const pending = yield* Ref.getAndSet(pendingItems, []);
+          yield* Ref.update(flushGeneration, (generation) => generation + 1);
+          yield* applyItemsUnlocked([...pending, item]);
           return;
         }
 

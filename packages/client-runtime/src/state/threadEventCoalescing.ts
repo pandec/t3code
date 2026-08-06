@@ -80,21 +80,41 @@ export function threadEventCoalescingLayer(
         windowMs: (priority) =>
           priority === "foreground" ? foregroundWindowMs : backgroundWindowMs,
         setPriority: (threadRef, priority) =>
-          Ref.modify(state, (current): readonly [boolean, ThreadEventPriorityState] => {
-            const key = threadKey(threadRef);
-            if ((current.priorities.get(key) ?? defaultPriority) === priority) {
-              return [false, current];
-            }
-            const priorities = new Map(current.priorities);
-            priorities.set(key, priority);
-            return [true, { ...current, priorities }];
-          }).pipe(
-            Effect.flatMap((changed) =>
-              changed
-                ? PubSub.publish(changes, { threadRef, priority }).pipe(Effect.asVoid)
-                : Effect.void,
-            ),
-          ),
+          Ref.modify(
+            state,
+            (
+              current,
+            ): readonly [ReadonlyArray<ThreadEventPriorityChange>, ThreadEventPriorityState] => {
+              const key = threadKey(threadRef);
+              if (priority === "foreground") {
+                if (sameThread(current.foreground, threadRef)) return [[], current];
+                const priorities = new Map(current.priorities);
+                const updates: Array<ThreadEventPriorityChange> = [];
+                if (current.foreground !== null) {
+                  priorities.set(threadKey(current.foreground), "background");
+                  updates.push({ threadRef: current.foreground, priority: "background" });
+                }
+                priorities.set(key, "foreground");
+                updates.push({ threadRef, priority: "foreground" });
+                return [updates, { priorities, foreground: threadRef }];
+              }
+              if (
+                (current.priorities.get(key) ?? defaultPriority) === "background" &&
+                !sameThread(current.foreground, threadRef)
+              ) {
+                return [[], current];
+              }
+              const priorities = new Map(current.priorities);
+              priorities.set(key, "background");
+              return [
+                [{ threadRef, priority: "background" }],
+                {
+                  priorities,
+                  foreground: sameThread(current.foreground, threadRef) ? null : current.foreground,
+                },
+              ];
+            },
+          ).pipe(Effect.flatMap(publish)),
         setForeground: (threadRef) =>
           Ref.modify(
             state,
@@ -175,12 +195,14 @@ export function coalesceThreadStreamItems(
     }
 
     const chunks = [first.event.payload.text];
+    let attachments = first.event.payload.attachments;
     let lastEvent = first.event;
     while (index + 1 < items.length && canMergeMessageDeltas(first, items[index + 1]!)) {
       index += 1;
       const next = items[index]!;
       if (next.kind !== "event" || next.event.type !== "thread.message-sent") break;
       chunks.push(next.event.payload.text);
+      attachments = next.event.payload.attachments ?? attachments;
       lastEvent = next.event;
     }
     coalesced.push(
@@ -191,9 +213,10 @@ export function coalesceThreadStreamItems(
             event: {
               ...lastEvent,
               payload: {
-                ...lastEvent.payload,
+                ...first.event.payload,
                 text: chunks.join(""),
-                createdAt: first.event.payload.createdAt,
+                turnId: lastEvent.payload.turnId,
+                ...(attachments === undefined ? {} : { attachments }),
               },
             },
           },

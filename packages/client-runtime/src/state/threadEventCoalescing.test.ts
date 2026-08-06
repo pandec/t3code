@@ -21,8 +21,16 @@ const THREAD_REF = {
   environmentId: EnvironmentId.make("environment-1"),
   threadId: THREAD_ID,
 };
+const OTHER_THREAD_REF = {
+  environmentId: THREAD_REF.environmentId,
+  threadId: ThreadId.make("thread-2"),
+};
 
-function messageDelta(text: string, sequence: number): OrchestrationThreadStreamItem {
+function messageDelta(
+  text: string,
+  sequence: number,
+  messageId = MessageId.make("message-1"),
+): OrchestrationThreadStreamItem {
   return {
     kind: "event",
     event: {
@@ -38,7 +46,7 @@ function messageDelta(text: string, sequence: number): OrchestrationThreadStream
       type: "thread.message-sent",
       payload: {
         threadId: THREAD_ID,
-        messageId: MessageId.make("message-1"),
+        messageId,
         role: "assistant",
         text,
         turnId: TurnId.make("turn-1"),
@@ -94,8 +102,12 @@ describe("thread event coalescing", () => {
     if (result[0]?.kind !== "event" || result[0].event.type !== "thread.message-sent") return;
     expect(result[0].event.sequence).toBe(2);
     expect(result[0].event.payload.text).toBe("Hello world");
+    expect(result[0].event.payload.updatedAt).toBe("2026-04-01T00:00:01.000Z");
     expect(result[1]).toBe(structural);
     expect(result[2]).toBe(third);
+    expect(
+      coalesceThreadStreamItems([first, messageDelta("other", 2, MessageId.make("message-2"))]),
+    ).toHaveLength(2);
   });
 
   it("classifies structural transitions as immediate without delaying deltas", () => {
@@ -111,10 +123,15 @@ describe("thread event coalescing", () => {
       expect(service.windowMs("foreground")).toBe(40);
       expect(service.windowMs("background")).toBe(800);
 
+      yield* service.setPriority(THREAD_REF, "foreground");
+      expect(yield* service.priority(THREAD_REF)).toBe("foreground");
+      yield* service.setPriority(OTHER_THREAD_REF, "foreground");
+      expect(yield* service.priority(THREAD_REF)).toBe("background");
+      expect(yield* service.priority(OTHER_THREAD_REF)).toBe("foreground");
+      yield* service.setPriority(OTHER_THREAD_REF, "background");
+      expect(yield* service.priority(OTHER_THREAD_REF)).toBe("background");
       yield* service.setForeground(THREAD_REF);
       expect(yield* service.priority(THREAD_REF)).toBe("foreground");
-      yield* service.setForeground(null);
-      expect(yield* service.priority(THREAD_REF)).toBe("background");
     }).pipe(
       Effect.provide(
         threadEventCoalescingLayer({
