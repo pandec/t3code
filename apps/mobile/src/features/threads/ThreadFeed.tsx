@@ -119,11 +119,11 @@ import {
   type ThreadFeedInsetReport,
 } from "./threadFeedInsets";
 import {
+  decideThreadUnderfilledHistoryEffectAction,
   distanceFromFeedTop,
   shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
   shouldRequestOlderMessagesForUnderfilledFeed,
-  shouldRetryUnderfilledOlderMessagesAfterReady,
   type ThreadHistoryWindowState,
 } from "./threadHistoryLoadMore";
 import {
@@ -1980,9 +1980,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const historyWindow = props.historyWindow;
   const olderPageRequestedRef = useRef(false);
   const contentHeightRef = useRef(Number.POSITIVE_INFINITY);
-  const previousOlderMessagesErrorRef = useRef({
+  const previousUnderfilledHistoryEffectRef = useRef({
     threadId: props.threadId,
     error: historyWindow?.error ?? null,
+    viewportHeight,
   });
   const oldestFeedEntryId = props.feed[0]?.id ?? null;
   const previousRequestSignalsRef = useRef({
@@ -2043,24 +2044,32 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [historyWindow, viewportHeight],
   );
   useEffect(() => {
-    const previous = previousOlderMessagesErrorRef.current;
-    const error = historyWindow?.error ?? null;
-    previousOlderMessagesErrorRef.current = { threadId: props.threadId, error };
-    if (
-      historyWindow &&
-      previous.threadId === props.threadId &&
-      shouldRetryUnderfilledOlderMessagesAfterReady(previous.error, {
-        contentHeight: contentHeightRef.current,
-        viewportHeight,
-        error,
-        hasOlderMessages: historyWindow.hasOlderMessages,
-        loadingOlderMessages: historyWindow.loadingOlderMessages,
-        requestInFlight: olderPageRequestedRef.current,
-      })
-    ) {
-      // A short feed may not emit another scroll/content-size event after a
-      // disconnected attempt. Retry exactly once when readiness clears the
-      // error; other settlements wait for user input or a measured size change.
+    const previous = previousUnderfilledHistoryEffectRef.current;
+    const current = {
+      threadId: props.threadId,
+      contentHeight: contentHeightRef.current,
+      viewportHeight,
+      error: historyWindow?.error ?? null,
+      hasOlderMessages: historyWindow?.hasOlderMessages ?? false,
+      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+      requestInFlight: olderPageRequestedRef.current,
+    };
+    previousUnderfilledHistoryEffectRef.current = {
+      threadId: current.threadId,
+      error: current.error,
+      viewportHeight: current.viewportHeight,
+    };
+
+    const action = decideThreadUnderfilledHistoryEffectAction(previous, current);
+    if (action === "reset-content-height") {
+      contentHeightRef.current = Number.POSITIVE_INFINITY;
+      olderPageRequestedRef.current = false;
+      return;
+    }
+    if (action === "request-older-messages" && historyWindow) {
+      // A short feed may not emit another content-size event after its parent
+      // first becomes measurable or readiness clears a disconnected error.
+      // Other settlements wait for user input or a measured size change.
       olderPageRequestedRef.current = true;
       historyWindow.onLoadOlderMessages();
     }

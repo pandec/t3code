@@ -398,6 +398,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
         yield* flushPendingUnlocked();
         const current = yield* SubscriptionRef.get(state);
+        // Keep this guard ahead of the data/window guards: a duplicate attempt
+        // must settle without clearing the accepted request's loading/error state.
         if (current.olderMessages.isLoading) {
           // This invocation is terminal even though another accepted request is
           // still loading. Advance the signal without clearing that request.
@@ -440,7 +442,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           yield* Ref.set(olderHistoryCapped, true);
           yield* SubscriptionRef.update(state, (value) =>
             Option.match(value.data, {
-              onNone: () => value,
+              onNone: () => ({
+                ...value,
+                olderMessages: {
+                  isLoading: false,
+                  error: null,
+                  settledCount: value.olderMessages.settledCount + 1,
+                },
+              }),
               onSome: (thread) => ({
                 ...value,
                 data: Option.some({

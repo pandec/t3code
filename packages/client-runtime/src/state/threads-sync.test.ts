@@ -634,6 +634,72 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("keeps the accepted page loading when a concurrent attempt settles", () =>
+    Effect.gen(function* () {
+      const messagePageLoadGate = yield* Deferred.make<void>();
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messagePageLoadGate,
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+      yield* SubscriptionRef.update(harness.state, (value) => ({
+        ...value,
+        data: Option.map(value.data, (thread) => ({
+          ...thread,
+          messageWindow: { ...thread.messageWindow!, hasMoreOlder: false },
+        })),
+        olderMessages: { ...value.olderMessages, error: "existing page error" },
+      }));
+
+      yield* harness.loadOlderMessages;
+      const concurrentSettlement = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+      expect(concurrentSettlement.olderMessages).toEqual({
+        isLoading: true,
+        error: "existing page error",
+        settledCount: 1,
+      });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+
+      yield* Deferred.succeed(messagePageLoadGate, undefined);
+      const completed = yield* awaitThreadState(
+        harness.observed,
+        (value) => !value.olderMessages.isLoading && value.olderMessages.settledCount === 2,
+      );
+      expect(completed.olderMessages.isLoading).toBe(false);
+    }),
+  );
+
+  it.effect("settles an older-page attempt when the thread has no data", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* awaitThreadState(harness.observed, (value) => Option.isNone(value.data));
+
+      yield* harness.loadOlderMessages;
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+
+      expect(settled.olderMessages).toEqual({ isLoading: false, error: null, settledCount: 1 });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
+    }),
+  );
+
   it.effect("reopens the 600-message scrollback cap when a revert frees capacity", () =>
     Effect.gen(function* () {
       const historyMessage = (index: number) => {
@@ -798,6 +864,18 @@ describe("EnvironmentThreads", () => {
         error: null,
         settledCount: 1,
       });
+
+      yield* harness.loadOlderMessages;
+      const rejected = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted" && value.olderMessages.settledCount === 2,
+      );
+      expect(rejected.olderMessages).toEqual({
+        isLoading: false,
+        error: null,
+        settledCount: 2,
+      });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
     }),
   );
 

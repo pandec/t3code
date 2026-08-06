@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { MOBILE_THREAD_HISTORY_WINDOW } from "../../connection/thread-history-window";
 import {
   LOAD_OLDER_MESSAGES_THRESHOLD_PX,
+  decideThreadUnderfilledHistoryEffectAction,
   distanceFromFeedTop,
   shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
@@ -73,8 +74,74 @@ describe("underfilled feed paging", () => {
     loadingOlderMessages: false,
     requestInFlight: false,
   };
+  const effectState = {
+    threadId: "thread-1",
+    ...underfilled,
+  };
 
-  it("retries once when reconnect clears a disconnected error", () => {
+  it("requests exactly once when an already-sized feed gains a measurable viewport", () => {
+    const beforeLayout = { threadId: "thread-1", error: null, viewportHeight: 0 };
+
+    expect(decideThreadUnderfilledHistoryEffectAction(beforeLayout, effectState)).toBe(
+      "request-older-messages",
+    );
+    expect(
+      decideThreadUnderfilledHistoryEffectAction(
+        {
+          threadId: effectState.threadId,
+          error: effectState.error,
+          viewportHeight: effectState.viewportHeight,
+        },
+        effectState,
+      ),
+    ).toBe("none");
+  });
+
+  it.each([200, 1_200])(
+    "resets a stale %i px content height on a thread switch without requesting",
+    (staleContentHeight) => {
+      let contentHeight = staleContentHeight;
+      const action = decideThreadUnderfilledHistoryEffectAction(
+        { threadId: "thread-1", error: null, viewportHeight: 800 },
+        { ...effectState, threadId: "thread-2", contentHeight },
+      );
+
+      expect(action).toBe("reset-content-height");
+      if (action === "reset-content-height") contentHeight = Number.POSITIVE_INFINITY;
+      expect(shouldRequestOlderMessagesForUnderfilledFeed({ ...underfilled, contentHeight })).toBe(
+        false,
+      );
+
+      // The new thread's own content-size event remains the request trigger.
+      expect(
+        shouldRequestOlderMessagesForUnderfilledFeed({ ...underfilled, contentHeight: 400 }),
+      ).toBe(true);
+    },
+  );
+
+  it("retries exactly once when reconnect clears a disconnected error", () => {
+    const disconnected = {
+      threadId: "thread-1",
+      error: "The environment is not connected.",
+      viewportHeight: 800,
+    };
+
+    expect(decideThreadUnderfilledHistoryEffectAction(disconnected, effectState)).toBe(
+      "request-older-messages",
+    );
+    expect(
+      decideThreadUnderfilledHistoryEffectAction(
+        {
+          threadId: effectState.threadId,
+          error: effectState.error,
+          viewportHeight: effectState.viewportHeight,
+        },
+        effectState,
+      ),
+    ).toBe("none");
+  });
+
+  it("recognizes an underfilled feed when a disconnected error clears", () => {
     expect(
       shouldRetryUnderfilledOlderMessagesAfterReady(
         "The environment is not connected.",
@@ -98,12 +165,14 @@ describe("underfilled feed paging", () => {
     let requestCount = 1;
 
     if (shouldReleaseOlderMessagesRequest(loading, staleSettlement)) requestInFlight = false;
-    if (
-      shouldRetryUnderfilledOlderMessagesAfterReady(null, {
-        ...underfilled,
-        requestInFlight,
-      })
-    ) {
+    const settledEffectState = { ...effectState, requestInFlight };
+    expect(
+      decideThreadUnderfilledHistoryEffectAction(
+        { threadId: "thread-1", error: null, viewportHeight: 800 },
+        settledEffectState,
+      ),
+    ).toBe("none");
+    if (shouldRetryUnderfilledOlderMessagesAfterReady(null, settledEffectState)) {
       requestCount += 1;
     }
     expect(requestCount).toBe(1);

@@ -74,7 +74,7 @@ export function shouldRequestOlderMessages(input: {
   return input.distanceFromTop <= (input.thresholdPx ?? LOAD_OLDER_MESSAGES_THRESHOLD_PX);
 }
 
-/** True when a ready, underfilled feed should automatically request another page. */
+/** Geometry and request state used by automatic underfilled-feed paging. */
 export interface ThreadUnderfilledHistoryRequestState {
   readonly contentHeight: number;
   readonly viewportHeight: number;
@@ -84,6 +84,7 @@ export interface ThreadUnderfilledHistoryRequestState {
   readonly requestInFlight: boolean;
 }
 
+/** True when a ready, underfilled feed should automatically request another page. */
 export function shouldRequestOlderMessagesForUnderfilledFeed(
   input: ThreadUnderfilledHistoryRequestState,
 ): boolean {
@@ -105,4 +106,33 @@ export function shouldRetryUnderfilledOlderMessagesAfterReady(
     current.error == null &&
     shouldRequestOlderMessagesForUnderfilledFeed(current)
   );
+}
+
+export interface ThreadUnderfilledHistoryEffectSignals {
+  readonly threadId: string;
+  readonly error: string | null | undefined;
+  readonly viewportHeight: number;
+}
+
+export interface ThreadUnderfilledHistoryEffectState
+  extends ThreadUnderfilledHistoryEffectSignals, ThreadUnderfilledHistoryRequestState {}
+
+export type ThreadUnderfilledHistoryEffectAction =
+  | "none"
+  | "request-older-messages"
+  | "reset-content-height";
+
+/** Decides the bounded action for ThreadFeed's underfilled-history effect. */
+export function decideThreadUnderfilledHistoryEffectAction(
+  previous: ThreadUnderfilledHistoryEffectSignals,
+  current: ThreadUnderfilledHistoryEffectState,
+): ThreadUnderfilledHistoryEffectAction {
+  if (previous.threadId !== current.threadId) return "reset-content-height";
+
+  const viewportBecameMeasurable = previous.viewportHeight === 0 && current.viewportHeight > 0;
+  const pagingErrorCleared = previous.error != null && current.error == null;
+  return (viewportBecameMeasurable || pagingErrorCleared) &&
+    shouldRequestOlderMessagesForUnderfilledFeed(current)
+    ? "request-older-messages"
+    : "none";
 }
