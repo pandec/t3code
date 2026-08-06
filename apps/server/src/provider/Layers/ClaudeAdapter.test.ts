@@ -320,6 +320,8 @@ function writeSkillFile(skillDirectory: string, contents: string): void {
   NodeFS.writeFileSync(NodePath.join(skillDirectory, "SKILL.md"), contents);
 }
 
+const toTranscriptLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
@@ -904,6 +906,117 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
+  it.effect("settles the cwd at the turn boundary when the transcript lags the tool", () => {
+    const sessionId = "6d1c47a9-32fe-4b08-8e5a-71c0d9b4e2af";
+    const workspaceRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-lag-cwd-"));
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-lag-home-"));
+    const worktreePath = NodePath.join(workspaceRoot, ".claude", "worktrees", "feature");
+    const projectDirectory = (cwd: string) =>
+      NodePath.join(homePath, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+
+    // As it is at the moment the tool result arrives: the transcript is still
+    // in the old project directory and still reports the old cwd. Observed
+    // live — the entry recording the move landed ~2ms after the tool result.
+    NodeFS.mkdirSync(projectDirectory(workspaceRoot), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(projectDirectory(workspaceRoot), `${sessionId}.jsonl`),
+      `${toTranscriptLine({ type: "user", uuid: "u1", cwd: workspaceRoot })}\n`,
+    );
+
+    const harness = makeHarness({ cwd: workspaceRoot, claudeConfig: { homePath } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const cwdChangedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.cwd.changed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: workspaceRoot,
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "isolate this work",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: sessionId,
+        uuid: "stream-lag-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "tool-enter-worktree-lag",
+            name: "EnterWorktree",
+            input: { name: "feature" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: sessionId,
+        uuid: "tool-result-lag-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-enter-worktree-lag",
+              content: `Created worktree at ${worktreePath} on branch feature.`,
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+
+      // Now the CLI catches up: the transcript is relocated and records the
+      // move. Nothing else will tell the adapter about it.
+      NodeFS.mkdirSync(projectDirectory(worktreePath), { recursive: true });
+      NodeFS.writeFileSync(
+        NodePath.join(projectDirectory(worktreePath), `${sessionId}.jsonl`),
+        `${toTranscriptLine({ type: "user", uuid: "u1", cwd: workspaceRoot })}\n${toTranscriptLine({
+          type: "assistant",
+          uuid: "a1",
+          cwd: worktreePath,
+        })}\n`,
+      );
+      NodeFS.rmSync(NodePath.join(projectDirectory(workspaceRoot), `${sessionId}.jsonl`));
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: sessionId,
+        uuid: "result-lag-1",
+      } as unknown as SDKMessage);
+
+      const event = yield* Fiber.join(cwdChangedFiber);
+      const cwdChanged = Option.getOrUndefined(event);
+      assert.equal(cwdChanged?.type, "session.cwd.changed");
+      assert.deepInclude(cwdChanged?.payload, { cwd: worktreePath });
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.scoped,
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(workspaceRoot, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
   it.effect("emits a cwd change when a worktree tool moves the session", () => {
     const sessionId = "3f2b91c4-8d5e-4a17-9c33-2be7f0a15d84";
     const workspaceRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-wt-cwd-"));
@@ -922,7 +1035,7 @@ describe("ClaudeAdapterLive", () => {
     NodeFS.mkdirSync(projectDirectory, { recursive: true });
     NodeFS.writeFileSync(
       NodePath.join(projectDirectory, `${sessionId}.jsonl`),
-      `${JSON.stringify({ type: "user", uuid: "u1", cwd: workspaceRoot })}\n${JSON.stringify({
+      `${toTranscriptLine({ type: "user", uuid: "u1", cwd: workspaceRoot })}\n${toTranscriptLine({
         type: "assistant",
         uuid: "a1",
         cwd: worktreePath,

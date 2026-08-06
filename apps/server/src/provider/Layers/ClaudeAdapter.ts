@@ -278,6 +278,12 @@ interface ClaudeSessionContext {
    * the session has moved would look for the transcript under the worktree.
    */
   readonly configDirPath: string;
+  /**
+   * A tool moved the session between directories during this turn. The move is
+   * re-checked at the turn boundary because the transcript entry recording it
+   * can land after the tool result reaches us.
+   */
+  cwdReconcilePending: boolean;
   readonly pendingWorkState: {
     hasPendingWork: boolean | undefined;
   };
@@ -1872,11 +1878,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const recordSessionCwd = Effect.fn("ClaudeAdapter.recordSessionCwd")(function* (
     context: ClaudeSessionContext,
     nextCwd: string,
-    reportedPreviousCwd?: string,
+    options?: { readonly reportedPreviousCwd?: string; readonly trigger?: string },
   ) {
     const threadId = context.session.threadId;
+    const reportedPreviousCwd = options?.reportedPreviousCwd;
     const previousCwd = context.session.cwd;
-    if (previousCwd === nextCwd) return;
+    if (previousCwd === nextCwd) {
+      // Not necessarily a no-op: a read that lands before the transcript
+      // records the move looks exactly like this, so leave a trace rather than
+      // returning in silence.
+      yield* Effect.logDebug("claude.session.cwd-unchanged", {
+        threadId,
+        cwd: nextCwd,
+        trigger: options?.trigger ?? "unspecified",
+      });
+      return;
+    }
 
     const stamp = yield* makeEventStamp();
     context.session = {
@@ -1920,11 +1937,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return toolName === "EnterWorktree" || toolName === "ExitWorktree";
   }
 
+  /**
+   * Bring the recorded cwd back in line with the transcript.
+   *
+   * Runs twice for a move: once when the tool that caused it completes, and
+   * again when the turn ends. The first is immediate but racy — the entry
+   * carrying the new cwd has been observed landing ~2ms after the tool result
+   * reaches us, and a read that lands early sees the pre-move directory and
+   * concludes nothing changed. The turn boundary is the durable checkpoint, and
+   * it also catches moves this adapter has no specific trigger for.
+   */
   const reconcileSessionCwdFromTranscript = Effect.fn(
     "ClaudeAdapter.reconcileSessionCwdFromTranscript",
-  )(function* (context: ClaudeSessionContext) {
+  )(function* (context: ClaudeSessionContext, trigger: "worktree-tool" | "turn-completed") {
     const sessionId = context.resumeSessionId;
-    if (sessionId === undefined) return;
+    if (sessionId === undefined) {
+      yield* Effect.logDebug("claude.session.cwd-reconcile-skipped", {
+        threadId: context.session.threadId,
+        trigger,
+        reason: "no-session-id",
+      });
+      return;
+    }
 
     const observedCwd = yield* findClaudeSessionCwd({
       configDirPath: context.configDirPath,
@@ -1935,17 +1969,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       Effect.orElseSucceed(() => null),
     );
     if (observedCwd === null) {
-      // The tool reported a move but the transcript does not show one. Say so:
-      // silence here looks identical to "nothing moved", and the persisted cwd
-      // would be wrong with nothing to explain why.
-      yield* Effect.logWarning("claude.session.cwd-unresolved-after-worktree-tool", {
+      const detail = {
         threadId: context.session.threadId,
         sessionId,
+        trigger,
         cwd: context.session.cwd ?? null,
-      });
+      };
+      // A worktree tool that leaves no resolvable cwd is a real problem worth
+      // announcing; the turn-boundary sweep runs for every turn, including
+      // sessions whose transcript is not readable at all, so it stays quiet.
+      yield* trigger === "worktree-tool"
+        ? Effect.logWarning("claude.session.cwd-unresolved-after-worktree-tool", detail)
+        : Effect.logDebug("claude.session.cwd-unresolved", detail);
       return;
     }
-    yield* recordSessionCwd(context, observedCwd);
+    yield* recordSessionCwd(context, observedCwd, { trigger });
   });
 
   const updateResumeCursor = Effect.fn("updateResumeCursor")(function* (
@@ -2636,6 +2674,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
+    // Only when a tool actually moved the session: turns that did not touch a
+    // worktree must not pay for a transcript read, and the session lifecycle
+    // must not wait on one.
+    if (context.cwdReconcilePending) {
+      context.cwdReconcilePending = false;
+      yield* reconcileSessionCwdFromTranscript(context, "turn-completed");
+    }
     // After the turn, so the quota reflects the work just done.
     context.scheduleSubscriptionUsage();
   });
@@ -3113,7 +3158,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         movesSessionWorkingDirectory(tool.toolName) &&
         message.parent_tool_use_id == null
       ) {
-        yield* reconcileSessionCwdFromTranscript(context);
+        // Try immediately for a responsive UI, and mark the turn so the move
+        // is confirmed at its boundary: the transcript entry recording it has
+        // been observed landing after the tool result reaches us, and a read
+        // that lands early concludes nothing moved.
+        context.cwdReconcilePending = true;
+        yield* reconcileSessionCwdFromTranscript(context, "worktree-tool");
       }
 
       context.inFlightTools.delete(index);
@@ -4412,7 +4462,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             });
             return;
           }
-          yield* recordSessionCwd(context, nextCwd, reportedPreviousCwd);
+          yield* recordSessionCwd(context, nextCwd, {
+            ...(reportedPreviousCwd !== undefined ? { reportedPreviousCwd } : {}),
+            trigger: "cwd-changed-hook",
+          });
         },
       );
 
@@ -4662,6 +4715,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
         pendingWorkState,
         configDirPath: sessionConfigDirPath,
+        cwdReconcilePending: false,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
