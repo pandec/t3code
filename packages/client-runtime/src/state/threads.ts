@@ -11,9 +11,11 @@ import {
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -170,6 +172,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   threadId: ThreadIdType,
 ) {
   const scope = yield* Effect.scope;
+  // Every fiber that can read stream events, mutate `state`, or enqueue a
+  // persistence write is forked into this child scope instead of `scope`
+  // directly. On teardown we close `teardownScope` first (interrupting and
+  // *awaiting* all of those fibers) before flushing pending items and
+  // persisting the final snapshot, so no producer can still be applying a
+  // late event (e.g. the last running -> idle transition) while the
+  // finalizer reads `state` and writes the cache. See the finalizer below.
+  const teardownScope = yield* Scope.make();
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
@@ -268,7 +278,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Stream.fromQueue(persistence).pipe(
     Stream.debounce("500 millis"),
     Stream.runForEach(persist),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
 
   const setSynchronizing = SubscriptionRef.update(state, (current) =>
@@ -654,7 +664,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         pending.push(item);
         if (wasEmpty) {
           const generation = yield* Ref.updateAndGet(flushGeneration, (current) => current + 1);
-          yield* Effect.forkIn(scheduleFlush(generation, windowMs), scope);
+          yield* Effect.forkIn(scheduleFlush(generation, windowMs), teardownScope);
         }
       }),
     );
@@ -737,7 +747,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* Stream.fromQueue(artifactRefreshes).pipe(
     Stream.runForEach(refreshWarmSnapshot),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
 
   if (Option.isSome(eventCoalescing)) {
@@ -748,7 +758,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           change.threadRef.threadId === threadId,
       ),
       Stream.runForEach(() => flushPending),
-      Effect.forkScoped,
+      Effect.forkIn(teardownScope),
     );
   }
 
@@ -763,7 +773,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           return flushPending.pipe(Effect.andThen(setReady));
       }
     }),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
 
   const foregroundResubscriptions = Option.match(wakeups, {
@@ -773,7 +783,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   yield* setSynchronizing;
-  yield* Effect.forkScoped(
+  yield* Effect.forkIn(
     subscribeDynamic(
       ORCHESTRATION_WS_METHODS.subscribeThread,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
@@ -843,17 +853,37 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         resubscribe: foregroundResubscriptions,
       },
     ).pipe(Stream.runForEach(acceptItem)),
+    teardownScope,
   );
 
+  // Teardown must not race the final persisted snapshot against a producer
+  // that is still in flight. `teardownScope` owns every fiber that can call
+  // `acceptItem`/`setThread` or enqueue a debounced persistence write
+  // (the subscription stream, the coalescing/supervisor watchers, the
+  // artifact-refresh consumer, the debounced persist consumer, and any
+  // pending `scheduleFlush` timer). Closing it first interrupts *and awaits*
+  // all of them, so once it resolves no fiber can still be applying a late
+  // event (e.g. the final running -> idle transition). Only then do we take
+  // the mutation lock to flush any already-buffered items and persist under
+  // that same lock, guaranteeing the persisted snapshot exactly matches the
+  // final published state with no window for another writer to race in.
   yield* Effect.addFinalizer(() =>
-    flushPending.pipe(
-      Effect.andThen(Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)])),
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
-          onNone: () => Effect.void,
-          onSome: (thread) =>
-            shouldPersistThread(thread) ? persist({ snapshotSequence, thread }) : Effect.void,
-        }),
+    Scope.close(teardownScope, Exit.void).pipe(
+      Effect.andThen(
+        mutationLock.withPermits(1)(
+          Effect.gen(function* () {
+            yield* flushPendingUnlocked();
+            const [current, snapshotSequence] = yield* Effect.all([
+              SubscriptionRef.get(state),
+              SubscriptionRef.get(lastSequence),
+            ]);
+            yield* Option.match(current.data, {
+              onNone: () => Effect.void,
+              onSome: (thread) =>
+                shouldPersistThread(thread) ? persist({ snapshotSequence, thread }) : Effect.void,
+            });
+          }),
+        ),
       ),
     ),
   );

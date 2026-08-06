@@ -15,9 +15,12 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -165,6 +168,13 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly initialEventPriority?: ThreadEventPriority;
   readonly foregroundWindowMs?: number;
   readonly backgroundWindowMs?: number;
+  // Makes `cache.saveThread` sleep (on the virtual `TestClock`) before
+  // committing whenever the snapshot's thread title matches `title`. This
+  // reproduces the fact that a real cache write crosses a genuine async
+  // boundary, so a test can deterministically control, via `TestClock`
+  // alarms, whether a stale in-flight write lands before or after another
+  // write without racing on scheduler internals.
+  readonly saveThreadDelay?: { readonly title: string; readonly millis: number };
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -304,7 +314,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loadThread: (_environmentId, threadId) =>
       threadId === THREAD_ID ? Ref.get(cachedThreadSnapshot) : Effect.succeed(Option.none()),
     saveThread: (_environmentId, thread) =>
-      Ref.set(cachedThreadSnapshot, Option.some(thread)).pipe(
+      (options?.saveThreadDelay !== undefined &&
+      thread.thread.title === options.saveThreadDelay.title
+        ? Effect.sleep(`${options.saveThreadDelay.millis} millis`)
+        : Effect.void
+      ).pipe(
+        Effect.andThen(Ref.set(cachedThreadSnapshot, Option.some(thread))),
         Effect.andThen(Ref.update(savedThreads, (current) => [...current, thread])),
       ),
     removeThread: (_environmentId, threadId) =>
@@ -1562,6 +1577,116 @@ describe("EnvironmentThreads", () => {
 
       expect(yield* Ref.get(savedThreads)).toEqual([]);
     }),
+  );
+
+  it.effect("applies the last running -> idle event before teardown decides what to persist", () =>
+    Effect.gen(function* () {
+      // Own the handle's scope explicitly instead of wrapping the harness
+      // in `Effect.scoped`, so teardown can be triggered at a precise
+      // moment relative to the final settle event.
+      const teardownScope = yield* Scope.make();
+      const harness = yield* makeHarness({ cached: ACTIVE_THREAD }).pipe(
+        Scope.provide(teardownScope),
+      );
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.session?.status === "running",
+      );
+
+      yield* Queue.offer(harness.inputs, sessionSettled(CACHED_SNAPSHOT_SEQUENCE + 1));
+      // Give the producer fiber scheduling turns to dequeue and apply the
+      // event. The 500ms debounced persistence writer never gets a
+      // chance to fire on its own here (the TestClock is never
+      // advanced), so the only path that can cache this event is the
+      // teardown finalizer's own flush-then-persist.
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+      yield* Scope.close(teardownScope, Exit.void);
+
+      const cached = Option.getOrThrow(yield* Ref.get(harness.cachedThreadSnapshot));
+      const saved = yield* Ref.get(harness.savedThreads);
+      const lastSaved = saved.at(-1);
+
+      expect(cached.thread.session?.status).toBe("idle");
+      expect(lastSaved?.thread.session?.status).toBe("idle");
+      expect(lastSaved?.thread).toEqual(cached.thread);
+      expect(saved.some((entry) => entry.thread.session?.status === "running")).toBe(false);
+    }),
+  );
+
+  it.effect(
+    "does not let a stale debounced write land after teardown's own persist and clobber the final state",
+    () =>
+      Effect.gen(function* () {
+        // Reproduces the finalizer teardown race deterministically via the
+        // virtual `TestClock`: a debounced persistence write for an *older*
+        // published state is already in flight (past its cache read, mid
+        // "commit") when a newer event supersedes it and teardown begins.
+        // The stale write's cache commit is given a long virtual delay so it
+        // is still outstanding when teardown's own explicit persist runs.
+        // Before this fix, the finalizer ran its persist immediately without
+        // first stopping the debounced writer, so once the virtual clock
+        // advanced far enough for the stale write's delay to elapse, it
+        // would land *after* the finalizer's own write and clobber the
+        // correct final snapshot with stale data.
+        const teardownScope = yield* Scope.make();
+        const harness = yield* makeHarness({
+          cached: BASE_THREAD,
+          saveThreadDelay: { title: "Interim title", millis: 10_000 },
+        }).pipe(Scope.provide(teardownScope));
+
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => value.status === "live" && Option.isSome(value.data),
+        );
+
+        // This update's debounced write starts, reads the cache, and then
+        // sleeps (on the virtual clock) for a long time right before it
+        // would commit.
+        yield* Queue.offer(
+          harness.inputs,
+          titleUpdated("Interim title", CACHED_SNAPSHOT_SEQUENCE + 1),
+        );
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.title === "Interim title",
+        );
+        yield* TestClock.adjust("500 millis");
+        for (let index = 0; index < 5; index += 1) yield* Effect.yieldNow;
+
+        // A final update supersedes it in published state before teardown
+        // begins.
+        yield* Queue.offer(
+          harness.inputs,
+          titleUpdated("Final title", CACHED_SNAPSHOT_SEQUENCE + 2),
+        );
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.title === "Final title",
+        );
+
+        // Start teardown and let its own (undelayed) persist run. A correct
+        // implementation has already interrupted the debounced writer here,
+        // cancelling its pending sleep, so it can never commit. A buggy
+        // implementation instead lets that write keep sleeping in the
+        // background while teardown's own persist completes first.
+        const closing = yield* Effect.forkChild(Scope.close(teardownScope, Exit.void));
+        for (let index = 0; index < 5; index += 1) yield* Effect.yieldNow;
+
+        // Advance the virtual clock past the stale write's delay. On correct
+        // code this fires no alarm (the writer was already interrupted). On
+        // buggy code this fires the still-pending stale write, which commits
+        // "Interim title" over the already-persisted "Final title".
+        yield* TestClock.adjust("10 seconds");
+        yield* Fiber.join(closing);
+
+        const cached = Option.getOrThrow(yield* Ref.get(harness.cachedThreadSnapshot));
+        const saved = yield* Ref.get(harness.savedThreads);
+        expect(cached.thread.title).toBe("Final title");
+        expect(saved.at(-1)?.thread.title).toBe("Final title");
+      }),
   );
 
   it.effect("seeds the thread from the HTTP snapshot and resumes live events", () =>
