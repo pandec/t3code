@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  type OrchestrationEventType,
   type OrchestrationThread,
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
@@ -91,6 +92,71 @@ function sessionTransition(sequence: number): OrchestrationThreadStreamItem {
       },
     },
   };
+}
+
+const STRUCTURAL_EVENT_TYPES = {
+  "project.created": false,
+  "project.meta-updated": false,
+  "project.deleted": false,
+  "thread.created": true,
+  "thread.fork-requested": false,
+  "thread.history-imported": true,
+  "thread.deleted": true,
+  "thread.archived": true,
+  "thread.unarchived": true,
+  "thread.settled": true,
+  "thread.unsettled": true,
+  "thread.snoozed": true,
+  "thread.unsnoozed": true,
+  "thread.moved-to-top": true,
+  "thread.pinned": true,
+  "thread.unpinned": true,
+  "thread.meta-updated": true,
+  "thread.runtime-mode-set": true,
+  "thread.interaction-mode-set": true,
+  "thread.message-sent": true,
+  "thread.turn-start-requested": true,
+  "thread.turn-interrupt-requested": true,
+  "thread.approval-response-requested": false,
+  "thread.user-input-response-requested": false,
+  "thread.checkpoint-revert-requested": false,
+  "thread.reverted": true,
+  "thread.session-stop-requested": true,
+  "thread.session-set": true,
+  "thread.proposed-plan-upserted": true,
+  "thread.turn-diff-completed": false,
+  "thread.activity-appended": false,
+} satisfies Record<OrchestrationEventType, boolean>;
+
+function eventItemForClassification(type: OrchestrationEventType): OrchestrationThreadStreamItem {
+  return {
+    kind: "event",
+    event: {
+      eventId: EventId.make(`classification-${type}`),
+      sequence: 1,
+      occurredAt: "2026-04-01T00:00:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      type,
+      payload:
+        type === "thread.message-sent"
+          ? {
+              threadId: THREAD_ID,
+              messageId: MessageId.make("message-classification"),
+              role: "assistant",
+              text: "complete",
+              turnId: TurnId.make("turn-classification"),
+              streaming: false,
+              createdAt: "2026-04-01T00:00:00.000Z",
+              updatedAt: "2026-04-01T00:00:00.000Z",
+            }
+          : {},
+    },
+  } as OrchestrationThreadStreamItem;
 }
 
 const BASE_THREAD: OrchestrationThread = {
@@ -220,6 +286,15 @@ describe("thread event coalescing", () => {
     expect(isStructuralThreadStreamItem(messageDelta("delta", 1))).toBe(false);
     expect(isStructuralThreadStreamItem(sessionTransition(2))).toBe(true);
     expect(isStructuralThreadStreamItem({ kind: "synchronized" })).toBe(true);
+  });
+
+  it("classifies every orchestration event type exhaustively", () => {
+    for (const [type, structural] of Object.entries(STRUCTURAL_EVENT_TYPES)) {
+      expect(
+        isStructuralThreadStreamItem(eventItemForClassification(type as OrchestrationEventType)),
+        type,
+      ).toBe(structural);
+    }
   });
 
   it.effect("uses configurable foreground and background tiers", () =>
