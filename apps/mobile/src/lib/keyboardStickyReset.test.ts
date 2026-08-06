@@ -7,11 +7,9 @@ import {
 import {
   KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS,
   KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-  KEYBOARD_STICKY_RESET_UNPAIRED_DID_HIDE_DELAY_MS,
   normalizeKeyboardDiagnosticValue,
   resolveKeyboardDidHideAction,
   resolveKeyboardStickyResetDecision,
-  resolvePendingKeyboardStickyResetDelay,
   resolveKeyboardStickyResetDelay,
 } from "./keyboardStickyReset";
 
@@ -24,29 +22,16 @@ describe("keyboard sticky reset", () => {
   });
 
   it("orders deterministic recovery before post-send scrolling", () => {
-    expect(KEYBOARD_STICKY_RESET_SEND_DELAY_MS).toBe(370);
+    expect(KEYBOARD_STICKY_RESET_SEND_DELAY_MS).toBe(700);
+    expect(POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS).toBe(780);
+    expect(POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS).toBe(850);
     expect(POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS).toBeGreaterThan(
       KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
     );
-    expect(POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS).toBe(850);
     expect(POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS).toBeGreaterThan(
       POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS,
     );
-    expect(KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS).toBeGreaterThan(
-      KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-    );
-    expect(KEYBOARD_STICKY_RESET_UNPAIRED_DID_HIDE_DELAY_MS).toBeLessThan(
-      KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-    );
-  });
-
-  it("extends a send pass beyond a reported longer hide animation", () => {
-    expect(resolvePendingKeyboardStickyResetDelay(KEYBOARD_STICKY_RESET_SEND_DELAY_MS, 200)).toBe(
-      KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-    );
-    expect(resolvePendingKeyboardStickyResetDelay(KEYBOARD_STICKY_RESET_SEND_DELAY_MS, 600)).toBe(
-      720,
-    );
+    expect(KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS).toBe(400);
   });
 
   it("resets only a stale offset from the active current generation", () => {
@@ -75,9 +60,9 @@ describe("keyboard sticky reset", () => {
     );
   });
 
-  it("completes a pending did-hide and delays an unpaired did-hide", () => {
+  it("completes a pending did-hide and ignores an unpaired did-hide", () => {
     expect(resolveKeyboardDidHideAction(true)).toBe("complete-pending");
-    expect(resolveKeyboardDidHideAction(false)).toBe("schedule-delayed");
+    expect(resolveKeyboardDidHideAction(false)).toBe("ignore-unpaired");
   });
 
   it("normalizes diagnostic values to finite bounded precision", () => {

@@ -2,8 +2,8 @@ import { KEYBOARD_STICKY_RESET_SEND_DELAY_MS } from "./keyboardStickyReset";
 
 /** Must stay after the deterministic send reconciliation deadline. */
 export const POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS = KEYBOARD_STICKY_RESET_SEND_DELAY_MS + 80;
-/** Bounds lost did-hide completion without making post-send recovery feel stalled. */
-export const POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS = 850;
+/** Bounds lost did-hide completion after the deterministic fallback. */
+export const POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS = KEYBOARD_STICKY_RESET_SEND_DELAY_MS + 150;
 
 export type BoundedKeyboardDismissOutcome = "settled" | "rejected" | "timeout";
 

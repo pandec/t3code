@@ -16,7 +16,12 @@ export function subscribeKeyboardStickyResetRequests(
 export function requestKeyboardStickyReset(reason: KeyboardStickyResetRequestReason): boolean {
   let handled = false;
   for (const handler of Array.from(handlers)) {
-    handled = handler(reason) || handled;
+    try {
+      handled = handler(reason) || handled;
+    } catch {
+      // A recovery subscriber must never turn an already successful send into
+      // a failure or prevent other mounted coordinators from handling it.
+    }
   }
   return handled;
 }

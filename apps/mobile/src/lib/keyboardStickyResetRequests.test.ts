@@ -39,6 +39,26 @@ describe("keyboard sticky reset requests", () => {
     }
   });
 
+  it("isolates throwing subscribers and continues dispatching", () => {
+    const calls: string[] = [];
+    const unsubscribeThrowing = subscribeKeyboardStickyResetRequests(() => {
+      calls.push("throwing");
+      throw new Error("subscriber failed");
+    });
+    const unsubscribeHandling = subscribeKeyboardStickyResetRequests(() => {
+      calls.push("handling");
+      return true;
+    });
+
+    try {
+      expect(requestKeyboardStickyReset("message-send")).toBe(true);
+      expect(calls).toEqual(["throwing", "handling"]);
+    } finally {
+      unsubscribeThrowing();
+      unsubscribeHandling();
+    }
+  });
+
   it("stops notifying an unsubscribed handler", () => {
     let calls = 0;
     const unsubscribe = subscribeKeyboardStickyResetRequests(() => {

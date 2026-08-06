@@ -15,10 +15,11 @@ export function resolveKeyboardStickyResetDelay(durationMs: number): number {
   return normalizedDuration + KEYBOARD_STICKY_RESET_SLACK_MS;
 }
 
-/** The deterministic send pass must run before post-send scrolling may start. */
-export const KEYBOARD_STICKY_RESET_SEND_DELAY_MS = resolveKeyboardStickyResetDelay(
-  KEYBOARD_STICKY_RESET_DEFAULT_DURATION_MS,
-);
+/**
+ * Deterministic fallback used when the send-triggered hide emits no completion.
+ * A healthy `keyboardDidHide` reconciles immediately instead of waiting for it.
+ */
+export const KEYBOARD_STICKY_RESET_SEND_DELAY_MS = 700;
 
 /**
  * Delay before the foreground reconciliation pass. iOS can hide the keyboard
@@ -27,16 +28,6 @@ export const KEYBOARD_STICKY_RESET_SEND_DELAY_MS = resolveKeyboardStickyResetDel
  * pass instead of letting it snap the composer down and immediately back up.
  */
 export const KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS = 400;
-
-/** Gives a new show signal a chance to invalidate a wholly unpaired did-hide. */
-export const KEYBOARD_STICKY_RESET_UNPAIRED_DID_HIDE_DELAY_MS = 80;
-
-export function resolvePendingKeyboardStickyResetDelay(
-  pendingDelayMs: number,
-  hideDurationMs: number,
-): number {
-  return Math.max(pendingDelayMs, resolveKeyboardStickyResetDelay(hideDurationMs));
-}
 
 export type KeyboardStickyResetDecision =
   | "reset"
@@ -62,10 +53,10 @@ export function resolveKeyboardStickyResetDecision(input: {
   return "reset";
 }
 
-export type KeyboardDidHideAction = "complete-pending" | "schedule-delayed";
+export type KeyboardDidHideAction = "complete-pending" | "ignore-unpaired";
 
 export function resolveKeyboardDidHideAction(hasPendingReconcile: boolean): KeyboardDidHideAction {
-  return hasPendingReconcile ? "complete-pending" : "schedule-delayed";
+  return hasPendingReconcile ? "complete-pending" : "ignore-unpaired";
 }
 
 export function normalizeKeyboardDiagnosticValue(value: number): number | null {

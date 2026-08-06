@@ -33,6 +33,16 @@ describe("awaitBoundedKeyboardDismiss", () => {
     await expect(outcome).resolves.toBe("settled");
   });
 
+  it("allows a known-visible dismiss to settle without a minimum wait", async () => {
+    vi.useFakeTimers();
+    const outcome = awaitBoundedKeyboardDismiss(Promise.resolve(), {
+      minimumWaitMs: 0,
+      maximumWaitMs: 500,
+    });
+
+    await expect(outcome).resolves.toBe("settled");
+  });
+
   it("returns a normal settlement after the minimum wait", async () => {
     vi.useFakeTimers();
     const gate = deferred();

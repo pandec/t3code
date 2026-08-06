@@ -319,14 +319,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       // deterministic reconciliation deadline and a bounded native dismiss.
       // Android retains its direct dismiss flow and aborts scrolling on failure.
       const scrollAfterKeyboardDismiss = async () => {
-        recordMobileDiagnostic("keyboard-sticky", {
-          event: "dismiss-start",
-          trigger: "anchor-scroll",
-          reason: "message-send",
-        });
         if (Platform.OS === "ios") {
+          const reportedVisibleBeforeDismiss = KeyboardController.isVisible();
+          const dismissPromise = Promise.resolve().then(() => KeyboardController.dismiss());
+          recordMobileDiagnostic("keyboard-sticky", {
+            event: "dismiss-start",
+            trigger: "anchor-scroll",
+            reason: "message-send",
+            reportedVisibleBeforeDismiss,
+          });
           const dismissOutcome = await awaitBoundedKeyboardDismiss(
-            Promise.resolve().then(() => KeyboardController.dismiss()),
+            dismissPromise,
+            reportedVisibleBeforeDismiss ? { minimumWaitMs: 0 } : undefined,
           );
           recordMobileDiagnostic("keyboard-sticky", {
             event: "dismiss-outcome",
@@ -338,6 +342,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             void flushMobileDiagnostics();
           }
         } else {
+          recordMobileDiagnostic("keyboard-sticky", {
+            event: "dismiss-start",
+            trigger: "anchor-scroll",
+            reason: "message-send",
+            reportedVisibleBeforeDismiss: null,
+          });
           try {
             await KeyboardController.dismiss();
             recordMobileDiagnostic("keyboard-sticky", {

@@ -6,15 +6,17 @@ import {
   useReanimatedKeyboardAnimation,
 } from "react-native-keyboard-controller";
 
-import { flushMobileDiagnostics, recordMobileDiagnostic } from "../diagnostics/journal";
+import {
+  flushMobileDiagnostics,
+  mobileDiagnosticsEnabled,
+  recordMobileDiagnostic,
+} from "../diagnostics/journal";
 import {
   KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS,
   KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-  KEYBOARD_STICKY_RESET_UNPAIRED_DID_HIDE_DELAY_MS,
   normalizeKeyboardDiagnosticValue,
   resolveKeyboardDidHideAction,
   resolveKeyboardStickyResetDecision,
-  resolvePendingKeyboardStickyResetDelay,
   resolveKeyboardStickyResetDelay,
   type KeyboardStickyResetDecision,
 } from "../lib/keyboardStickyReset";
@@ -28,11 +30,7 @@ type ReconcileTrigger =
   | "keyboard-will-hide"
   | "keyboard-did-hide"
   | "app-active";
-type ReconcileReason =
-  | KeyboardStickyResetRequestReason
-  | "keyboard-hide"
-  | "unpaired-did-hide"
-  | "foreground";
+type ReconcileReason = KeyboardStickyResetRequestReason | "keyboard-hide" | "foreground";
 
 interface ReconcilePass {
   readonly generation: number;
@@ -74,6 +72,7 @@ export function KeyboardStickyResetCoordinator() {
 
   const recordKeyboardDiagnostic = useCallback(
     (context: KeyboardDiagnosticContext) => {
+      if (!mobileDiagnosticsEnabled) return;
       recordMobileDiagnostic("keyboard-sticky", {
         event: context.event,
         generation: context.generation,
@@ -221,21 +220,15 @@ export function KeyboardStickyResetCoordinator() {
         pending.generation === generationRef.current &&
         pending.reason === "message-send"
       ) {
-        const delayMs = resolvePendingKeyboardStickyResetDelay(pending.delayMs, event.duration);
-        const extended = delayMs > pending.delayMs;
         recordKeyboardDiagnostic({
           event: "keyboard-will-hide",
           generation: pending.generation,
           trigger: "keyboard-will-hide",
           reason: pending.reason,
-          delayMs,
+          delayMs: pending.delayMs,
           durationMs: event.duration,
-          decision: extended ? "extend-pending" : "preserve-pending",
+          decision: "preserve-pending",
         });
-        if (extended) {
-          clearResetTimers();
-          scheduleReconcile({ ...pending, delayMs, durationMs: event.duration }, true);
-        }
         return;
       }
 
@@ -281,27 +274,14 @@ export function KeyboardStickyResetCoordinator() {
         return;
       }
 
-      const generation = startFreshGeneration();
       recordKeyboardDiagnostic({
         event: "keyboard-did-hide",
-        generation,
+        generation: generationRef.current,
         trigger: "keyboard-did-hide",
         reason: "unpaired-did-hide",
         durationMs: event.duration,
         decision: action,
       });
-      scheduleReconcile(
-        {
-          generation,
-          trigger: "keyboard-did-hide",
-          reason: "unpaired-did-hide",
-          delayMs: KEYBOARD_STICKY_RESET_UNPAIRED_DID_HIDE_DELAY_MS,
-          durationMs: event.duration,
-          requireReportedHidden: true,
-          flushAfter: false,
-        },
-        true,
-      );
     });
     const appState = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
