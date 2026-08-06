@@ -2349,6 +2349,81 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }),
   );
 
+  it.effect("getThreadMessagePage tolerates a stale cursor for empty and non-empty threads", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-stale-cursor', 'Project Stale Cursor', '/tmp/project-stale-cursor',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-06-04T00:00:00.000Z', '2026-06-04T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES
+          (
+            'thread-stale-empty', 'project-stale-cursor', 'Empty Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-04T00:00:01.000Z', '2026-06-04T00:00:01.000Z', NULL
+          ),
+          (
+            'thread-stale-nonempty', 'project-stale-cursor', 'Non-empty Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-04T00:00:01.000Z', '2026-06-04T00:00:01.000Z', NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming,
+          created_at, updated_at
+        ) VALUES (
+          'message-still-present', 'thread-stale-nonempty', NULL, 'user',
+          'still present', 0,
+          '2026-06-04T00:00:02.000Z', '2026-06-04T00:00:02.000Z'
+        )
+      `;
+
+      const before = asMessageId("message-reverted-away");
+      const emptyPage = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-stale-empty"),
+        { before },
+      );
+      assert.equal(emptyPage._tag, "Some");
+      if (emptyPage._tag === "Some") {
+        assert.deepStrictEqual(emptyPage.value.messages, []);
+        assert.equal(emptyPage.value.hasMoreOlder, false);
+      }
+
+      const nonEmptyPage = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-stale-nonempty"),
+        { before },
+      );
+      assert.equal(nonEmptyPage._tag, "Some");
+      if (nonEmptyPage._tag === "Some") {
+        assert.deepStrictEqual(nonEmptyPage.value.messages, []);
+        assert.equal(nonEmptyPage.value.hasMoreOlder, true);
+      }
+    }),
+  );
+
   it.effect("getThreadMessagePage returns None for a deleted or missing thread", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

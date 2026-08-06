@@ -36,7 +36,7 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
  * query (cursor+limit pushdown, ORDER BY created_at, message_id) — instead
  * of hydrating the full thread-detail snapshot just to page messages.
  */
-export const getThreadMessagesHttp = Effect.fn("environment.orchestration.threadMessages")(
+export const getThreadMessagesHttp = Effect.fn("environment.orchestration.threadMessages.handler")(
   function* (
     params: { readonly threadId: ThreadId },
     query: EnvironmentOrchestrationThreadMessagesUrlParams,

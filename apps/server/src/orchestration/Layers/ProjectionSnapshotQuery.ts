@@ -198,8 +198,8 @@ const ThreadMessagePageLatestInput = Schema.Struct({
   threadId: ThreadId,
   fetchLimit: Schema.Int,
 });
-const ThreadHasAnyMessageRowSchema = Schema.Struct({
-  hasAny: Schema.Literals([0, 1]),
+const ThreadExistsRowSchema = Schema.Struct({
+  hasAny: Schema.Number,
 });
 const FullThreadDiffContextLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -688,35 +688,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: () =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         ORDER BY messages.thread_id ASC, messages.created_at ASC, messages.message_id ASC
       `,
   });
@@ -1157,40 +1129,44 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const threadMessageArtifactSelect = sql`
+    SELECT
+      messages.message_id AS "messageId",
+      messages.thread_id AS "threadId",
+      messages.turn_id AS "turnId",
+      messages.role,
+      messages.text,
+      messages.attachments_json AS "attachments",
+      messages.input_origin AS "inputOrigin",
+      messages.is_streaming AS "isStreaming",
+      messages.created_at AS "createdAt",
+      messages.updated_at AS "updatedAt",
+      summary.summary AS "summaryText",
+      summary.created_at AS "summaryCreatedAt",
+      summary.source_text_hash AS "summarySourceTextHash",
+      summary.recipe_hash AS "summaryRecipeHash",
+      messages.generation_model_selection_json AS "generationModelSelectionJson",
+      speech.speech_id AS "speechId",
+      speech.transcript AS "speechTranscript",
+      speech.mime_type AS "speechMimeType",
+      speech.size_bytes AS "speechSizeBytes",
+      speech.created_at AS "speechCreatedAt",
+      speech.source_text_hash AS "speechSourceTextHash"
+    FROM projection_thread_messages AS messages
+    LEFT JOIN projection_message_summary AS summary
+      ON summary.message_id = messages.message_id
+      AND summary.thread_id = messages.thread_id
+    LEFT JOIN projection_message_speech AS speech
+      ON speech.message_id = messages.message_id
+      AND speech.thread_id = messages.thread_id
+  `;
+
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: ({ threadId }) =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         WHERE messages.thread_id = ${threadId}
         ORDER BY messages.created_at ASC, messages.message_id ASC
       `,
@@ -1227,35 +1203,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: ({ threadId, cursorCreatedAt, cursorMessageId, fetchLimit }) =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         WHERE messages.thread_id = ${threadId}
           AND (
             messages.created_at < ${cursorCreatedAt}
@@ -1277,44 +1225,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: ({ threadId, fetchLimit }) =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         WHERE messages.thread_id = ${threadId}
         ORDER BY messages.created_at DESC, messages.message_id DESC
         LIMIT ${fetchLimit}
       `,
   });
 
+  const existsThreadRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: ThreadExistsRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT EXISTS(
+          SELECT 1
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+            AND deleted_at IS NULL
+        ) AS "hasAny"
+      `,
+  });
+
   const existsThreadMessageRow = SqlSchema.findOne({
     Request: ThreadIdLookupInput,
-    Result: ThreadHasAnyMessageRowSchema,
+    Result: ThreadExistsRowSchema,
     execute: ({ threadId }) =>
       sql`
         SELECT EXISTS(
@@ -2852,17 +2786,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const threadRow = yield* getThreadRowById({ threadId, includeArchived: 1 }).pipe(
+          const threadExists = yield* existsThreadRow({ threadId }).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getThreadMessagePage:getThread:query",
-                "ProjectionSnapshotQuery.getThreadMessagePage:getThread:decodeRow",
+                "ProjectionSnapshotQuery.getThreadMessagePage:existsThread:query",
+                "ProjectionSnapshotQuery.getThreadMessagePage:existsThread:decodeRow",
               ),
             ),
           );
-          if (Option.isNone(threadRow)) {
-            return Option.none<OrchestrationThreadMessagePage>();
-          }
+          if (threadExists.hasAny === 0) return Option.none<OrchestrationThreadMessagePage>();
 
           const limit = clampThreadMessageLimit(options.limit ?? MAX_THREAD_MESSAGE_LIMIT);
           const fetchLimit = limit + 1;
@@ -2930,7 +2862,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             return Option.some({
               threadId,
               messages: [],
-              hasMoreOlder: existsRow.hasAny === 1,
+              hasMoreOlder: existsRow.hasAny !== 0,
               snapshotSequence,
             });
           }
