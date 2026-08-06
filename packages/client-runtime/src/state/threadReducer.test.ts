@@ -183,7 +183,18 @@ describe("retainRecentThreadHistory", () => {
 
   it("retains a bounded message tail and records the load-older cursor", () => {
     const retained = retainRecentThreadHistory(
-      { ...baseThread, messages: [message(1), message(2), message(3)] },
+      {
+        ...baseThread,
+        messages: [message(1), message(2), message(3)],
+        // A populated `messageWindow` marks this as a windowing-capable
+        // snapshot (e.g. from a server that honored the message limit),
+        // distinct from the legacy no-metadata case covered below.
+        messageWindow: {
+          hasMoreOlder: false,
+          oldestLoadedMessageId: MessageId.make("message-1"),
+          totalCount: null,
+        },
+      },
       { messageWindowLimit: 2 },
     );
 
@@ -217,6 +228,19 @@ describe("retainRecentThreadHistory", () => {
       oldestLoadedMessageId: "message-1",
       totalCount: null,
     });
+  });
+
+  it("retains full history for a legacy snapshot without message-window metadata", () => {
+    const messages = Array.from({ length: 151 }, (_, index) => message(index));
+
+    const retained = retainRecentThreadHistory(
+      { ...baseThread, messages },
+      { messageWindowLimit: 150 },
+    );
+
+    expect(retained.messages).toHaveLength(151);
+    expect(retained.messages).toBe(messages);
+    expect(retained.messageWindow).toBeUndefined();
   });
 
   it("stops paging when an older page does not advance the cursor", () => {

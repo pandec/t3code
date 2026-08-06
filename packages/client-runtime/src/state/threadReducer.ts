@@ -74,9 +74,15 @@ export function retainRecentThreadHistory(
   const activities = retainRecentActivities(thread.activities);
   const checkpoints = retainRecent(thread.checkpoints);
   const messageWindowLimit = options.messageWindowLimit;
+  // A thread without `messageWindow` metadata came from a paging-incapable
+  // source: an old server that ignored the message-limit query, or a cache
+  // snapshot saved before windowing shipped. Neither can serve an older-page
+  // request, so trimming here would fabricate a `hasMoreOlder` cursor the
+  // loader can never satisfy. Retain the full history instead.
   const shouldTrimMessages =
     messageWindowLimit !== undefined &&
     messageWindowLimit !== null &&
+    thread.messageWindow !== undefined &&
     thread.messages.length > messageWindowLimit;
   const messages = shouldTrimMessages
     ? messageWindowLimit === 0
