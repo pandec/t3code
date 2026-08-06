@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -94,6 +95,9 @@ import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import { defaultScriptsRoot, readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
+import { resolveClaudeConfigDirPath } from "./provider/Drivers/ClaudeHome.ts";
+import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -337,6 +341,7 @@ function toAuthAccessStreamEvent(
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  shellSequenceAtProcessStart: number,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -356,6 +361,32 @@ const makeWsRpcLayer = (
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerInstanceHealth = yield* ProviderInstanceHealth.ProviderInstanceHealth;
       const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+      const nodePathService = yield* Path.Path;
+      // Workflow scripts live under each Claude instance's config dir, which
+      // the fork lets diverge from ~/.claude (custom homes; shadow homes
+      // symlink `projects` back to their shared dir, so realpath containment
+      // under the shared root covers them). Recomputed per request because
+      // instance settings hot-reload.
+      const listClaudeScriptRoots = Effect.gen(function* () {
+        const roots = new Set<string>([defaultScriptsRoot()]);
+        const instances = yield* providerInstanceRegistry.listInstances;
+        for (const instance of instances) {
+          if (instance.driverKind !== "claudeAgent") continue;
+          const envelope = yield* (
+            providerInstanceRegistry.getInstanceConfig?.(instance.instanceId) ??
+              Effect.succeed(undefined)
+          );
+          if (envelope === undefined) continue;
+          const blob = envelope.config as { homePath?: unknown } | undefined;
+          const homePath = typeof blob?.homePath === "string" ? blob.homePath : "";
+          const configDir = yield* resolveClaudeConfigDirPath(
+            { homePath },
+            mergeProviderInstanceEnvironment(envelope.environment),
+          ).pipe(Effect.provideService(Path.Path, nodePathService));
+          roots.add(nodePathService.join(configDir, "projects"));
+        }
+        return Array.from(roots);
+      });
       const providerUsageRefresh = yield* ProviderUsageRefresh.ProviderUsageRefresh;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
@@ -835,6 +866,16 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getWorkflowScript,
+            listClaudeScriptRoots.pipe(
+              Effect.flatMap((permittedRoots) =>
+                readWorkflowScript({ scriptPath: input.scriptPath, permittedRoots }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getTurnDiff,
@@ -945,10 +986,17 @@ const makeWsRpcLayer = (
                 // Gap too large: replaying every intervening event (each a shell
                 // refetch) is far more expensive than a single O(active-threads)
                 // snapshot. A cursor ahead of this engine's authoritative state
-                // is also invalid, so reset it with a snapshot. Send the snapshot
-                // followed by the buffered live tail, exactly as the
-                // no-afterSequence path does.
-                if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
+                // is also invalid, so reset it with a snapshot. A cursor from
+                // before this process started also needs the snapshot: the
+                // client's cached shells may carry volatile state (background
+                // liveness) that died with the previous process, and no durable
+                // event exists to correct it. Send the snapshot followed by the
+                // buffered live tail, exactly as the no-afterSequence path does.
+                if (
+                  replayGap < 0 ||
+                  replayGap > SHELL_RESUME_MAX_GAP ||
+                  afterSequence < shellSequenceAtProcessStart
+                ) {
                   const snapshot = yield* loadSnapshot;
                   return Stream.concat(
                     Stream.make({ kind: "snapshot" as const, snapshot }),
@@ -1934,6 +1982,15 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    // Shell snapshots carry volatile per-process state (backgroundLiveness),
+    // which a restart silently resets. A resume cursor that predates this
+    // process may therefore describe shells whose volatile fields no longer
+    // exist, and replaying durable events cannot correct them — only a fresh
+    // snapshot can. Capture the head sequence once at route construction
+    // (process startup) so subscribeShell can tell "resuming within this
+    // process" from "resuming across a restart".
+    const orchestrationEngineAtBoot = yield* OrchestrationEngine.OrchestrationEngineService;
+    const shellSequenceAtProcessStart = yield* orchestrationEngineAtBoot.latestSequence;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -1953,7 +2010,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, shellSequenceAtProcessStart).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

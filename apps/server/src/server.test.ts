@@ -6462,6 +6462,71 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("subscribeShell sends a fresh snapshot to a cursor from before this process", () =>
+    Effect.gen(function* () {
+      let readEventsCalls = 0;
+      const snapshotThreadId = ThreadId.make("thread-restart-snapshot");
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            // The head is already 50 when the router is built, so a cursor
+            // below 50 predates this process. Its cached shells may hold
+            // volatile state (background liveness) that died with the previous
+            // process, and replaying durable events cannot correct that — only
+            // a fresh snapshot can, even though the gap is small.
+            latestSequence: Effect.succeed(50),
+            readEvents: () =>
+              Stream.sync(() => {
+                readEventsCalls += 1;
+                return {
+                  sequence: 49,
+                  eventId: EventId.make("event-should-not-be-read"),
+                  aggregateKind: "thread",
+                  aggregateId: snapshotThreadId,
+                  occurredAt: now,
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.created",
+                  payload: {} as never,
+                } satisfies OrchestrationEvent;
+              }),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 50,
+                projects: [],
+                threads: [makeDefaultOrchestrationThreadShell({ id: snapshotThreadId })],
+                updatedAt: now,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 48,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      const [first, second] = Array.from(items);
+      assert.equal(first?.kind, "snapshot");
+      if (first?.kind === "snapshot") {
+        assert.equal(first.snapshot.threads[0]?.id, snapshotThreadId);
+      }
+      assert.equal(second?.kind, "synchronized");
+      assert.equal(readEventsCalls, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("subscribeShell replaces a cursor ahead of the authoritative head", () =>
     Effect.gen(function* () {
       let readEventsCalls = 0;
@@ -6509,6 +6574,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const now = "2026-01-01T00:00:00.000Z";
       const shellFetches: Array<string> = [];
       let replayLimit: number | undefined;
+      // Starts at 0 so the resume below reads as within-process (a cursor from
+      // before the process started falls back to a snapshot instead of replay).
+      let headSequence = 0;
 
       const messageEvent = (sequence: number): OrchestrationEvent =>
         ({
@@ -6542,7 +6610,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            latestSequence: Effect.succeed(50),
+            latestSequence: Effect.sync(() => headSequence),
             // A burst of message-sent deltas for the busy thread, plus one
             // thread.created for a different thread, all within one batch.
             readEvents: (_afterSequence, limit) => {
@@ -6563,6 +6631,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       });
 
+      headSequence = 50;
       const wsUrl = yield* getWsServerUrl("/ws");
       const items = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -6692,6 +6761,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const goneThreadId = ThreadId.make("thread-gone");
       const now = "2026-01-01T00:00:00.000Z";
+      // Starts at 0 so the resume below reads as within-process (a cursor from
+      // before the process started falls back to a snapshot instead of replay).
+      let headSequence = 0;
 
       const makeThreadEvent = (
         sequence: number,
@@ -6714,7 +6786,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            latestSequence: Effect.succeed(2),
+            latestSequence: Effect.sync(() => headSequence),
             // A thread.deleted followed, within the same coalescing window, by a
             // later refetchable event for the same thread. The later event wins
             // coalescing; its shell refetch returns none (the row is gone), which
@@ -6731,6 +6803,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       });
 
+      headSequence = 2;
       const wsUrl = yield* getWsServerUrl("/ws");
       const items = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -6752,6 +6825,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const threadId = ThreadId.make("thread-transient-refetch");
       const now = "2026-01-01T00:00:00.000Z";
       let attempts = 0;
+      // Starts at 0 so the resume below reads as within-process (a cursor from
+      // before the process started falls back to a snapshot instead of replay).
+      let headSequence = 0;
 
       const event: OrchestrationEvent = {
         sequence: 1,
@@ -6770,7 +6846,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            latestSequence: Effect.succeed(1),
+            latestSequence: Effect.sync(() => headSequence),
             readEvents: () => Stream.make(event),
           },
           projectionSnapshotQuery: {
@@ -6792,6 +6868,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       });
 
+      headSequence = 1;
       const wsUrl = yield* getWsServerUrl("/ws");
       const items = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -6813,6 +6890,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const projectId = ProjectId.make("project-gone");
       const now = "2026-01-01T00:00:00.000Z";
+      // Starts at 0 so the resume below reads as within-process (a cursor from
+      // before the process started falls back to a snapshot instead of replay).
+      let headSequence = 0;
 
       const makeProjectEvent = (
         sequence: number,
@@ -6838,7 +6918,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            latestSequence: Effect.succeed(2),
+            latestSequence: Effect.sync(() => headSequence),
             readEvents: () =>
               Stream.fromIterable([
                 makeProjectEvent(1, "project.deleted"),
@@ -6851,6 +6931,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       });
 
+      headSequence = 2;
       const wsUrl = yield* getWsServerUrl("/ws");
       const items = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>

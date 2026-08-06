@@ -743,7 +743,7 @@ export function ProviderInstanceCard({
     for (const key of MODEL_SECTION_CONFIG_KEYS) {
       const baseValue = baseObject?.[key];
       if (baseValue !== undefined) {
-        next = { ...(next ?? {}), [key]: baseValue };
+        next = { ...next, [key]: baseValue };
       } else if (next !== undefined && Object.hasOwn(next, key)) {
         const { [key]: _drop, ...rest } = next;
         next = rest;
