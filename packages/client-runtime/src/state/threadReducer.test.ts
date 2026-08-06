@@ -218,6 +218,26 @@ describe("retainRecentThreadHistory", () => {
       totalCount: null,
     });
   });
+
+  it("stops paging when an older page does not advance the cursor", () => {
+    const current = retainRecentThreadHistory(
+      { ...baseThread, messages: [message(2), message(3)] },
+      { messageWindowLimit: 2 },
+    );
+    const prepended = prependOlderThreadMessages(current, {
+      threadId: baseThread.id,
+      messages: [],
+      hasMoreOlder: true,
+      snapshotSequence: 4,
+    });
+
+    expect(prepended.messages).toEqual(current.messages);
+    expect(prepended.messageWindow).toEqual({
+      hasMoreOlder: false,
+      oldestLoadedMessageId: "message-2",
+      totalCount: null,
+    });
+  });
 });
 
 describe("applyThreadDetailEvent", () => {

@@ -127,11 +127,14 @@ export function prependOlderThreadMessages(
     seen.add(message.id);
     return true;
   });
+  const advanced = messages.length > thread.messages.length;
   return {
     ...thread,
     messages,
     messageWindow: {
-      hasMoreOlder: page.hasMoreOlder,
+      // A non-advancing page means the server no longer recognizes this cursor.
+      // Stop retrying the same cursor until a later snapshot refreshes the window.
+      hasMoreOlder: advanced && page.hasMoreOlder,
       oldestLoadedMessageId: messages[0]?.id ?? null,
       totalCount: thread.messageWindow?.totalCount ?? null,
     },

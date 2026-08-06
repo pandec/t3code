@@ -7,6 +7,9 @@ export const THREAD_STATE_IDLE_TTL_MS = 5 * 60_000;
 
 export const DEFAULT_MESSAGE_WINDOW_LIMIT = 2_000;
 export const DEFAULT_MESSAGE_OLDER_PAGE_SIZE = 200;
+// Explicit scrollback may widen the hot window, but keep it bounded so streaming
+// updates cannot rebuild an arbitrarily large message array again.
+export const MAX_MESSAGE_WINDOW_MULTIPLIER = 5;
 
 export interface ThreadHistoryWindowConfig {
   readonly messageWindowLimit: number | null;

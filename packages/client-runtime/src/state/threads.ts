@@ -42,6 +42,7 @@ import {
 import {
   DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
   DEFAULT_MESSAGE_WINDOW_LIMIT,
+  MAX_MESSAGE_WINDOW_MULTIPLIER,
   ThreadHistoryWindow,
   THREAD_STATE_IDLE_TTL_MS,
 } from "./threadRetention.ts";
@@ -150,6 +151,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     messageWindowLimit: DEFAULT_MESSAGE_WINDOW_LIMIT,
     messageOlderPageSize: DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
   }));
+  const maxLoadedOlderMessageCount =
+    historyWindow.messageWindowLimit === null
+      ? null
+      : historyWindow.messageWindowLimit * (MAX_MESSAGE_WINDOW_MULTIPLIER - 1);
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const eventCoalescing = yield* Effect.serviceOption(ThreadEventCoalescing);
   const environmentId = supervisor.target.environmentId;
@@ -327,8 +332,33 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           return Option.none<{
             readonly prepared: PreparedConnection;
             readonly beforeMessageId: MessageId | null;
+            readonly limit: number;
             readonly sequence: number;
           }>();
+        }
+
+        const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+        const remainingCapacity =
+          maxLoadedOlderMessageCount === null
+            ? historyWindow.messageOlderPageSize
+            : Math.max(0, maxLoadedOlderMessageCount - loadedOlderCount);
+        if (remainingCapacity === 0) {
+          yield* SubscriptionRef.update(state, (value) =>
+            Option.match(value.data, {
+              onNone: () => value,
+              onSome: (thread) => ({
+                ...value,
+                data: Option.some({
+                  ...thread,
+                  messageWindow: {
+                    ...thread.messageWindow!,
+                    hasMoreOlder: false,
+                  },
+                }),
+              }),
+            }),
+          );
+          return Option.none();
         }
 
         const prepared = yield* SubscriptionRef.get(supervisor.prepared);
@@ -348,6 +378,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         return Option.some({
           prepared: prepared.value,
           beforeMessageId: current.data.value.messageWindow.oldestLoadedMessageId,
+          limit: Math.min(historyWindow.messageOlderPageSize, remainingCapacity),
           sequence,
         });
       }),
@@ -358,7 +389,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ? Option.none<OrchestrationThreadMessagePage>()
       : yield* messagePageLoader.value.loadOlder(request.value.prepared, threadId, {
           beforeMessageId: request.value.beforeMessageId,
-          limit: historyWindow.messageOlderPageSize,
+          limit: request.value.limit,
         });
 
     yield* mutationLock.withPermits(1)(
@@ -395,11 +426,25 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
 
         const currentThread = current.data.value;
-        const thread = prependOlderThreadMessages(currentThread, page.value);
-        yield* Ref.update(
-          loadedOlderMessageCount,
-          (count) => count + Math.max(0, thread.messages.length - currentThread.messages.length),
+        const prependedThread = prependOlderThreadMessages(currentThread, page.value);
+        const addedCount = Math.max(
+          0,
+          prependedThread.messages.length - currentThread.messages.length,
         );
+        const loadedOlderCount = yield* Ref.updateAndGet(loadedOlderMessageCount, (count) =>
+          maxLoadedOlderMessageCount === null
+            ? count + addedCount
+            : Math.min(maxLoadedOlderMessageCount, count + addedCount),
+        );
+        const reachedLoadedHistoryLimit =
+          maxLoadedOlderMessageCount !== null && loadedOlderCount >= maxLoadedOlderMessageCount;
+        const thread =
+          reachedLoadedHistoryLimit && prependedThread.messageWindow?.hasMoreOlder === true
+            ? {
+                ...prependedThread,
+                messageWindow: { ...prependedThread.messageWindow, hasMoreOlder: false },
+              }
+            : prependedThread;
         yield* SubscriptionRef.set(state, {
           ...current,
           data: Option.some(thread),

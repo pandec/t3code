@@ -155,6 +155,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly snapshotLoadGate?: Deferred.Deferred<void>;
   readonly messagePage?: Option.Option<OrchestrationThreadMessagePage>;
+  readonly messagePageForBefore?: (
+    beforeMessageId: MessageId | null,
+  ) => Option.Option<OrchestrationThreadMessagePage>;
   readonly messagePageLoadGate?: Deferred.Deferred<void>;
   readonly messageWindowLimit?: number;
   readonly messageOlderPageSize?: number;
@@ -279,7 +282,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         ),
         Effect.as(
           threadId === THREAD_ID
-            ? (options?.messagePage ?? Option.none<OrchestrationThreadMessagePage>())
+            ? (options?.messagePageForBefore?.(pageOptions.beforeMessageId) ??
+                options?.messagePage ??
+                Option.none<OrchestrationThreadMessagePage>())
             : Option.none<OrchestrationThreadMessagePage>(),
         ),
       ),
@@ -442,6 +447,23 @@ const messageDelta = (
   },
 });
 
+const reverted = (turnCount: number, sequence: number): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-reverted-${sequence}`),
+    sequence,
+    occurredAt: "2026-04-01T01:01:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.reverted",
+    payload: { threadId: THREAD_ID, turnCount },
+  },
+});
+
 const sessionSettled = (sequence: number): OrchestrationThreadStreamItem => ({
   kind: "event",
   event: {
@@ -575,6 +597,59 @@ describe("EnvironmentThreads", () => {
       expect(
         (yield* Ref.get(harness.savedThreads)).at(-1)?.thread.messages.map((message) => message.id),
       ).toEqual(["message-3", "message-4"]);
+    }),
+  );
+
+  it.effect("caps explicitly loaded scrollback at five message windows", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(9), makeThreadMessage(10)];
+      const pageByCursor = new Map<string, ReadonlyArray<number>>([
+        ["message-9", [7, 8]],
+        ["message-7", [5, 6]],
+        ["message-5", [3, 4]],
+        ["message-3", [1, 2]],
+      ]);
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 10,
+          },
+        },
+        messageWindowLimit: 2,
+        messageOlderPageSize: 2,
+        messagePageForBefore: (beforeMessageId) => {
+          const indexes = beforeMessageId === null ? undefined : pageByCursor.get(beforeMessageId);
+          return indexes === undefined
+            ? Option.none()
+            : Option.some({
+                threadId: THREAD_ID,
+                messages: indexes.map(makeThreadMessage),
+                hasMoreOlder: true,
+                snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+              });
+        },
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      for (const expectedLength of [4, 6, 8, 10]) {
+        yield* harness.loadOlderMessages;
+        yield* awaitThreadState(
+          harness.observed,
+          (value) =>
+            Option.isSome(value.data) && value.data.value.messages.length === expectedLength,
+        );
+      }
+      const capped = Option.getOrThrow((yield* Ref.get(harness.latest)).data);
+      expect(capped.messages).toHaveLength(10);
+      expect(capped.messageWindow?.hasMoreOlder).toBe(false);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(4);
+
+      yield* harness.loadOlderMessages;
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(4);
     }),
   );
 
@@ -748,6 +823,43 @@ describe("EnvironmentThreads", () => {
         "message-5",
       ]);
       expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(true);
+    }),
+  );
+
+  it.effect("auto-refills an emptied window after a deep revert", () =>
+    Effect.gen(function* () {
+      const retainedMessage = {
+        ...makeThreadMessage(3),
+        turnId: TurnId.make("turn-1"),
+      };
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: [retainedMessage],
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: retainedMessage.id,
+            totalCount: 3,
+          },
+        },
+        messageWindowLimit: 1,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
+      const refilled = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages[0]?.id === "message-1",
+      );
+
+      expect(yield* Ref.get(harness.lastMessagePageBefore)).toBeNull();
+      expect(Option.getOrThrow(refilled.data).messageWindow?.hasMoreOlder).toBe(false);
     }),
   );
 
