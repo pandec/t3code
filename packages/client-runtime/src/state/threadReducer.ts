@@ -10,6 +10,7 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  OrchestrationThreadMessagePage,
   TurnId,
 } from "@t3tools/contracts";
 
@@ -36,6 +37,10 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
 
 const THREAD_HISTORY_RETENTION_LIMIT = 500;
 
+export interface ThreadHistoryRetentionOptions {
+  readonly messageWindowLimit?: number | null;
+}
+
 function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
   return entries.length > THREAD_HISTORY_RETENTION_LIMIT
     ? entries.slice(-THREAD_HISTORY_RETENTION_LIMIT)
@@ -61,16 +66,85 @@ function retainRecentActivities(
   return pipe(recent.slice(1), Arr.append(latestContextWindow), Arr.sort(activityOrder));
 }
 
-/**
- * Bounds memory and cache growth for thread snapshots from any source.
- * TODO: Add paged thread history before clients need access beyond these recent entries.
- */
-export function retainRecentThreadHistory(thread: OrchestrationThread): OrchestrationThread {
+/** Bounds memory and cache growth for thread snapshots from any source. */
+export function retainRecentThreadHistory(
+  thread: OrchestrationThread,
+  options: ThreadHistoryRetentionOptions = {},
+): OrchestrationThread {
   const activities = retainRecentActivities(thread.activities);
   const checkpoints = retainRecent(thread.checkpoints);
-  return activities === thread.activities && checkpoints === thread.checkpoints
+  const messageWindowLimit = options.messageWindowLimit;
+  // A thread without `messageWindow` metadata came from a paging-incapable
+  // source: an old server that ignored the message-limit query, or a cache
+  // snapshot saved before windowing shipped. Neither can serve an older-page
+  // request, so trimming here would fabricate a `hasMoreOlder` cursor the
+  // loader can never satisfy. Retain the full history instead.
+  const shouldTrimMessages =
+    messageWindowLimit !== undefined &&
+    messageWindowLimit !== null &&
+    thread.messageWindow !== undefined &&
+    thread.messages.length > messageWindowLimit;
+  const messages = shouldTrimMessages
+    ? messageWindowLimit === 0
+      ? []
+      : thread.messages.slice(-messageWindowLimit)
+    : thread.messages;
+  const messageWindow = shouldTrimMessages
+    ? {
+        hasMoreOlder: true,
+        oldestLoadedMessageId: messages[0]?.id ?? null,
+        totalCount: thread.messageWindow?.totalCount ?? null,
+      }
+    : thread.messageWindow;
+  const retainedMessageIds = shouldTrimMessages
+    ? new Set(messages.map((message) => message.id))
+    : null;
+  const completedTurnAssistantMessageIds =
+    retainedMessageIds === null
+      ? thread.completedTurnAssistantMessageIds
+      : thread.completedTurnAssistantMessageIds.filter((messageId) =>
+          retainedMessageIds.has(messageId),
+        );
+
+  return activities === thread.activities &&
+    checkpoints === thread.checkpoints &&
+    messages === thread.messages &&
+    messageWindow === thread.messageWindow &&
+    completedTurnAssistantMessageIds === thread.completedTurnAssistantMessageIds
     ? thread
-    : { ...thread, activities, checkpoints };
+    : {
+        ...thread,
+        activities,
+        checkpoints,
+        messages,
+        completedTurnAssistantMessageIds,
+        ...(messageWindow === undefined ? {} : { messageWindow }),
+      };
+}
+
+/** Prepends one older page without applying the hot-window trim again. */
+export function prependOlderThreadMessages(
+  thread: OrchestrationThread,
+  page: OrchestrationThreadMessagePage,
+): OrchestrationThread {
+  const seen = new Set<MessageId>();
+  const messages = [...page.messages, ...thread.messages].filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+  const advanced = messages.length > thread.messages.length;
+  return {
+    ...thread,
+    messages,
+    messageWindow: {
+      // A non-advancing page means the server no longer recognizes this cursor.
+      // Stop retrying the same cursor until a later snapshot refreshes the window.
+      hasMoreOlder: advanced && page.hasMoreOlder,
+      oldestLoadedMessageId: messages[0]?.id ?? null,
+      totalCount: thread.messageWindow?.totalCount ?? null,
+    },
+  };
 }
 
 /**
@@ -101,6 +175,47 @@ function isResolvableContextWindowActivity(activity: OrchestrationThreadActivity
  * scoped fields like `environmentId`) is the caller's responsibility.
  */
 export function applyThreadDetailEvent(
+  thread: OrchestrationThread,
+  event: OrchestrationEvent,
+  options: ThreadHistoryRetentionOptions = {},
+): ThreadDetailReducerResult {
+  const result = applyThreadDetailEventUnretained(thread, event);
+  if (result.kind !== "updated" || options.messageWindowLimit === undefined) return result;
+
+  const effectiveLimit =
+    options.messageWindowLimit === null
+      ? null
+      : Math.max(options.messageWindowLimit, thread.messages.length);
+  const knownTotalCount = thread.messageWindow?.totalCount;
+  let updatedThread = result.thread;
+  if (
+    event.type !== "thread.reverted" &&
+    knownTotalCount !== undefined &&
+    knownTotalCount !== null &&
+    updatedThread.messageWindow !== undefined
+  ) {
+    const previousIds = new Set(thread.messages.map((message) => message.id));
+    const addedCount = updatedThread.messages.reduce(
+      (count, message) => count + (previousIds.has(message.id) ? 0 : 1),
+      0,
+    );
+    if (addedCount > 0) {
+      updatedThread = {
+        ...updatedThread,
+        messageWindow: {
+          ...updatedThread.messageWindow,
+          totalCount: knownTotalCount + addedCount,
+        },
+      };
+    }
+  }
+  return {
+    kind: "updated",
+    thread: retainRecentThreadHistory(updatedThread, { messageWindowLimit: effectiveLimit }),
+  };
+}
+
+function applyThreadDetailEventUnretained(
   thread: OrchestrationThread,
   event: OrchestrationEvent,
 ): ThreadDetailReducerResult {
@@ -333,14 +448,27 @@ export function applyThreadDetailEvent(
         updatedAt: message.createdAt,
       }));
       const importedIds = new Set(importedMessages.map((message) => message.id));
+      const messages = [
+        ...importedMessages,
+        ...thread.messages.filter((message) => !importedIds.has(message.id)),
+      ];
+      // Imported history prepends ahead of the current window, so the actual
+      // earliest loaded message changes even when the array stays under the
+      // retention limit and `retainRecentThreadHistory` never touches
+      // `messageWindow`. Keep `oldestLoadedMessageId` accurate here so a later
+      // `loadOlderMessages` call pages from the real boundary instead of a
+      // stale cursor; `hasMoreOlder` is left untouched since paging validity
+      // beyond the newly imported messages is unaffected.
+      const messageWindow =
+        thread.messageWindow === undefined
+          ? undefined
+          : { ...thread.messageWindow, oldestLoadedMessageId: messages[0]?.id ?? null };
       return {
         kind: "updated",
         thread: {
           ...thread,
-          messages: [
-            ...importedMessages,
-            ...thread.messages.filter((message) => !importedIds.has(message.id)),
-          ],
+          messages,
+          ...(messageWindow === undefined ? {} : { messageWindow }),
           updatedAt: event.occurredAt,
         },
       };
@@ -655,6 +783,15 @@ export function applyThreadDetailEvent(
           ...thread,
           checkpoints,
           messages,
+          ...(thread.messageWindow === undefined
+            ? {}
+            : {
+                messageWindow: {
+                  ...thread.messageWindow,
+                  oldestLoadedMessageId: messages[0]?.id ?? null,
+                  totalCount: null,
+                },
+              }),
           completedTurnAssistantMessageIds: thread.completedTurnAssistantMessageIds.filter(
             (messageId) => retainedMessageIds.has(messageId),
           ),
@@ -817,10 +954,11 @@ function retainMessagesAfterRevert(
   }
 
   const retainFallbackMessages = (role: "user" | "assistant") => {
+    const windowTurnCount = messages.filter((message) => message.role === role).length;
     const retainedCount = messages.filter(
       (message) => message.role === role && retainedMessageIds.has(message.id),
     ).length;
-    const missingCount = Math.max(0, turnCount - retainedCount);
+    const missingCount = Math.max(0, Math.min(turnCount, windowTurnCount) - retainedCount);
     const fallbackMessages = messages
       .filter(
         (message) =>

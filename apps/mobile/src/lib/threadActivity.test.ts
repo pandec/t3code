@@ -569,3 +569,92 @@ describe("quiet timeline: nested agents", () => {
     expect(ids).not.toContain("shell-done");
   });
 });
+
+describe("buildThreadFeed windowed history", () => {
+  const windowedThread = () =>
+    makeThread({
+      id: ThreadId.make("thread-window"),
+      projectId: ProjectId.make("project-1"),
+      title: "Long history",
+      messages: [
+        {
+          id: MessageId.make("message-old"),
+          role: "user",
+          text: "First",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:01.000Z",
+        },
+        {
+          id: MessageId.make("message-kept"),
+          role: "user",
+          text: "Second",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:05.000Z",
+          updatedAt: "2026-04-01T00:00:05.000Z",
+        },
+        {
+          id: MessageId.make("message-newest"),
+          role: "assistant",
+          text: "Third",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:09.000Z",
+          updatedAt: "2026-04-01T00:00:09.000Z",
+        },
+      ],
+      activities: [
+        makeActivity({
+          id: EventId.make("activity-old"),
+          kind: "runtime.warning",
+          summary: "Old warning",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          payload: { message: "Old warning" },
+        }),
+        makeActivity({
+          id: EventId.make("activity-kept"),
+          kind: "runtime.warning",
+          summary: "Kept warning",
+          createdAt: "2026-04-01T00:00:06.000Z",
+          payload: { message: "Kept warning" },
+        }),
+      ],
+    });
+
+  function feedIds(entries: ReadonlyArray<ThreadFeedEntry>): ReadonlyArray<string> {
+    return entries.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities.map((row) => row.id) : [entry.id],
+    );
+  }
+
+  it("builds the whole history when no window is supplied", () => {
+    expect(feedIds(buildThreadFeed(windowedThread()))).toEqual([
+      "message-old",
+      "activity-old",
+      "message-kept",
+      "activity-kept",
+      "message-newest",
+    ]);
+  });
+
+  it("keeps only the loaded messages and the work that followed them", () => {
+    const thread = windowedThread();
+    expect(feedIds(buildThreadFeed(thread, { loadedMessages: thread.messages.slice(1) }))).toEqual([
+      "message-kept",
+      "activity-kept",
+      "message-newest",
+    ]);
+  });
+
+  it("keeps the work log when an empty window gives it nothing to trim against", () => {
+    // A message-free window (thread of pure activity, or a page still loading)
+    // has no oldest-message boundary, so work entries are not cut away.
+    const thread = windowedThread();
+    expect(feedIds(buildThreadFeed(thread, { loadedMessages: [] }))).toEqual([
+      "activity-old",
+      "activity-kept",
+    ]);
+  });
+});

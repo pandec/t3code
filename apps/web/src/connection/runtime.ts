@@ -1,6 +1,9 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
-import { threadSnapshotLoaderLayer } from "@t3tools/client-runtime/state/threads";
+import {
+  threadHistoryWindowLayer,
+  threadSnapshotLoaderLayer,
+} from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -16,10 +19,15 @@ const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
 );
 
 const snapshotLoaderLayer = Layer.merge(threadSnapshotLoaderLayer, shellSnapshotLoaderLayer);
+const webThreadHistoryWindowLayer = threadHistoryWindowLayer({
+  messageWindowLimit: null,
+  messageOlderPageSize: 200,
+});
 
 type ConnectionLayerSource =
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
+  | typeof webThreadHistoryWindowLayer
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof backgroundActivityObserverLayer
@@ -31,6 +39,7 @@ const providedClientConnectionLayer = Layer.merge(Connection.layer, snapshotLoad
       runtimeContextLayer,
       providedConnectionPlatformLayer,
       backgroundActivityObserverLayer,
+      webThreadHistoryWindowLayer,
     ),
   ),
 );

@@ -2078,6 +2078,400 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
     }),
   );
+
+  it.effect(
+    "getThreadMessagePage runs a bounded query and never hydrates other thread-detail tables",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_state`;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            scripts_json, created_at, updated_at, deleted_at
+          ) VALUES (
+            'project-bounded', 'Project Bounded', '/tmp/project-bounded',
+            '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+            '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, branch, worktree_path, latest_turn_id,
+            latest_user_message_at, pending_approval_count,
+            pending_user_input_count, has_actionable_proposed_plan,
+            created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-bounded', 'project-bounded', 'Thread Bounded',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-01T00:00:01.000Z', '2026-06-01T00:00:01.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming,
+            created_at, updated_at
+          ) VALUES (
+            'message-bounded-1', 'thread-bounded', NULL, 'user',
+            'only message', 0,
+            '2026-06-01T00:00:02.000Z', '2026-06-01T00:00:02.000Z'
+          )
+        `;
+        // A malformed activity payload for the same thread: any code path
+        // that hydrates activities (e.g. getThreadDetailSnapshot) fails to
+        // decode this row. getThreadMessagePage must never touch it.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary,
+            payload_json, created_at
+          ) VALUES (
+            'activity-bounded-corrupt', 'thread-bounded', NULL, 'info',
+            'runtime.note', 'corrupt payload', 'not-json',
+            '2026-06-01T00:00:03.000Z'
+          )
+        `;
+
+        const threadDetailExit = yield* Effect.exit(
+          snapshotQuery.getThreadDetailSnapshot(ThreadId.make("thread-bounded")),
+        );
+        assert.equal(threadDetailExit._tag, "Failure");
+
+        const page = yield* snapshotQuery.getThreadMessagePage(ThreadId.make("thread-bounded"), {});
+        assert.equal(page._tag, "Some");
+        if (page._tag === "Some") {
+          assert.deepStrictEqual(
+            page.value.messages.map((message) => message.id),
+            [asMessageId("message-bounded-1")],
+          );
+          assert.equal(page.value.hasMoreOlder, false);
+        }
+      }),
+  );
+
+  it.effect("getThreadMessagePage clamps the requested limit to the 1..500 range", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-clamp', 'Project Clamp', '/tmp/project-clamp',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-06-02T00:00:00.000Z', '2026-06-02T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-clamp', 'project-clamp', 'Thread Clamp',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+          'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-06-02T00:00:01.000Z', '2026-06-02T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming,
+          created_at, updated_at
+        ) VALUES
+          ('message-clamp-1', 'thread-clamp', NULL, 'user', 'first', 0,
+           '2026-06-02T00:00:02.000Z', '2026-06-02T00:00:02.000Z'),
+          ('message-clamp-2', 'thread-clamp', NULL, 'assistant', 'second', 0,
+           '2026-06-02T00:00:03.000Z', '2026-06-02T00:00:03.000Z'),
+          ('message-clamp-3', 'thread-clamp', NULL, 'user', 'third', 0,
+           '2026-06-02T00:00:04.000Z', '2026-06-02T00:00:04.000Z')
+      `;
+
+      const threadId = ThreadId.make("thread-clamp");
+
+      // limit: 0 clamps up to the minimum of 1.
+      const zeroLimit = yield* snapshotQuery.getThreadMessagePage(threadId, { limit: 0 });
+      assert.equal(zeroLimit._tag, "Some");
+      if (zeroLimit._tag === "Some") {
+        assert.deepStrictEqual(
+          zeroLimit.value.messages.map((message) => message.id),
+          [asMessageId("message-clamp-3")],
+        );
+        assert.equal(zeroLimit.value.hasMoreOlder, true);
+      }
+
+      // limit: -5 also clamps up to the minimum of 1.
+      const negativeLimit = yield* snapshotQuery.getThreadMessagePage(threadId, { limit: -5 });
+      assert.equal(negativeLimit._tag, "Some");
+      if (negativeLimit._tag === "Some") {
+        assert.deepStrictEqual(
+          negativeLimit.value.messages.map((message) => message.id),
+          [asMessageId("message-clamp-3")],
+        );
+        assert.equal(negativeLimit.value.hasMoreOlder, true);
+      }
+
+      // limit: 10000 clamps down to the maximum of 500, so all 3 seeded
+      // messages fit in one page.
+      const overLimit = yield* snapshotQuery.getThreadMessagePage(threadId, { limit: 10000 });
+      assert.equal(overLimit._tag, "Some");
+      if (overLimit._tag === "Some") {
+        assert.deepStrictEqual(
+          overLimit.value.messages.map((message) => message.id),
+          [
+            asMessageId("message-clamp-1"),
+            asMessageId("message-clamp-2"),
+            asMessageId("message-clamp-3"),
+          ],
+        );
+        assert.equal(overLimit.value.hasMoreOlder, false);
+      }
+    }),
+  );
+
+  it.effect(
+    "getThreadMessagePage breaks created_at ties on message_id across consecutive before-cursor pages",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`DELETE FROM projection_state`;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            scripts_json, created_at, updated_at, deleted_at
+          ) VALUES (
+            'project-tiebreak', 'Project Tiebreak', '/tmp/project-tiebreak',
+            '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+            '2026-06-03T00:00:00.000Z', '2026-06-03T00:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, branch, worktree_path, latest_turn_id,
+            latest_user_message_at, pending_approval_count,
+            pending_user_input_count, has_actionable_proposed_plan,
+            created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-tiebreak', 'project-tiebreak', 'Thread Tiebreak',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-03T00:00:01.000Z', '2026-06-03T00:00:01.000Z', NULL
+          )
+        `;
+        // All four messages share the exact same created_at timestamp, so
+        // only the message_id tie-break in the ORDER BY / cursor comparison
+        // determines a stable, non-overlapping page split.
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming,
+            created_at, updated_at
+          ) VALUES
+            ('message-a', 'thread-tiebreak', NULL, 'user', 'a', 0,
+             '2026-06-03T00:00:02.000Z', '2026-06-03T00:00:02.000Z'),
+            ('message-b', 'thread-tiebreak', NULL, 'assistant', 'b', 0,
+             '2026-06-03T00:00:02.000Z', '2026-06-03T00:00:02.000Z'),
+            ('message-c', 'thread-tiebreak', NULL, 'user', 'c', 0,
+             '2026-06-03T00:00:02.000Z', '2026-06-03T00:00:02.000Z'),
+            ('message-d', 'thread-tiebreak', NULL, 'assistant', 'd', 0,
+             '2026-06-03T00:00:02.000Z', '2026-06-03T00:00:02.000Z')
+        `;
+
+        const threadId = ThreadId.make("thread-tiebreak");
+
+        const page1 = yield* snapshotQuery.getThreadMessagePage(threadId, { limit: 2 });
+        assert.equal(page1._tag, "Some");
+        if (page1._tag !== "Some") {
+          return;
+        }
+        assert.deepStrictEqual(
+          page1.value.messages.map((message) => message.id),
+          [asMessageId("message-c"), asMessageId("message-d")],
+        );
+        assert.equal(page1.value.hasMoreOlder, true);
+
+        const oldestOnPage1 = page1.value.messages[0]?.id;
+        assert.ok(oldestOnPage1 !== undefined);
+
+        const page2 = yield* snapshotQuery.getThreadMessagePage(threadId, {
+          limit: 2,
+          before: oldestOnPage1,
+        });
+        assert.equal(page2._tag, "Some");
+        if (page2._tag !== "Some") {
+          return;
+        }
+        assert.deepStrictEqual(
+          page2.value.messages.map((message) => message.id),
+          [asMessageId("message-a"), asMessageId("message-b")],
+        );
+        assert.equal(page2.value.hasMoreOlder, false);
+
+        // The two pages together cover every seeded message exactly once —
+        // no row skipped or repeated across the created_at tie.
+        const combinedIds = [...page1.value.messages, ...page2.value.messages].map(
+          (message) => message.id,
+        );
+        assert.deepStrictEqual(
+          combinedIds.slice().sort(),
+          [
+            asMessageId("message-a"),
+            asMessageId("message-b"),
+            asMessageId("message-c"),
+            asMessageId("message-d"),
+          ]
+            .slice()
+            .sort(),
+        );
+      }),
+  );
+
+  it.effect("getThreadMessagePage tolerates a stale cursor for empty and non-empty threads", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-stale-cursor', 'Project Stale Cursor', '/tmp/project-stale-cursor',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-06-04T00:00:00.000Z', '2026-06-04T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES
+          (
+            'thread-stale-empty', 'project-stale-cursor', 'Empty Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-04T00:00:01.000Z', '2026-06-04T00:00:01.000Z', NULL
+          ),
+          (
+            'thread-stale-nonempty', 'project-stale-cursor', 'Non-empty Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+            'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+            '2026-06-04T00:00:01.000Z', '2026-06-04T00:00:01.000Z', NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming,
+          created_at, updated_at
+        ) VALUES (
+          'message-still-present', 'thread-stale-nonempty', NULL, 'user',
+          'still present', 0,
+          '2026-06-04T00:00:02.000Z', '2026-06-04T00:00:02.000Z'
+        )
+      `;
+
+      const before = asMessageId("message-reverted-away");
+      const emptyPage = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-stale-empty"),
+        { before },
+      );
+      assert.equal(emptyPage._tag, "Some");
+      if (emptyPage._tag === "Some") {
+        assert.deepStrictEqual(emptyPage.value.messages, []);
+        assert.equal(emptyPage.value.hasMoreOlder, false);
+      }
+
+      const nonEmptyPage = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-stale-nonempty"),
+        { before },
+      );
+      assert.equal(nonEmptyPage._tag, "Some");
+      if (nonEmptyPage._tag === "Some") {
+        assert.deepStrictEqual(nonEmptyPage.value.messages, []);
+        assert.equal(nonEmptyPage.value.hasMoreOlder, true);
+      }
+    }),
+  );
+
+  it.effect("getThreadMessagePage returns None for a deleted or missing thread", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+
+      const missing = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-does-not-exist"),
+        {},
+      );
+      assert.equal(missing._tag, "None");
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-deleted', 'Project Deleted', '/tmp/project-deleted',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-06-04T00:00:00.000Z', '2026-06-04T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-deleted', 'project-deleted', 'Thread Deleted',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+          'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-06-04T00:00:01.000Z', '2026-06-04T00:00:01.000Z',
+          '2026-06-04T00:00:02.000Z'
+        )
+      `;
+
+      const deleted = yield* snapshotQuery.getThreadMessagePage(
+        ThreadId.make("thread-deleted"),
+        {},
+      );
+      assert.equal(deleted._tag, "None");
+    }),
+  );
 });
 
 it.effect(

@@ -10,7 +10,8 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useEffect, useMemo, useRef } from "react";
 import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -60,8 +61,10 @@ import {
   EMPTY_INCOMING_SHARE_PRESENTATION_STATE,
   transitionIncomingSharePresentation,
 } from "./features/sharing/incoming-share-presentation";
+import { selectedWorkspaceThreadRef, WORKSPACE_OVERLAY_ROUTES } from "./lib/selected-thread-ref";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
+import { useForegroundThreadEventPriority } from "./state/thread-event-priority";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
@@ -262,35 +265,27 @@ const NewTaskSheetStack = createNativeStackNavigator({
   },
 });
 
-// Routes presented as sheets/overlays ON TOP of the workspace. They must not
-// influence the adaptive workspace layout: opening Settings over Home should
-// not flip the sidebar in or change the active thread.
-const WORKSPACE_OVERLAY_ROUTES = new Set([
-  "ConnectOnboarding",
-  "Connections",
-  "ConnectionsNew",
-  "GitBranches",
-  "GitCommit",
-  "GitConfirm",
-  "GitOverview",
-  "NewTaskSheet",
-  "SettingsLegal",
-  "SettingsSheet",
-  "ThreadReviewComment",
-]);
-
 /**
  * Pathname of the topmost NON-overlay route — the screen the workspace is
  * actually "on", regardless of any sheets floating above it.
  */
+function workspaceRoutes(state: NavigationState) {
+  return state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
+}
+
 function workspacePathFromState(state: NavigationState): string {
-  const routes = state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
+  const routes = workspaceRoutes(state);
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
       : state;
   const path = getPathFromState(effectiveState, navigationPathConfig);
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThreadRef | null }) {
+  useForegroundThreadEventPriority(props.threadRef);
+  return null;
 }
 
 // The drain hook subscribes to the outbox, all thread shells, projects, and
@@ -334,9 +329,11 @@ function RootStackLayout(props: {
   const path = getPathFromState(props.state, navigationPathConfig);
   const pathname = path.startsWith("/") ? path : `/${path}`;
   const workspacePathname = workspacePathFromState(props.state);
+  const selectedThreadRef = useMemo(() => selectedWorkspaceThreadRef(props.state), [props.state]);
 
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
+      <ThreadEventPriorityCoordinator threadRef={selectedThreadRef} />
       <ThreadOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ClerkSettingsSheetDetentProvider initiallyExpanded={false}>

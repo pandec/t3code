@@ -24,7 +24,13 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  MessageId,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -32,6 +38,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadMessagePage,
 } from "./orchestration.ts";
 import { ProviderCatalogResult } from "./providerCatalog.ts";
 import {
@@ -513,9 +520,20 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
+export const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
+
+export const EnvironmentOrchestrationThreadSnapshotUrlParams = Schema.Struct({
+  messageLimit: Schema.optionalKey(NonNegativeInt),
+});
+
+export const EnvironmentOrchestrationThreadMessagesUrlParams = Schema.Struct({
+  before: Schema.optionalKey(MessageId),
+  limit: Schema.optionalKey(NonNegativeInt),
+});
+export type EnvironmentOrchestrationThreadMessagesUrlParams =
+  typeof EnvironmentOrchestrationThreadMessagesUrlParams.Type;
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
@@ -536,7 +554,17 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: EnvironmentOrchestrationThreadSnapshotUrlParams,
       success: OrchestrationThreadDetailSnapshot,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("threadMessages", "/api/orchestration/threads/:threadId/messages", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: EnvironmentOrchestrationThreadMessagesUrlParams,
+      success: OrchestrationThreadMessagePage,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

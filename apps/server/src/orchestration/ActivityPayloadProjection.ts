@@ -4,6 +4,18 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 
+/**
+ * Upper bound on message pages, shared with the dedicated bounded SQL query
+ * behind `GET /api/orchestration/threads/:threadId/messages`
+ * (ProjectionSnapshotQuery.getThreadMessagePage) and the `messageLimit`
+ * window used here for the thread-detail snapshot.
+ */
+export const MAX_THREAD_MESSAGE_LIMIT = 500;
+
+export function clampThreadMessageLimit(limit: number): number {
+  return Math.max(1, Math.min(MAX_THREAD_MESSAGE_LIMIT, limit));
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -249,14 +261,32 @@ function dropStaleContextWindowActivities(
 
 export function projectThreadDetailSnapshot(
   snapshot: OrchestrationThreadDetailSnapshot,
+  options: { readonly messageLimit?: number } = {},
 ): OrchestrationThreadDetailSnapshot {
+  const thread = {
+    ...snapshot.thread,
+    activities: dropStaleContextWindowActivities(snapshot.thread.activities).map(
+      projectActivityPayload,
+    ),
+  };
+  delete thread.messageWindow;
+
+  if (options.messageLimit === undefined) {
+    return { ...snapshot, thread };
+  }
+
+  const messageLimit = clampThreadMessageLimit(options.messageLimit);
+  const messages = snapshot.thread.messages.slice(-messageLimit);
   return {
     ...snapshot,
     thread: {
-      ...snapshot.thread,
-      activities: dropStaleContextWindowActivities(snapshot.thread.activities).map(
-        projectActivityPayload,
-      ),
+      ...thread,
+      messages,
+      messageWindow: {
+        hasMoreOlder: messages.length < snapshot.thread.messages.length,
+        oldestLoadedMessageId: messages[0]?.id ?? null,
+        totalCount: snapshot.thread.messages.length,
+      },
     },
   };
 }

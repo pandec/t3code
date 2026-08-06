@@ -8,6 +8,7 @@
  */
 import type {
   CheckpointRef,
+  MessageId,
   OrchestrationCheckpointSummary,
   OrchestrationProject,
   OrchestrationProjectShell,
@@ -19,6 +20,7 @@ import type {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadMessagePage,
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
@@ -184,6 +186,22 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Read one cursor-paged, limit-bounded window of a thread's messages.
+   *
+   * Unlike `getThreadDetailSnapshot`, this never hydrates activities,
+   * checkpoints, proposed plans, or the session row for the thread — it runs
+   * a single bounded SQL query (keyset pagination on `created_at,
+   * message_id`, pushed-down `LIMIT`) so large threads cannot force a full
+   * in-memory hydration just to page messages. Returns `None` when the
+   * thread does not exist or has been deleted; archived threads still
+   * resolve, matching `getThreadDetailSnapshot`'s read semantics.
+   */
+  readonly getThreadMessagePage: (
+    threadId: ThreadId,
+    options: { readonly before?: MessageId; readonly limit?: number },
+  ) => Effect.Effect<Option.Option<OrchestrationThreadMessagePage>, ProjectionRepositoryError>;
 }
 
 /**

@@ -1,20 +1,25 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type MessageId,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadMessagePage,
   type OrchestrationThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
@@ -22,16 +27,40 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
+import { ThreadMessagePageLoader } from "./threadMessagesHttp.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { applyThreadDetailEvent, retainRecentThreadHistory } from "./threadReducer.ts";
-import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
+import {
+  coalesceThreadStreamItems,
+  filterAppliedThreadStreamItems,
+  isStructuralThreadStreamItem,
+  THREAD_EVENT_FOREGROUND_WINDOW_MS,
+  ThreadEventCoalescing,
+} from "./threadEventCoalescing.ts";
+import {
+  applyThreadDetailEvent,
+  prependOlderThreadMessages,
+  retainRecentThreadHistory,
+} from "./threadReducer.ts";
+import {
+  DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  DEFAULT_MESSAGE_WINDOW_LIMIT,
+  MAX_MESSAGE_WINDOW_MULTIPLIER,
+  ThreadHistoryWindow,
+  THREAD_STATE_IDLE_TTL_MS,
+} from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
+  EMPTY_THREAD_OLDER_MESSAGES_STATE,
   type EnvironmentThreadState,
   type EnvironmentThreadStatus,
 } from "./threadState.ts";
+
+export interface EnvironmentThreadStateHandle {
+  readonly state: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>;
+  readonly loadOlderMessages: Effect.Effect<void>;
+}
 
 function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): EnvironmentThreadStatus {
   return Option.isSome(data) ? "cached" : "empty";
@@ -47,6 +76,71 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
 function shouldPersistThread(thread: OrchestrationThread): boolean {
   const status = thread.session?.status;
   return status !== "starting" && status !== "running";
+}
+
+interface ThreadWarmRefreshRetention {
+  readonly messageWindowLimit: number | null;
+  readonly maxLoadedOlderMessageCount: number | null;
+}
+
+/**
+ * Reattaches explicitly loaded older messages that a warm refresh's base
+ * window doesn't cover. The merge is clamped to the same bounds explicit
+ * scrollback observes (`MAX_MESSAGE_WINDOW_MULTIPLIER` resident messages,
+ * `maxLoadedOlderMessageCount` older messages) so a warm refresh can never
+ * grow the retained history past what `loadOlderMessages` itself allows.
+ */
+export function preserveLoadedOlderMessages(
+  current: OrchestrationThread,
+  refreshed: OrchestrationThread,
+  loadedOlderCount: number,
+  retention: ThreadWarmRefreshRetention,
+): OrchestrationThread {
+  if (loadedOlderCount === 0) return refreshed;
+
+  const firstRefreshedMessageId = refreshed.messages[0]?.id;
+  if (firstRefreshedMessageId === undefined) return refreshed;
+
+  const firstRefreshedIndex = current.messages.findIndex(
+    (message) => message.id === firstRefreshedMessageId,
+  );
+  if (firstRefreshedIndex < 0) return refreshed;
+
+  const candidates = current.messages.slice(0, firstRefreshedIndex);
+  const totalCount = refreshed.messageWindow?.totalCount ?? null;
+  const totalCountBound =
+    totalCount === null ? candidates.length : Math.max(0, totalCount - refreshed.messages.length);
+  const naturalBound = Math.min(candidates.length, totalCountBound);
+  const residentCapBound =
+    retention.messageWindowLimit === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(
+          0,
+          retention.messageWindowLimit * MAX_MESSAGE_WINDOW_MULTIPLIER - refreshed.messages.length,
+        );
+  const olderCountCapBound = retention.maxLoadedOlderMessageCount ?? Number.POSITIVE_INFINITY;
+  const retentionBound = Math.min(residentCapBound, olderCountCapBound);
+  const cappedByRetention = retentionBound < naturalBound;
+  const preserveCount = Math.min(naturalBound, retentionBound);
+  const preservedOlder = preserveCount <= 0 ? [] : candidates.slice(-preserveCount);
+  if (preservedOlder.length === 0) return refreshed;
+  const messages = [...preservedOlder, ...refreshed.messages];
+  return {
+    ...refreshed,
+    messages,
+    messageWindow: {
+      // Retention caps stop growth outright, mirroring the explicit-scrollback
+      // cap in `loadOlderMessages`: don't invite more loads once the resident
+      // or older-message ceiling is reached.
+      hasMoreOlder: cappedByRetention
+        ? false
+        : totalCount === null
+          ? (current.messageWindow?.hasMoreOlder ?? refreshed.messageWindow?.hasMoreOlder ?? false)
+          : messages.length < totalCount,
+      oldestLoadedMessageId: messages[0]?.id ?? null,
+      totalCount,
+    },
+  };
 }
 
 function mergeThreadMessageArtifacts(
@@ -78,10 +172,33 @@ function mergeThreadMessageArtifacts(
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
 ) {
+  // Every fiber that can read stream events, mutate `state`, or enqueue a
+  // persistence write is forked into this dedicated child scope. On teardown
+  // we close `teardownScope` first (interrupting and
+  // *awaiting* all of those fibers) before flushing pending items and
+  // persisting the final snapshot, so no producer can still be applying a
+  // late event (e.g. the last running -> idle transition) while the
+  // finalizer reads `state` and writes the cache. See the finalizer below.
+  const teardownScope = yield* Scope.make();
+  // Ensure partial initialization cannot leak the independent child scope. The
+  // final persistence finalizer below closes it first during normal teardown;
+  // this earlier registration is then an idempotent no-op.
+  yield* Effect.addFinalizer(() => Scope.close(teardownScope, Exit.void));
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
+  const messagePageLoader = yield* Effect.serviceOption(ThreadMessagePageLoader);
+  const configuredHistoryWindow = yield* Effect.serviceOption(ThreadHistoryWindow);
+  const historyWindow = Option.getOrElse(configuredHistoryWindow, () => ({
+    messageWindowLimit: DEFAULT_MESSAGE_WINDOW_LIMIT,
+    messageOlderPageSize: DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  }));
+  const maxLoadedOlderMessageCount =
+    historyWindow.messageWindowLimit === null
+      ? null
+      : historyWindow.messageWindowLimit * (MAX_MESSAGE_WINDOW_MULTIPLIER - 1);
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
+  const eventCoalescing = yield* Effect.serviceOption(ThreadEventCoalescing);
   const environmentId = supervisor.target.environmentId;
   const cached = yield* cache.loadThread(environmentId, threadId).pipe(
     Effect.catch((error) =>
@@ -95,11 +212,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     ),
   );
-  const cachedThread = Option.map(cached, (snapshot) => retainRecentThreadHistory(snapshot.thread));
+  const cachedThread = Option.map(cached, (snapshot) =>
+    retainRecentThreadHistory(snapshot.thread, {
+      messageWindowLimit: historyWindow.messageWindowLimit,
+    }),
+  );
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
     error: Option.none(),
+    olderMessages: EMPTY_THREAD_OLDER_MESSAGES_STATE,
   });
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
@@ -107,7 +229,20 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const lastRevertSequence = yield* Ref.make(0);
+  const loadedOlderMessageCount = yield* Ref.make(0);
+  // Distinguishes a client-enforced history ceiling from a server-reported end
+  // of history so a revert can reopen paging after it frees resident capacity.
+  const olderHistoryCapped = yield* Ref.make(false);
+  const tornDown = yield* Ref.make(false);
+  // Bumped whenever a hard snapshot (a full thread replacement, e.g. after
+  // reconnect/install) is installed. An in-flight older-page request can land
+  // with a cursor that coincidentally matches the post-snapshot window, so the
+  // cursor check alone can't detect staleness; the generation check can.
+  const installGeneration = yield* Ref.make(0);
   const mutationLock = yield* Semaphore.make(1);
+  const pendingItems = yield* Ref.make<Array<OrchestrationThreadStreamItem>>([]);
+  const flushGeneration = yield* Ref.make(0);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
   const artifactRefreshes = yield* Queue.sliding<PreparedConnection>(1);
 
@@ -129,7 +264,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
       return;
     }
-    yield* cache.saveThread(environmentId, snapshot).pipe(
+    const retainedSnapshot = {
+      ...snapshot,
+      thread: retainRecentThreadHistory(snapshot.thread, {
+        messageWindowLimit: historyWindow.messageWindowLimit,
+      }),
+    };
+    yield* cache.saveThread(environmentId, retainedSnapshot).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(
           Effect.annotateLogs({
@@ -145,7 +286,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Stream.fromQueue(persistence).pipe(
     Stream.debounce("500 millis"),
     Stream.runForEach(persist),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
 
   const setSynchronizing = SubscriptionRef.update(state, (current) =>
@@ -158,12 +299,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         },
   );
   const setReady = SubscriptionRef.update(state, (current) =>
-    current.status === "live" || current.status === "deleted"
+    current.status === "deleted"
       ? current
       : {
           ...current,
-          status: "synchronizing" as const,
+          status: current.status === "live" ? current.status : ("synchronizing" as const),
           error: Option.none(),
+          olderMessages: { ...current.olderMessages, error: null },
         },
   );
   const setDisconnected = Effect.gen(function* () {
@@ -173,6 +315,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
     }));
   });
+  const settleOlderMessages = (error: string | null) =>
+    SubscriptionRef.update(state, (current) => ({
+      ...current,
+      olderMessages: {
+        isLoading: false,
+        error,
+        settledCount: current.olderMessages.settledCount + 1,
+      },
+    }));
   const setStreamError = (cause: Cause.Cause<unknown>) =>
     Ref.set(awaitingCompletion, false).pipe(
       Effect.andThen(
@@ -187,13 +338,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
+    messageWindowLimit: number | null = historyWindow.messageWindowLimit,
   ) {
-    const retainedThread = retainRecentThreadHistory(thread);
+    const retainedThread = retainRecentThreadHistory(thread, { messageWindowLimit });
     const waiting = yield* Ref.get(awaitingCompletion);
+    const currentState = yield* SubscriptionRef.get(state);
     yield* SubscriptionRef.set(state, {
       data: Option.some(retainedThread),
       status: waiting ? "synchronizing" : "live",
       error: Option.none(),
+      olderMessages: currentState.olderMessages,
     });
     // Active threads can update many times per second and retain large tool
     // payloads. The server remains the source of truth while a turn is active;
@@ -206,11 +360,17 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
     yield* Ref.set(awaitingCompletion, false);
-    yield* SubscriptionRef.set(state, {
+    yield* Ref.set(olderHistoryCapped, false);
+    yield* SubscriptionRef.update(state, (current) => ({
       data: Option.none(),
-      status: "deleted",
+      status: "deleted" as const,
       error: Option.none(),
-    });
+      olderMessages: {
+        isLoading: false,
+        error: null,
+        settledCount: current.olderMessages.settledCount,
+      },
+    }));
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(
@@ -224,63 +384,443 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  const applyItemUnlocked = Effect.fn("EnvironmentThreadState.applyItemUnlocked")(function* (
-    item: OrchestrationThreadStreamItem,
+  const loadOlderMessages = Effect.fn("EnvironmentThreadState.loadOlderMessages")(function* () {
+    const request = yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (yield* Ref.get(tornDown)) {
+          return Option.none<{
+            readonly prepared: PreparedConnection;
+            readonly beforeMessageId: MessageId | null;
+            readonly limit: number;
+            readonly sequence: number;
+            readonly generation: number;
+          }>();
+        }
+        yield* flushPendingUnlocked();
+        const current = yield* SubscriptionRef.get(state);
+        // Keep this guard ahead of the data/window guards: a duplicate attempt
+        // must settle without clearing the accepted request's loading/error state.
+        if (current.olderMessages.isLoading) {
+          // This invocation is terminal even though another accepted request is
+          // still loading. Advance the signal without clearing that request.
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: {
+              ...value.olderMessages,
+              settledCount: value.olderMessages.settledCount + 1,
+            },
+          }));
+          return Option.none<{
+            readonly prepared: PreparedConnection;
+            readonly beforeMessageId: MessageId | null;
+            readonly limit: number;
+            readonly sequence: number;
+            readonly generation: number;
+          }>();
+        }
+        if (
+          current.status === "deleted" ||
+          Option.isNone(current.data) ||
+          current.data.value.messageWindow?.hasMoreOlder !== true
+        ) {
+          yield* settleOlderMessages(null);
+          return Option.none<{
+            readonly prepared: PreparedConnection;
+            readonly beforeMessageId: MessageId | null;
+            readonly limit: number;
+            readonly sequence: number;
+            readonly generation: number;
+          }>();
+        }
+
+        const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+        const remainingCapacity =
+          maxLoadedOlderMessageCount === null
+            ? historyWindow.messageOlderPageSize
+            : Math.max(0, maxLoadedOlderMessageCount - loadedOlderCount);
+        if (remainingCapacity === 0) {
+          yield* Ref.set(olderHistoryCapped, true);
+          yield* SubscriptionRef.update(state, (value) =>
+            Option.match(value.data, {
+              onNone: () => ({
+                ...value,
+                olderMessages: {
+                  isLoading: false,
+                  error: null,
+                  settledCount: value.olderMessages.settledCount + 1,
+                },
+              }),
+              onSome: (thread) => ({
+                ...value,
+                data: Option.some({
+                  ...thread,
+                  messageWindow: {
+                    ...thread.messageWindow!,
+                    hasMoreOlder: false,
+                  },
+                }),
+                olderMessages: {
+                  isLoading: false,
+                  error: null,
+                  settledCount: value.olderMessages.settledCount + 1,
+                },
+              }),
+            }),
+          );
+          return Option.none();
+        }
+
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isNone(prepared)) {
+          // React can batch adjacent state publications into one commit, so a
+          // synthetic loading transition is not a reliable latch-release
+          // signal. Every terminal attempt increments `settledCount` instead.
+          yield* settleOlderMessages("The environment is not connected.");
+          return Option.none();
+        }
+
+        const sequence = yield* SubscriptionRef.get(lastSequence);
+        const generation = yield* Ref.get(installGeneration);
+        yield* SubscriptionRef.update(state, (value) => ({
+          ...value,
+          olderMessages: {
+            isLoading: true,
+            error: null,
+            settledCount: value.olderMessages.settledCount,
+          },
+        }));
+        return Option.some({
+          prepared: prepared.value,
+          beforeMessageId: current.data.value.messageWindow.oldestLoadedMessageId,
+          limit: Math.min(historyWindow.messageOlderPageSize, remainingCapacity),
+          sequence,
+          generation,
+        });
+      }),
+    );
+    if (Option.isNone(request)) return;
+
+    const page = Option.isNone(messagePageLoader)
+      ? Option.none<OrchestrationThreadMessagePage>()
+      : yield* messagePageLoader.value.loadOlder(request.value.prepared, threadId, {
+          beforeMessageId: request.value.beforeMessageId,
+          limit: request.value.limit,
+        });
+
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (yield* Ref.get(tornDown)) return;
+        yield* flushPendingUnlocked();
+        if (yield* Ref.get(tornDown)) return;
+        const current = yield* SubscriptionRef.get(state);
+        if (current.status === "deleted" || Option.isNone(current.data)) {
+          yield* settleOlderMessages(null);
+          return;
+        }
+
+        const revertedAt = yield* Ref.get(lastRevertSequence);
+        const currentCursor = current.data.value.messageWindow?.oldestLoadedMessageId ?? null;
+        const currentGeneration = yield* Ref.get(installGeneration);
+        if (
+          revertedAt > request.value.sequence ||
+          currentCursor !== request.value.beforeMessageId ||
+          currentGeneration !== request.value.generation
+        ) {
+          yield* settleOlderMessages(null);
+          return;
+        }
+        if (Option.isNone(page) || page.value.threadId !== threadId) {
+          yield* settleOlderMessages("Could not load older messages.");
+          return;
+        }
+        if (page.value.snapshotSequence < revertedAt) {
+          yield* settleOlderMessages(null);
+          return;
+        }
+
+        const currentThread = current.data.value;
+        const prependedThread = prependOlderThreadMessages(currentThread, page.value);
+        const addedCount = Math.max(
+          0,
+          prependedThread.messages.length - currentThread.messages.length,
+        );
+        const loadedOlderCount = yield* Ref.updateAndGet(loadedOlderMessageCount, (count) =>
+          maxLoadedOlderMessageCount === null
+            ? count + addedCount
+            : Math.min(maxLoadedOlderMessageCount, count + addedCount),
+        );
+        const reachedLoadedHistoryLimit =
+          maxLoadedOlderMessageCount !== null && loadedOlderCount >= maxLoadedOlderMessageCount;
+        const cappedByClient =
+          reachedLoadedHistoryLimit && prependedThread.messageWindow?.hasMoreOlder === true;
+        const thread = cappedByClient
+          ? {
+              ...prependedThread,
+              messageWindow: { ...prependedThread.messageWindow, hasMoreOlder: false },
+            }
+          : prependedThread;
+        yield* Ref.set(olderHistoryCapped, cappedByClient);
+        yield* SubscriptionRef.set(state, {
+          ...current,
+          data: Option.some(thread),
+          olderMessages: {
+            isLoading: false,
+            error: null,
+            settledCount: current.olderMessages.settledCount + 1,
+          },
+        });
+        if (shouldPersistThread(thread)) {
+          const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+          yield* Queue.offer(persistence, { snapshotSequence, thread });
+        }
+      }),
+    );
+  });
+
+  const applyItemsUnlocked = Effect.fn("EnvironmentThreadState.applyItemsUnlocked")(function* (
+    items: ReadonlyArray<OrchestrationThreadStreamItem>,
   ) {
-    if (item.kind === "synchronized") {
+    if (items.length === 0) return;
+
+    const initialSequence = yield* SubscriptionRef.get(lastSequence);
+    const initialRevertSequence = yield* Ref.get(lastRevertSequence);
+    const initialLoadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+    const initialOlderHistoryCapped = yield* Ref.get(olderHistoryCapped);
+    const initialState = yield* SubscriptionRef.get(state);
+    let sequence = initialSequence;
+    let revertSequence = initialRevertSequence;
+    let loadedOlderCount = initialLoadedOlderCount;
+    let historyCapped = initialOlderHistoryCapped;
+    let data = initialState.data;
+    let threadChanged = false;
+    let deleted = false;
+    let synchronized = false;
+    let installed = false;
+
+    const deduped = filterAppliedThreadStreamItems(items, initialSequence);
+    for (const item of coalesceThreadStreamItems(deduped)) {
+      if (item.kind === "synchronized") {
+        synchronized = true;
+        continue;
+      }
+      if (item.kind === "snapshot") {
+        sequence = item.snapshot.snapshotSequence;
+        loadedOlderCount = 0;
+        historyCapped = false;
+        data = Option.some(item.snapshot.thread);
+        threadChanged = true;
+        deleted = false;
+        installed = true;
+        continue;
+      }
+      if (item.event.sequence <= sequence) continue;
+      sequence = item.event.sequence;
+      if (item.event.type === "thread.reverted") {
+        revertSequence = item.event.sequence;
+      }
+
+      if (Option.isNone(data)) {
+        if (item.event.type === "thread.deleted") deleted = true;
+        continue;
+      }
+      const retainedLimit =
+        historyWindow.messageWindowLimit === null
+          ? null
+          : historyWindow.messageWindowLimit + loadedOlderCount;
+      const result = applyThreadDetailEvent(data.value, item.event, {
+        messageWindowLimit: retainedLimit,
+      });
+      if (result.kind === "updated") {
+        let thread = result.thread;
+        if (item.event.type === "thread.reverted") {
+          loadedOlderCount = Math.min(loadedOlderCount, thread.messages.length);
+          if (
+            historyCapped &&
+            maxLoadedOlderMessageCount !== null &&
+            loadedOlderCount < maxLoadedOlderMessageCount
+          ) {
+            historyCapped = false;
+            if (thread.messageWindow?.hasMoreOlder === false) {
+              thread = {
+                ...thread,
+                messageWindow: { ...thread.messageWindow, hasMoreOlder: true },
+              };
+            }
+          }
+        }
+        data = Option.some(thread);
+        threadChanged = true;
+      } else if (result.kind === "deleted") {
+        data = Option.none();
+        threadChanged = false;
+        deleted = true;
+      }
+    }
+
+    if (sequence !== initialSequence) {
+      yield* SubscriptionRef.set(lastSequence, sequence);
+    }
+    if (revertSequence !== initialRevertSequence) {
+      yield* Ref.set(lastRevertSequence, revertSequence);
+    }
+    if (loadedOlderCount !== initialLoadedOlderCount) {
+      yield* Ref.set(loadedOlderMessageCount, loadedOlderCount);
+    }
+    if (historyCapped !== initialOlderHistoryCapped) {
+      yield* Ref.set(olderHistoryCapped, historyCapped);
+    }
+    if (installed) {
+      yield* Ref.update(installGeneration, (generation) => generation + 1);
+    }
+    if (deleted) {
+      yield* setDeleted();
+    } else if (threadChanged && Option.isSome(data)) {
+      const retainedLimit =
+        historyWindow.messageWindowLimit === null
+          ? null
+          : historyWindow.messageWindowLimit + loadedOlderCount;
+      yield* setThread(data.value, retainedLimit);
+    }
+    if (synchronized) {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
         Option.isSome(current.data) && current.status !== "deleted"
           ? { ...current, status: "live" as const, error: Option.none() }
           : current,
       );
-      return;
-    }
-
-    if (item.kind === "snapshot") {
-      yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
-      yield* setThread(item.snapshot.thread);
-      return;
-    }
-
-    const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.event.sequence <= sequence) {
-      return;
-    }
-    yield* SubscriptionRef.set(lastSequence, item.event.sequence);
-
-    const current = yield* SubscriptionRef.get(state);
-    if (Option.isNone(current.data)) {
-      if (item.event.type === "thread.deleted") {
-        yield* setDeleted();
-      }
-      return;
-    }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
-    if (result.kind === "updated") {
-      yield* setThread(result.thread);
-    } else if (result.kind === "deleted") {
-      yield* setDeleted();
     }
   });
-  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(
-    (item: OrchestrationThreadStreamItem) => mutationLock.withPermits(1)(applyItemUnlocked(item)),
+
+  const flushPendingUnlocked = Effect.fn("EnvironmentThreadState.flushPendingUnlocked")(
+    function* () {
+      yield* Ref.update(flushGeneration, (generation) => generation + 1);
+      const pending = yield* Ref.getAndSet(pendingItems, []);
+      yield* applyItemsUnlocked(pending);
+    },
   );
+  const flushPending = mutationLock.withPermits(1)(flushPendingUnlocked());
+  const scheduleFlush = Effect.fn("EnvironmentThreadState.scheduleFlush")(function* (
+    generation: number,
+    windowMs: number,
+  ) {
+    yield* Effect.sleep(Duration.millis(windowMs));
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if ((yield* Ref.get(flushGeneration)) !== generation) return;
+        yield* flushPendingUnlocked();
+      }),
+    );
+  });
+  const acceptItem = Effect.fn("EnvironmentThreadState.acceptItem")(function* (
+    item: OrchestrationThreadStreamItem,
+  ) {
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (isStructuralThreadStreamItem(item)) {
+          const pending = yield* Ref.getAndSet(pendingItems, []);
+          yield* Ref.update(flushGeneration, (generation) => generation + 1);
+          yield* applyItemsUnlocked([...pending, item]);
+          return;
+        }
+
+        const priority = yield* Option.match(eventCoalescing, {
+          onNone: () => Effect.succeed("foreground" as const),
+          onSome: (service) =>
+            service.priority({
+              environmentId,
+              threadId,
+            }),
+        });
+        const windowMs = Option.match(eventCoalescing, {
+          onNone: () => THREAD_EVENT_FOREGROUND_WINDOW_MS,
+          onSome: (service) => service.windowMs(priority),
+        });
+        if (windowMs <= 0) {
+          const pending = yield* Ref.getAndSet(pendingItems, []);
+          yield* Ref.update(flushGeneration, (generation) => generation + 1);
+          yield* applyItemsUnlocked([...pending, item]);
+          return;
+        }
+
+        const pending = yield* Ref.get(pendingItems);
+        const wasEmpty = pending.length === 0;
+        pending.push(item);
+        if (wasEmpty) {
+          const generation = yield* Ref.updateAndGet(flushGeneration, (current) => current + 1);
+          yield* Effect.forkIn(scheduleFlush(generation, windowMs), teardownScope);
+        }
+      }),
+    );
+    if (item.kind !== "event" || item.event.type !== "thread.reverted") return;
+
+    const current = yield* SubscriptionRef.get(state);
+    if (
+      Option.isSome(current.data) &&
+      current.data.value.messages.length === 0 &&
+      current.data.value.messageWindow?.hasMoreOlder === true
+    ) {
+      // The refill's HTTP fetch must not hold up `acceptItem` — it runs inside
+      // the WS event consumption loop (`Stream.runForEach(acceptItem)`), so
+      // awaiting the page load here would stall every subsequent WS event
+      // until it settled. Fork it into the thread's teardown scope instead;
+      // `loadOlderMessages`'s own mutation-lock and stale-cursor/revert-sequence
+      // guards still apply when it eventually runs, and teardown awaits it
+      // before the final persisted snapshot is read.
+      yield* Effect.forkIn(loadOlderMessages(), teardownScope);
+    }
+  });
 
   const refreshWarmSnapshot = Effect.fn("EnvironmentThreadState.refreshWarmSnapshot")(function* (
     prepared: PreparedConnection,
   ) {
-    const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+    const httpSnapshot = yield* snapshotLoader.load(
+      prepared,
+      threadId,
+      historyWindow.messageWindowLimit === null
+        ? undefined
+        : { messageLimit: historyWindow.messageWindowLimit },
+    );
     if (Option.isNone(httpSnapshot)) return;
     yield* mutationLock.withPermits(1)(
       Effect.gen(function* () {
+        yield* flushPendingUnlocked();
         const currentState = yield* SubscriptionRef.get(state);
         if (currentState.status === "deleted" || Option.isNone(currentState.data)) return;
 
         const sequence = yield* SubscriptionRef.get(lastSequence);
+        const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+        const retainedLimit =
+          historyWindow.messageWindowLimit === null
+            ? null
+            : historyWindow.messageWindowLimit + loadedOlderCount;
         if (httpSnapshot.value.snapshotSequence > sequence) {
           yield* SubscriptionRef.set(lastSequence, httpSnapshot.value.snapshotSequence);
-          yield* setThread(httpSnapshot.value.thread);
+          const refreshed = preserveLoadedOlderMessages(
+            currentState.data.value,
+            httpSnapshot.value.thread,
+            loadedOlderCount,
+            {
+              messageWindowLimit: historyWindow.messageWindowLimit,
+              maxLoadedOlderMessageCount,
+            },
+          );
+          const refreshedOlderCount = Math.max(
+            0,
+            refreshed.messages.length - httpSnapshot.value.thread.messages.length,
+          );
+          const cappedByClient =
+            maxLoadedOlderMessageCount !== null &&
+            refreshedOlderCount >= maxLoadedOlderMessageCount &&
+            refreshed.messageWindow?.hasMoreOlder === false &&
+            httpSnapshot.value.thread.messageWindow?.hasMoreOlder === true;
+          yield* Ref.set(loadedOlderMessageCount, refreshedOlderCount);
+          yield* Ref.set(olderHistoryCapped, cappedByClient);
+          yield* setThread(
+            refreshed,
+            historyWindow.messageWindowLimit === null
+              ? null
+              : historyWindow.messageWindowLimit + refreshedOlderCount,
+          );
           return;
         }
         yield* setThread(
@@ -289,6 +829,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             httpSnapshot.value.thread,
             httpSnapshot.value.snapshotSequence === sequence,
           ),
+          retainedLimit,
         );
       }),
     );
@@ -296,21 +837,33 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* Stream.fromQueue(artifactRefreshes).pipe(
     Stream.runForEach(refreshWarmSnapshot),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
+
+  if (Option.isSome(eventCoalescing)) {
+    yield* eventCoalescing.value.changes.pipe(
+      Stream.filter(
+        (change) =>
+          change.threadRef.environmentId === environmentId &&
+          change.threadRef.threadId === threadId,
+      ),
+      Stream.runForEach(() => flushPending),
+      Effect.forkIn(teardownScope),
+    );
+  }
 
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
       switch (connectionProjectionPhase(connectionState)) {
         case "synchronizing":
-          return setSynchronizing;
+          return flushPending.pipe(Effect.andThen(setSynchronizing));
         case "disconnected":
-          return setDisconnected;
+          return flushPending.pipe(Effect.andThen(setDisconnected));
         case "ready":
-          return setReady;
+          return flushPending.pipe(Effect.andThen(setReady));
       }
     }),
-    Effect.forkScoped,
+    Effect.forkIn(teardownScope),
   );
 
   const foregroundResubscriptions = Option.match(wakeups, {
@@ -320,7 +873,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   yield* setSynchronizing;
-  yield* Effect.forkScoped(
+  yield* Effect.forkIn(
     subscribeDynamic(
       ORCHESTRATION_WS_METHODS.subscribeThread,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
@@ -330,6 +883,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         );
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
+        yield* flushPending;
 
         let current = yield* SubscriptionRef.get(state);
         if (current.status !== "deleted") {
@@ -348,9 +902,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             ),
           );
           if (Option.isNone(current.data)) {
-            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            const httpSnapshot = yield* snapshotLoader.load(
+              prepared,
+              threadId,
+              historyWindow.messageWindowLimit === null
+                ? undefined
+                : { messageLimit: historyWindow.messageWindowLimit },
+            );
             if (Option.isSome(httpSnapshot)) {
-              yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+              yield* acceptItem({ kind: "snapshot", snapshot: httpSnapshot.value });
               current = yield* SubscriptionRef.get(state);
             }
           } else {
@@ -371,37 +931,87 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         return {
           threadId,
           ...(canResume ? { afterSequence: sequence } : {}),
+          ...(historyWindow.messageWindowLimit === null
+            ? {}
+            : { messageLimit: historyWindow.messageWindowLimit }),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };
       }),
       {
-        onExpectedFailure: setStreamError,
+        onExpectedFailure: (cause) => flushPending.pipe(Effect.andThen(setStreamError(cause))),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(Stream.runForEach(acceptItem)),
+    teardownScope,
   );
 
+  // Teardown must not race the final persisted snapshot against a producer
+  // that is still in flight. Mark teardown first so a manually invoked page
+  // load cannot commit after its HTTP wait. `teardownScope` owns the stream,
+  // watcher, refresh, persistence, timer, and deep-refill fibers; closing it
+  // interrupts and awaits them. Only then do we take the mutation lock to
+  // flush buffered items and persist the final published state.
   yield* Effect.addFinalizer(() =>
-    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
-          onNone: () => Effect.void,
-          onSome: (thread) =>
-            shouldPersistThread(thread) ? persist({ snapshotSequence, thread }) : Effect.void,
-        }),
+    Ref.set(tornDown, true).pipe(
+      Effect.andThen(Scope.close(teardownScope, Exit.void)),
+      Effect.andThen(
+        mutationLock.withPermits(1)(
+          Effect.gen(function* () {
+            yield* flushPendingUnlocked();
+            const [current, snapshotSequence] = yield* Effect.all([
+              SubscriptionRef.get(state),
+              SubscriptionRef.get(lastSequence),
+            ]);
+            yield* Option.match(current.data, {
+              onNone: () => Effect.void,
+              onSome: (thread) =>
+                shouldPersistThread(thread) ? persist({ snapshotSequence, thread }) : Effect.void,
+            });
+          }),
+        ),
       ),
     ),
   );
 
-  return state;
+  return {
+    state,
+    loadOlderMessages: loadOlderMessages(),
+  } satisfies EnvironmentThreadStateHandle;
 });
 
-export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+interface EnvironmentThreadStateEntry {
+  readonly state: EnvironmentThreadState;
+  readonly loadOlderMessages: Effect.Effect<void>;
+}
+
+const EMPTY_ENVIRONMENT_THREAD_STATE_ENTRY: EnvironmentThreadStateEntry = {
+  state: EMPTY_ENVIRONMENT_THREAD_STATE,
+  loadOlderMessages: Effect.void,
+};
+
+function threadStateEntryChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
   return followStreamInEnvironment(
     environmentId,
-    Stream.unwrap(makeEnvironmentThreadState(threadId).pipe(Effect.map(SubscriptionRef.changes))),
+    Stream.unwrap(
+      makeEnvironmentThreadState(threadId).pipe(
+        Effect.map((handle) =>
+          SubscriptionRef.changes(handle.state).pipe(
+            Stream.map(
+              (state): EnvironmentThreadStateEntry => ({
+                state,
+                loadOlderMessages: handle.loadOlderMessages,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
+}
+
+export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+  return threadStateEntryChanges(environmentId, threadId).pipe(Stream.map((entry) => entry.state));
 }
 
 export function createEnvironmentThreadStateAtoms<R, E>(
@@ -410,31 +1020,53 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     E
   >,
 ) {
-  const family = Atom.family((key: string) => {
+  const entryFamily = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
     return runtime
-      .atom(threadStateChanges(environmentId, threadId), {
-        initialValue: EMPTY_ENVIRONMENT_THREAD_STATE,
+      .atom(threadStateEntryChanges(environmentId, threadId), {
+        initialValue: EMPTY_ENVIRONMENT_THREAD_STATE_ENTRY,
       })
       .pipe(
         Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-        Atom.withLabel(`environment-thread-state:${key}`),
+        Atom.withLabel(`environment-thread-entry:${key}`),
+      );
+  });
+  const stateFamily = Atom.family((key: string) =>
+    Atom.make((get) => AsyncResult.map(get(entryFamily(key)), (entry) => entry.state)).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-state:${key}`),
+    ),
+  );
+  const loadOlderMessagesFamily = Atom.family((key: string) => {
+    const entryAtom = entryFamily(key);
+    return runtime
+      .fn<void>()((_input, get) =>
+        get.result(entryAtom).pipe(Effect.flatMap((entry) => entry.loadOlderMessages)),
+      )
+      .pipe(
+        Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+        Atom.withLabel(`environment-thread-load-older-messages:${key}`),
       );
   });
 
   return {
     stateAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
-      family(threadKey({ environmentId, threadId })),
+      stateFamily(threadKey({ environmentId, threadId })),
+    loadOlderMessagesAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
+      loadOlderMessagesFamily(threadKey({ environmentId, threadId })),
   };
 }
 
 export * from "./archivedThreads.ts";
 export * from "./checkpointDiff.ts";
 export * from "./threadPrewarm.ts";
+export * from "./threadMessagesHttp.ts";
+export * from "./threadRetention.ts";
 export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
 export * from "./threadDetail.ts";
+export * from "./threadEventCoalescing.ts";
 export * from "./threadReducer.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

@@ -119,6 +119,14 @@ import {
   type ThreadFeedInsetReport,
 } from "./threadFeedInsets";
 import {
+  decideThreadUnderfilledHistoryEffectAction,
+  distanceFromFeedTop,
+  shouldReleaseOlderMessagesRequest,
+  shouldRequestOlderMessages,
+  shouldRequestOlderMessagesForUnderfilledFeed,
+  type ThreadHistoryWindowState,
+} from "./threadHistoryLoadMore";
+import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
   ThreadWorkLog,
@@ -187,6 +195,8 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  /** Older-message paging state. Omitted where history is fully loaded (tests, previews). */
+  readonly historyWindow?: ThreadHistoryWindowState;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
@@ -1964,6 +1974,107 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // list opens pinned to the end.
   const nearListEnd = useSharedValue(true);
 
+  // Older-message paging. The latch stops a burst of scroll events from asking
+  // for the same page repeatedly: `loadingOlderMessages` only turns true once
+  // the request has been accepted, a frame or more later.
+  const historyWindow = props.historyWindow;
+  const olderPageRequestedRef = useRef(false);
+  const contentHeightRef = useRef(Number.POSITIVE_INFINITY);
+  const previousUnderfilledHistoryEffectRef = useRef({
+    threadId: props.threadId,
+    error: historyWindow?.error ?? null,
+    viewportHeight,
+  });
+  const oldestFeedEntryId = props.feed[0]?.id ?? null;
+  const previousRequestSignalsRef = useRef({
+    oldestFeedEntryId,
+    loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+    settledCount: historyWindow?.settledCount ?? 0,
+  });
+  useEffect(() => {
+    // Release once a page lands, loading changes, or any request attempt
+    // settles. `settledCount` advances even for a disconnected rejection that
+    // React batches into a single commit, so repeated failures and a later
+    // warm resume cannot leave this mount's request latch stuck.
+    const current = {
+      oldestFeedEntryId,
+      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+      settledCount: historyWindow?.settledCount ?? 0,
+    };
+    if (shouldReleaseOlderMessagesRequest(previousRequestSignalsRef.current, current)) {
+      olderPageRequestedRef.current = false;
+    }
+    previousRequestSignalsRef.current = current;
+  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages, historyWindow?.settledCount]);
+
+  const requestOlderMessagesIfNeeded = useCallback(
+    (distanceFromTop: number) => {
+      if (
+        historyWindow &&
+        shouldRequestOlderMessages({
+          distanceFromTop,
+          hasOlderMessages: historyWindow.hasOlderMessages,
+          loadingOlderMessages: historyWindow.loadingOlderMessages,
+          requestInFlight: olderPageRequestedRef.current,
+        })
+      ) {
+        olderPageRequestedRef.current = true;
+        historyWindow.onLoadOlderMessages();
+      }
+    },
+    [historyWindow],
+  );
+  const requestOlderMessagesForUnderfilledFeed = useCallback(
+    (contentHeight: number) => {
+      if (
+        historyWindow &&
+        shouldRequestOlderMessagesForUnderfilledFeed({
+          contentHeight,
+          viewportHeight,
+          error: historyWindow.error,
+          hasOlderMessages: historyWindow.hasOlderMessages,
+          loadingOlderMessages: historyWindow.loadingOlderMessages,
+          requestInFlight: olderPageRequestedRef.current,
+        })
+      ) {
+        olderPageRequestedRef.current = true;
+        historyWindow.onLoadOlderMessages();
+      }
+    },
+    [historyWindow, viewportHeight],
+  );
+  useEffect(() => {
+    const previous = previousUnderfilledHistoryEffectRef.current;
+    const current = {
+      threadId: props.threadId,
+      contentHeight: contentHeightRef.current,
+      viewportHeight,
+      error: historyWindow?.error ?? null,
+      hasOlderMessages: historyWindow?.hasOlderMessages ?? false,
+      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+      requestInFlight: olderPageRequestedRef.current,
+    };
+    previousUnderfilledHistoryEffectRef.current = {
+      threadId: current.threadId,
+      error: current.error,
+      viewportHeight: current.viewportHeight,
+    };
+
+    const action = decideThreadUnderfilledHistoryEffectAction(previous, current);
+    if (action === "reset-content-height") {
+      contentHeightRef.current = Number.POSITIVE_INFINITY;
+      olderPageRequestedRef.current = false;
+      return;
+    }
+    if (action === "request-older-messages" && historyWindow) {
+      // A short feed may not emit another content-size event after its parent
+      // first becomes measurable or readiness clears a disconnected error.
+      // Other settlements wait for user input or a measured size change.
+      olderPageRequestedRef.current = true;
+      historyWindow.onLoadOlderMessages();
+    }
+  }, [historyWindow, props.threadId, viewportHeight]);
+
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -1974,8 +2085,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
       nearListEnd.value =
         contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
+      requestOlderMessagesIfNeeded(
+        distanceFromFeedTop({
+          contentOffsetY: contentOffset.y,
+          topInset: anchorTopInset,
+        }),
+      );
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd],
+    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd, requestOlderMessagesIfNeeded],
+  );
+  const handleContentSizeChange = useCallback(
+    (_width: number, height: number) => {
+      contentHeightRef.current = height;
+      requestOlderMessagesForUnderfilledFeed(height);
+    },
+    [requestOlderMessagesForUnderfilledFeed],
   );
 
   // Gated variant of the 180ms feed layout slide. Instant while browsing
@@ -2455,6 +2579,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
+            onContentSizeChange={handleContentSizeChange}
             scrollEventThrottle={16}
             ListHeaderComponent={
               usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
@@ -2465,6 +2590,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
+        {/*
+          Older-page spinner. Deliberately an absolute overlay rather than a list
+          header: a header would add content the moment a load starts and remove
+          it the moment the page lands, and maintainVisibleContentPosition would
+          have to absorb both shifts on top of the prepended page. An overlay
+          contributes no layout, so the viewport stays exactly where the user
+          left it.
+        */}
+        {historyWindow?.loadingOlderMessages === true ? (
+          <View
+            pointerEvents="none"
+            className="absolute left-0 right-0 items-center"
+            style={{ top: anchorTopInset + 8 }}
+          >
+            <ActivityIndicator size="small" color={iconSubtleColor} />
+          </View>
+        ) : null}
         {props.feed.length === 0 &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (

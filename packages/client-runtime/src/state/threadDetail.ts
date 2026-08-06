@@ -6,6 +6,7 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  OrchestrationThreadMessageWindow,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -13,7 +14,11 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentThread, EnvironmentThreadShell } from "./models.ts";
 import { scopeThread } from "./models.ts";
-import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
+import {
+  EMPTY_ENVIRONMENT_THREAD_STATE,
+  type EnvironmentThreadState,
+  type ThreadOlderMessagesState,
+} from "./threadState.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 
@@ -72,6 +77,10 @@ export function createEnvironmentThreadDetailAtoms<E>(
     environmentId: ScopedThreadRef["environmentId"],
     threadId: ScopedThreadRef["threadId"],
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentThreadState, E>>,
+  loadOlderMessagesAtom?: (
+    environmentId: ScopedThreadRef["environmentId"],
+    threadId: ScopedThreadRef["threadId"],
+  ) => Atom.Writable<unknown, void>,
 ) {
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -128,6 +137,25 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ),
   );
 
+  const threadMessageWindowAtomFamily = Atom.family((key: string) =>
+    Atom.make(
+      (get): OrchestrationThreadMessageWindow | null =>
+        get(threadDetailAtomFamily(key))?.messageWindow ?? null,
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-message-window:${key}`),
+    ),
+  );
+
+  const threadOlderMessagesAtomFamily = Atom.family((key: string) =>
+    Atom.make(
+      (get): ThreadOlderMessagesState => get(threadStateValueAtomFamily(key)).olderMessages,
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-older-messages:${key}`),
+    ),
+  );
+
   const threadActivitiesAtomFamily = Atom.family((key: string) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationThreadActivity> =>
@@ -176,12 +204,24 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ),
   );
 
+  const noOpLoadOlderMessagesAtom = Atom.writable(
+    () => undefined,
+    () => undefined,
+  ).pipe(
+    Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+    Atom.withLabel("environment-thread-load-older-messages:unavailable"),
+  );
+
   return {
     stateAtom: (ref: ScopedThreadRef) => threadStateValueAtomFamily(threadKey(ref)),
     detailAtom: (ref: ScopedThreadRef) => threadDetailAtomFamily(threadKey(ref)),
     statusAtom: (ref: ScopedThreadRef) => threadStatusAtomFamily(threadKey(ref)),
     errorAtom: (ref: ScopedThreadRef) => threadErrorAtomFamily(threadKey(ref)),
     messagesAtom: (ref: ScopedThreadRef) => threadMessagesAtomFamily(threadKey(ref)),
+    messageWindowAtom: (ref: ScopedThreadRef) => threadMessageWindowAtomFamily(threadKey(ref)),
+    olderMessagesAtom: (ref: ScopedThreadRef) => threadOlderMessagesAtomFamily(threadKey(ref)),
+    loadOlderMessagesAtom: (ref: ScopedThreadRef) =>
+      loadOlderMessagesAtom?.(ref.environmentId, ref.threadId) ?? noOpLoadOlderMessagesAtom,
     activitiesAtom: (ref: ScopedThreadRef) => threadActivitiesAtomFamily(threadKey(ref)),
     proposedPlansAtom: (ref: ScopedThreadRef) => threadProposedPlansAtomFamily(threadKey(ref)),
     checkpointsAtom: (ref: ScopedThreadRef) => threadCheckpointsAtomFamily(threadKey(ref)),

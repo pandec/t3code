@@ -3,6 +3,8 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   EnvironmentHttpConflictError,
+  type EnvironmentOrchestrationThreadMessagesUrlParams,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -24,6 +26,36 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { TurnStartBootstrap } from "./Services/TurnStartBootstrap.ts";
 
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
+
+/**
+ * Handler body for GET /api/orchestration/threads/:threadId/messages,
+ * exported standalone so route tests can exercise auth, 404, and clamping
+ * behavior against a provided ProjectionSnapshotQuery layer without booting
+ * the full HTTP API. Reads through
+ * ProjectionSnapshotQuery.getThreadMessagePage — a dedicated bounded SQL
+ * query (cursor+limit pushdown, ORDER BY created_at, message_id) — instead
+ * of hydrating the full thread-detail snapshot just to page messages.
+ */
+export const getThreadMessagesHttp = Effect.fn("environment.orchestration.threadMessages.handler")(
+  function* (
+    params: { readonly threadId: ThreadId },
+    query: EnvironmentOrchestrationThreadMessagesUrlParams,
+  ) {
+    yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const page = yield* projectionSnapshotQuery
+      .getThreadMessagePage(params.threadId, query)
+      .pipe(
+        Effect.catch((cause) =>
+          failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+        ),
+      );
+    if (Option.isNone(page)) {
+      return yield* failEnvironmentNotFound("thread_not_found");
+    }
+    return page.value;
+  },
+);
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -82,7 +114,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return projectThreadDetailSnapshot(snapshot.value);
+          return projectThreadDetailSnapshot(snapshot.value, args.query);
+        }),
+      )
+      .handle(
+        "threadMessages",
+        Effect.fn("environment.orchestration.threadMessages")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          return yield* getThreadMessagesHttp(args.params, args.query);
         }),
       )
       .handle(

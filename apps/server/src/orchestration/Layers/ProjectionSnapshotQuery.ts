@@ -14,6 +14,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadMessagePage,
   ProjectScript,
   RepositoryIdentity,
   TurnId,
@@ -48,6 +49,7 @@ import {
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
+import { clampThreadMessageLimit, MAX_THREAD_MESSAGE_LIMIT } from "../ActivityPayloadProjection.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
@@ -177,6 +179,27 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   worktreePath: Schema.NullOr(Schema.String),
+});
+const ThreadMessageCursorLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+const ThreadMessageCursorRowSchema = Schema.Struct({
+  createdAt: IsoDateTime,
+  messageId: MessageId,
+});
+const ThreadMessagePageBeforeCursorInput = Schema.Struct({
+  threadId: ThreadId,
+  cursorCreatedAt: IsoDateTime,
+  cursorMessageId: MessageId,
+  fetchLimit: Schema.Int,
+});
+const ThreadMessagePageLatestInput = Schema.Struct({
+  threadId: ThreadId,
+  fetchLimit: Schema.Int,
+});
+const ThreadExistsRowSchema = Schema.Struct({
+  hasAny: Schema.Number,
 });
 const FullThreadDiffContextLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -665,35 +688,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: () =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         ORDER BY messages.thread_id ASC, messages.created_at ASC, messages.message_id ASC
       `,
   });
@@ -1134,42 +1129,131 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const threadMessageArtifactSelect = sql`
+    SELECT
+      messages.message_id AS "messageId",
+      messages.thread_id AS "threadId",
+      messages.turn_id AS "turnId",
+      messages.role,
+      messages.text,
+      messages.attachments_json AS "attachments",
+      messages.input_origin AS "inputOrigin",
+      messages.is_streaming AS "isStreaming",
+      messages.created_at AS "createdAt",
+      messages.updated_at AS "updatedAt",
+      summary.summary AS "summaryText",
+      summary.created_at AS "summaryCreatedAt",
+      summary.source_text_hash AS "summarySourceTextHash",
+      summary.recipe_hash AS "summaryRecipeHash",
+      messages.generation_model_selection_json AS "generationModelSelectionJson",
+      speech.speech_id AS "speechId",
+      speech.transcript AS "speechTranscript",
+      speech.mime_type AS "speechMimeType",
+      speech.size_bytes AS "speechSizeBytes",
+      speech.created_at AS "speechCreatedAt",
+      speech.source_text_hash AS "speechSourceTextHash"
+    FROM projection_thread_messages AS messages
+    LEFT JOIN projection_message_summary AS summary
+      ON summary.message_id = messages.message_id
+      AND summary.thread_id = messages.thread_id
+    LEFT JOIN projection_message_speech AS speech
+      ON speech.message_id = messages.message_id
+      AND speech.thread_id = messages.thread_id
+  `;
+
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageArtifactDbRowSchema,
     execute: ({ threadId }) =>
       sql`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.turn_id AS "turnId",
-          messages.role,
-          messages.text,
-          messages.attachments_json AS "attachments",
-          messages.input_origin AS "inputOrigin",
-          messages.is_streaming AS "isStreaming",
-          messages.created_at AS "createdAt",
-          messages.updated_at AS "updatedAt",
-          summary.summary AS "summaryText",
-          summary.created_at AS "summaryCreatedAt",
-          summary.source_text_hash AS "summarySourceTextHash",
-          summary.recipe_hash AS "summaryRecipeHash",
-          messages.generation_model_selection_json AS "generationModelSelectionJson",
-          speech.speech_id AS "speechId",
-          speech.transcript AS "speechTranscript",
-          speech.mime_type AS "speechMimeType",
-          speech.size_bytes AS "speechSizeBytes",
-          speech.created_at AS "speechCreatedAt",
-          speech.source_text_hash AS "speechSourceTextHash"
-        FROM projection_thread_messages AS messages
-        LEFT JOIN projection_message_summary AS summary
-          ON summary.message_id = messages.message_id
-          AND summary.thread_id = messages.thread_id
-        LEFT JOIN projection_message_speech AS speech
-          ON speech.message_id = messages.message_id
-          AND speech.thread_id = messages.thread_id
+        ${threadMessageArtifactSelect}
         WHERE messages.thread_id = ${threadId}
         ORDER BY messages.created_at ASC, messages.message_id ASC
+      `,
+  });
+
+  // Cursor resolution for GET /api/orchestration/threads/:threadId/messages.
+  // The client-supplied `before` cursor is an opaque message id; this looks
+  // up its (created_at, message_id) keyset position so the bounded page
+  // query below can push a WHERE + LIMIT to SQL instead of hydrating every
+  // message in the thread.
+  const getThreadMessageCursorRow = SqlSchema.findOneOption({
+    Request: ThreadMessageCursorLookupInput,
+    Result: ThreadMessageCursorRowSchema,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        SELECT
+          created_at AS "createdAt",
+          message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND message_id = ${messageId}
+        LIMIT 1
+      `,
+  });
+
+  // Bounded keyset page strictly older than a cursor. Ties on `created_at`
+  // are broken by `message_id` in both the comparison and the ORDER BY so
+  // consecutive pages neither skip nor repeat a message when several rows
+  // share a timestamp. `fetchLimit` is `limit + 1`; the caller trims the
+  // extra row and uses its presence to derive `hasMoreOlder` without a
+  // separate COUNT query.
+  const listThreadMessagePageRowsBeforeCursor = SqlSchema.findAll({
+    Request: ThreadMessagePageBeforeCursorInput,
+    Result: ProjectionThreadMessageArtifactDbRowSchema,
+    execute: ({ threadId, cursorCreatedAt, cursorMessageId, fetchLimit }) =>
+      sql`
+        ${threadMessageArtifactSelect}
+        WHERE messages.thread_id = ${threadId}
+          AND (
+            messages.created_at < ${cursorCreatedAt}
+            OR (
+              messages.created_at = ${cursorCreatedAt}
+              AND messages.message_id < ${cursorMessageId}
+            )
+          )
+        ORDER BY messages.created_at DESC, messages.message_id DESC
+        LIMIT ${fetchLimit}
+      `,
+  });
+
+  // Bounded keyset page of the newest messages, used when no `before` cursor
+  // is supplied. Same tie-break and over-fetch-by-one contract as the
+  // cursor-bounded query above.
+  const listThreadMessagePageRowsLatest = SqlSchema.findAll({
+    Request: ThreadMessagePageLatestInput,
+    Result: ProjectionThreadMessageArtifactDbRowSchema,
+    execute: ({ threadId, fetchLimit }) =>
+      sql`
+        ${threadMessageArtifactSelect}
+        WHERE messages.thread_id = ${threadId}
+        ORDER BY messages.created_at DESC, messages.message_id DESC
+        LIMIT ${fetchLimit}
+      `,
+  });
+
+  const existsThreadRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: ThreadExistsRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT EXISTS(
+          SELECT 1
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+            AND deleted_at IS NULL
+        ) AS "hasAny"
+      `,
+  });
+
+  const existsThreadMessageRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: ThreadExistsRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT EXISTS(
+          SELECT 1 FROM projection_thread_messages WHERE thread_id = ${threadId}
+        ) AS "hasAny"
       `,
   });
 
@@ -2687,6 +2771,124 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       );
 
+  // Serves GET /api/orchestration/threads/:threadId/messages with a single
+  // bounded SQL query rather than routing through getThreadDetailSnapshot.
+  // getThreadDetailSnapshot hydrates every message, activity, checkpoint,
+  // proposed plan, and the session row for the thread just to slice a page
+  // of messages in memory afterward — on large threads that hydration (not
+  // the page itself) is what drives allocation storms. This query instead
+  // pushes the cursor comparison and LIMIT down to SQL and never touches the
+  // other thread-detail tables.
+  const getThreadMessagePage: ProjectionSnapshotQueryShape["getThreadMessagePage"] = (
+    threadId,
+    options,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const threadExists = yield* existsThreadRow({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadMessagePage:existsThread:query",
+                "ProjectionSnapshotQuery.getThreadMessagePage:existsThread:decodeRow",
+              ),
+            ),
+          );
+          if (threadExists.hasAny === 0) return Option.none<OrchestrationThreadMessagePage>();
+
+          const limit = clampThreadMessageLimit(options.limit ?? MAX_THREAD_MESSAGE_LIMIT);
+          const fetchLimit = limit + 1;
+
+          let cursorMissing = false;
+          let rowsDesc: ReadonlyArray<
+            Schema.Schema.Type<typeof ProjectionThreadMessageArtifactDbRowSchema>
+          > = [];
+
+          if (options.before === undefined) {
+            rowsDesc = yield* listThreadMessagePageRowsLatest({ threadId, fetchLimit }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadMessagePage:listLatest:query",
+                  "ProjectionSnapshotQuery.getThreadMessagePage:listLatest:decodeRows",
+                ),
+              ),
+            );
+          } else {
+            const cursorRow = yield* getThreadMessageCursorRow({
+              threadId,
+              messageId: options.before,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadMessagePage:getCursor:query",
+                  "ProjectionSnapshotQuery.getThreadMessagePage:getCursor:decodeRow",
+                ),
+              ),
+            );
+            if (Option.isNone(cursorRow)) {
+              // A cursor from a page the client already loaded can stop
+              // existing (e.g. a deep revert). Keep paging available by
+              // reporting more-to-load rather than erroring, matching the
+              // shell/thread-detail routes' tolerance for stale cursors.
+              cursorMissing = true;
+            } else {
+              rowsDesc = yield* listThreadMessagePageRowsBeforeCursor({
+                threadId,
+                cursorCreatedAt: cursorRow.value.createdAt,
+                cursorMessageId: cursorRow.value.messageId,
+                fetchLimit,
+              }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getThreadMessagePage:listBeforeCursor:query",
+                    "ProjectionSnapshotQuery.getThreadMessagePage:listBeforeCursor:decodeRows",
+                  ),
+                ),
+              );
+            }
+          }
+
+          const { snapshotSequence } = yield* getSnapshotSequence();
+
+          if (cursorMissing) {
+            const existsRow = yield* existsThreadMessageRow({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadMessagePage:existsAny:query",
+                  "ProjectionSnapshotQuery.getThreadMessagePage:existsAny:decodeRow",
+                ),
+              ),
+            );
+            return Option.some({
+              threadId,
+              messages: [],
+              hasMoreOlder: existsRow.hasAny !== 0,
+              snapshotSequence,
+            });
+          }
+
+          const hasMoreOlder = rowsDesc.length > limit;
+          const pageRowsDesc = hasMoreOlder ? rowsDesc.slice(0, limit) : rowsDesc;
+          const messages = pageRowsDesc.toReversed().map(mapMessageRow);
+
+          return Option.some({
+            threadId,
+            messages,
+            hasMoreOlder,
+            snapshotSequence,
+          });
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isPersistenceError(error)
+            ? error
+            : toPersistenceSqlError("ProjectionSnapshotQuery.getThreadMessagePage:transaction")(
+                error,
+              ),
+        ),
+      );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2704,6 +2906,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadShellById,
     getThreadDetailById,
     getThreadDetailSnapshot,
+    getThreadMessagePage,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

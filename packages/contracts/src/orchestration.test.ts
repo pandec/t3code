@@ -470,8 +470,45 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
 
     assert.strictEqual(thread.settledOverride, null);
     assert.strictEqual(thread.settledAt, null);
+    assert.strictEqual(thread.messageWindow, undefined);
     assert.strictEqual(shell.settledOverride, null);
     assert.strictEqual(shell.settledAt, null);
+  }),
+);
+
+it.effect("decodes optional thread message window metadata", () =>
+  Effect.gen(function* () {
+    const thread = yield* decodeOrchestrationThread({
+      id: "thread-window-1",
+      projectId: "project-1",
+      title: "Windowed thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      deletedAt: null,
+      messages: [],
+      messageWindow: {
+        hasMoreOlder: true,
+        oldestLoadedMessageId: null,
+        totalCount: 12,
+      },
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    });
+
+    assert.deepStrictEqual(thread.messageWindow, {
+      hasMoreOlder: true,
+      oldestLoadedMessageId: null,
+      totalCount: 12,
+    });
   }),
 );
 
