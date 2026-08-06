@@ -442,14 +442,27 @@ function applyThreadDetailEventUnretained(
         updatedAt: message.createdAt,
       }));
       const importedIds = new Set(importedMessages.map((message) => message.id));
+      const messages = [
+        ...importedMessages,
+        ...thread.messages.filter((message) => !importedIds.has(message.id)),
+      ];
+      // Imported history prepends ahead of the current window, so the actual
+      // earliest loaded message changes even when the array stays under the
+      // retention limit and `retainRecentThreadHistory` never touches
+      // `messageWindow`. Keep `oldestLoadedMessageId` accurate here so a later
+      // `loadOlderMessages` call pages from the real boundary instead of a
+      // stale cursor; `hasMoreOlder` is left untouched since paging validity
+      // beyond the newly imported messages is unaffected.
+      const messageWindow =
+        thread.messageWindow === undefined
+          ? undefined
+          : { ...thread.messageWindow, oldestLoadedMessageId: messages[0]?.id ?? null };
       return {
         kind: "updated",
         thread: {
           ...thread,
-          messages: [
-            ...importedMessages,
-            ...thread.messages.filter((message) => !importedIds.has(message.id)),
-          ],
+          messages,
+          ...(messageWindow === undefined ? {} : { messageWindow }),
           updatedAt: event.occurredAt,
         },
       };

@@ -874,6 +874,78 @@ describe("applyThreadDetailEvent", () => {
         ]);
       }
     });
+
+    it("keeps oldestLoadedMessageId accurate even when the window stays underfilled", () => {
+      const importedMessageId = MessageId.make("imported-1");
+      const laterMessageId = MessageId.make("later-1");
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: laterMessageId,
+            role: "assistant" as const,
+            text: "later continuation",
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T14:00:00.000Z",
+            updatedAt: "2026-04-01T14:00:00.000Z",
+          },
+        ],
+        messageWindow: {
+          hasMoreOlder: true,
+          oldestLoadedMessageId: laterMessageId,
+          totalCount: 5,
+        },
+      };
+      const event = {
+        ...baseEventFields,
+        sequence: 16,
+        occurredAt: "2026-04-01T13:00:00.000Z",
+        aggregateKind: "thread" as const,
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.history-imported" as const,
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          source: {
+            provider: ProviderDriverKind.make("codex"),
+            nativeSessionId: "native-1",
+            nativeCwd: "/tmp/project",
+          },
+          messages: [
+            {
+              messageId: importedMessageId,
+              role: "user" as const,
+              text: "imported question",
+              createdAt: "2026-04-01T12:00:00.000Z",
+            },
+          ],
+          createdAt: "2026-04-01T13:00:00.000Z",
+        },
+      };
+
+      // A window limit far above the resulting message count means the
+      // window stays underfilled and `retainRecentThreadHistory` never
+      // trims (and thus never recomputes `messageWindow` on its own).
+      const result = applyThreadDetailEvent(thread, event, { messageWindowLimit: 150 });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+        importedMessageId,
+        laterMessageId,
+      ]);
+      // The newly imported message is now the true earliest loaded message,
+      // so the cursor must follow it rather than staying pinned at the
+      // pre-import boundary -- a stale cursor would make a later
+      // `loadOlderMessages` page from the wrong position.
+      expect(result.thread.messageWindow?.oldestLoadedMessageId).toBe(importedMessageId);
+      // Paging beyond the imported messages is still valid and should
+      // continue to be offered.
+      expect(result.thread.messageWindow?.hasMoreOlder).toBe(true);
+      // The import grew the known total by exactly the newly-added message.
+      expect(result.thread.messageWindow?.totalCount).toBe(6);
+    });
   });
 
   describe("thread.session-set", () => {
