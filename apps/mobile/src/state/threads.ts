@@ -1,17 +1,26 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
   createEnvironmentThreadStateAtoms,
   EMPTY_ENVIRONMENT_THREAD_STATE,
+  EMPTY_THREAD_OLDER_MESSAGES_STATE,
   type EnvironmentThreadState,
+  type ThreadOlderMessagesState,
   createThreadEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { OrchestrationThread } from "@t3tools/contracts";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationMessage,
+  OrchestrationThread,
+  OrchestrationThreadMessageWindow,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { useCallback, useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -21,6 +30,7 @@ export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRunt
 export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
+  environmentThreads.loadOlderMessagesAtom,
 );
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
@@ -72,6 +82,64 @@ export function threadDetailToShell(
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(
   Atom.withLabel("mobile-environment-thread:empty"),
 );
+const EMPTY_MESSAGES_ATOM = Atom.make<ReadonlyArray<OrchestrationMessage>>([]);
+const EMPTY_MESSAGE_WINDOW_ATOM = Atom.make<OrchestrationThreadMessageWindow | null>(null);
+const EMPTY_OLDER_MESSAGES_ATOM = Atom.make<ThreadOlderMessagesState>(
+  EMPTY_THREAD_OLDER_MESSAGES_STATE,
+);
+const EMPTY_LOAD_OLDER_MESSAGES_ATOM = Atom.writable(
+  () => undefined,
+  () => undefined,
+);
+
+function useScopedThreadRef(
+  environmentId: EnvironmentId | null,
+  threadId: ThreadId | null,
+): ScopedThreadRef | null {
+  return useMemo(
+    () => (environmentId === null || threadId === null ? null : { environmentId, threadId }),
+    [environmentId, threadId],
+  );
+}
+
+export function useThreadMessageWindow(
+  environmentId: EnvironmentId | null,
+  threadId: ThreadId | null,
+) {
+  const ref = useScopedThreadRef(environmentId, threadId);
+  const messages = useAtomValue(
+    ref === null ? EMPTY_MESSAGES_ATOM : environmentThreadDetails.messagesAtom(ref),
+  );
+  const messageWindow = useAtomValue(
+    ref === null ? EMPTY_MESSAGE_WINDOW_ATOM : environmentThreadDetails.messageWindowAtom(ref),
+  );
+  const olderMessages = useAtomValue(
+    ref === null ? EMPTY_OLDER_MESSAGES_ATOM : environmentThreadDetails.olderMessagesAtom(ref),
+  );
+  return useMemo(
+    () => ({
+      messages,
+      messageWindow,
+      hasOlderMessages: messageWindow?.hasMoreOlder === true,
+      loadingOlderMessages: olderMessages.isLoading,
+      error: olderMessages.error,
+    }),
+    [messageWindow, messages, olderMessages.error, olderMessages.isLoading],
+  );
+}
+
+export function useLoadOlderMessages(
+  environmentId: EnvironmentId | null,
+  threadId: ThreadId | null,
+): () => void {
+  const ref = useScopedThreadRef(environmentId, threadId);
+  const load = useAtomSet(
+    ref === null
+      ? EMPTY_LOAD_OLDER_MESSAGES_ATOM
+      : environmentThreadDetails.loadOlderMessagesAtom(ref),
+  );
+  return useCallback(() => load(), [load]);
+}
 
 export function useEnvironmentThread(
   environmentId: EnvironmentId | null,

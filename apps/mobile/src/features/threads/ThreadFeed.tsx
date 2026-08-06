@@ -119,6 +119,11 @@ import {
   type ThreadFeedInsetReport,
 } from "./threadFeedInsets";
 import {
+  distanceFromFeedTop,
+  shouldRequestOlderMessages,
+  type ThreadHistoryWindowState,
+} from "./threadHistoryLoadMore";
+import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
   ThreadWorkLog,
@@ -187,6 +192,8 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  /** Older-message paging state. Omitted where history is fully loaded (tests, previews). */
+  readonly historyWindow?: ThreadHistoryWindowState;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
@@ -1964,6 +1971,36 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // list opens pinned to the end.
   const nearListEnd = useSharedValue(true);
 
+  // Older-message paging. The latch stops a burst of scroll events from asking
+  // for the same page repeatedly: `loadingOlderMessages` only turns true once
+  // the request has been accepted, a frame or more later.
+  const historyWindow = props.historyWindow;
+  const olderPageRequestedRef = useRef(false);
+  const oldestFeedEntryId = props.feed[0]?.id ?? null;
+  useEffect(() => {
+    // Release once a page lands (the oldest entry changes) or the request
+    // settles; the near-top test then decides whether another page is wanted.
+    olderPageRequestedRef.current = false;
+  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages]);
+
+  const requestOlderMessagesIfNeeded = useCallback(
+    (distanceFromTop: number) => {
+      if (
+        historyWindow &&
+        shouldRequestOlderMessages({
+          distanceFromTop,
+          hasOlderMessages: historyWindow.hasOlderMessages,
+          loadingOlderMessages: historyWindow.loadingOlderMessages,
+          requestInFlight: olderPageRequestedRef.current,
+        })
+      ) {
+        olderPageRequestedRef.current = true;
+        historyWindow.onLoadOlderMessages();
+      }
+    },
+    [historyWindow],
+  );
+
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -1974,8 +2011,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
       nearListEnd.value =
         contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
+      requestOlderMessagesIfNeeded(
+        distanceFromFeedTop({
+          contentOffsetY: contentOffset.y,
+          topInset: anchorTopInset,
+        }),
+      );
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd],
+    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd, requestOlderMessagesIfNeeded],
+  );
+  const handleContentSizeChange = useCallback(
+    (_width: number, height: number) => {
+      if (viewportHeight > 0 && height <= viewportHeight) {
+        requestOlderMessagesIfNeeded(0);
+      }
+    },
+    [requestOlderMessagesIfNeeded, viewportHeight],
   );
 
   // Gated variant of the 180ms feed layout slide. Instant while browsing
@@ -2455,6 +2506,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
+            onContentSizeChange={handleContentSizeChange}
             scrollEventThrottle={16}
             ListHeaderComponent={
               usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
@@ -2465,6 +2517,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
+        {/*
+          Older-page spinner. Deliberately an absolute overlay rather than a list
+          header: a header would add content the moment a load starts and remove
+          it the moment the page lands, and maintainVisibleContentPosition would
+          have to absorb both shifts on top of the prepended page. An overlay
+          contributes no layout, so the viewport stays exactly where the user
+          left it.
+        */}
+        {historyWindow?.loadingOlderMessages === true ? (
+          <View
+            pointerEvents="none"
+            className="absolute left-0 right-0 items-center"
+            style={{ top: anchorTopInset + 8 }}
+          >
+            <ActivityIndicator size="small" color={iconSubtleColor} />
+          </View>
+        ) : null}
         {props.feed.length === 0 &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (

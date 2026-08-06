@@ -1,6 +1,8 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
 import {
+  threadHistoryWindowLayer,
+  threadMessagePageLoaderLayer,
   threadPrewarmTriggersLayer,
   threadSnapshotLoaderLayer,
 } from "@t3tools/client-runtime/state/threads";
@@ -13,17 +15,28 @@ import {
   mobileBackgroundActivityReporterLayer,
 } from "./background-activity";
 import { connectionPlatformLayer } from "./platform";
+import { MOBILE_THREAD_HISTORY_WINDOW } from "./thread-history-window";
 
 const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
   Layer.provide(runtimeContextLayer),
 );
 
-const snapshotLoaderLayer = Layer.merge(threadSnapshotLoaderLayer, shellSnapshotLoaderLayer);
+const snapshotLoaderLayer = Layer.mergeAll(
+  threadSnapshotLoaderLayer,
+  threadMessagePageLoaderLayer,
+  shellSnapshotLoaderLayer,
+);
+
+// Threads hydrate a bounded tail of their message history; older pages load on
+// demand as the feed is scrolled up. See MOBILE_THREAD_HISTORY_WINDOW for why
+// the phone budget is smaller than the desktop one.
+const mobileThreadHistoryWindowLayer = threadHistoryWindowLayer(MOBILE_THREAD_HISTORY_WINDOW);
 
 type ConnectionLayerSource =
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
   | typeof threadPrewarmTriggersLayer
+  | typeof mobileThreadHistoryWindowLayer
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
@@ -39,6 +52,7 @@ const providedClientConnectionLayer = Layer.mergeAll(
       runtimeContextLayer,
       providedConnectionPlatformLayer,
       mobileBackgroundActivityObserverLayer,
+      mobileThreadHistoryWindowLayer,
     ),
   ),
 );

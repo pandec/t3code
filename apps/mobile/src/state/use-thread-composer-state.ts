@@ -23,6 +23,7 @@ import {
 } from "@t3tools/shared/composerTrigger";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
+import type { ThreadHistoryWindowState } from "../features/threads/threadHistoryLoadMore";
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import {
   convertPastedImagesToAttachments,
@@ -52,7 +53,7 @@ import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import type { ThreadOutboxDeliveryIntent } from "./thread-outbox-model";
-import { threadEnvironment } from "./threads";
+import { threadEnvironment, useLoadOlderMessages, useThreadMessageWindow } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
@@ -118,9 +119,33 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
+  // A thread's detail snapshot can carry far more messages than the window
+  // keeps hydrated for display. Build the feed from the window's messages so a
+  // long history costs a bounded amount of feed-building work per stream tick,
+  // and let the feed page older messages in as the user scrolls up.
+  const messageWindow = useThreadMessageWindow(
+    selectedThreadShell?.environmentId ?? null,
+    selectedThreadShell?.id ?? null,
+  );
+  const loadOlderMessages = useLoadOlderMessages(
+    selectedThreadShell?.environmentId ?? null,
+    selectedThreadShell?.id ?? null,
+  );
+  const windowedMessages = messageWindow.messages;
   const selectedThreadFeed = useMemo(
-    () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
-    [selectedThreadDetail],
+    () =>
+      selectedThreadDetail
+        ? buildThreadFeed(selectedThreadDetail, { loadedMessages: windowedMessages })
+        : [],
+    [selectedThreadDetail, windowedMessages],
+  );
+  const threadHistoryWindow = useMemo<ThreadHistoryWindowState>(
+    () => ({
+      hasOlderMessages: messageWindow.hasOlderMessages,
+      loadingOlderMessages: messageWindow.loadingOlderMessages,
+      onLoadOlderMessages: loadOlderMessages,
+    }),
+    [messageWindow.hasOlderMessages, messageWindow.loadingOlderMessages, loadOlderMessages],
   );
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
@@ -401,6 +426,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    threadHistoryWindow,
     selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,
