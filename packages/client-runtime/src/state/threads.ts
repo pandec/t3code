@@ -1,8 +1,10 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type MessageId,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadMessagePage,
   type OrchestrationThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
@@ -14,7 +16,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
@@ -22,16 +24,31 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
+import { ThreadMessagePageLoader } from "./threadMessagesHttp.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { applyThreadDetailEvent, retainRecentThreadHistory } from "./threadReducer.ts";
-import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
+import {
+  applyThreadDetailEvent,
+  prependOlderThreadMessages,
+  retainRecentThreadHistory,
+} from "./threadReducer.ts";
+import {
+  DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  DEFAULT_MESSAGE_WINDOW_LIMIT,
+  ThreadHistoryWindow,
+  THREAD_STATE_IDLE_TTL_MS,
+} from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadState,
   type EnvironmentThreadStatus,
 } from "./threadState.ts";
+
+export interface EnvironmentThreadStateHandle {
+  readonly state: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>;
+  readonly loadOlderMessages: Effect.Effect<void>;
+}
 
 function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): EnvironmentThreadStatus {
   return Option.isSome(data) ? "cached" : "empty";
@@ -47,6 +64,44 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
 function shouldPersistThread(thread: OrchestrationThread): boolean {
   const status = thread.session?.status;
   return status !== "starting" && status !== "running";
+}
+
+function preserveLoadedOlderMessages(
+  current: OrchestrationThread,
+  refreshed: OrchestrationThread,
+  loadedOlderCount: number,
+): OrchestrationThread {
+  if (loadedOlderCount === 0) return refreshed;
+
+  const firstRefreshedMessageId = refreshed.messages[0]?.id;
+  if (firstRefreshedMessageId === undefined) return refreshed;
+
+  const firstRefreshedIndex = current.messages.findIndex(
+    (message) => message.id === firstRefreshedMessageId,
+  );
+  if (firstRefreshedIndex < 0) return refreshed;
+
+  const candidates = current.messages.slice(0, firstRefreshedIndex);
+  const totalCount = refreshed.messageWindow?.totalCount ?? null;
+  const preserveCount =
+    totalCount === null
+      ? candidates.length
+      : Math.min(candidates.length, Math.max(0, totalCount - refreshed.messages.length));
+  const preservedOlder = preserveCount === 0 ? [] : candidates.slice(-preserveCount);
+  if (preservedOlder.length === 0) return refreshed;
+  const messages = [...preservedOlder, ...refreshed.messages];
+  return {
+    ...refreshed,
+    messages,
+    messageWindow: {
+      hasMoreOlder:
+        totalCount === null
+          ? (current.messageWindow?.hasMoreOlder ?? refreshed.messageWindow?.hasMoreOlder ?? false)
+          : messages.length < totalCount,
+      oldestLoadedMessageId: messages[0]?.id ?? null,
+      totalCount,
+    },
+  };
 }
 
 function mergeThreadMessageArtifacts(
@@ -81,6 +136,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
+  const messagePageLoader = yield* Effect.serviceOption(ThreadMessagePageLoader);
+  const configuredHistoryWindow = yield* Effect.serviceOption(ThreadHistoryWindow);
+  const historyWindow = Option.getOrElse(configuredHistoryWindow, () => ({
+    messageWindowLimit: DEFAULT_MESSAGE_WINDOW_LIMIT,
+    messageOlderPageSize: DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  }));
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
   const cached = yield* cache.loadThread(environmentId, threadId).pipe(
@@ -95,11 +156,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     ),
   );
-  const cachedThread = Option.map(cached, (snapshot) => retainRecentThreadHistory(snapshot.thread));
+  const cachedThread = Option.map(cached, (snapshot) =>
+    retainRecentThreadHistory(snapshot.thread, {
+      messageWindowLimit: historyWindow.messageWindowLimit,
+    }),
+  );
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
     error: Option.none(),
+    olderMessages: { isLoading: false, error: null },
   });
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
@@ -107,6 +173,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const lastRevertSequence = yield* Ref.make(0);
+  const loadedOlderMessageCount = yield* Ref.make(0);
   const mutationLock = yield* Semaphore.make(1);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
   const artifactRefreshes = yield* Queue.sliding<PreparedConnection>(1);
@@ -187,13 +255,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
+    messageWindowLimit: number | null = historyWindow.messageWindowLimit,
   ) {
-    const retainedThread = retainRecentThreadHistory(thread);
+    const retainedThread = retainRecentThreadHistory(thread, { messageWindowLimit });
     const waiting = yield* Ref.get(awaitingCompletion);
+    const currentState = yield* SubscriptionRef.get(state);
     yield* SubscriptionRef.set(state, {
       data: Option.some(retainedThread),
       status: waiting ? "synchronizing" : "live",
       error: Option.none(),
+      olderMessages: currentState.olderMessages,
     });
     // Active threads can update many times per second and retain large tool
     // payloads. The server remains the source of truth while a turn is active;
@@ -210,6 +281,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       data: Option.none(),
       status: "deleted",
       error: Option.none(),
+      olderMessages: { isLoading: false, error: null },
     });
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
@@ -221,6 +293,104 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           }),
         ),
       ),
+    );
+  });
+
+  const loadOlderMessages = Effect.fn("EnvironmentThreadState.loadOlderMessages")(function* () {
+    const request = yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(state);
+        if (
+          current.status === "deleted" ||
+          current.olderMessages.isLoading ||
+          Option.isNone(current.data) ||
+          current.data.value.messageWindow?.hasMoreOlder !== true
+        ) {
+          return Option.none<{
+            readonly prepared: PreparedConnection;
+            readonly beforeMessageId: MessageId | null;
+            readonly sequence: number;
+          }>();
+        }
+
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isNone(prepared)) {
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: { isLoading: false, error: "The environment is not connected." },
+          }));
+          return Option.none();
+        }
+
+        const sequence = yield* SubscriptionRef.get(lastSequence);
+        yield* SubscriptionRef.update(state, (value) => ({
+          ...value,
+          olderMessages: { isLoading: true, error: null },
+        }));
+        return Option.some({
+          prepared: prepared.value,
+          beforeMessageId: current.data.value.messageWindow.oldestLoadedMessageId,
+          sequence,
+        });
+      }),
+    );
+    if (Option.isNone(request)) return;
+
+    const page = Option.isNone(messagePageLoader)
+      ? Option.none<OrchestrationThreadMessagePage>()
+      : yield* messagePageLoader.value.loadOlder(request.value.prepared, threadId, {
+          beforeMessageId: request.value.beforeMessageId,
+          limit: historyWindow.messageOlderPageSize,
+        });
+
+    yield* mutationLock.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(state);
+        if (current.status === "deleted" || Option.isNone(current.data)) return;
+
+        const revertedAt = yield* Ref.get(lastRevertSequence);
+        const currentCursor = current.data.value.messageWindow?.oldestLoadedMessageId ?? null;
+        if (
+          revertedAt > request.value.sequence ||
+          currentCursor !== request.value.beforeMessageId
+        ) {
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: { isLoading: false, error: null },
+          }));
+          return;
+        }
+        if (Option.isNone(page) || page.value.threadId !== threadId) {
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: { isLoading: false, error: "Could not load older messages." },
+          }));
+          return;
+        }
+        if (page.value.snapshotSequence < revertedAt) {
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: { isLoading: false, error: null },
+          }));
+          return;
+        }
+
+        const currentThread = current.data.value;
+        const thread = prependOlderThreadMessages(currentThread, page.value);
+        yield* Ref.update(
+          loadedOlderMessageCount,
+          (count) => count + Math.max(0, thread.messages.length - currentThread.messages.length),
+        );
+        yield* SubscriptionRef.set(state, {
+          ...current,
+          data: Option.some(thread),
+          olderMessages: { isLoading: false, error: null },
+        });
+        if (shouldPersistThread(thread)) {
+          const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+          yield* Queue.offer(persistence, { snapshotSequence, thread });
+        }
+      }),
     );
   });
 
@@ -239,6 +409,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
+      yield* Ref.set(loadedOlderMessageCount, 0);
       yield* setThread(item.snapshot.thread);
       return;
     }
@@ -248,6 +419,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       return;
     }
     yield* SubscriptionRef.set(lastSequence, item.event.sequence);
+    if (item.event.type === "thread.reverted") {
+      yield* Ref.set(lastRevertSequence, item.event.sequence);
+    }
 
     const current = yield* SubscriptionRef.get(state);
     if (Option.isNone(current.data)) {
@@ -256,21 +430,51 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }
       return;
     }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
+    const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+    const retainedLimit =
+      historyWindow.messageWindowLimit === null
+        ? null
+        : historyWindow.messageWindowLimit + loadedOlderCount;
+    const result = applyThreadDetailEvent(current.data.value, item.event, {
+      messageWindowLimit: retainedLimit,
+    });
     if (result.kind === "updated") {
-      yield* setThread(result.thread);
+      if (item.event.type === "thread.reverted") {
+        yield* Ref.update(loadedOlderMessageCount, (count) =>
+          Math.min(count, result.thread.messages.length),
+        );
+      }
+      yield* setThread(result.thread, retainedLimit);
     } else if (result.kind === "deleted") {
       yield* setDeleted();
     }
   });
-  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(
-    (item: OrchestrationThreadStreamItem) => mutationLock.withPermits(1)(applyItemUnlocked(item)),
-  );
+  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
+    item: OrchestrationThreadStreamItem,
+  ) {
+    yield* mutationLock.withPermits(1)(applyItemUnlocked(item));
+    if (item.kind !== "event" || item.event.type !== "thread.reverted") return;
+
+    const current = yield* SubscriptionRef.get(state);
+    if (
+      Option.isSome(current.data) &&
+      current.data.value.messages.length === 0 &&
+      current.data.value.messageWindow?.hasMoreOlder === true
+    ) {
+      yield* loadOlderMessages();
+    }
+  });
 
   const refreshWarmSnapshot = Effect.fn("EnvironmentThreadState.refreshWarmSnapshot")(function* (
     prepared: PreparedConnection,
   ) {
-    const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+    const httpSnapshot = yield* snapshotLoader.load(
+      prepared,
+      threadId,
+      historyWindow.messageWindowLimit === null
+        ? undefined
+        : { messageLimit: historyWindow.messageWindowLimit },
+    );
     if (Option.isNone(httpSnapshot)) return;
     yield* mutationLock.withPermits(1)(
       Effect.gen(function* () {
@@ -278,9 +482,29 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         if (currentState.status === "deleted" || Option.isNone(currentState.data)) return;
 
         const sequence = yield* SubscriptionRef.get(lastSequence);
+        const loadedOlderCount = yield* Ref.get(loadedOlderMessageCount);
+        const retainedLimit =
+          historyWindow.messageWindowLimit === null
+            ? null
+            : historyWindow.messageWindowLimit + loadedOlderCount;
         if (httpSnapshot.value.snapshotSequence > sequence) {
           yield* SubscriptionRef.set(lastSequence, httpSnapshot.value.snapshotSequence);
-          yield* setThread(httpSnapshot.value.thread);
+          const refreshed = preserveLoadedOlderMessages(
+            currentState.data.value,
+            httpSnapshot.value.thread,
+            loadedOlderCount,
+          );
+          const refreshedOlderCount = Math.max(
+            0,
+            refreshed.messages.length - httpSnapshot.value.thread.messages.length,
+          );
+          yield* Ref.set(loadedOlderMessageCount, refreshedOlderCount);
+          yield* setThread(
+            refreshed,
+            historyWindow.messageWindowLimit === null
+              ? null
+              : historyWindow.messageWindowLimit + refreshedOlderCount,
+          );
           return;
         }
         yield* setThread(
@@ -289,6 +513,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             httpSnapshot.value.thread,
             httpSnapshot.value.snapshotSequence === sequence,
           ),
+          retainedLimit,
         );
       }),
     );
@@ -348,7 +573,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             ),
           );
           if (Option.isNone(current.data)) {
-            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            const httpSnapshot = yield* snapshotLoader.load(
+              prepared,
+              threadId,
+              historyWindow.messageWindowLimit === null
+                ? undefined
+                : { messageLimit: historyWindow.messageWindowLimit },
+            );
             if (Option.isSome(httpSnapshot)) {
               yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
               current = yield* SubscriptionRef.get(state);
@@ -371,6 +602,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         return {
           threadId,
           ...(canResume ? { afterSequence: sequence } : {}),
+          ...(historyWindow.messageWindowLimit === null
+            ? {}
+            : { messageLimit: historyWindow.messageWindowLimit }),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };
       }),
@@ -394,14 +628,44 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ),
   );
 
-  return state;
+  return {
+    state,
+    loadOlderMessages: loadOlderMessages(),
+  } satisfies EnvironmentThreadStateHandle;
 });
 
-export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+interface EnvironmentThreadStateEntry {
+  readonly state: EnvironmentThreadState;
+  readonly loadOlderMessages: Effect.Effect<void>;
+}
+
+const EMPTY_ENVIRONMENT_THREAD_STATE_ENTRY: EnvironmentThreadStateEntry = {
+  state: EMPTY_ENVIRONMENT_THREAD_STATE,
+  loadOlderMessages: Effect.void,
+};
+
+function threadStateEntryChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
   return followStreamInEnvironment(
     environmentId,
-    Stream.unwrap(makeEnvironmentThreadState(threadId).pipe(Effect.map(SubscriptionRef.changes))),
+    Stream.unwrap(
+      makeEnvironmentThreadState(threadId).pipe(
+        Effect.map((handle) =>
+          SubscriptionRef.changes(handle.state).pipe(
+            Stream.map(
+              (state): EnvironmentThreadStateEntry => ({
+                state,
+                loadOlderMessages: handle.loadOlderMessages,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
+}
+
+export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+  return threadStateEntryChanges(environmentId, threadId).pipe(Stream.map((entry) => entry.state));
 }
 
 export function createEnvironmentThreadStateAtoms<R, E>(
@@ -410,27 +674,48 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     E
   >,
 ) {
-  const family = Atom.family((key: string) => {
+  const entryFamily = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
     return runtime
-      .atom(threadStateChanges(environmentId, threadId), {
-        initialValue: EMPTY_ENVIRONMENT_THREAD_STATE,
+      .atom(threadStateEntryChanges(environmentId, threadId), {
+        initialValue: EMPTY_ENVIRONMENT_THREAD_STATE_ENTRY,
       })
       .pipe(
         Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-        Atom.withLabel(`environment-thread-state:${key}`),
+        Atom.withLabel(`environment-thread-entry:${key}`),
+      );
+  });
+  const stateFamily = Atom.family((key: string) =>
+    Atom.make((get) => AsyncResult.map(get(entryFamily(key)), (entry) => entry.state)).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-state:${key}`),
+    ),
+  );
+  const loadOlderMessagesFamily = Atom.family((key: string) => {
+    const entryAtom = entryFamily(key);
+    return runtime
+      .fn<void>()((_input, get) =>
+        get.result(entryAtom).pipe(Effect.flatMap((entry) => entry.loadOlderMessages)),
+      )
+      .pipe(
+        Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+        Atom.withLabel(`environment-thread-load-older-messages:${key}`),
       );
   });
 
   return {
     stateAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
-      family(threadKey({ environmentId, threadId })),
+      stateFamily(threadKey({ environmentId, threadId })),
+    loadOlderMessagesAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
+      loadOlderMessagesFamily(threadKey({ environmentId, threadId })),
   };
 }
 
 export * from "./archivedThreads.ts";
 export * from "./checkpointDiff.ts";
 export * from "./threadPrewarm.ts";
+export * from "./threadMessagesHttp.ts";
+export * from "./threadRetention.ts";
 export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";

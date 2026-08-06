@@ -32,11 +32,16 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly messageLimit?: number;
   readonly timeoutMs?: number;
 }) {
+  const query =
+    input.messageLimit === undefined
+      ? ""
+      : `?messageLimit=${encodeURIComponent(input.messageLimit)}`;
   const requestUrl = environmentEndpointUrl(
     input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}`,
+    `/api/orchestration/threads/${input.threadId}${query}`,
   );
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
@@ -52,6 +57,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
+        query: input.messageLimit === undefined ? {} : { messageLimit: input.messageLimit },
         headers,
       }),
     ),
@@ -72,6 +78,7 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
+      options?: { readonly messageLimit?: number },
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -89,8 +96,13 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId) =>
-        fetchEnvironmentThreadSnapshot({ prepared, threadId, signer }).pipe(
+      load: (prepared: PreparedConnection, threadId: ThreadId, options) =>
+        fetchEnvironmentThreadSnapshot({
+          prepared,
+          threadId,
+          signer,
+          ...(options?.messageLimit === undefined ? {} : { messageLimit: options.messageLimit }),
+        }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           // A genuinely missing thread (404) is expected — the socket

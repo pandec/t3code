@@ -18,9 +18,12 @@ describe("createEnvironmentThreadStateAtoms", () => {
     const environmentId = EnvironmentId.make("environment-1");
     const threadId = ThreadId.make("thread-1");
     const atom = threads.stateAtom(environmentId, threadId);
+    const loadOlderMessagesAtom = threads.loadOlderMessagesAtom(environmentId, threadId);
 
     expect(atom.idleTTL).toBe(THREAD_STATE_IDLE_TTL_MS);
+    expect(loadOlderMessagesAtom.idleTTL).toBe(THREAD_STATE_IDLE_TTL_MS);
     expect(threads.stateAtom(environmentId, threadId)).toBe(atom);
+    expect(threads.loadOlderMessagesAtom(environmentId, threadId)).toBe(loadOlderMessagesAtom);
     expect(threads.stateAtom(environmentId, ThreadId.make("thread-2"))).not.toBe(atom);
   });
 });

@@ -246,6 +246,21 @@ export const OrchestrationMessage = Schema.Struct({
 });
 export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
+export const OrchestrationThreadMessageWindow = Schema.Struct({
+  hasMoreOlder: Schema.Boolean,
+  oldestLoadedMessageId: Schema.NullOr(MessageId),
+  totalCount: Schema.NullOr(NonNegativeInt),
+});
+export type OrchestrationThreadMessageWindow = typeof OrchestrationThreadMessageWindow.Type;
+
+export const OrchestrationThreadMessagePage = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(OrchestrationMessage),
+  hasMoreOlder: Schema.Boolean,
+  snapshotSequence: NonNegativeInt,
+});
+export type OrchestrationThreadMessagePage = typeof OrchestrationThreadMessagePage.Type;
+
 export const OrchestrationProposedPlanId = TrimmedNonEmptyString;
 export type OrchestrationProposedPlanId = typeof OrchestrationProposedPlanId.Type;
 
@@ -391,6 +406,7 @@ export const OrchestrationThread = Schema.Struct({
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
+  messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
   completedTurnAssistantMessageIds: Schema.Array(MessageId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -551,6 +567,8 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * snapshot or catch-up replay and before it begins emitting live events.
    */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Limits message history included in snapshot frames. */
+  messageLimit: Schema.optionalKey(NonNegativeInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 

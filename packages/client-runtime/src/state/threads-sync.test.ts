@@ -9,6 +9,7 @@ import {
   TurnId,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadMessagePage,
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -35,6 +36,8 @@ import * as RpcSession from "../rpc/session.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
+  ThreadHistoryWindow,
+  ThreadMessagePageLoader,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
 } from "./threads.ts";
@@ -81,6 +84,19 @@ const BASE_THREAD: OrchestrationThread = {
   checkpoints: [],
   session: null,
 };
+function makeThreadMessage(index: number): OrchestrationThread["messages"][number] {
+  const timestamp = `2026-04-01T00:${String(index).padStart(2, "0")}:00.000Z`;
+  return {
+    id: MessageId.make(`message-${index}`),
+    role: index % 2 === 0 ? "assistant" : "user",
+    text: `Message ${index}`,
+    turnId: null,
+    streaming: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 const ACTIVE_THREAD: OrchestrationThread = {
   ...BASE_THREAD,
   latestTurn: {
@@ -136,6 +152,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationThread;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly snapshotLoadGate?: Deferred.Deferred<void>;
+  readonly messagePage?: Option.Option<OrchestrationThreadMessagePage>;
+  readonly messagePageLoadGate?: Deferred.Deferred<void>;
+  readonly messageWindowLimit?: number;
+  readonly messageOlderPageSize?: number;
   readonly completionMarker?: boolean;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
@@ -144,7 +164,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const retryCount = yield* Ref.make(0);
   const subscriptionCount = yield* Ref.make(0);
   const loaderCalls = yield* Ref.make(0);
+  const messagePageLoaderCalls = yield* Ref.make(0);
+  const lastMessagePageBefore = yield* Ref.make<MessageId | null | undefined>(undefined);
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
+  const lastSubscribeMessageLimit = yield* Ref.make<number | undefined>(undefined);
   const lastRequestCompletionMarker = yield* Ref.make<boolean | undefined>(undefined);
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const cachedThreadSnapshot = yield* Ref.make<Option.Option<OrchestrationThreadDetailSnapshot>>(
@@ -169,11 +192,13 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const client = {
     [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: {
       readonly afterSequence?: number;
+      readonly messageLimit?: number;
       readonly requestCompletionMarker?: boolean;
     }) =>
       Stream.unwrap(
         Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
           Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
+          Effect.andThen(Ref.set(lastSubscribeMessageLimit, input.messageLimit)),
           Effect.andThen(Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker)),
           Effect.as(streamFrom(inputs)),
         ),
@@ -205,6 +230,22 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         ),
       ),
   });
+  const messagePageLoader = ThreadMessagePageLoader.of({
+    loadOlder: (_prepared, threadId, pageOptions) =>
+      Ref.update(messagePageLoaderCalls, (count) => count + 1).pipe(
+        Effect.andThen(Ref.set(lastMessagePageBefore, pageOptions.beforeMessageId)),
+        Effect.andThen(
+          options?.messagePageLoadGate === undefined
+            ? Effect.void
+            : Deferred.await(options.messagePageLoadGate),
+        ),
+        Effect.as(
+          threadId === THREAD_ID
+            ? (options?.messagePage ?? Option.none<OrchestrationThreadMessagePage>())
+            : Option.none<OrchestrationThreadMessagePage>(),
+        ),
+      ),
+  });
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: TARGET,
     state: supervisorState,
@@ -233,16 +274,24 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     clearVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
+  const threadHandle = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
+    Effect.provideService(ThreadMessagePageLoader, messagePageLoader),
+    Effect.provideService(
+      ThreadHistoryWindow,
+      ThreadHistoryWindow.of({
+        messageWindowLimit: options?.messageWindowLimit ?? 2_000,
+        messageOlderPageSize: options?.messageOlderPageSize ?? 200,
+      }),
+    ),
     Effect.provideService(
       ConnectionWakeups.ConnectionWakeups,
       ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
     ),
   );
-  yield* SubscriptionRef.changes(threadState).pipe(
+  yield* SubscriptionRef.changes(threadHandle.state).pipe(
     Stream.runForEach((state) =>
       Ref.set(latest, state).pipe(Effect.andThen(Queue.offer(observed, state))),
     ),
@@ -252,11 +301,15 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   return {
     inputs,
     observed,
+    loadOlderMessages: threadHandle.loadOlderMessages,
     latest,
     retryCount,
     subscriptionCount,
     loaderCalls,
+    messagePageLoaderCalls,
+    lastMessagePageBefore,
     lastSubscribeAfterSequence,
+    lastSubscribeMessageLimit,
     lastRequestCompletionMarker,
     supervisorState,
     supervisorSession,
@@ -359,7 +412,179 @@ describe("EnvironmentThreads", () => {
       // The HTTP refresh can hydrate state stored outside orchestration events,
       // then the subscription still resumes from the cached sequence.
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(yield* Ref.get(harness.lastSubscribeMessageLimit)).toBe(2_000);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
+  it.effect("prepends an older message page and updates the window", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messageWindowLimit: 2,
+        messageOlderPageSize: 2,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      yield* harness.loadOlderMessages;
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages.length === 4,
+      );
+      const thread = Option.getOrThrow(state.data);
+
+      expect(thread.messages.map((message) => message.id)).toEqual([
+        "message-1",
+        "message-2",
+        "message-3",
+        "message-4",
+      ]);
+      expect(thread.messageWindow).toEqual({
+        hasMoreOlder: false,
+        oldestLoadedMessageId: "message-1",
+        totalCount: 4,
+      });
+      expect(yield* Ref.get(harness.lastMessagePageBefore)).toBe("message-3");
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+      expect(state.olderMessages).toEqual({ isLoading: false, error: null });
+    }),
+  );
+
+  it.effect("preserves contiguous loaded history across a newer warm refresh", () =>
+    Effect.gen(function* () {
+      const snapshotLoadGate = yield* Deferred.make<void>();
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messageWindowLimit: 2,
+        messageOlderPageSize: 2,
+        snapshotLoadGate,
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          thread: {
+            ...BASE_THREAD,
+            messages: [makeThreadMessage(4), makeThreadMessage(5)],
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: MessageId.make("message-4"),
+              totalCount: 5,
+            },
+          },
+        }),
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      yield* harness.loadOlderMessages;
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages.length === 4,
+      );
+
+      yield* Deferred.succeed(snapshotLoadGate, undefined);
+      const refreshed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.at(-1)?.id === MessageId.make("message-5"),
+      );
+
+      expect(Option.getOrThrow(refreshed.data).messages.map((message) => message.id)).toEqual([
+        "message-1",
+        "message-2",
+        "message-3",
+        "message-4",
+        "message-5",
+      ]);
+    }),
+  );
+
+  it.effect("discards an older page when a snapshot moves its cursor", () =>
+    Effect.gen(function* () {
+      const messagePageLoadGate = yield* Deferred.make<void>();
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messageWindowLimit: 2,
+        messageOlderPageSize: 2,
+        messagePageLoadGate,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+
+      const moved = [makeThreadMessage(4), makeThreadMessage(5)];
+      yield* Queue.offer(
+        harness.inputs,
+        snapshot(
+          {
+            ...BASE_THREAD,
+            messages: moved,
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: moved[0]!.id,
+              totalCount: 5,
+            },
+          },
+          CACHED_SNAPSHOT_SEQUENCE + 1,
+        ),
+      );
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages[0]?.id === "message-4",
+      );
+      yield* Deferred.succeed(messagePageLoadGate, undefined);
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) => !value.olderMessages.isLoading,
+      );
+
+      expect(Option.getOrThrow(settled.data).messages.map((message) => message.id)).toEqual([
+        "message-4",
+        "message-5",
+      ]);
+      expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(true);
     }),
   );
 

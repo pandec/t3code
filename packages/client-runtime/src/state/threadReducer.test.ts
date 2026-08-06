@@ -13,7 +13,11 @@ import {
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent, retainRecentThreadHistory } from "./threadReducer.ts";
+import {
+  applyThreadDetailEvent,
+  prependOlderThreadMessages,
+  retainRecentThreadHistory,
+} from "./threadReducer.ts";
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),
@@ -47,6 +51,16 @@ const baseThread: OrchestrationThread = {
   checkpoints: [],
   session: null,
 };
+
+const message = (index: number, role: "user" | "assistant" = "user") => ({
+  id: MessageId.make(`message-${index}`),
+  role,
+  text: `Message ${index}`,
+  turnId: null,
+  streaming: false,
+  createdAt: `2026-04-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+  updatedAt: `2026-04-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+});
 
 describe("retainRecentThreadHistory", () => {
   it("caps snapshot activities and checkpoints", () => {
@@ -165,6 +179,44 @@ describe("retainRecentThreadHistory", () => {
     expect(retained.activities[0]?.id).toBe("activity-context-window");
     expect(retained.activities[1]?.id).toBe("activity-2");
     expect(retained.activities.at(-1)?.id).toBe("activity-500");
+  });
+
+  it("retains a bounded message tail and records the load-older cursor", () => {
+    const retained = retainRecentThreadHistory(
+      { ...baseThread, messages: [message(1), message(2), message(3)] },
+      { messageWindowLimit: 2 },
+    );
+
+    expect(retained.messages.map((entry) => entry.id)).toEqual(["message-2", "message-3"]);
+    expect(retained.messageWindow).toEqual({
+      hasMoreOlder: true,
+      oldestLoadedMessageId: "message-2",
+      totalCount: null,
+    });
+  });
+
+  it("prepends an older page without trimming it away", () => {
+    const current = retainRecentThreadHistory(
+      { ...baseThread, messages: [message(2), message(3)] },
+      { messageWindowLimit: 2 },
+    );
+    const prepended = prependOlderThreadMessages(current, {
+      threadId: baseThread.id,
+      messages: [message(1), message(2)],
+      hasMoreOlder: false,
+      snapshotSequence: 3,
+    });
+
+    expect(prepended.messages.map((entry) => entry.id)).toEqual([
+      "message-1",
+      "message-2",
+      "message-3",
+    ]);
+    expect(prepended.messageWindow).toEqual({
+      hasMoreOlder: false,
+      oldestLoadedMessageId: "message-1",
+      totalCount: null,
+    });
   });
 });
 
@@ -1483,6 +1535,11 @@ describe("applyThreadDetailEvent", () => {
             },
           ],
           completedTurnAssistantMessageIds: [oldMessageId, postTargetMessageId],
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: oldMessageId,
+            totalCount: 700,
+          },
           proposedPlans: [
             {
               id: "plan-old",
@@ -1552,6 +1609,11 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.messages).toEqual([]);
+        expect(result.thread.messageWindow).toEqual({
+          hasMoreOlder: true,
+          oldestLoadedMessageId: null,
+          totalCount: null,
+        });
         expect(result.thread.completedTurnAssistantMessageIds).toEqual([]);
         expect(result.thread.proposedPlans).toEqual([]);
         expect(result.thread.activities).toEqual([]);
