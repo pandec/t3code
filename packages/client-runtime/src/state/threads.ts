@@ -171,15 +171,18 @@ function mergeThreadMessageArtifacts(
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
 ) {
-  const scope = yield* Effect.scope;
   // Every fiber that can read stream events, mutate `state`, or enqueue a
-  // persistence write is forked into this child scope instead of `scope`
-  // directly. On teardown we close `teardownScope` first (interrupting and
+  // persistence write is forked into this dedicated child scope. On teardown
+  // we close `teardownScope` first (interrupting and
   // *awaiting* all of those fibers) before flushing pending items and
   // persisting the final snapshot, so no producer can still be applying a
   // late event (e.g. the last running -> idle transition) while the
   // finalizer reads `state` and writes the cache. See the finalizer below.
   const teardownScope = yield* Scope.make();
+  // Ensure partial initialization cannot leak the independent child scope. The
+  // final persistence finalizer below closes it first during normal teardown;
+  // this earlier registration is then an idempotent no-op.
+  yield* Effect.addFinalizer(() => Scope.close(teardownScope, Exit.void));
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
@@ -679,10 +682,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // The refill's HTTP fetch must not hold up `acceptItem` — it runs inside
       // the WS event consumption loop (`Stream.runForEach(acceptItem)`), so
       // awaiting the page load here would stall every subsequent WS event
-      // until it settled. Fork it onto the thread's own scope instead;
+      // until it settled. Fork it into the thread's teardown scope instead;
       // `loadOlderMessages`'s own mutation-lock and stale-cursor/revert-sequence
-      // guards still apply when it eventually runs.
-      yield* Effect.forkIn(loadOlderMessages(), scope);
+      // guards still apply when it eventually runs, and teardown awaits it
+      // before the final persisted snapshot is read.
+      yield* Effect.forkIn(loadOlderMessages(), teardownScope);
     }
   });
 
