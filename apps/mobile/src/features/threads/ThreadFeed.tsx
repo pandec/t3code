@@ -123,6 +123,7 @@ import {
   shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
   shouldRequestOlderMessagesForUnderfilledFeed,
+  shouldRetryUnderfilledOlderMessagesAfterReady,
   type ThreadHistoryWindowState,
 } from "./threadHistoryLoadMore";
 import {
@@ -1979,6 +1980,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const historyWindow = props.historyWindow;
   const olderPageRequestedRef = useRef(false);
   const contentHeightRef = useRef(Number.POSITIVE_INFINITY);
+  const previousOlderMessagesErrorRef = useRef({
+    threadId: props.threadId,
+    error: historyWindow?.error ?? null,
+  });
   const oldestFeedEntryId = props.feed[0]?.id ?? null;
   const previousRequestSignalsRef = useRef({
     oldestFeedEntryId,
@@ -2038,11 +2043,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [historyWindow, viewportHeight],
   );
   useEffect(() => {
-    // A short feed may not emit another scroll/content-size event after a
-    // disconnected attempt. Re-run its underfill check when readiness clears
-    // the error (and after each successful page while it remains underfilled).
-    requestOlderMessagesForUnderfilledFeed(contentHeightRef.current);
-  }, [requestOlderMessagesForUnderfilledFeed]);
+    const previous = previousOlderMessagesErrorRef.current;
+    const error = historyWindow?.error ?? null;
+    previousOlderMessagesErrorRef.current = { threadId: props.threadId, error };
+    if (
+      historyWindow &&
+      previous.threadId === props.threadId &&
+      shouldRetryUnderfilledOlderMessagesAfterReady(previous.error, {
+        contentHeight: contentHeightRef.current,
+        viewportHeight,
+        error,
+        hasOlderMessages: historyWindow.hasOlderMessages,
+        loadingOlderMessages: historyWindow.loadingOlderMessages,
+        requestInFlight: olderPageRequestedRef.current,
+      })
+    ) {
+      // A short feed may not emit another scroll/content-size event after a
+      // disconnected attempt. Retry exactly once when readiness clears the
+      // error; other settlements wait for user input or a measured size change.
+      olderPageRequestedRef.current = true;
+      historyWindow.onLoadOlderMessages();
+    }
+  }, [historyWindow, props.threadId, viewportHeight]);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {

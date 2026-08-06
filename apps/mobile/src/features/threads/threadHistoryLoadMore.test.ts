@@ -7,6 +7,7 @@ import {
   shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
   shouldRequestOlderMessagesForUnderfilledFeed,
+  shouldRetryUnderfilledOlderMessagesAfterReady,
 } from "./threadHistoryLoadMore";
 
 const base = {
@@ -63,25 +64,86 @@ describe("shouldReleaseOlderMessagesRequest", () => {
   });
 });
 
-describe("shouldRequestOlderMessagesForUnderfilledFeed", () => {
-  it("retries a short feed once reconnect clears its disconnected error", () => {
-    const underfilled = {
-      contentHeight: 400,
-      viewportHeight: 800,
-      hasOlderMessages: true,
-      loadingOlderMessages: false,
-      requestInFlight: false,
-    };
+describe("underfilled feed paging", () => {
+  const underfilled = {
+    contentHeight: 400,
+    viewportHeight: 800,
+    error: null,
+    hasOlderMessages: true,
+    loadingOlderMessages: false,
+    requestInFlight: false,
+  };
 
+  it("retries once when reconnect clears a disconnected error", () => {
     expect(
+      shouldRetryUnderfilledOlderMessagesAfterReady(
+        "The environment is not connected.",
+        underfilled,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not loop after a stale-generation page settles without progress", () => {
+    const loading = {
+      oldestFeedEntryId: "message-3",
+      loadingOlderMessages: true,
+      settledCount: 0,
+    };
+    const staleSettlement = {
+      ...loading,
+      loadingOlderMessages: false,
+      settledCount: 1,
+    };
+    let requestInFlight = true;
+    let requestCount = 1;
+
+    if (shouldReleaseOlderMessagesRequest(loading, staleSettlement)) requestInFlight = false;
+    if (
+      shouldRetryUnderfilledOlderMessagesAfterReady(null, {
+        ...underfilled,
+        requestInFlight,
+      })
+    ) {
+      requestCount += 1;
+    }
+    expect(requestCount).toBe(1);
+  });
+
+  it("waits for content remeasurement before requesting after a successful page", () => {
+    const loading = {
+      oldestFeedEntryId: "message-3",
+      loadingOlderMessages: true,
+      settledCount: 0,
+    };
+    const successfulSettlement = {
+      oldestFeedEntryId: "message-1",
+      loadingOlderMessages: false,
+      settledCount: 1,
+    };
+    let requestInFlight = true;
+    let requestCount = 1;
+
+    if (shouldReleaseOlderMessagesRequest(loading, successfulSettlement)) requestInFlight = false;
+    if (
+      shouldRetryUnderfilledOlderMessagesAfterReady(null, {
+        ...underfilled,
+        requestInFlight,
+      })
+    ) {
+      requestCount += 1;
+    }
+    expect(requestCount).toBe(1);
+
+    if (
       shouldRequestOlderMessagesForUnderfilledFeed({
         ...underfilled,
-        error: "The environment is not connected.",
-      }),
-    ).toBe(false);
-    expect(shouldRequestOlderMessagesForUnderfilledFeed({ ...underfilled, error: null })).toBe(
-      true,
-    );
+        contentHeight: 600,
+        requestInFlight,
+      })
+    ) {
+      requestCount += 1;
+    }
+    expect(requestCount).toBe(2);
   });
 });
 

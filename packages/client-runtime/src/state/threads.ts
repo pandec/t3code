@@ -398,12 +398,30 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
         yield* flushPendingUnlocked();
         const current = yield* SubscriptionRef.get(state);
+        if (current.olderMessages.isLoading) {
+          // This invocation is terminal even though another accepted request is
+          // still loading. Advance the signal without clearing that request.
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: {
+              ...value.olderMessages,
+              settledCount: value.olderMessages.settledCount + 1,
+            },
+          }));
+          return Option.none<{
+            readonly prepared: PreparedConnection;
+            readonly beforeMessageId: MessageId | null;
+            readonly limit: number;
+            readonly sequence: number;
+            readonly generation: number;
+          }>();
+        }
         if (
           current.status === "deleted" ||
-          current.olderMessages.isLoading ||
           Option.isNone(current.data) ||
           current.data.value.messageWindow?.hasMoreOlder !== true
         ) {
+          yield* settleOlderMessages(null);
           return Option.none<{
             readonly prepared: PreparedConnection;
             readonly beforeMessageId: MessageId | null;

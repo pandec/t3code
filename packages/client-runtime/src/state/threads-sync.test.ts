@@ -686,6 +686,11 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(6);
 
       yield* harness.loadOlderMessages;
+      const cappedAttempt = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 7,
+      );
+      expect(cappedAttempt.olderMessages.isLoading).toBe(false);
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(6);
 
       yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
@@ -694,7 +699,7 @@ describe("EnvironmentThreads", () => {
         (value) =>
           Option.isSome(value.data) &&
           value.data.value.messages[0]?.id === "message-651" &&
-          value.olderMessages.settledCount === 7,
+          value.olderMessages.settledCount === 8,
       );
       expect(Option.getOrThrow(refilled.data).messageWindow?.hasMoreOlder).toBe(true);
       expect(yield* Ref.get(harness.lastMessagePageBefore)).toBeNull();
@@ -707,6 +712,92 @@ describe("EnvironmentThreads", () => {
       );
       expect(Option.getOrThrow(paged.data).messageWindow?.hasMoreOlder).toBe(true);
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(8);
+    }),
+  );
+
+  it.effect("keeps server-reported exhausted history closed after a revert", () =>
+    Effect.gen(function* () {
+      const retainedMessage = {
+        ...makeThreadMessage(1),
+        turnId: TurnId.make("turn-1"),
+      };
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: [retainedMessage],
+          messageWindow: {
+            hasMoreOlder: false,
+            oldestLoadedMessageId: retainedMessage.id,
+            totalCount: 1,
+          },
+        },
+        foregroundWindowMs: 0,
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      yield* harness.loadOlderMessages;
+      const rejected = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+      expect(rejected.olderMessages).toEqual({ isLoading: false, error: null, settledCount: 1 });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
+
+      yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
+      const revertedState = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages.length === 0,
+      );
+      expect(Option.getOrThrow(revertedState.data).messageWindow?.hasMoreOlder).toBe(false);
+      expect(revertedState.olderMessages.settledCount).toBe(1);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("preserves the settlement signal through thread updates and deletion", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        foregroundWindowMs: 0,
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* SubscriptionRef.set(harness.prepared, Option.none());
+
+      yield* harness.loadOlderMessages;
+      yield* awaitThreadState(harness.observed, (value) => value.olderMessages.settledCount === 1);
+
+      yield* Queue.offer(
+        harness.inputs,
+        snapshot({ ...BASE_THREAD, title: "Updated title" }, CACHED_SNAPSHOT_SEQUENCE + 1),
+      );
+      const updated = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "Updated title",
+      );
+      expect(updated.olderMessages.settledCount).toBe(1);
+
+      yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 2));
+      const deletedState = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(deletedState.olderMessages).toEqual({
+        isLoading: false,
+        error: null,
+        settledCount: 1,
+      });
     }),
   );
 

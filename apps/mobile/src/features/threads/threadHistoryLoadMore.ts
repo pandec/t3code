@@ -75,18 +75,34 @@ export function shouldRequestOlderMessages(input: {
 }
 
 /** True when a ready, underfilled feed should automatically request another page. */
-export function shouldRequestOlderMessagesForUnderfilledFeed(input: {
+export interface ThreadUnderfilledHistoryRequestState {
   readonly contentHeight: number;
   readonly viewportHeight: number;
   readonly error: string | null | undefined;
   readonly hasOlderMessages: boolean;
   readonly loadingOlderMessages: boolean;
   readonly requestInFlight: boolean;
-}): boolean {
+}
+
+export function shouldRequestOlderMessagesForUnderfilledFeed(
+  input: ThreadUnderfilledHistoryRequestState,
+): boolean {
   return (
     input.error == null &&
     input.viewportHeight > 0 &&
     input.contentHeight <= input.viewportHeight &&
     shouldRequestOlderMessages({ ...input, distanceFromTop: 0 })
+  );
+}
+
+/** Auto-retries an underfilled feed only when a previous paging error clears. */
+export function shouldRetryUnderfilledOlderMessagesAfterReady(
+  previousError: string | null | undefined,
+  current: ThreadUnderfilledHistoryRequestState,
+): boolean {
+  return (
+    previousError != null &&
+    current.error == null &&
+    shouldRequestOlderMessagesForUnderfilledFeed(current)
   );
 }
