@@ -75,10 +75,23 @@ function shouldPersistThread(thread: OrchestrationThread): boolean {
   return status !== "starting" && status !== "running";
 }
 
-function preserveLoadedOlderMessages(
+interface ThreadWarmRefreshRetention {
+  readonly messageWindowLimit: number | null;
+  readonly maxLoadedOlderMessageCount: number | null;
+}
+
+/**
+ * Reattaches explicitly loaded older messages that a warm refresh's base
+ * window doesn't cover. The merge is clamped to the same bounds explicit
+ * scrollback observes (`MAX_MESSAGE_WINDOW_MULTIPLIER` resident messages,
+ * `maxLoadedOlderMessageCount` older messages) so a warm refresh can never
+ * grow the retained history past what `loadOlderMessages` itself allows.
+ */
+export function preserveLoadedOlderMessages(
   current: OrchestrationThread,
   refreshed: OrchestrationThread,
   loadedOlderCount: number,
+  retention: ThreadWarmRefreshRetention,
 ): OrchestrationThread {
   if (loadedOlderCount === 0) return refreshed;
 
@@ -92,19 +105,33 @@ function preserveLoadedOlderMessages(
 
   const candidates = current.messages.slice(0, firstRefreshedIndex);
   const totalCount = refreshed.messageWindow?.totalCount ?? null;
-  const preserveCount =
-    totalCount === null
-      ? candidates.length
-      : Math.min(candidates.length, Math.max(0, totalCount - refreshed.messages.length));
-  const preservedOlder = preserveCount === 0 ? [] : candidates.slice(-preserveCount);
+  const totalCountBound =
+    totalCount === null ? candidates.length : Math.max(0, totalCount - refreshed.messages.length);
+  const naturalBound = Math.min(candidates.length, totalCountBound);
+  const residentCapBound =
+    retention.messageWindowLimit === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(
+          0,
+          retention.messageWindowLimit * MAX_MESSAGE_WINDOW_MULTIPLIER - refreshed.messages.length,
+        );
+  const olderCountCapBound = retention.maxLoadedOlderMessageCount ?? Number.POSITIVE_INFINITY;
+  const retentionBound = Math.min(residentCapBound, olderCountCapBound);
+  const cappedByRetention = retentionBound < naturalBound;
+  const preserveCount = Math.min(naturalBound, retentionBound);
+  const preservedOlder = preserveCount <= 0 ? [] : candidates.slice(-preserveCount);
   if (preservedOlder.length === 0) return refreshed;
   const messages = [...preservedOlder, ...refreshed.messages];
   return {
     ...refreshed,
     messages,
     messageWindow: {
-      hasMoreOlder:
-        totalCount === null
+      // Retention caps stop growth outright, mirroring the explicit-scrollback
+      // cap in `loadOlderMessages`: don't invite more loads once the resident
+      // or older-message ceiling is reached.
+      hasMoreOlder: cappedByRetention
+        ? false
+        : totalCount === null
           ? (current.messageWindow?.hasMoreOlder ?? refreshed.messageWindow?.hasMoreOlder ?? false)
           : messages.length < totalCount,
       oldestLoadedMessageId: messages[0]?.id ?? null,
@@ -678,6 +705,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             currentState.data.value,
             httpSnapshot.value.thread,
             loadedOlderCount,
+            {
+              messageWindowLimit: historyWindow.messageWindowLimit,
+              maxLoadedOlderMessageCount,
+            },
           );
           const refreshedOlderCount = Math.max(
             0,
