@@ -578,6 +578,56 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("flushes buffered events before loading and prepending an older page", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...ACTIVE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messageWindowLimit: 2,
+        messageOlderPageSize: 2,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(2), makeThreadMessage(3)],
+          hasMoreOlder: true,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+
+      yield* Queue.offer(harness.inputs, messageDelta("Buffered", CACHED_SNAPSHOT_SEQUENCE + 1));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages).toHaveLength(2);
+
+      yield* harness.loadOlderMessages;
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.at(-1)?.text === "Buffered" &&
+          value.data.value.messages.length === 4,
+      );
+
+      expect(yield* Ref.get(harness.lastMessagePageBefore)).toBe("message-4");
+      expect(Option.getOrThrow(state.data).messages.map((message) => message.id)).toEqual([
+        "message-2",
+        "message-3",
+        "message-4",
+        "message-streaming",
+      ]);
+    }),
+  );
+
   it.effect("preserves contiguous loaded history across a newer warm refresh", () =>
     Effect.gen(function* () {
       const snapshotLoadGate = yield* Deferred.make<void>();
@@ -874,6 +924,51 @@ describe("EnvironmentThreads", () => {
       expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages[0]?.text).toBe(
         "Hello world",
       );
+    }),
+  );
+
+  it.effect("applies message windowing to a coalesced batch", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(1), makeThreadMessage(2)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...ACTIVE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: false,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 2,
+          },
+        },
+        messageWindowLimit: 2,
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Ref.set(harness.publicationCount, 0);
+
+      yield* Queue.offer(harness.inputs, messageDelta("Hello", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* Queue.offer(harness.inputs, messageDelta(" world", CACHED_SNAPSHOT_SEQUENCE + 2));
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+      yield* TestClock.adjust("50 millis");
+      const flushed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) && value.data.value.messages.at(-1)?.text === "Hello world",
+      );
+      const thread = Option.getOrThrow(flushed.data);
+
+      expect(thread.messages.map((message) => message.id)).toEqual([
+        "message-2",
+        "message-streaming",
+      ]);
+      expect(thread.messageWindow).toEqual({
+        hasMoreOlder: true,
+        oldestLoadedMessageId: "message-2",
+        totalCount: 3,
+      });
+      expect(yield* Ref.get(harness.publicationCount)).toBe(1);
     }),
   );
 
