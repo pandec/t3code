@@ -22,6 +22,7 @@ import {
   KeyboardController,
   KeyboardStickyView,
   useKeyboardState,
+  useReanimatedKeyboardAnimation,
 } from "react-native-keyboard-controller";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -29,7 +30,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import { flushMobileDiagnostics, recordMobileDiagnostic } from "../../diagnostics/journal";
-import { awaitBoundedKeyboardDismiss } from "../../lib/boundedKeyboardDismiss";
+import {
+  awaitBoundedKeyboardDismiss,
+  requiresKeyboardStickyResetWait,
+} from "../../lib/boundedKeyboardDismiss";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { requestKeyboardStickyReset } from "../../lib/keyboardStickyResetRequests";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
@@ -204,6 +208,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       ? measuredComposerOverlay.height
       : null;
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
+  const keyboardAnimation = useReanimatedKeyboardAnimation();
   const composerBottomInset = composerExpanded ? 0 : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
@@ -321,16 +326,22 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       const scrollAfterKeyboardDismiss = async () => {
         if (Platform.OS === "ios") {
           const reportedVisibleBeforeDismiss = KeyboardController.isVisible();
+          const keyboardHeightBeforeDismiss = keyboardAnimation.height.value;
+          const offsetLooksStale = requiresKeyboardStickyResetWait({
+            reportedVisible: reportedVisibleBeforeDismiss,
+            keyboardHeight: keyboardHeightBeforeDismiss,
+          });
           const dismissPromise = Promise.resolve().then(() => KeyboardController.dismiss());
           recordMobileDiagnostic("keyboard-sticky", {
             event: "dismiss-start",
             trigger: "anchor-scroll",
             reason: "message-send",
             reportedVisibleBeforeDismiss,
+            offsetLooksStale,
           });
           const dismissOutcome = await awaitBoundedKeyboardDismiss(
             dismissPromise,
-            reportedVisibleBeforeDismiss ? { minimumWaitMs: 0 } : undefined,
+            offsetLooksStale ? undefined : { minimumWaitMs: 0 },
           );
           recordMobileDiagnostic("keyboard-sticky", {
             event: "dismiss-outcome",
@@ -401,6 +412,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [
     anchorMessageId,
     freeze,
+    keyboardAnimation.height,
     contentPresentationKind,
     selectedThreadFeed,
     scrollMessageToEnd,

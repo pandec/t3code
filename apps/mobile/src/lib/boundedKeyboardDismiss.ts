@@ -7,6 +7,17 @@ export const POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS = KEYBOARD_STICKY_RESET_SEND
 
 export type BoundedKeyboardDismissOutcome = "settled" | "rejected" | "timeout";
 
+export function requiresKeyboardStickyResetWait(input: {
+  readonly reportedVisible: boolean;
+  readonly keyboardHeight: number;
+}): boolean {
+  return (
+    !input.reportedVisible &&
+    Number.isFinite(input.keyboardHeight) &&
+    Math.abs(input.keyboardHeight) > 0.5
+  );
+}
+
 interface BoundedKeyboardDismissTiming {
   readonly minimumWaitMs?: number;
   readonly maximumWaitMs?: number;

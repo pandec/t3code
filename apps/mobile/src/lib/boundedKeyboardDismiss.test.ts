@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { awaitBoundedKeyboardDismiss } from "./boundedKeyboardDismiss";
+import {
+  awaitBoundedKeyboardDismiss,
+  requiresKeyboardStickyResetWait,
+} from "./boundedKeyboardDismiss";
 
 function deferred() {
   let resolve!: () => void;
@@ -16,6 +19,26 @@ const timing = { minimumWaitMs: 100, maximumWaitMs: 500 } as const;
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("requiresKeyboardStickyResetWait", () => {
+  it("waits only for a stale offset reported as hidden", () => {
+    expect(requiresKeyboardStickyResetWait({ reportedVisible: false, keyboardHeight: -336 })).toBe(
+      true,
+    );
+    expect(requiresKeyboardStickyResetWait({ reportedVisible: false, keyboardHeight: 0 })).toBe(
+      false,
+    );
+    expect(requiresKeyboardStickyResetWait({ reportedVisible: true, keyboardHeight: -336 })).toBe(
+      false,
+    );
+    expect(
+      requiresKeyboardStickyResetWait({
+        reportedVisible: false,
+        keyboardHeight: Number.NaN,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("awaitBoundedKeyboardDismiss", () => {
