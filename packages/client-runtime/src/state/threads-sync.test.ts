@@ -161,7 +161,6 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly messagePageLoadGate?: Deferred.Deferred<void>;
   readonly messageWindowLimit?: number;
   readonly messageOlderPageSize?: number;
-  readonly providePageLoader?: boolean;
   readonly completionMarker?: boolean;
   readonly initialEventPriority?: ThreadEventPriority;
   readonly foregroundWindowMs?: number;
@@ -322,10 +321,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
-    (self) =>
-      options?.providePageLoader === false
-        ? self
-        : Effect.provideService(self, ThreadMessagePageLoader, messagePageLoader),
+    Effect.provideService(ThreadMessagePageLoader, messagePageLoader),
     Effect.provideService(
       ThreadHistoryWindow,
       ThreadHistoryWindow.of({
@@ -528,25 +524,21 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect(
-    "retains full history for a legacy cache without message-window metadata, even without a page loader",
-    () =>
-      Effect.gen(function* () {
-        const messages = Array.from({ length: 151 }, (_, index) => makeThreadMessage(index));
-        const harness = yield* makeHarness({
-          cached: { ...BASE_THREAD, messages },
-          messageWindowLimit: 150,
-          providePageLoader: false,
-        });
+  it.effect("retains full history for a legacy cache when the page loader returns no page", () =>
+    Effect.gen(function* () {
+      const messages = Array.from({ length: 151 }, (_, index) => makeThreadMessage(index));
+      const harness = yield* makeHarness({
+        cached: { ...BASE_THREAD, messages },
+        messageWindowLimit: 150,
+        messagePage: Option.none(),
+      });
 
-        const state = yield* awaitThreadState(harness.observed, (value) =>
-          Option.isSome(value.data),
-        );
-        const thread = Option.getOrThrow(state.data);
+      const state = yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      const thread = Option.getOrThrow(state.data);
 
-        expect(thread.messages).toHaveLength(151);
-        expect(thread.messageWindow).toBeUndefined();
-      }),
+      expect(thread.messages).toHaveLength(151);
+      expect(thread.messageWindow).toBeUndefined();
+    }),
   );
 
   it.effect("refreshes a warm cache before resuming from its sequence", () =>
