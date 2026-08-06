@@ -9,6 +9,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -422,3 +423,80 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
     return summaries as ReadonlyArray<ClaudeImportableSessionSummary>;
   },
 );
+
+/** Bytes read from the end of a transcript when resolving its current cwd. */
+const CWD_TAIL_BYTES = 128 * 1024;
+
+/**
+ * Resolve the working directory a live session is running in *now*.
+ *
+ * Claude stores a session under the project directory derived from its cwd and
+ * relocates the file when the session moves (the agent entering or leaving a
+ * worktree), so the directory the transcript currently sits in — and the `cwd`
+ * on its most recent entries — is the only authoritative answer. The runtime
+ * stream carries the cwd only in `system/init`, and `getSessionInfo` reports
+ * the directory the session *started* in, so neither can see a move.
+ *
+ * Returns `null` when the transcript cannot be found or carries no cwd; callers
+ * treat that as "unchanged" rather than an error.
+ */
+export const findClaudeSessionCwd = Effect.fn("findClaudeSessionCwd")(function* (input: {
+  readonly configDirPath: string;
+  readonly sessionId: string;
+}) {
+  if (!SESSION_ID_PATTERN.test(input.sessionId)) {
+    return null;
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const projectsDirectory = path.join(input.configDirPath, "projects");
+
+  const projectDirectories = yield* fileSystem
+    .readDirectory(projectsDirectory)
+    .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+
+  const fileName = `${input.sessionId}.jsonl`;
+  let transcriptPath: string | null = null;
+  let newestModified = Number.NEGATIVE_INFINITY;
+  for (const projectDirectory of projectDirectories) {
+    const candidate = path.join(projectsDirectory, projectDirectory, fileName);
+    const info = yield* fileSystem.stat(candidate).pipe(Effect.option);
+    if (info._tag !== "Some") continue;
+    // A session that moved can leave a copy behind in its previous project
+    // directory; the most recently written one is the live transcript.
+    const modified = Option.match(info.value.mtime, {
+      onNone: () => 0,
+      onSome: (value) => value.getTime(),
+    });
+    if (modified >= newestModified) {
+      newestModified = modified;
+      transcriptPath = candidate;
+    }
+  }
+  if (transcriptPath === null) {
+    return null;
+  }
+
+  const stats = yield* fileSystem.stat(transcriptPath).pipe(Effect.option);
+  if (stats._tag !== "Some") return null;
+  const size = Number(stats.value.size);
+  const content = yield* fileSystem
+    .readFileString(transcriptPath)
+    .pipe(Effect.map((text) => (size > CWD_TAIL_BYTES ? text.slice(-CWD_TAIL_BYTES) : text)))
+    .pipe(Effect.orElseSucceed(() => ""));
+
+  const lines = content.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line || !line.startsWith("{")) continue;
+    const decoded = yield* decodeJsonLine(line).pipe(Effect.option);
+    if (decoded._tag !== "Some") continue;
+    const parsed: unknown = decoded.value;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    const cwd = "cwd" in parsed ? (parsed as { readonly cwd?: unknown }).cwd : undefined;
+    if (typeof cwd === "string" && cwd.trim().length > 0) {
+      return cwd.trim();
+    }
+  }
+  return null;
+});

@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -7,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   claudeProjectDirectoryName,
+  findClaudeSessionCwd,
   parseClaudeTranscript,
   readClaudeSessionTranscript,
 } from "./ClaudeSessionImport.ts";
@@ -334,6 +336,100 @@ describe("readClaudeSessionTranscript", () => {
 
       expect(error._tag).toBe("ClaudeSessionImportIoError");
       expect(error.detail).toContain("not a valid persisted session UUID");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("findClaudeSessionCwd", () => {
+  const writeTranscript = Effect.fn("writeTranscript")(function* (input: {
+    readonly configDirPath: string;
+    readonly cwd: string;
+    readonly lines: ReadonlyArray<string>;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = path.join(
+      input.configDirPath,
+      "projects",
+      claudeProjectDirectoryName(input.cwd),
+    );
+    yield* fileSystem.makeDirectory(directory, { recursive: true });
+    const filePath = path.join(directory, `${SESSION_ID}.jsonl`);
+    yield* fileSystem.writeFileString(filePath, `${input.lines.join("\n")}\n`);
+    return filePath;
+  });
+
+  it.effect("reports the directory a session moved into, not the one it started in", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-cwd-" });
+      const configDirPath = path.join(root, ".claude");
+      const workspaceRoot = "/tmp/project-moved";
+      const worktree = "/tmp/project-moved/.claude/worktrees/feature";
+
+      // Claude relocates the transcript into the new cwd's project directory,
+      // and its trailing entries carry that cwd. The first entry keeps the
+      // directory the session started in, which is what makes reading the tail
+      // (rather than the head) the whole point.
+      yield* writeTranscript({
+        configDirPath,
+        cwd: worktree,
+        lines: [
+          toJsonLine({ type: "user", uuid: "u1", cwd: workspaceRoot }),
+          toJsonLine({ type: "assistant", uuid: "a1", cwd: worktree }),
+          toJsonLine({ type: "last-prompt", cwd: null }),
+        ],
+      });
+
+      const resolved = yield* findClaudeSessionCwd({ configDirPath, sessionId: SESSION_ID });
+      expect(resolved).toBe(worktree);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("prefers the most recently written copy when a stale one is left behind", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-cwd-stale-" });
+      const configDirPath = path.join(root, ".claude");
+      const workspaceRoot = "/tmp/project-stale";
+      const worktree = "/tmp/project-stale/.claude/worktrees/feature";
+
+      const stalePath = yield* writeTranscript({
+        configDirPath,
+        cwd: workspaceRoot,
+        lines: [toJsonLine({ type: "assistant", uuid: "a1", cwd: workspaceRoot })],
+      });
+      const livePath = yield* writeTranscript({
+        configDirPath,
+        cwd: worktree,
+        lines: [toJsonLine({ type: "assistant", uuid: "a2", cwd: worktree })],
+      });
+      const staleTime = DateTime.toDate(DateTime.makeUnsafe(1_000));
+      const liveTime = DateTime.toDate(DateTime.makeUnsafe(9_000_000));
+      yield* fileSystem.utimes(stalePath, staleTime, staleTime);
+      yield* fileSystem.utimes(livePath, liveTime, liveTime);
+
+      const resolved = yield* findClaudeSessionCwd({ configDirPath, sessionId: SESSION_ID });
+      expect(resolved).toBe(worktree);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("returns null for a missing transcript or a non-UUID session id", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-cwd-absent-" });
+      const configDirPath = path.join(root, ".claude");
+
+      expect(yield* findClaudeSessionCwd({ configDirPath, sessionId: SESSION_ID })).toBeNull();
+      expect(
+        yield* findClaudeSessionCwd({
+          configDirPath,
+          sessionId: "../other-project/session",
+        }),
+      ).toBeNull();
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

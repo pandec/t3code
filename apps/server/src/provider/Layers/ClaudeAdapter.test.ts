@@ -899,6 +899,102 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
+  it.effect("emits a cwd change when a worktree tool moves the session", () => {
+    const sessionId = "3f2b91c4-8d5e-4a17-9c33-2be7f0a15d84";
+    const workspaceRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-wt-cwd-"));
+    const homePath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-wt-home-"));
+    const worktreePath = NodePath.join(workspaceRoot, ".claude", "worktrees", "feature");
+
+    // Claude relocates the transcript into the project directory derived from
+    // the new cwd, and its trailing entries carry that cwd. That file is the
+    // only place the move is observable — the CLI does not fire CwdChanged and
+    // the stream reports a cwd only in system/init.
+    const projectDirectory = NodePath.join(
+      homePath,
+      "projects",
+      worktreePath.replace(/[^a-zA-Z0-9]/g, "-"),
+    );
+    NodeFS.mkdirSync(projectDirectory, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(projectDirectory, `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: "user", uuid: "u1", cwd: workspaceRoot })}\n${JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        cwd: worktreePath,
+      })}\n`,
+    );
+
+    const harness = makeHarness({ cwd: workspaceRoot, claudeConfig: { homePath } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const cwdChangedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.cwd.changed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: workspaceRoot,
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "isolate this work",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: sessionId,
+        uuid: "stream-wt-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "tool-enter-worktree",
+            name: "EnterWorktree",
+            input: { name: "feature" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: sessionId,
+        uuid: "tool-result-wt-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-enter-worktree",
+              content: `Created worktree at ${worktreePath} on branch feature.`,
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      const event = yield* Fiber.join(cwdChangedFiber);
+      const cwdChanged = Option.getOrUndefined(event);
+      assert.equal(cwdChanged?.type, "session.cwd.changed");
+      assert.deepInclude(cwdChanged?.payload, { cwd: worktreePath });
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.scoped,
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(workspaceRoot, { recursive: true, force: true });
+          NodeFS.rmSync(homePath, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
   it.effect("emits a cwd change when the session moves itself into a worktree", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
