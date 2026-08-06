@@ -197,7 +197,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
       return;
     }
-    yield* cache.saveThread(environmentId, snapshot).pipe(
+    const retainedSnapshot = {
+      ...snapshot,
+      thread: retainRecentThreadHistory(snapshot.thread, {
+        messageWindowLimit: historyWindow.messageWindowLimit,
+      }),
+    };
+    yield* cache.saveThread(environmentId, retainedSnapshot).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(
           Effect.annotateLogs({

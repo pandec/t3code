@@ -462,6 +462,12 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.lastMessagePageBefore)).toBe("message-3");
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
       expect(state.olderMessages).toEqual({ isLoading: false, error: null });
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      expect(
+        (yield* Ref.get(harness.savedThreads)).at(-1)?.thread.messages.map((message) => message.id),
+      ).toEqual(["message-3", "message-4"]);
     }),
   );
 
