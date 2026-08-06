@@ -190,6 +190,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const awaitingCompletion = yield* Ref.make(false);
   const lastRevertSequence = yield* Ref.make(0);
   const loadedOlderMessageCount = yield* Ref.make(0);
+  // Bumped whenever a hard snapshot (a full thread replacement, e.g. after
+  // reconnect/install) is installed. An in-flight older-page request can land
+  // with a cursor that coincidentally matches the post-snapshot window, so the
+  // cursor check alone can't detect staleness; the generation check can.
+  const installGeneration = yield* Ref.make(0);
   const mutationLock = yield* Semaphore.make(1);
   const pendingItems = yield* Ref.make<Array<OrchestrationThreadStreamItem>>([]);
   const flushGeneration = yield* Ref.make(0);
@@ -335,6 +340,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             readonly beforeMessageId: MessageId | null;
             readonly limit: number;
             readonly sequence: number;
+            readonly generation: number;
           }>();
         }
 
@@ -372,6 +378,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
 
         const sequence = yield* SubscriptionRef.get(lastSequence);
+        const generation = yield* Ref.get(installGeneration);
         yield* SubscriptionRef.update(state, (value) => ({
           ...value,
           olderMessages: { isLoading: true, error: null },
@@ -381,6 +388,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           beforeMessageId: current.data.value.messageWindow.oldestLoadedMessageId,
           limit: Math.min(historyWindow.messageOlderPageSize, remainingCapacity),
           sequence,
+          generation,
         });
       }),
     );
@@ -401,9 +409,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         const revertedAt = yield* Ref.get(lastRevertSequence);
         const currentCursor = current.data.value.messageWindow?.oldestLoadedMessageId ?? null;
+        const currentGeneration = yield* Ref.get(installGeneration);
         if (
           revertedAt > request.value.sequence ||
-          currentCursor !== request.value.beforeMessageId
+          currentCursor !== request.value.beforeMessageId ||
+          currentGeneration !== request.value.generation
         ) {
           yield* SubscriptionRef.update(state, (value) => ({
             ...value,
@@ -475,6 +485,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     let threadChanged = false;
     let deleted = false;
     let synchronized = false;
+    let installed = false;
 
     const deduped = filterAppliedThreadStreamItems(items, initialSequence);
     for (const item of coalesceThreadStreamItems(deduped)) {
@@ -488,6 +499,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         data = Option.some(item.snapshot.thread);
         threadChanged = true;
         deleted = false;
+        installed = true;
         continue;
       }
       if (item.event.sequence <= sequence) continue;
@@ -528,6 +540,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     if (loadedOlderCount !== initialLoadedOlderCount) {
       yield* Ref.set(loadedOlderMessageCount, loadedOlderCount);
+    }
+    if (installed) {
+      yield* Ref.update(installGeneration, (generation) => generation + 1);
     }
     if (deleted) {
       yield* setDeleted();

@@ -826,6 +826,76 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect(
+    "discards an in-flight older page when a hard snapshot lands with the same cursor",
+    () =>
+      Effect.gen(function* () {
+        const messagePageLoadGate = yield* Deferred.make<void>();
+        const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+        const harness = yield* makeHarness({
+          cached: {
+            ...BASE_THREAD,
+            messages: recent,
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: recent[0]!.id,
+              totalCount: 4,
+            },
+          },
+          messageWindowLimit: 2,
+          messageOlderPageSize: 2,
+          messagePageLoadGate,
+          messagePage: Option.some({
+            threadId: THREAD_ID,
+            messages: [makeThreadMessage(1), makeThreadMessage(2)],
+            hasMoreOlder: false,
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          }),
+        });
+        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+        yield* Effect.forkChild(harness.loadOlderMessages);
+        yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+
+        // A hard snapshot (e.g. after a reconnect/install) reinstalls the
+        // exact same window, so the cursor comparison alone can't detect
+        // that the in-flight page is now stale.
+        yield* Queue.offer(
+          harness.inputs,
+          snapshot(
+            {
+              ...BASE_THREAD,
+              messages: recent,
+              messageWindow: {
+                hasMoreOlder: true,
+                oldestLoadedMessageId: recent[0]!.id,
+                totalCount: 4,
+              },
+            },
+            CACHED_SNAPSHOT_SEQUENCE + 1,
+          ),
+        );
+        for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+        yield* Deferred.succeed(messagePageLoadGate, undefined);
+        const settled = yield* awaitThreadState(
+          harness.observed,
+          (value) => !value.olderMessages.isLoading,
+        );
+
+        // The stale page is discarded outright: messages stay exactly as the
+        // hard snapshot installed them, and `hasMoreOlder` is retained rather
+        // than being overwritten by the discarded page's `false`.
+        expect(Option.getOrThrow(settled.data).messages.map((message) => message.id)).toEqual([
+          "message-3",
+          "message-4",
+        ]);
+        expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(true);
+        expect(Option.getOrThrow(settled.data).messageWindow?.oldestLoadedMessageId).toBe(
+          "message-3",
+        );
+      }),
+  );
+
   it.effect("auto-refills an emptied window after a deep revert", () =>
     Effect.gen(function* () {
       const retainedMessage = {
