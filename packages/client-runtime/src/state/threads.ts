@@ -370,6 +370,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         const prepared = yield* SubscriptionRef.get(supervisor.prepared);
         if (Option.isNone(prepared)) {
+          // Publish the same false -> true -> false shape as a real request so a
+          // mounted feed's request-in-flight latch — which only releases on a
+          // `loadingOlderMessages` transition or a page landing — always sees a
+          // transition to reset on, even though nothing was actually loaded.
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            olderMessages: { isLoading: true, error: null },
+          }));
           yield* SubscriptionRef.update(state, (value) => ({
             ...value,
             olderMessages: { isLoading: false, error: "The environment is not connected." },

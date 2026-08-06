@@ -14,6 +14,14 @@ export interface ThreadHistoryWindowState {
   readonly hasOlderMessages: boolean;
   /** A page request is in flight. */
   readonly loadingOlderMessages: boolean;
+  /**
+   * The most recent older-page failure, including a request rejected because
+   * the environment was disconnected. A mounted feed should treat any change
+   * here as an additional signal to release its request-in-flight latch,
+   * alongside a `loadingOlderMessages` transition or a page landing, so a
+   * disconnected attempt is never able to leave the latch stuck.
+   */
+  readonly error?: string | null;
   /** Requests the next older page. Safe to call when nothing is pending. */
   readonly onLoadOlderMessages: () => void;
 }

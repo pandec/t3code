@@ -1978,10 +1978,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const olderPageRequestedRef = useRef(false);
   const oldestFeedEntryId = props.feed[0]?.id ?? null;
   useEffect(() => {
-    // Release once a page lands (the oldest entry changes) or the request
-    // settles; the near-top test then decides whether another page is wanted.
+    // Release once a page lands (the oldest entry changes), the request
+    // settles, or an error is reported; the near-top test then decides
+    // whether another page is wanted. `historyWindow.error` covers a request
+    // rejected because the environment was disconnected: that path can
+    // settle without ever flipping `loadingOlderMessages` to true, so without
+    // this dependency the latch would stay stuck and the next top-scroll
+    // after reconnecting would never ask for a page again.
     olderPageRequestedRef.current = false;
-  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages]);
+  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages, historyWindow?.error]);
 
   const requestOlderMessagesIfNeeded = useCallback(
     (distanceFromTop: number) => {

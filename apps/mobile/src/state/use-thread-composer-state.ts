@@ -143,9 +143,15 @@ export function useThreadComposerState() {
     () => ({
       hasOlderMessages: messageWindow.hasOlderMessages,
       loadingOlderMessages: messageWindow.loadingOlderMessages,
+      error: messageWindow.error,
       onLoadOlderMessages: loadOlderMessages,
     }),
-    [messageWindow.hasOlderMessages, messageWindow.loadingOlderMessages, loadOlderMessages],
+    [
+      messageWindow.hasOlderMessages,
+      messageWindow.loadingOlderMessages,
+      messageWindow.error,
+      loadOlderMessages,
+    ],
   );
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;

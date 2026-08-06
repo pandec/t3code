@@ -366,6 +366,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     removedThreads,
     wakeups,
     eventPriority,
+    prepared,
     setEventPriority: (priority: ThreadEventPriority) =>
       eventCoalescing.setPriority(
         { environmentId: TARGET.environmentId, threadId: THREAD_ID },
@@ -893,6 +894,48 @@ describe("EnvironmentThreads", () => {
         expect(Option.getOrThrow(settled.data).messageWindow?.oldestLoadedMessageId).toBe(
           "message-3",
         );
+      }),
+  );
+
+  it.effect(
+    "surfaces a disconnected load-older attempt as an observable loading transition with an error",
+    () =>
+      Effect.gen(function* () {
+        // A rejected-while-disconnected attempt is the one path through
+        // `loadOlderMessages` that can settle without a page landing. A
+        // mounted feed's request-in-flight latch only resets on a
+        // `loadingOlderMessages` transition (or a page landing), so this
+        // path must still publish `isLoading: true` before settling back to
+        // `false` with an error — settling straight to `false` would leave a
+        // latched feed unable to ask for another page after reconnecting.
+        const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+        const harness = yield* makeHarness({
+          cached: {
+            ...BASE_THREAD,
+            messages: recent,
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: recent[0]!.id,
+              totalCount: 4,
+            },
+          },
+        });
+        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+        yield* SubscriptionRef.set(harness.prepared, Option.none());
+        yield* Effect.forkChild(harness.loadOlderMessages);
+
+        yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+        const settled = yield* awaitThreadState(
+          harness.observed,
+          (value) => !value.olderMessages.isLoading,
+        );
+
+        expect(settled.olderMessages).toEqual({
+          isLoading: false,
+          error: "The environment is not connected.",
+        });
+        expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
       }),
   );
 
