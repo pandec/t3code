@@ -1878,7 +1878,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const recordSessionCwd = Effect.fn("ClaudeAdapter.recordSessionCwd")(function* (
     context: ClaudeSessionContext,
     nextCwd: string,
-    options?: { readonly reportedPreviousCwd?: string; readonly trigger?: string },
+    options?: {
+      readonly reportedPreviousCwd?: string;
+      readonly trigger?: "worktree-tool" | "turn-completed" | "cwd-changed-hook";
+    },
   ) {
     const threadId = context.session.threadId;
     const reportedPreviousCwd = options?.reportedPreviousCwd;
@@ -1944,8 +1947,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
    * again when the turn ends. The first is immediate but racy — the entry
    * carrying the new cwd has been observed landing ~2ms after the tool result
    * reaches us, and a read that lands early sees the pre-move directory and
-   * concludes nothing changed. The turn boundary is the durable checkpoint, and
-   * it also catches moves this adapter has no specific trigger for.
+   * concludes nothing changed. The turn boundary is the durable re-check of
+   * that same move; it is gated on a worktree tool having run, so it does not
+   * discover moves nothing flagged.
    */
   const reconcileSessionCwdFromTranscript = Effect.fn(
     "ClaudeAdapter.reconcileSessionCwdFromTranscript",
@@ -1975,10 +1979,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         trigger,
         cwd: context.session.cwd ?? null,
       };
-      // A worktree tool that leaves no resolvable cwd is a real problem worth
-      // announcing; the turn-boundary sweep runs for every turn, including
-      // sessions whose transcript is not readable at all, so it stays quiet.
-      yield* trigger === "worktree-tool"
+      // The tool-time attempt is expected to lose the race, so only the
+      // turn-boundary re-check failing means the move is genuinely unresolvable
+      // — and by then the tool-time attempt has already warned once.
+      yield* trigger === "turn-completed"
         ? Effect.logWarning("claude.session.cwd-unresolved-after-worktree-tool", detail)
         : Effect.logDebug("claude.session.cwd-unresolved", detail);
       return;
@@ -2550,12 +2554,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           }
         : undefined);
 
+    // Settle a pending move before any early return: a result that arrives
+    // without an active turn must not strand the flag, or the move is lost and
+    // a later unrelated turn pays for the read.
+    const reconcilePendingCwd = context.cwdReconcilePending;
+    context.cwdReconcilePending = false;
+
     const turnState = context.turnState;
     if (!turnState) {
       yield* emitThreadTokenUsage(context, usageSnapshot, {
         rawMethod: "claude/result",
         rawPayload: result ?? { status },
       });
+
+      if (reconcilePendingCwd) {
+        yield* reconcileSessionCwdFromTranscript(context, "turn-completed");
+      }
 
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
@@ -2677,8 +2691,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // Only when a tool actually moved the session: turns that did not touch a
     // worktree must not pay for a transcript read, and the session lifecycle
     // must not wait on one.
-    if (context.cwdReconcilePending) {
-      context.cwdReconcilePending = false;
+    if (reconcilePendingCwd) {
       yield* reconcileSessionCwdFromTranscript(context, "turn-completed");
     }
     // After the turn, so the quota reflects the work just done.
@@ -2940,6 +2953,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(parentToolUseId ? { parentToolUseId } : {}),
       };
       context.inFlightTools.set(index, tool);
+      // Mark as soon as the tool starts, not when its result lands: a turn
+      // interrupted in between still moved the session, and only the flag
+      // survives to have the move confirmed at the turn boundary.
+      if (movesSessionWorkingDirectory(toolName) && parentToolUseId === undefined) {
+        context.cwdReconcilePending = true;
+      }
 
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
