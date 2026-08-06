@@ -21,6 +21,7 @@ import {
   type SDKControlReloadSkillsResponse,
   type SDKResultMessage,
   type SettingSource,
+  type TerminalReason,
   type SDKUserMessage,
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -367,7 +368,21 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
+// Some runtime versions emit `interrupted` before the SDK type union includes it.
+const INTERRUPTED_TERMINAL_REASONS: ReadonlySet<TerminalReason | "interrupted"> = new Set([
+  "interrupted",
+  "aborted_tools",
+  "aborted_streaming",
+]);
+
 function isInterruptedResult(result: SDKResultMessage): boolean {
+  if (
+    result.terminal_reason !== undefined &&
+    INTERRUPTED_TERMINAL_REASONS.has(result.terminal_reason)
+  ) {
+    return true;
+  }
+
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
