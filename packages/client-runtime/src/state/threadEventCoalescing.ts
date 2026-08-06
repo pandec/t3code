@@ -179,6 +179,41 @@ function canMergeMessageDeltas(
   );
 }
 
+/**
+ * Drops replayed/duplicate events at-or-below the already-applied sequence
+ * cursor. Must run before {@link coalesceThreadStreamItems} so a replayed
+ * event never gets merged into a fresh delta for the same message — merging
+ * first would let stale text leak into the coalesced chunk even though the
+ * replayed event itself would otherwise be filtered out.
+ *
+ * Mirrors the cursor bookkeeping the reducer loop performs: a `snapshot`
+ * item resets the cursor to its `snapshotSequence`; a `synchronized` item
+ * does not affect the cursor; an `event` item is dropped when its sequence
+ * is at-or-below the current cursor, otherwise it advances the cursor.
+ */
+export function filterAppliedThreadStreamItems(
+  items: ReadonlyArray<OrchestrationThreadStreamItem>,
+  appliedSequence: number,
+): ReadonlyArray<OrchestrationThreadStreamItem> {
+  let cursor = appliedSequence;
+  const filtered: Array<OrchestrationThreadStreamItem> = [];
+  for (const item of items) {
+    if (item.kind === "synchronized") {
+      filtered.push(item);
+      continue;
+    }
+    if (item.kind === "snapshot") {
+      cursor = item.snapshot.snapshotSequence;
+      filtered.push(item);
+      continue;
+    }
+    if (item.event.sequence <= cursor) continue;
+    cursor = item.event.sequence;
+    filtered.push(item);
+  }
+  return filtered;
+}
+
 export function coalesceThreadStreamItems(
   items: ReadonlyArray<OrchestrationThreadStreamItem>,
 ): ReadonlyArray<OrchestrationThreadStreamItem> {

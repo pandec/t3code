@@ -30,6 +30,7 @@ import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import {
   coalesceThreadStreamItems,
+  filterAppliedThreadStreamItems,
   isStructuralThreadStreamItem,
   THREAD_EVENT_FOREGROUND_WINDOW_MS,
   ThreadEventCoalescing,
@@ -475,7 +476,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     let deleted = false;
     let synchronized = false;
 
-    for (const item of coalesceThreadStreamItems(items)) {
+    const deduped = filterAppliedThreadStreamItems(items, initialSequence);
+    for (const item of coalesceThreadStreamItems(deduped)) {
       if (item.kind === "synchronized") {
         synchronized = true;
         continue;
