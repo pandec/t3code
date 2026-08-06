@@ -6,6 +6,8 @@ export type EnvironmentThreadStatus = "empty" | "cached" | "synchronizing" | "li
 export interface ThreadOlderMessagesState {
   readonly isLoading: boolean;
   readonly error: string | null;
+  /** Monotonic signal for every completed older-message request attempt. */
+  readonly settledCount: number;
 }
 
 export interface EnvironmentThreadState {
@@ -18,6 +20,7 @@ export interface EnvironmentThreadState {
 export const EMPTY_THREAD_OLDER_MESSAGES_STATE: ThreadOlderMessagesState = {
   isLoading: false,
   error: null,
+  settledCount: 0,
 };
 
 export const EMPTY_ENVIRONMENT_THREAD_STATE: EnvironmentThreadState = {

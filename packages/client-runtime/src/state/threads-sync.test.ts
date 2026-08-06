@@ -363,6 +363,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   return {
     inputs,
     observed,
+    state: threadHandle.state,
     loadOlderMessages: threadHandle.loadOlderMessages,
     latest,
     publicationCount,
@@ -508,11 +509,11 @@ const sessionSettled = (sequence: number): OrchestrationThreadStreamItem => ({
   },
 });
 
-const deleted = (): OrchestrationThreadStreamItem => ({
+const deleted = (sequence = 3): OrchestrationThreadStreamItem => ({
   kind: "event",
   event: {
     eventId: EventId.make("event-deleted"),
-    sequence: 3,
+    sequence,
     occurredAt: "2026-04-01T02:00:00.000Z",
     commandId: null,
     causationEventId: null,
@@ -623,7 +624,7 @@ describe("EnvironmentThreads", () => {
       });
       expect(yield* Ref.get(harness.lastMessagePageBefore)).toBe("message-3");
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
-      expect(state.olderMessages).toEqual({ isLoading: false, error: null });
+      expect(state.olderMessages).toEqual({ isLoading: false, error: null, settledCount: 1 });
 
       yield* TestClock.adjust("500 millis");
       yield* Effect.yieldNow;
@@ -633,15 +634,20 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("caps explicitly loaded scrollback at five message windows", () =>
+  it.effect("reopens the 600-message scrollback cap when a revert frees capacity", () =>
     Effect.gen(function* () {
-      const recent = [makeThreadMessage(9), makeThreadMessage(10)];
-      const pageByCursor = new Map<string, ReadonlyArray<number>>([
-        ["message-9", [7, 8]],
-        ["message-7", [5, 6]],
-        ["message-5", [3, 4]],
-        ["message-3", [1, 2]],
-      ]);
+      const historyMessage = (index: number) => {
+        const timestamp = `2026-04-01T00:00:00.${String(index).padStart(3, "0")}Z`;
+        return {
+          ...makeThreadMessage(index),
+          turnId: TurnId.make("turn-1"),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+      };
+      const messageRange = (start: number, end: number) =>
+        Array.from({ length: end - start + 1 }, (_, index) => historyMessage(start + index));
+      const recent = messageRange(601, 750);
       const harness = yield* makeHarness({
         cached: {
           ...BASE_THREAD,
@@ -649,26 +655,24 @@ describe("EnvironmentThreads", () => {
           messageWindow: {
             hasMoreOlder: true,
             oldestLoadedMessageId: recent[0]!.id,
-            totalCount: 10,
+            totalCount: 750,
           },
         },
-        messageWindowLimit: 2,
-        messageOlderPageSize: 2,
+        messageWindowLimit: 150,
+        messageOlderPageSize: 100,
         messagePageForBefore: (beforeMessageId) => {
-          const indexes = beforeMessageId === null ? undefined : pageByCursor.get(beforeMessageId);
-          return indexes === undefined
-            ? Option.none()
-            : Option.some({
-                threadId: THREAD_ID,
-                messages: indexes.map(makeThreadMessage),
-                hasMoreOlder: true,
-                snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
-              });
+          const beforeIndex = beforeMessageId === null ? 751 : Number(beforeMessageId.slice(8));
+          return Option.some({
+            threadId: THREAD_ID,
+            messages: messageRange(Math.max(1, beforeIndex - 100), beforeIndex - 1),
+            hasMoreOlder: true,
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          });
         },
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
-      for (const expectedLength of [4, 6, 8, 10]) {
+      for (const expectedLength of [250, 350, 450, 550, 650, 750]) {
         yield* harness.loadOlderMessages;
         yield* awaitThreadState(
           harness.observed,
@@ -677,12 +681,32 @@ describe("EnvironmentThreads", () => {
         );
       }
       const capped = Option.getOrThrow((yield* Ref.get(harness.latest)).data);
-      expect(capped.messages).toHaveLength(10);
+      expect(capped.messages).toHaveLength(750);
       expect(capped.messageWindow?.hasMoreOlder).toBe(false);
-      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(4);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(6);
 
       yield* harness.loadOlderMessages;
-      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(4);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(6);
+
+      yield* Queue.offer(harness.inputs, reverted(0, CACHED_SNAPSHOT_SEQUENCE + 1));
+      const refilled = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages[0]?.id === "message-651" &&
+          value.olderMessages.settledCount === 7,
+      );
+      expect(Option.getOrThrow(refilled.data).messageWindow?.hasMoreOlder).toBe(true);
+      expect(yield* Ref.get(harness.lastMessagePageBefore)).toBeNull();
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(7);
+
+      yield* harness.loadOlderMessages;
+      const paged = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.messages[0]?.id === "message-551",
+      );
+      expect(Option.getOrThrow(paged.data).messageWindow?.hasMoreOlder).toBe(true);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(8);
     }),
   );
 
@@ -856,6 +880,7 @@ describe("EnvironmentThreads", () => {
         "message-5",
       ]);
       expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(true);
+      expect(settled.olderMessages.settledCount).toBe(1);
     }),
   );
 
@@ -926,49 +951,151 @@ describe("EnvironmentThreads", () => {
         expect(Option.getOrThrow(settled.data).messageWindow?.oldestLoadedMessageId).toBe(
           "message-3",
         );
+        expect(settled.olderMessages.settledCount).toBe(1);
       }),
   );
 
-  it.effect(
-    "surfaces a disconnected load-older attempt as an observable loading transition with an error",
-    () =>
-      Effect.gen(function* () {
-        // A rejected-while-disconnected attempt is the one path through
-        // `loadOlderMessages` that can settle without a page landing. A
-        // mounted feed's request-in-flight latch only resets on a
-        // `loadingOlderMessages` transition (or a page landing), so this
-        // path must still publish `isLoading: true` before settling back to
-        // `false` with an error — settling straight to `false` would leave a
-        // latched feed unable to ask for another page after reconnecting.
-        const recent = [makeThreadMessage(3), makeThreadMessage(4)];
-        const harness = yield* makeHarness({
-          cached: {
-            ...BASE_THREAD,
-            messages: recent,
-            messageWindow: {
-              hasMoreOlder: true,
-              oldestLoadedMessageId: recent[0]!.id,
-              totalCount: 4,
-            },
+  it.effect("settles an in-flight older page discarded by thread deletion", () =>
+    Effect.gen(function* () {
+      const messagePageLoadGate = yield* Deferred.make<void>();
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
           },
-        });
-        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+        },
+        messagePageLoadGate,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
 
-        yield* SubscriptionRef.set(harness.prepared, Option.none());
-        yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      yield* Deferred.succeed(messagePageLoadGate, undefined);
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted" && value.olderMessages.settledCount === 1,
+      );
 
-        yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
-        const settled = yield* awaitThreadState(
-          harness.observed,
-          (value) => !value.olderMessages.isLoading,
-        );
+      expect(Option.isNone(settled.data)).toBe(true);
+      expect(settled.olderMessages).toEqual({ isLoading: false, error: null, settledCount: 1 });
+    }),
+  );
 
-        expect(settled.olderMessages).toEqual({
-          isLoading: false,
-          error: "The environment is not connected.",
-        });
-        expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
-      }),
+  it.effect("increments the settlement signal for consecutive disconnected page attempts", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      yield* SubscriptionRef.set(harness.prepared, Option.none());
+
+      yield* harness.loadOlderMessages;
+      const first = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+      expect(first.olderMessages).toEqual({
+        isLoading: false,
+        error: "The environment is not connected.",
+        settledCount: 1,
+      });
+
+      yield* harness.loadOlderMessages;
+      const second = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 2,
+      );
+      expect(second.olderMessages).toEqual({
+        isLoading: false,
+        error: "The environment is not connected.",
+        settledCount: 2,
+      });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("clears a disconnected page error on warm resume and pages on the next attempt", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      yield* SubscriptionRef.set(harness.prepared, Option.none());
+
+      yield* harness.loadOlderMessages;
+      const disconnected = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+      expect(disconnected.olderMessages.error).toBe("The environment is not connected.");
+      expect(Option.getOrThrow(disconnected.data).messages[0]?.id).toBe("message-3");
+
+      yield* SubscriptionRef.set(harness.prepared, Option.some(PREPARED));
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      const ready = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.error === null,
+      );
+      expect(ready.olderMessages.settledCount).toBe(1);
+      expect(Option.getOrThrow(ready.data).messages[0]?.id).toBe("message-3");
+
+      yield* harness.loadOlderMessages;
+      const paged = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.olderMessages.settledCount === 2 &&
+          Option.isSome(value.data) &&
+          value.data.value.messages[0]?.id === "message-1",
+      );
+      expect(paged.olderMessages).toEqual({ isLoading: false, error: null, settledCount: 2 });
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+    }),
   );
 
   it.effect("auto-refills an emptied window after a deep revert", () =>
@@ -1120,7 +1247,11 @@ describe("EnvironmentThreads", () => {
 
         expect(Option.getOrThrow(settled.data).messages).toEqual([]);
         expect(Option.getOrThrow(settled.data).messageWindow?.hasMoreOlder).toBe(false);
-        expect(settled.olderMessages).toEqual({ isLoading: false, error: null });
+        expect(settled.olderMessages).toEqual({
+          isLoading: false,
+          error: null,
+          settledCount: 1,
+        });
         expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
       }),
   );
@@ -1497,6 +1628,51 @@ describe("EnvironmentThreads", () => {
         (value) => Option.isSome(value.data) && value.data.value.messages.length === 1,
       );
       expect(Option.getOrThrow(flushed.data).messages[0]?.text).toBe("Focused");
+    }),
+  );
+
+  it.effect("does not commit a manual older page after thread teardown", () =>
+    Effect.gen(function* () {
+      const messagePageLoadGate = yield* Deferred.make<void>();
+      const teardownScope = yield* Scope.make();
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messagePageLoadGate,
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      }).pipe(Scope.provide(teardownScope));
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+
+      const pageFiber = yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
+      yield* Scope.close(teardownScope, Exit.void);
+      const stateAfterTeardown = yield* SubscriptionRef.get(harness.state);
+      const savedAfterTeardown = yield* Ref.get(harness.savedThreads);
+
+      yield* Deferred.succeed(messagePageLoadGate, undefined);
+      yield* Fiber.await(pageFiber);
+      yield* harness.loadOlderMessages;
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      expect(yield* SubscriptionRef.get(harness.state)).toEqual(stateAfterTeardown);
+      expect(yield* Ref.get(harness.savedThreads)).toEqual(savedAfterTeardown);
+      expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(1);
+      expect(
+        Option.getOrThrow(stateAfterTeardown.data).messages.map((message) => message.id),
+      ).toEqual(["message-3", "message-4"]);
     }),
   );
 

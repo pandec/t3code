@@ -14,16 +14,30 @@ export interface ThreadHistoryWindowState {
   readonly hasOlderMessages: boolean;
   /** A page request is in flight. */
   readonly loadingOlderMessages: boolean;
-  /**
-   * The most recent older-page failure, including a request rejected because
-   * the environment was disconnected. A mounted feed should treat any change
-   * here as an additional signal to release its request-in-flight latch,
-   * alongside a `loadingOlderMessages` transition or a page landing, so a
-   * disconnected attempt is never able to leave the latch stuck.
-   */
+  /** Monotonic signal that advances whenever an older-page attempt settles. */
+  readonly settledCount: number;
+  /** The most recent older-page failure. */
   readonly error?: string | null;
   /** Requests the next older page. Safe to call when nothing is pending. */
   readonly onLoadOlderMessages: () => void;
+}
+
+export interface ThreadHistoryRequestSignals {
+  readonly oldestFeedEntryId: string | null;
+  readonly loadingOlderMessages: boolean;
+  readonly settledCount: number;
+}
+
+/** True when a feed request latch must be released for a new top-scroll attempt. */
+export function shouldReleaseOlderMessagesRequest(
+  previous: ThreadHistoryRequestSignals,
+  current: ThreadHistoryRequestSignals,
+): boolean {
+  return (
+    previous.oldestFeedEntryId !== current.oldestFeedEntryId ||
+    previous.loadingOlderMessages !== current.loadingOlderMessages ||
+    previous.settledCount !== current.settledCount
+  );
 }
 
 /**
@@ -58,4 +72,21 @@ export function shouldRequestOlderMessages(input: {
     return false;
   }
   return input.distanceFromTop <= (input.thresholdPx ?? LOAD_OLDER_MESSAGES_THRESHOLD_PX);
+}
+
+/** True when a ready, underfilled feed should automatically request another page. */
+export function shouldRequestOlderMessagesForUnderfilledFeed(input: {
+  readonly contentHeight: number;
+  readonly viewportHeight: number;
+  readonly error: string | null | undefined;
+  readonly hasOlderMessages: boolean;
+  readonly loadingOlderMessages: boolean;
+  readonly requestInFlight: boolean;
+}): boolean {
+  return (
+    input.error == null &&
+    input.viewportHeight > 0 &&
+    input.contentHeight <= input.viewportHeight &&
+    shouldRequestOlderMessages({ ...input, distanceFromTop: 0 })
+  );
 }

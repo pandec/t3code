@@ -143,12 +143,14 @@ export function useThreadComposerState() {
     () => ({
       hasOlderMessages: messageWindow.hasOlderMessages,
       loadingOlderMessages: messageWindow.loadingOlderMessages,
+      settledCount: messageWindow.settledCount,
       error: messageWindow.error,
       onLoadOlderMessages: loadOlderMessages,
     }),
     [
       messageWindow.hasOlderMessages,
       messageWindow.loadingOlderMessages,
+      messageWindow.settledCount,
       messageWindow.error,
       loadOlderMessages,
     ],

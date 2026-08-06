@@ -120,7 +120,9 @@ import {
 } from "./threadFeedInsets";
 import {
   distanceFromFeedTop,
+  shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
+  shouldRequestOlderMessagesForUnderfilledFeed,
   type ThreadHistoryWindowState,
 } from "./threadHistoryLoadMore";
 import {
@@ -1976,17 +1978,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // the request has been accepted, a frame or more later.
   const historyWindow = props.historyWindow;
   const olderPageRequestedRef = useRef(false);
+  const contentHeightRef = useRef(Number.POSITIVE_INFINITY);
   const oldestFeedEntryId = props.feed[0]?.id ?? null;
+  const previousRequestSignalsRef = useRef({
+    oldestFeedEntryId,
+    loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+    settledCount: historyWindow?.settledCount ?? 0,
+  });
   useEffect(() => {
-    // Release once a page lands (the oldest entry changes), the request
-    // settles, or an error is reported; the near-top test then decides
-    // whether another page is wanted. `historyWindow.error` covers a request
-    // rejected because the environment was disconnected: that path can
-    // settle without ever flipping `loadingOlderMessages` to true, so without
-    // this dependency the latch would stay stuck and the next top-scroll
-    // after reconnecting would never ask for a page again.
-    olderPageRequestedRef.current = false;
-  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages, historyWindow?.error]);
+    // Release once a page lands, loading changes, or any request attempt
+    // settles. `settledCount` advances even for a disconnected rejection that
+    // React batches into a single commit, so repeated failures and a later
+    // warm resume cannot leave this mount's request latch stuck.
+    const current = {
+      oldestFeedEntryId,
+      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
+      settledCount: historyWindow?.settledCount ?? 0,
+    };
+    if (shouldReleaseOlderMessagesRequest(previousRequestSignalsRef.current, current)) {
+      olderPageRequestedRef.current = false;
+    }
+    previousRequestSignalsRef.current = current;
+  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages, historyWindow?.settledCount]);
 
   const requestOlderMessagesIfNeeded = useCallback(
     (distanceFromTop: number) => {
@@ -2005,6 +2018,31 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [historyWindow],
   );
+  const requestOlderMessagesForUnderfilledFeed = useCallback(
+    (contentHeight: number) => {
+      if (
+        historyWindow &&
+        shouldRequestOlderMessagesForUnderfilledFeed({
+          contentHeight,
+          viewportHeight,
+          error: historyWindow.error,
+          hasOlderMessages: historyWindow.hasOlderMessages,
+          loadingOlderMessages: historyWindow.loadingOlderMessages,
+          requestInFlight: olderPageRequestedRef.current,
+        })
+      ) {
+        olderPageRequestedRef.current = true;
+        historyWindow.onLoadOlderMessages();
+      }
+    },
+    [historyWindow, viewportHeight],
+  );
+  useEffect(() => {
+    // A short feed may not emit another scroll/content-size event after a
+    // disconnected attempt. Re-run its underfill check when readiness clears
+    // the error (and after each successful page while it remains underfilled).
+    requestOlderMessagesForUnderfilledFeed(contentHeightRef.current);
+  }, [requestOlderMessagesForUnderfilledFeed]);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -2027,11 +2065,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const handleContentSizeChange = useCallback(
     (_width: number, height: number) => {
-      if (viewportHeight > 0 && height <= viewportHeight) {
-        requestOlderMessagesIfNeeded(0);
-      }
+      contentHeightRef.current = height;
+      requestOlderMessagesForUnderfilledFeed(height);
     },
-    [requestOlderMessagesIfNeeded, viewportHeight],
+    [requestOlderMessagesForUnderfilledFeed],
   );
 
   // Gated variant of the 180ms feed layout slide. Instant while browsing

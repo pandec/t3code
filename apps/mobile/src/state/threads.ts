@@ -122,9 +122,16 @@ export function useThreadMessageWindow(
       messageWindow,
       hasOlderMessages: messageWindow?.hasMoreOlder === true,
       loadingOlderMessages: olderMessages.isLoading,
+      settledCount: olderMessages.settledCount,
       error: olderMessages.error,
     }),
-    [messageWindow, messages, olderMessages.error, olderMessages.isLoading],
+    [
+      messageWindow,
+      messages,
+      olderMessages.error,
+      olderMessages.isLoading,
+      olderMessages.settledCount,
+    ],
   );
 }
 

@@ -4,7 +4,9 @@ import { MOBILE_THREAD_HISTORY_WINDOW } from "../../connection/thread-history-wi
 import {
   LOAD_OLDER_MESSAGES_THRESHOLD_PX,
   distanceFromFeedTop,
+  shouldReleaseOlderMessagesRequest,
   shouldRequestOlderMessages,
+  shouldRequestOlderMessagesForUnderfilledFeed,
 } from "./threadHistoryLoadMore";
 
 const base = {
@@ -30,6 +32,56 @@ describe("distanceFromFeedTop", () => {
     expect(distanceFromFeedTop({ contentOffsetY: -96, topInset: 96 })).toBe(0);
     // Without automatic insets the header spacer is content, so offset is raw.
     expect(distanceFromFeedTop({ contentOffsetY: 240, topInset: 0 })).toBe(240);
+  });
+});
+
+describe("shouldReleaseOlderMessagesRequest", () => {
+  it("releases repeated disconnected attempts and permits the next top-scroll after reconnect", () => {
+    const initial = {
+      oldestFeedEntryId: "message-3",
+      loadingOlderMessages: false,
+      settledCount: 0,
+    };
+    const firstDisconnected = { ...initial, settledCount: 1 };
+    const secondDisconnected = { ...initial, settledCount: 2 };
+
+    let requestInFlight = true;
+    if (shouldReleaseOlderMessagesRequest(initial, firstDisconnected)) requestInFlight = false;
+    expect(shouldRequestOlderMessages({ ...base, requestInFlight })).toBe(true);
+
+    requestInFlight = true;
+    if (shouldReleaseOlderMessagesRequest(firstDisconnected, secondDisconnected)) {
+      requestInFlight = false;
+    }
+    expect(shouldRequestOlderMessages({ ...base, requestInFlight })).toBe(true);
+
+    // Warm resume itself leaves the message/window signals unchanged, but the
+    // terminal disconnected attempt already released the latch, so its next
+    // top-scroll is accepted without waiting for a snapshot or entry change.
+    expect(shouldReleaseOlderMessagesRequest(secondDisconnected, secondDisconnected)).toBe(false);
+    expect(shouldRequestOlderMessages({ ...base, requestInFlight })).toBe(true);
+  });
+});
+
+describe("shouldRequestOlderMessagesForUnderfilledFeed", () => {
+  it("retries a short feed once reconnect clears its disconnected error", () => {
+    const underfilled = {
+      contentHeight: 400,
+      viewportHeight: 800,
+      hasOlderMessages: true,
+      loadingOlderMessages: false,
+      requestInFlight: false,
+    };
+
+    expect(
+      shouldRequestOlderMessagesForUnderfilledFeed({
+        ...underfilled,
+        error: "The environment is not connected.",
+      }),
+    ).toBe(false);
+    expect(shouldRequestOlderMessagesForUnderfilledFeed({ ...underfilled, error: null })).toBe(
+      true,
+    );
   });
 });
 
