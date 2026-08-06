@@ -228,6 +228,12 @@ interface ClaudeSessionContext {
   subscriptionUsageInFlight: boolean;
   subscriptionUsageRefreshPending: boolean;
   readonly scheduleSubscriptionUsage: () => void;
+  /**
+   * Claude config directory resolved when the session started. A relative
+   * CLAUDE_CONFIG_DIR/HOME resolves against the cwd, so re-resolving it after
+   * the session has moved would look for the transcript under the worktree.
+   */
+  readonly configDirPath: string;
   readonly pendingWorkState: {
     hasPendingWork: boolean | undefined;
   };
@@ -1641,13 +1647,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const sessionId = context.resumeSessionId;
     if (sessionId === undefined) return;
 
-    const configDirPath = yield* resolveClaudeConfigDirPath(
-      claudeSettings,
-      claudeEnvironment,
-      context.session.cwd,
-    ).pipe(Effect.provideService(Path.Path, path));
-
-    const observedCwd = yield* findClaudeSessionCwd({ configDirPath, sessionId }).pipe(
+    const observedCwd = yield* findClaudeSessionCwd({
+      configDirPath: context.configDirPath,
+      sessionId,
+    }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.orElseSucceed(() => null),
@@ -3512,6 +3515,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const pendingWorkState: ClaudeSessionContext["pendingWorkState"] = {
         hasPendingWork: undefined,
       };
+      // Pin the config directory to the cwd the session starts in: a relative
+      // CLAUDE_CONFIG_DIR/HOME resolves against the cwd, and the session's cwd
+      // moves out from under it once the agent enters a worktree.
+      const sessionConfigDirPath = yield* resolveClaudeConfigDirPath(
+        claudeSettings,
+        claudeEnvironment,
+        input.cwd,
+      ).pipe(Effect.provideService(Path.Path, path));
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -4090,6 +4101,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           });
         },
         pendingWorkState,
+        configDirPath: sessionConfigDirPath,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);

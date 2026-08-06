@@ -428,6 +428,35 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
 const CWD_TAIL_BYTES = 128 * 1024;
 
 /**
+ * Read the trailing bytes of a file without materializing the whole thing.
+ * Transcripts reach tens of megabytes, and this runs inline while provider
+ * messages are being processed.
+ */
+const readFileTail = Effect.fn("readFileTail")(function* (input: {
+  readonly filePath: string;
+  readonly size: number;
+  readonly maxBytes: number;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const length = Math.min(input.size, input.maxBytes);
+  if (length <= 0) return "";
+  const offset = input.size - length;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const file = yield* fileSystem.open(input.filePath, { flag: "r" });
+      if (offset > 0) {
+        yield* file.seek(FileSystem.Size(offset), "start");
+      }
+      const chunk = yield* file.readAlloc(FileSystem.Size(length));
+      return Option.match(chunk, {
+        onNone: () => "",
+        onSome: (bytes) => new TextDecoder().decode(bytes),
+      });
+    }),
+  );
+});
+
+/**
  * Resolve the working directory a live session is running in *now*.
  *
  * Claude stores a session under the project directory derived from its cwd and
@@ -456,38 +485,54 @@ export const findClaudeSessionCwd = Effect.fn("findClaudeSessionCwd")(function* 
     .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
 
   const fileName = `${input.sessionId}.jsonl`;
-  let transcriptPath: string | null = null;
-  let newestModified = Number.NEGATIVE_INFINITY;
+  const candidates: Array<{
+    readonly cwd: string;
+    readonly modified: number;
+    readonly selfConsistent: boolean;
+  }> = [];
+
   for (const projectDirectory of projectDirectories) {
-    const candidate = path.join(projectsDirectory, projectDirectory, fileName);
-    const info = yield* fileSystem.stat(candidate).pipe(Effect.option);
+    const candidatePath = path.join(projectsDirectory, projectDirectory, fileName);
+    const info = yield* fileSystem.stat(candidatePath).pipe(Effect.option);
     if (info._tag !== "Some") continue;
-    // A session that moved can leave a copy behind in its previous project
-    // directory; the most recently written one is the live transcript.
-    const modified = Option.match(info.value.mtime, {
-      onNone: () => 0,
-      onSome: (value) => value.getTime(),
+
+    const tail = yield* readFileTail({
+      filePath: candidatePath,
+      size: Number(info.value.size),
+      maxBytes: CWD_TAIL_BYTES,
+    }).pipe(Effect.orElseSucceed(() => ""));
+
+    const cwd = yield* lastCwdInTranscriptTail(tail);
+    if (cwd === null) continue;
+
+    candidates.push({
+      cwd,
+      modified: Option.match(info.value.mtime, {
+        onNone: () => 0,
+        onSome: (value) => value.getTime(),
+      }),
+      // The live transcript sits in the project directory derived from its own
+      // current cwd; a copy left behind by a move does not. This settles the
+      // choice without depending on mtime, which ties at millisecond precision
+      // and is preserved by ordinary copies.
+      selfConsistent: claudeProjectDirectoryName(cwd) === projectDirectory,
     });
-    if (modified >= newestModified) {
-      newestModified = modified;
-      transcriptPath = candidate;
-    }
-  }
-  if (transcriptPath === null) {
-    return null;
   }
 
-  const stats = yield* fileSystem.stat(transcriptPath).pipe(Effect.option);
-  if (stats._tag !== "Some") return null;
-  const size = Number(stats.value.size);
-  const content = yield* fileSystem
-    .readFileString(transcriptPath)
-    .pipe(Effect.map((text) => (size > CWD_TAIL_BYTES ? text.slice(-CWD_TAIL_BYTES) : text)))
-    .pipe(Effect.orElseSucceed(() => ""));
+  if (candidates.length === 0) return null;
+  const preferred = candidates.filter((candidate) => candidate.selfConsistent);
+  const pool = preferred.length > 0 ? preferred : candidates;
+  return pool.reduce((best, candidate) => (candidate.modified > best.modified ? candidate : best))
+    .cwd;
+});
 
-  const lines = content.split("\n");
+/** The `cwd` on the last entry that carries one, scanning backward. */
+const lastCwdInTranscriptTail = Effect.fn("lastCwdInTranscriptTail")(function* (tail: string) {
+  const lines = tail.split("\n");
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
+    // The first line of a tail slice is usually cut mid-record; it fails to
+    // decode and is skipped like any other unparseable line.
     if (!line || !line.startsWith("{")) continue;
     const decoded = yield* decodeJsonLine(line).pipe(Effect.option);
     if (decoded._tag !== "Some") continue;

@@ -387,7 +387,7 @@ describe("findClaudeSessionCwd", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("prefers the most recently written copy when a stale one is left behind", () =>
+  it.effect("prefers the copy whose project directory matches its own cwd", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -396,20 +396,50 @@ describe("findClaudeSessionCwd", () => {
       const workspaceRoot = "/tmp/project-stale";
       const worktree = "/tmp/project-stale/.claude/worktrees/feature";
 
+      // The stale copy sits in the old project directory but its content now
+      // reports the worktree, so it is not self-consistent.
       const stalePath = yield* writeTranscript({
         configDirPath,
         cwd: workspaceRoot,
-        lines: [toJsonLine({ type: "assistant", uuid: "a1", cwd: workspaceRoot })],
+        lines: [toJsonLine({ type: "assistant", uuid: "a1", cwd: worktree })],
       });
       const livePath = yield* writeTranscript({
         configDirPath,
         cwd: worktree,
         lines: [toJsonLine({ type: "assistant", uuid: "a2", cwd: worktree })],
       });
-      const staleTime = DateTime.toDate(DateTime.makeUnsafe(1_000));
-      const liveTime = DateTime.toDate(DateTime.makeUnsafe(9_000_000));
-      yield* fileSystem.utimes(stalePath, staleTime, staleTime);
-      yield* fileSystem.utimes(livePath, liveTime, liveTime);
+      // Identical timestamps: a copy left behind by a move preserves them, so
+      // the choice must not depend on mtime or on directory iteration order.
+      const sameTime = DateTime.toDate(DateTime.makeUnsafe(5_000_000));
+      yield* fileSystem.utimes(stalePath, sameTime, sameTime);
+      yield* fileSystem.utimes(livePath, sameTime, sameTime);
+
+      const resolved = yield* findClaudeSessionCwd({ configDirPath, sessionId: SESSION_ID });
+      expect(resolved).toBe(worktree);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads only the tail of a large transcript", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-cwd-large-" });
+      const configDirPath = path.join(root, ".claude");
+      const worktree = "/tmp/project-large/.claude/worktrees/feature";
+      const filler = Array.from({ length: 400 }, (_unused, index) =>
+        toJsonLine({
+          type: "assistant",
+          uuid: `pad-${index}`,
+          cwd: "/tmp/stale-early-cwd",
+          pad: "x".repeat(512),
+        }),
+      );
+
+      yield* writeTranscript({
+        configDirPath,
+        cwd: worktree,
+        lines: [...filler, toJsonLine({ type: "assistant", uuid: "final", cwd: worktree })],
+      });
 
       const resolved = yield* findClaudeSessionCwd({ configDirPath, sessionId: SESSION_ID });
       expect(resolved).toBe(worktree);
