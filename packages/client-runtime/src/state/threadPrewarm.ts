@@ -38,13 +38,13 @@ import {
 import { ThreadSnapshotLoader, type ThreadSnapshotLoadWindow } from "./threadSnapshotHttp.ts";
 
 /**
- * Opportunistic thread-detail prewarming: shortly after an environment
- * connects (and on later app foregrounds), fetch detail snapshots for a few
- * recently active threads and store them in the offline cache. Opening one
- * of those threads then paints instantly from cache and only needs the cheap
- * `afterSequence` socket catch-up instead of blocking on a detail fetch.
+ * Opportunistic thread-detail cache population: shortly after an environment
+ * connects (and on later app foregrounds), fetch bounded snapshots for a few
+ * recently active threads whose detail cache entry is missing. Existing entries
+ * are never refreshed because they may contain explicitly loaded scrollback;
+ * opening them online uses `afterSequence` to reconcile with the server.
  *
- * This is deliberately best-effort: every failure is swallowed after logging,
+ * This is deliberately best-effort: failures are reported in the run status,
  * and the regular open-path reconciliation remains the source of truth.
  */
 
@@ -100,7 +100,7 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
 );
 
 export interface EnvironmentThreadPrewarmStatus {
-  /** Latest successful run; drives the user-facing "last synced" label. */
+  /** Latest successful cache population; drives the user-facing sync label. */
   readonly lastRunAt: number | null;
   /** Completion cursor for manual requests, including unavailable outcomes. */
   readonly lastManualRequestCompletedAt: number | null;
@@ -233,7 +233,9 @@ export function selectPrewarmCandidates(
  * existing entry: the client cannot reliably infer whether it contains
  * explicitly loaded scrollback, and the live open path repairs stale entries.
  */
-export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(function* (
+type PrewarmCommitResult = "populated" | "existing" | "failed";
+
+const commitPrewarmedThreadSnapshotResult = Effect.fn("ThreadPrewarm.commitResult")(function* (
   cache: EnvironmentCacheStore["Service"],
   environmentId: EnvironmentIdType,
   snapshot: OrchestrationThreadDetailSnapshot,
@@ -242,29 +244,52 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
   return yield* withEnvironmentCacheMutationLock(
     cache,
     environmentId,
-    Effect.gen(function* () {
-      const stored = yield* cache
-        .loadThread(environmentId, snapshot.thread.id)
-        .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
-      if (Option.isSome(stored)) return false;
-      // Turn pages are already bounded by a coherent server-selected turn range.
-      // Retaining any row type independently would create gaps that its opaque
-      // cursor cannot recover. Legacy snapshots can safely use client retention
-      // because messageWindow is rewritten with the retained message boundary.
-      const retainedSnapshot =
-        snapshot.page === undefined
-          ? {
-              ...snapshot,
-              thread: retainRecentThreadHistory(
-                snapshot.thread,
-                messageWindowLimit === undefined ? {} : { messageWindowLimit },
-              ),
-            }
-          : snapshot;
-      yield* cache.saveThread(environmentId, retainedSnapshot);
-      return true;
-    }),
+    cache.loadThread(environmentId, snapshot.thread.id).pipe(
+      Effect.matchEffect({
+        // A persistence failure leaves cache existence unknown. Fail closed so
+        // prewarm can never authorize an overwrite from a failed read.
+        onFailure: () => Effect.succeed<PrewarmCommitResult>("failed"),
+        onSuccess: (stored) => {
+          if (Option.isSome(stored)) {
+            return Effect.succeed<PrewarmCommitResult>("existing");
+          }
+          // Turn pages are already bounded by a coherent server-selected turn range.
+          // Retaining any row type independently would create gaps that its opaque
+          // cursor cannot recover. Legacy snapshots can safely use client retention
+          // because messageWindow is rewritten with the retained message boundary.
+          const retainedSnapshot =
+            snapshot.page === undefined
+              ? {
+                  ...snapshot,
+                  thread: retainRecentThreadHistory(
+                    snapshot.thread,
+                    messageWindowLimit === undefined ? {} : { messageWindowLimit },
+                  ),
+                }
+              : snapshot;
+          return cache.saveThread(environmentId, retainedSnapshot).pipe(
+            Effect.as<PrewarmCommitResult>("populated"),
+            Effect.orElseSucceed((): PrewarmCommitResult => "failed"),
+          );
+        },
+      }),
+    ),
   );
+});
+
+export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(function* (
+  cache: EnvironmentCacheStore["Service"],
+  environmentId: EnvironmentIdType,
+  snapshot: OrchestrationThreadDetailSnapshot,
+  messageWindowLimit?: number | null,
+) {
+  const result = yield* commitPrewarmedThreadSnapshotResult(
+    cache,
+    environmentId,
+    snapshot,
+    messageWindowLimit,
+  );
+  return result === "populated";
 });
 
 const waitForPrewarmSession = (
@@ -292,7 +317,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   readonly loader: ThreadSnapshotLoader["Service"];
   readonly environmentId: EnvironmentIdType;
   readonly historyWindow: ThreadHistoryWindowConfig;
-  readonly previousManualRequestCompletedAt: number | null;
+  readonly previousLastRunAt: number | null;
   /** Restricts a targeted (settle-triggered) run to these threads. */
   readonly only?: ReadonlySet<ThreadIdType>;
 }) {
@@ -330,13 +355,22 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
     candidates,
     (thread) =>
       Effect.gen(function* () {
-        const stored = yield* input.cache
-          .loadThread(input.environmentId, thread.id)
-          .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
+        const cacheRead = yield* input.cache.loadThread(input.environmentId, thread.id).pipe(
+          Effect.match({
+            onFailure: () => ({ kind: "failed" as const }),
+            onSuccess: (stored) => ({ kind: "loaded" as const, stored }),
+          }),
+        );
+        // A failed read cannot prove the entry is missing. Do not fetch or write:
+        // failing closed is the only way to preserve populate-only semantics.
+        if (cacheRead.kind === "failed") {
+          failed += 1;
+          return;
+        }
         // Prewarm only fills cold-cache misses. Any existing entry may contain
         // explicitly loaded scrollback that a bounded initial page cannot safely
         // replace, and the live open path will reconcile its freshness.
-        if (Option.isSome(stored)) {
+        if (Option.isSome(cacheRead.stored)) {
           skipped += 1;
           return;
         }
@@ -349,28 +383,29 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           skipped += 1;
           return;
         }
-        const committed = yield* commitPrewarmedThreadSnapshot(
+        const commitResult = yield* commitPrewarmedThreadSnapshotResult(
           input.cache,
           input.environmentId,
           fetched.value,
           input.historyWindow.messageWindowLimit,
-        ).pipe(Effect.orElseSucceed(() => false));
-        if (committed) {
+        );
+        if (commitResult === "populated") {
           refreshed += 1;
-        } else {
+        } else if (commitResult === "existing") {
           skipped += 1;
+        } else {
+          failed += 1;
         }
       }),
     { concurrency: PREWARM_CONCURRENCY, discard: true },
   );
-  const lastRunAt = yield* Clock.currentTimeMillis;
+  const lastRunAt = refreshed > 0 ? yield* Clock.currentTimeMillis : input.previousLastRunAt;
   const status: EnvironmentThreadPrewarmStatus = {
+    ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
     lastRunAt,
-    lastManualRequestCompletedAt: input.previousManualRequestCompletedAt,
     refreshed,
     skipped,
     failed,
-    running: false,
   };
   yield* Effect.logDebug("Prewarmed thread details.").pipe(
     Effect.annotateLogs({
@@ -526,7 +561,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                 loader,
                 environmentId,
                 historyWindow,
-                previousManualRequestCompletedAt: previous.lastManualRequestCompletedAt,
+                previousLastRunAt: previous.lastRunAt,
                 ...(runFull ? {} : { only: batch.settled }),
               }).pipe(
                 Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
@@ -553,7 +588,8 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
               if (attempt.kind === "completed" && attempt.status !== null) {
                 settled = attempt.status;
                 if (consumeCooldown) {
-                  yield* Ref.set(lastFullRunAt, settled.lastRunAt);
+                  const completedAt = yield* Clock.currentTimeMillis;
+                  yield* Ref.set(lastFullRunAt, completedAt);
                 }
               } else if (attempt.kind === "timed-out") {
                 yield* Effect.logWarning("Thread prewarm run timed out.").pipe(
@@ -649,12 +685,12 @@ export function createEnvironmentThreadPrewarmAtoms<R, E>(
 }
 
 export interface ThreadPrewarmSummary {
-  /** Latest completed run across environments, or null before the first. */
+  /** Latest successful cache population across environments. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
   /** True while any environment has a prewarm run in flight. */
   readonly syncing: boolean;
-  /** Per-environment successful-run timestamps. */
+  /** Per-environment successful-population timestamps. */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
   /** Per-environment cursors used to track manual request completion. */
   readonly environmentLastManualRequestCompletedAt: ReadonlyMap<EnvironmentIdType, number | null>;
@@ -720,7 +756,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       refreshed += status.refreshed;
       syncing ||= status.running;
       // A stream restart re-emits the empty baseline to clear a stranded
-      // `running`. Successful-run and manual-completion cursors must survive
+      // `running`. Successful-population and manual-completion cursors must survive
       // that baseline so labels do not roll back and pending requests do not
       // observe a false completion.
       const environmentLastRun =

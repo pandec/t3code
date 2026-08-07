@@ -194,16 +194,33 @@ function retainedFixtureSnapshot(protocol: "turn" | "legacy"): OrchestrationThre
 const makeCacheStore = Effect.fn("TestThreadPrewarm.makeCacheStore")(function* (options: {
   readonly shell: Option.Option<OrchestrationShellSnapshot>;
   readonly threads?: ReadonlyArray<OrchestrationThreadDetailSnapshot>;
+  readonly failThreadRead?: { readonly threadId: string; readonly attempt: number };
 }) {
   const stored = yield* Ref.make<ReadonlyMap<string, OrchestrationThreadDetailSnapshot>>(
     new Map((options.threads ?? []).map((snapshot) => [snapshot.thread.id, snapshot])),
   );
   const saveCalls = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
+  const readAttempts = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const cache = Persistence.EnvironmentCacheStore.of({
     loadShell: () => Effect.succeed(options.shell),
     saveShell: () => Effect.void,
     loadThread: (_environmentId, threadId) =>
-      Ref.get(stored).pipe(Effect.map((map) => Option.fromNullishOr(map.get(threadId)))),
+      Ref.modify(readAttempts, (attempts) => {
+        const attempt = (attempts.get(threadId) ?? 0) + 1;
+        return [attempt, new Map(attempts).set(threadId, attempt)] as const;
+      }).pipe(
+        Effect.flatMap((attempt) =>
+          options.failThreadRead?.threadId === threadId &&
+          options.failThreadRead.attempt === attempt
+            ? Effect.fail(
+                new Persistence.ConnectionPersistenceError({
+                  operation: "load-thread",
+                  message: "transient read failure",
+                }),
+              )
+            : Ref.get(stored).pipe(Effect.map((map) => Option.fromNullishOr(map.get(threadId)))),
+        ),
+      ),
     saveThread: (_environmentId, snapshot) =>
       Ref.update(saveCalls, (calls) => [...calls, snapshot]).pipe(
         Effect.andThen(Ref.update(stored, (map) => new Map(map).set(snapshot.thread.id, snapshot))),
@@ -275,6 +292,43 @@ describe("commitPrewarmedThreadSnapshot", () => {
       expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, missing)).toBe(true);
       expect((yield* Ref.get(stored)).get("thread-missing")).toEqual(missing);
       expect(yield* Ref.get(saveCalls)).toEqual([missing]);
+    }),
+  );
+
+  it.effect("fails closed when the commit-time cache read fails", () =>
+    Effect.gen(function* () {
+      const snapshot = detailSnapshot("thread-read-failure", 8);
+      const { cache, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        failThreadRead: { threadId: snapshot.thread.id, attempt: 1 },
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, snapshot)).toBe(false);
+      expect(yield* Ref.get(saveCalls)).toEqual([]);
+    }),
+  );
+
+  it.effect("preserves a live entry when the commit-time cache read fails", () =>
+    Effect.gen(function* () {
+      const prewarm = detailSnapshot("thread-race-read", 10);
+      const live = detailSnapshot("thread-race-read", 11);
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        failThreadRead: { threadId: prewarm.thread.id, attempt: 2 },
+      });
+
+      // The preliminary read authorizes the fetch, then live persistence wins the
+      // lock before prewarm reaches its commit-time existence check.
+      expect(Option.isNone(yield* cache.loadThread(ENVIRONMENT_ID, prewarm.thread.id))).toBe(true);
+      yield* withEnvironmentCacheMutationLock(
+        cache,
+        ENVIRONMENT_ID,
+        cache.saveThread(ENVIRONMENT_ID, live),
+      );
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, prewarm)).toBe(false);
+      expect((yield* Ref.get(stored)).get(prewarm.thread.id)).toEqual(live);
+      expect(yield* Ref.get(saveCalls)).toEqual([live]);
     }),
   );
 
@@ -425,6 +479,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     readonly historyWindow?: ThreadHistoryWindow["Service"];
     readonly runGate?: ThreadPrewarmRunGate["Service"];
     readonly environmentId?: EnvironmentId;
+    readonly failStaleThreadReadOnAttempt?: number;
   }) {
     const environmentId = options?.environmentId ?? ENVIRONMENT_ID;
     const target = new PrimaryConnectionTarget({
@@ -459,9 +514,18 @@ describe("makeEnvironmentThreadPrewarm", () => {
       // Existing entries are never fetched or replaced; "stale" is absent and
       // therefore exercises cold-cache population.
       threads: [detailSnapshot("current", 10)],
+      ...(options?.failStaleThreadReadOnAttempt === undefined
+        ? {}
+        : {
+            failThreadRead: {
+              threadId: "stale",
+              attempt: options.failStaleThreadReadOnAttempt,
+            },
+          }),
     });
     const loaderCalls = yield* Ref.make<ReadonlyArray<string>>([]);
     const loaderWindows = yield* Ref.make<ReadonlyArray<ThreadSnapshotLoadWindow | undefined>>([]);
+    const snapshotAvailable = yield* Ref.make(true);
     const loader = ThreadSnapshotLoader.of({
       load: (_prepared, threadId, window) =>
         Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
@@ -479,8 +543,14 @@ describe("makeEnvironmentThreadPrewarm", () => {
           Effect.andThen(
             options?.hangSnapshotLoad === true
               ? Effect.never
-              : Effect.succeed(
-                  Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+              : Ref.get(snapshotAvailable).pipe(
+                  Effect.map((available) =>
+                    available
+                      ? Option.some(
+                          options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10),
+                        )
+                      : Option.none(),
+                  ),
                 ),
           ),
         ),
@@ -561,6 +631,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       saveCalls,
       loaderCalls,
       loaderWindows,
+      snapshotAvailable,
       initialStatus,
       fire,
     };
@@ -597,6 +668,26 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect((yield* Ref.get(harness.saveCalls)).map((snapshot) => snapshot.thread.id)).toEqual([
           "stale",
         ]);
+      }),
+    ),
+  );
+
+  it.effect("counts a commit-time cache read failure as failed without writing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ failStaleThreadReadOnAttempt: 2 });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(0);
+        expect(status.skipped).toBe(1);
+        expect(status.failed).toBe(1);
+        expect(status.lastRunAt).toBe(null);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
+        expect(yield* Ref.get(harness.saveCalls)).toEqual([]);
       }),
     ),
   );
@@ -1088,6 +1179,62 @@ describe("makeEnvironmentThreadPrewarm", () => {
         yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
         expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("does not advance lastRunAt when every manual candidate is already cached", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        const initial = yield* Queue.take(harness.statuses);
+        expect(initial.refreshed).toBe(1);
+        expect(initial.lastRunAt).not.toBe(null);
+
+        yield* TestClock.adjust("1 second");
+        yield* harness.fire({ reason: "manual" });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(0);
+        expect(status.skipped).toBe(2);
+        expect(status.lastRunAt).toBe(initial.lastRunAt);
+        expect(status.lastManualRequestCompletedAt).not.toBe(null);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
+      }),
+    ),
+  );
+
+  it.effect("preserves the previous lastRunAt when every loader returns no snapshot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        const initial = yield* Queue.take(harness.statuses);
+        expect(initial.refreshed).toBe(1);
+        expect(initial.lastRunAt).not.toBe(null);
+
+        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
+        yield* Ref.set(harness.snapshotAvailable, false);
+        yield* TestClock.adjust("1 second");
+        yield* harness.fire({ reason: "manual" });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(0);
+        expect(status.failed).toBe(1);
+        expect(status.lastRunAt).toBe(initial.lastRunAt);
+        expect(status.lastManualRequestCompletedAt).not.toBe(null);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
       }),
     ),
   );
