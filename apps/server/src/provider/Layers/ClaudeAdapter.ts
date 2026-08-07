@@ -1879,12 +1879,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context: ClaudeSessionContext,
     nextCwd: string,
     options?: {
-      readonly reportedPreviousCwd?: string;
-      readonly trigger?: "worktree-tool" | "turn-completed" | "cwd-changed-hook";
+      readonly trigger?: "worktree-tool" | "turn-completed";
     },
   ) {
     const threadId = context.session.threadId;
-    const reportedPreviousCwd = options?.reportedPreviousCwd;
     const previousCwd = context.session.cwd;
     if (previousCwd === nextCwd) {
       // Not necessarily a no-op: a read that lands before the transcript
@@ -1907,7 +1905,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     yield* Effect.logInfo("claude.session.cwd-changed", {
       threadId,
-      previousCwd: previousCwd ?? reportedPreviousCwd ?? null,
+      previousCwd: previousCwd ?? null,
       cwd: nextCwd,
     });
 
@@ -1919,9 +1917,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       threadId,
       payload: {
         cwd: nextCwd,
-        ...((previousCwd ?? reportedPreviousCwd)
-          ? { previousCwd: previousCwd ?? reportedPreviousCwd }
-          : {}),
         ...(context.session.sessionGenerationId !== undefined
           ? { sessionGenerationId: context.session.sessionGenerationId }
           : {}),
@@ -3177,11 +3172,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         movesSessionWorkingDirectory(tool.toolName) &&
         message.parent_tool_use_id == null
       ) {
-        // Try immediately for a responsive UI, and mark the turn so the move
-        // is confirmed at its boundary: the transcript entry recording it has
-        // been observed landing after the tool result reaches us, and a read
-        // that lands early concludes nothing moved.
-        context.cwdReconcilePending = true;
+        // Try immediately for a responsive UI. The flag set when the tool
+        // started confirms the move at the turn boundary because the
+        // transcript entry can land after this result reaches us.
         yield* reconcileSessionCwdFromTranscript(context, "worktree-tool");
       }
 
@@ -4457,71 +4450,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return {};
       };
 
-      /**
-       * The session can move itself between directories mid-run (the agent
-       * entering, switching, or leaving a worktree). Claude Code stores a
-       * transcript under the project directory derived from the session's cwd,
-       * so a move that T3 does not record leaves the persisted cwd pointing at
-       * the wrong project directory and the next cold resume fails to find the
-       * conversation at all. Record every move so the binding follows the
-       * session.
-       */
-      const recordSessionCwdChange = Effect.fn("ClaudeAdapter.recordSessionCwdChangeFromHook")(
-        function* (nextCwd: string, reportedPreviousCwd: string | undefined) {
-          const context = yield* Ref.get(contextRef);
-          if (!context || context.stopped) {
-            // Hooks are registered with the query before the session context is
-            // published, so a very early move has nowhere to land. Log it rather
-            // than dropping it silently — the persisted cwd would be wrong and
-            // there would be nothing to explain why.
-            yield* Effect.logWarning("claude.session.cwd-change-unrecorded", {
-              threadId,
-              cwd: nextCwd,
-              reason: context ? "session-stopped" : "context-not-ready",
-            });
-            return;
-          }
-          yield* recordSessionCwd(context, nextCwd, {
-            ...(reportedPreviousCwd !== undefined ? { reportedPreviousCwd } : {}),
-            trigger: "cwd-changed-hook",
-          });
-        },
-      );
-
-      const cwdChangedHook: HookCallback = async (hookInput) => {
-        try {
-          if (hookInput.hook_event_name !== "CwdChanged") {
-            return {};
-          }
-          // Subagents run with their own cwd; only the main thread's directory
-          // decides where the resumable transcript lives.
-          if (hookInput.agent_id !== undefined) {
-            return {};
-          }
-          const nextCwd = hookInput.new_cwd.trim();
-          if (nextCwd.length === 0) {
-            return {};
-          }
-          const previousCwd = hookInput.old_cwd.trim();
-          // Awaited rather than forked: the move must be recorded before the
-          // session can proceed to a state that discards it. A detached fiber
-          // loses the final directory change when the agent leaves a worktree
-          // as its last act and the session then exits, which is exactly the
-          // case this fix exists for.
-          await runPromise(
-            recordSessionCwdChange(nextCwd, previousCwd.length > 0 ? previousCwd : undefined),
-          );
-        } catch (cause) {
-          runFork(
-            Effect.logWarning("claude.session.cwd-changed-hook-failed", {
-              threadId,
-              cause,
-            }),
-          );
-        }
-        return {};
-      };
-
       const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
@@ -4588,7 +4516,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         hooks: {
           Stop: [{ hooks: [stopHook] }],
-          CwdChanged: [{ hooks: [cwdChangedHook] }],
         },
         canUseTool,
         env: claudeEnvironment,

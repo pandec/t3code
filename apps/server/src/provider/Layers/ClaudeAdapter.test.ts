@@ -1119,66 +1119,6 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("emits a cwd change when the session moves itself into a worktree", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const workspaceRoot = "/tmp/project";
-      const worktreePath = "/tmp/project/.claude/worktrees/feature";
-
-      const cwdChangedFiber = yield* Stream.filter(
-        adapter.streamEvents,
-        (event) => event.type === "session.cwd.changed",
-      ).pipe(Stream.runHead, Effect.forkChild);
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-        cwd: workspaceRoot,
-      });
-
-      const cwdHook = harness.getLastCreateQueryInput()?.options.hooks?.CwdChanged?.[0]?.hooks[0];
-      assert.isDefined(cwdHook);
-      if (!cwdHook) {
-        return;
-      }
-
-      const baseHookInput = {
-        session_id: "sdk-session-cwd",
-        transcript_path: "/tmp/transcript.jsonl",
-        cwd: workspaceRoot,
-        hook_event_name: "CwdChanged" as const,
-      };
-      const invoke = (input: Record<string, unknown>) =>
-        Effect.promise(() =>
-          cwdHook({ ...baseHookInput, ...input } as never, undefined, {
-            signal: new AbortController().signal,
-          }),
-        );
-
-      // A subagent's directory does not decide where the resumable transcript
-      // lives, so it must not move the session's recorded cwd.
-      const subagentOutput = yield* invoke({
-        old_cwd: workspaceRoot,
-        new_cwd: "/tmp/somewhere-else",
-        agent_id: "agent-1",
-      });
-      assert.deepEqual(subagentOutput, {});
-
-      const hookOutput = yield* invoke({ old_cwd: workspaceRoot, new_cwd: worktreePath });
-      assert.deepEqual(hookOutput, {});
-
-      const event = yield* Fiber.join(cwdChangedFiber);
-      const cwdChanged = Option.getOrUndefined(event);
-      assert.equal(cwdChanged?.type, "session.cwd.changed");
-      assert.deepInclude(cwdChanged?.payload, {
-        cwd: worktreePath,
-        previousCwd: workspaceRoot,
-      });
-    }).pipe(Effect.provide(harness.layer), Effect.scoped);
-  });
-
   it.effect("reports the latest Stop hook pending-work state on turn completion", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
