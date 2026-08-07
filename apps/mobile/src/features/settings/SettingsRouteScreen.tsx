@@ -633,8 +633,8 @@ function useMinuteClockMs(): number {
  * Manual counterpart of the automatic thread prewarming: fires the same
  * engine on demand (bypassing its cooldown) and shows when any environment
  * last completed a warm run. The engine debounces briefly before running, so
- * the row stays in "Syncing…" until a fresher run timestamp arrives — and it
- * reports background runs the same way, matching the home header indicator.
+ * the row tracks a separate manual-completion cursor until that request reaches
+ * a terminal outcome without treating unavailable attempts as successful syncs.
  */
 const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
 
@@ -645,7 +645,7 @@ function ThreadSyncRow() {
   const nowMs = useMinuteClockMs();
   const syncInFlight = useRef(false);
   const [requestedFrom, setRequestedFrom] = useState<
-    ThreadPrewarmSummary["environmentLastRunAt"] | null
+    ThreadPrewarmSummary["environmentLastManualRequestCompletedAt"] | null
   >(null);
 
   // Manual requests are tracked separately from the engine's own in-flight
@@ -653,7 +653,10 @@ function ThreadSyncRow() {
   // covers the gap between the tap and the run.
   const manualSyncing =
     requestedFrom !== null &&
-    !didEnvironmentPrewarmRunsAdvance(summary.environmentLastRunAt, requestedFrom);
+    !didEnvironmentPrewarmRunsAdvance(
+      summary.environmentLastManualRequestCompletedAt,
+      requestedFrom,
+    );
   const syncing = manualSyncing || summary.syncing;
 
   useEffect(() => {
@@ -685,7 +688,7 @@ function ThreadSyncRow() {
       onPress={() => {
         if (syncInFlight.current) return;
         syncInFlight.current = true;
-        setRequestedFrom(new Map(summary.environmentLastRunAt));
+        setRequestedFrom(new Map(summary.environmentLastManualRequestCompletedAt));
         void fireTrigger({ reason: "manual" });
       }}
     >

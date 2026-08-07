@@ -32,6 +32,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { ThreadSnapshotLoadWindow } from "./threadSnapshotHttp.ts";
 import {
+  commitPrewarmedThreadSnapshot,
   INITIAL_THREAD_USER_TURN_LIMIT,
   makeEnvironmentThreadState,
   OLDER_THREAD_PAGE_USER_TURN_LIMIT,
@@ -154,8 +155,10 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
   readonly initialResponse?: LoaderResponse;
   /** Unwindowed responses served in order (falls back to `initialResponse`). */
   readonly initialResponses?: ReadonlyArray<LoaderResponse>;
-  /** Cached snapshot returned by the cache store (simulates a warm cache). */
+  /** Cached snapshot returned by the default cache store (simulates a warm cache). */
   readonly cached?: OrchestrationThreadDetailSnapshot;
+  /** Existing cache service for persistence-to-cold-start integration tests. */
+  readonly cache?: Persistence.EnvironmentCacheStore["Service"];
   /** Soft ceiling on resident messages for automatic refills. */
   readonly residentMessageCeiling?: number | null;
   /**
@@ -232,22 +235,24 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     disconnect: Effect.void,
     retryNow: Effect.void,
   } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
-  const cache = Persistence.EnvironmentCacheStore.of({
-    loadShell: () => Effect.succeed(Option.none()),
-    saveShell: () => Effect.void,
-    loadThread: () =>
-      Effect.succeed(options?.cached !== undefined ? Option.some(options.cached) : Option.none()),
-    saveThread: (_environmentId, thread) =>
-      Ref.update(savedThreads, (current) => [...current, thread]),
-    removeThread: () => Effect.void,
-    loadServerConfig: () => Effect.succeed(Option.none()),
-    saveServerConfig: () => Effect.void,
-    loadVcsRefs: () => Effect.succeed(Option.none()),
-    saveVcsRefs: () => Effect.void,
-    removeVcsRefs: () => Effect.void,
-    clearVcsRefs: () => Effect.void,
-    clear: () => Effect.void,
-  });
+  const cache =
+    options?.cache ??
+    Persistence.EnvironmentCacheStore.of({
+      loadShell: () => Effect.succeed(Option.none()),
+      saveShell: () => Effect.void,
+      loadThread: () =>
+        Effect.succeed(options?.cached !== undefined ? Option.some(options.cached) : Option.none()),
+      saveThread: (_environmentId, thread) =>
+        Ref.update(savedThreads, (current) => [...current, thread]),
+      removeThread: () => Effect.void,
+      loadServerConfig: () => Effect.succeed(Option.none()),
+      saveServerConfig: () => Effect.void,
+      loadVcsRefs: () => Effect.succeed(Option.none()),
+      saveVcsRefs: () => Effect.void,
+      removeVcsRefs: () => Effect.void,
+      clearVcsRefs: () => Effect.void,
+      clear: () => Effect.void,
+    });
   const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
@@ -358,6 +363,56 @@ describe("thread pagination state", () => {
       expect(turnWindow(windows[0])?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
       const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
       expect(subscribeInput?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
+    }),
+  );
+
+  it.effect("keeps a turn page usable after a legacy prewarm attempt and cold start", () =>
+    Effect.gen(function* () {
+      const stored = yield* Ref.make<OrchestrationThreadDetailSnapshot>(WINDOWED_SNAPSHOT);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: () => Effect.void,
+        loadThread: () => Ref.get(stored).pipe(Effect.map(Option.some)),
+        saveThread: (_environmentId, snapshot) => Ref.set(stored, snapshot),
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const legacyAttempt: OrchestrationThreadDetailSnapshot = {
+        snapshotSequence: 20,
+        thread: {
+          ...BASE_THREAD,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: RECENT_MESSAGE.id,
+            totalCount: 20,
+          },
+        },
+      };
+
+      expect(
+        yield* commitPrewarmedThreadSnapshot(cache, TARGET.environmentId, legacyAttempt, 150),
+      ).toBe(false);
+      const cached = yield* Ref.get(stored);
+      expect(cached.page).toEqual(WINDOWED_SNAPSHOT.page);
+      expect(cached.thread.messageWindow).toBeUndefined();
+
+      const harness = yield* makeHarness({
+        cache,
+        paginationCapability: true,
+      });
+      const state = yield* harness.awaitState((value) => Option.isSome(value.page));
+      expect(Option.getOrThrow(state.page).beforeCursor).toBe("cursor-1");
+      yield* Effect.yieldNow;
+      const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
+      expect(subscribeInput?.afterSequence).toBe(10);
+      expect(subscribeInput?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
+      expect(subscribeInput?.messageLimit).toBeUndefined();
     }),
   );
 
