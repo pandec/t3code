@@ -4,6 +4,7 @@ import {
   threadEventCoalescingLayer,
   threadHistoryWindowLayer,
   threadMessagePageLoaderLayer,
+  threadPrewarmRunGateLayer,
   threadPrewarmTriggersLayer,
   threadSnapshotLoaderLayer,
 } from "@t3tools/client-runtime/state/threads";
@@ -39,6 +40,7 @@ const mobileThreadEventCoalescingLayer = threadEventCoalescingLayer({
 type ConnectionLayerSource =
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
+  | typeof threadPrewarmRunGateLayer
   | typeof threadPrewarmTriggersLayer
   | typeof mobileThreadHistoryWindowLayer
   | typeof mobileThreadEventCoalescingLayer
@@ -50,6 +52,7 @@ type ConnectionLayerSource =
 const providedClientConnectionLayer = Layer.mergeAll(
   Connection.layer,
   snapshotLoaderLayer,
+  threadPrewarmRunGateLayer,
   threadPrewarmTriggersLayer,
   mobileThreadEventCoalescingLayer,
 ).pipe(
