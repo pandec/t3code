@@ -27,6 +27,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadMessagePageLoader } from "./threadMessagesHttp.ts";
@@ -412,42 +413,48 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
-    const stored = yield* cache.loadThread(environmentId, threadId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not inspect the thread cache before persisting.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-          Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
-        ),
-      ),
-    );
-    if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
-      return;
-    }
-    // Never trim a windowed snapshot: its cursor and its rows must stay in
-    // agreement or a cache restore would page from the wrong boundary.
-    const retainedSnapshot =
-      snapshot.page === undefined
-        ? {
-            ...snapshot,
-            thread: retainRecentThreadHistory(snapshot.thread, {
-              messageWindowLimit: historyWindow.messageWindowLimit,
-            }),
-          }
-        : snapshot;
-    yield* cache.saveThread(environmentId, retainedSnapshot).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not persist the thread cache.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      Effect.gen(function* () {
+        const stored = yield* cache.loadThread(environmentId, threadId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not inspect the thread cache before persisting.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+              Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
+            ),
+          ),
+        );
+        if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
+          return;
+        }
+        // Never trim a windowed snapshot: its cursor and its rows must stay in
+        // agreement or a cache restore would page from the wrong boundary.
+        const retainedSnapshot =
+          snapshot.page === undefined
+            ? {
+                ...snapshot,
+                thread: retainRecentThreadHistory(snapshot.thread, {
+                  messageWindowLimit: historyWindow.messageWindowLimit,
+                }),
+              }
+            : snapshot;
+        yield* cache.saveThread(environmentId, retainedSnapshot).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not persist the thread cache.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+            ),
+          ),
+        );
+      }),
     );
   });
 
@@ -600,7 +607,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         settledCount: current.olderMessages.settledCount,
       },
     }));
-    yield* cache.removeThread(environmentId, threadId).pipe(
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      cache.removeThread(environmentId, threadId),
+    ).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(
           Effect.annotateLogs({

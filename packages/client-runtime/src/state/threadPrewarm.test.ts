@@ -30,6 +30,7 @@ import {
 } from "../connection/model.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import * as Persistence from "../platform/persistence.ts";
 import {
   advanceThreadStreamingSnapshot,
@@ -155,14 +156,21 @@ function retainedFixtureSnapshot(protocol: "turn" | "legacy"): OrchestrationThre
     kind: "command",
     summary: `Ran command ${index}`,
     payload: {},
-    turnId: TurnId.make(`turn-${index}`),
+    turnId: TurnId.make(`turn-${index % messages.length}`),
     sequence: index,
     createdAt: "2026-04-01T00:00:00.000Z",
   }));
   return {
     ...snapshot,
     ...(protocol === "turn"
-      ? { page: { beforeCursor: "cursor-1", hasMore: true, snapshotSequence: 10 } }
+      ? {
+          page: {
+            beforeCursor: "cursor-1",
+            hasMore: false,
+            snapshotSequence: 10,
+            threadSequence: 10,
+          },
+        }
       : {}),
     thread: {
       ...snapshot.thread,
@@ -188,13 +196,16 @@ const makeCacheStore = Effect.fn("TestThreadPrewarm.makeCacheStore")(function* (
   const stored = yield* Ref.make<ReadonlyMap<string, OrchestrationThreadDetailSnapshot>>(
     new Map((options.threads ?? []).map((snapshot) => [snapshot.thread.id, snapshot])),
   );
+  const saveCalls = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const cache = Persistence.EnvironmentCacheStore.of({
     loadShell: () => Effect.succeed(options.shell),
     saveShell: () => Effect.void,
     loadThread: (_environmentId, threadId) =>
       Ref.get(stored).pipe(Effect.map((map) => Option.fromNullishOr(map.get(threadId)))),
     saveThread: (_environmentId, snapshot) =>
-      Ref.update(stored, (map) => new Map(map).set(snapshot.thread.id, snapshot)),
+      Ref.update(saveCalls, (calls) => [...calls, snapshot]).pipe(
+        Effect.andThen(Ref.update(stored, (map) => new Map(map).set(snapshot.thread.id, snapshot))),
+      ),
     removeThread: () => Effect.void,
     loadServerConfig: () => Effect.succeed(Option.none()),
     saveServerConfig: () => Effect.void,
@@ -204,7 +215,7 @@ const makeCacheStore = Effect.fn("TestThreadPrewarm.makeCacheStore")(function* (
     clearVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  return { cache, stored };
+  return { cache, stored, saveCalls };
 });
 
 describe("selectPrewarmCandidates", () => {
@@ -253,7 +264,7 @@ describe("commitPrewarmedThreadSnapshot", () => {
     }),
   );
 
-  it.effect("retains bounded history without mixing pagination metadata", () =>
+  it.effect("retains only legacy history and preserves protocol metadata", () =>
     Effect.gen(function* () {
       const { cache, stored } = yield* makeCacheStore({ shell: Option.none() });
 
@@ -275,12 +286,13 @@ describe("commitPrewarmedThreadSnapshot", () => {
       ).toBe(true);
 
       const turn = (yield* Ref.get(stored)).get("thread-turn");
-      expect(turn?.thread.activities).toHaveLength(500);
+      expect(turn?.thread.activities).toHaveLength(501);
       expect(turn?.thread.messages).toHaveLength(3);
       expect(turn?.page).toEqual({
         beforeCursor: "cursor-1",
-        hasMore: true,
+        hasMore: false,
         snapshotSequence: 10,
+        threadSequence: 10,
       });
       expect(turn?.thread.messageWindow).toBeUndefined();
 
@@ -296,6 +308,227 @@ describe("commitPrewarmedThreadSnapshot", () => {
         oldestLoadedMessageId: "message-1",
         totalCount: 10,
       });
+    }),
+  );
+
+  it.effect("does not replace wider cached turn history after unrelated global activity", () =>
+    Effect.gen(function* () {
+      const wider = {
+        ...retainedFixtureSnapshot("turn"),
+        snapshotSequence: 100,
+        page: {
+          beforeCursor: "cursor-wider",
+          hasMore: true,
+          snapshotSequence: 100,
+          threadSequence: 50,
+        },
+      };
+      const fetched = {
+        ...wider,
+        snapshotSequence: 110,
+        page: {
+          beforeCursor: "cursor-initial",
+          hasMore: true,
+          snapshotSequence: 110,
+          threadSequence: 50,
+        },
+        thread: {
+          ...wider.thread,
+          messages: wider.thread.messages.slice(-1),
+        },
+      };
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        threads: [wider],
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
+      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(wider);
+      expect(yield* Ref.get(saveCalls)).toEqual([]);
+    }),
+  );
+
+  it.effect("uses thread activity rather than unrelated global activity for turn freshness", () =>
+    Effect.gen(function* () {
+      const storedSnapshot = {
+        ...retainedFixtureSnapshot("turn"),
+        snapshotSequence: 100,
+        page: {
+          beforeCursor: "cursor-stored",
+          hasMore: true,
+          snapshotSequence: 100,
+          threadSequence: 50,
+        },
+      };
+      const fetched = {
+        ...storedSnapshot,
+        snapshotSequence: 110,
+        page: {
+          beforeCursor: "cursor-fetched",
+          hasMore: true,
+          snapshotSequence: 110,
+          threadSequence: 50,
+        },
+      };
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        threads: [storedSnapshot],
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
+      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(storedSnapshot);
+      expect(yield* Ref.get(saveCalls)).toEqual([]);
+    }),
+  );
+
+  it.effect("persists a turn page when its thread changed after the cached snapshot", () =>
+    Effect.gen(function* () {
+      const storedSnapshot = {
+        ...retainedFixtureSnapshot("turn"),
+        snapshotSequence: 100,
+        page: {
+          beforeCursor: "cursor-stored",
+          hasMore: true,
+          snapshotSequence: 100,
+          threadSequence: 50,
+        },
+      };
+      const fetched = {
+        ...storedSnapshot,
+        snapshotSequence: 110,
+        page: {
+          beforeCursor: "cursor-fetched",
+          hasMore: true,
+          snapshotSequence: 110,
+          threadSequence: 101,
+        },
+      };
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        threads: [storedSnapshot],
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(true);
+      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(fetched);
+      expect(yield* Ref.get(saveCalls)).toEqual([fetched]);
+    }),
+  );
+
+  it.effect("refreshes an equally bounded turn window after it slides forward", () =>
+    Effect.gen(function* () {
+      const storedSnapshot = {
+        ...retainedFixtureSnapshot("turn"),
+        snapshotSequence: 100,
+        page: {
+          beforeCursor: "cursor-stored",
+          hasMore: true,
+          snapshotSequence: 100,
+          threadSequence: 50,
+        },
+      };
+      const fetched = {
+        ...storedSnapshot,
+        snapshotSequence: 110,
+        page: {
+          beforeCursor: "cursor-fetched",
+          hasMore: true,
+          snapshotSequence: 110,
+          threadSequence: 101,
+        },
+        thread: {
+          ...storedSnapshot.thread,
+          messages: storedSnapshot.thread.messages.map((message, index) => ({
+            ...message,
+            id: MessageId.make(`new-message-${index}`),
+          })),
+        },
+      };
+      const { cache, stored } = yield* makeCacheStore({
+        shell: Option.none(),
+        threads: [storedSnapshot],
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(true);
+      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(fetched);
+    }),
+  );
+
+  it.effect("serializes the cache comparison with live persistence", () =>
+    Effect.gen(function* () {
+      const initial = detailSnapshot("thread-race", 100);
+      const prewarm = detailSnapshot("thread-race", 110);
+      const live = detailSnapshot("thread-race", 111);
+      const stored = yield* Ref.make<Option.Option<OrchestrationThreadDetailSnapshot>>(
+        Option.some(initial),
+      );
+      const prewarmLoaded = yield* Deferred.make<void>();
+      const releasePrewarmLoad = yield* Deferred.make<void>();
+      const saveOrder = yield* Ref.make<ReadonlyArray<number>>([]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: () => Effect.void,
+        loadThread: () =>
+          Deferred.succeed(prewarmLoaded, undefined).pipe(
+            Effect.andThen(Deferred.await(releasePrewarmLoad)),
+            Effect.andThen(Ref.get(stored)),
+          ),
+        saveThread: (_environmentId, snapshot) =>
+          Ref.update(saveOrder, (order) => [...order, snapshot.snapshotSequence]).pipe(
+            Effect.andThen(Ref.set(stored, Option.some(snapshot))),
+          ),
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+
+      const prewarmFiber = yield* commitPrewarmedThreadSnapshot(
+        cache,
+        ENVIRONMENT_ID,
+        prewarm,
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(prewarmLoaded);
+      const liveFiber = yield* withEnvironmentCacheMutationLock(
+        cache,
+        ENVIRONMENT_ID,
+        cache.saveThread(ENVIRONMENT_ID, live),
+      ).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(saveOrder)).toEqual([]);
+
+      yield* Deferred.succeed(releasePrewarmLoad, undefined);
+      yield* Fiber.join(prewarmFiber);
+      yield* Fiber.join(liveFiber);
+      expect(yield* Ref.get(saveOrder)).toEqual([110, 111]);
+      expect(Option.getOrThrow(yield* Ref.get(stored)).snapshotSequence).toBe(111);
+    }),
+  );
+
+  it.effect("does not downgrade a cached turn page to legacy metadata", () =>
+    Effect.gen(function* () {
+      const turn = retainedFixtureSnapshot("turn");
+      const legacy = {
+        ...retainedFixtureSnapshot("legacy"),
+        snapshotSequence: 20,
+        thread: {
+          ...retainedFixtureSnapshot("legacy").thread,
+          id: turn.thread.id,
+        },
+      };
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
+        shell: Option.none(),
+        threads: [turn],
+      });
+
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, legacy, 150)).toBe(false);
+      const persisted = (yield* Ref.get(stored)).get(turn.thread.id);
+      expect(persisted?.page).toEqual(turn.page);
+      expect(persisted?.thread.messageWindow).toBeUndefined();
+      expect(yield* Ref.get(saveCalls)).toEqual([]);
     }),
   );
 });
@@ -338,9 +571,29 @@ describe("makeEnvironmentThreadPrewarm", () => {
     readonly cachedShell?: false;
     readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
     readonly hangSnapshotLoad?: boolean;
+    readonly snapshotLoadStarted?: Deferred.Deferred<void>;
+    readonly releaseSnapshotLoad?: Deferred.Deferred<void>;
     readonly paginationCapability?: boolean;
+    readonly initialSession?: "none";
     readonly historyWindow?: ThreadHistoryWindow["Service"];
+    readonly runGate?: ThreadPrewarmRunGate["Service"];
+    readonly environmentId?: EnvironmentId;
   }) {
+    const environmentId = options?.environmentId ?? ENVIRONMENT_ID;
+    const target = new PrimaryConnectionTarget({
+      environmentId,
+      label: `Test environment ${environmentId}`,
+      httpBaseUrl: `https://${environmentId}.example.test`,
+      wsBaseUrl: `wss://${environmentId}.example.test`,
+    });
+    const preparedConnection: PreparedConnection = {
+      environmentId,
+      label: target.label,
+      httpBaseUrl: target.httpBaseUrl,
+      socketUrl: target.wsBaseUrl,
+      httpAuthorization: null,
+      target,
+    };
     const shell: OrchestrationShellSnapshot = {
       snapshotSequence: 10,
       projects: [],
@@ -367,6 +620,16 @@ describe("makeEnvironmentThreadPrewarm", () => {
         Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
           Effect.andThen(Ref.update(loaderWindows, (windows) => [...windows, window])),
           Effect.andThen(
+            options?.snapshotLoadStarted === undefined
+              ? Effect.void
+              : Deferred.succeed(options.snapshotLoadStarted, undefined),
+          ),
+          Effect.andThen(
+            options?.releaseSnapshotLoad === undefined
+              ? Effect.void
+              : Deferred.await(options.releaseSnapshotLoad),
+          ),
+          Effect.andThen(
             options?.hangSnapshotLoad === true
               ? Effect.never
               : Effect.succeed(
@@ -379,17 +642,21 @@ describe("makeEnvironmentThreadPrewarm", () => {
       AVAILABLE_CONNECTION_STATE,
     );
     const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
-      options?.initialPrepared ?? Option.some(PREPARED),
+      options?.initialPrepared ?? Option.some(preparedConnection),
     );
-    const session = yield* SubscriptionRef.make(
-      Option.some({
+    const makeSession = (paginationCapability: boolean) =>
+      ({
         initialConfig: Effect.succeed({
-          threadSnapshotPagination: options?.paginationCapability === true,
+          threadSnapshotPagination: paginationCapability,
         } as never),
-      } as never),
+      }) as never;
+    const session = yield* SubscriptionRef.make(
+      options?.initialSession === "none"
+        ? Option.none()
+        : Option.some(makeSession(options?.paginationCapability === true)),
     );
     const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-      target: TARGET,
+      target,
       state: supervisorState,
       session,
       prepared,
@@ -409,6 +676,10 @@ describe("makeEnvironmentThreadPrewarm", () => {
       Effect.provideService(Persistence.EnvironmentCacheStore, cache),
       Effect.provideService(ThreadSnapshotLoader, loader),
       Effect.provideService(ThreadHistoryWindow, options?.historyWindow ?? TEST_HISTORY_WINDOW),
+      Effect.provideService(
+        ThreadPrewarmRunGate,
+        options?.runGate ?? ThreadPrewarmRunGate.of({ run: (effect) => effect }),
+      ),
       Effect.provideService(
         ConnectionWakeups.ConnectionWakeups,
         ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
@@ -433,6 +704,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
     return {
       supervisorState,
       prepared,
+      session,
+      setSessionCapability: (supported: boolean) =>
+        SubscriptionRef.set(session, Option.some(makeSession(supported))),
       wakeups,
       statuses,
       started,
@@ -509,6 +783,84 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(windows).toEqual([{ messageLimit: 150 }]);
         expect(windows.some((window) => window !== undefined && "turnLimit" in window)).toBe(false);
       }),
+    ),
+  );
+
+  it.effect("waits for a session before selecting the snapshot protocol", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ initialSession: "none" });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.started);
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([]);
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
+
+        yield* harness.setSessionCapability(true);
+        yield* Effect.yieldNow;
+        expect((yield* Queue.take(harness.statuses)).refreshed).toBe(1);
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([{ turnLimit: 10 }]);
+      }),
+    ),
+  );
+
+  it.effect("does not fail or consume cooldown when the session wait expires", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ initialSession: "none" });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.started);
+        yield* TestClock.adjust("2 seconds");
+
+        const skipped = yield* Queue.take(harness.statuses);
+        expect(skipped.failed).toBe(0);
+        expect(skipped.lastRunAt).toBe(null);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual([]);
+
+        yield* harness.setSessionCapability(true);
+        yield* SubscriptionRef.set(harness.supervisorState, {
+          ...CONNECTED_STATE,
+          generation: 2,
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        expect((yield* Queue.take(harness.statuses)).refreshed).toBe(1);
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([{ turnLimit: 10 }]);
+      }),
+    ),
+  );
+
+  it.effect("does not occupy the shared gate while awaiting a session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runGate = yield* ThreadPrewarmRunGate;
+        const waiting = yield* makeHarness({
+          environmentId: EnvironmentId.make("environment-session-wait"),
+          initialSession: "none",
+          runGate,
+        });
+        const ready = yield* makeHarness({
+          environmentId: EnvironmentId.make("environment-session-ready"),
+          runGate,
+        });
+
+        yield* SubscriptionRef.set(waiting.supervisorState, CONNECTED_STATE);
+        yield* SubscriptionRef.set(ready.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(waiting.started);
+        yield* Queue.take(ready.started);
+
+        expect((yield* Queue.take(ready.statuses)).refreshed).toBe(1);
+        expect(yield* Ref.get(ready.loaderCalls)).toEqual(["stale"]);
+        expect(yield* Ref.get(waiting.loaderCalls)).toEqual([]);
+      }).pipe(Effect.provide(threadPrewarmRunGateLayer)),
     ),
   );
 
@@ -611,6 +963,44 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
         expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
       }),
+    ),
+  );
+
+  it.effect("serializes real environment engines through the shared gate", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runGate = yield* ThreadPrewarmRunGate;
+        const firstLoadStarted = yield* Deferred.make<void>();
+        const releaseFirstLoad = yield* Deferred.make<void>();
+        const first = yield* makeHarness({
+          environmentId: EnvironmentId.make("environment-gate-1"),
+          snapshotLoadStarted: firstLoadStarted,
+          releaseSnapshotLoad: releaseFirstLoad,
+          runGate,
+        });
+        const second = yield* makeHarness({
+          environmentId: EnvironmentId.make("environment-gate-2"),
+          runGate,
+        });
+
+        yield* SubscriptionRef.set(first.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(first.started);
+        yield* Deferred.await(firstLoadStarted);
+
+        yield* SubscriptionRef.set(second.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(second.started);
+        expect(yield* Ref.get(second.loaderCalls)).toEqual([]);
+
+        yield* Deferred.succeed(releaseFirstLoad, undefined);
+        expect((yield* Queue.take(first.statuses)).refreshed).toBe(1);
+        expect((yield* Queue.take(second.statuses)).refreshed).toBe(1);
+        expect(yield* Ref.get(first.loaderCalls)).toEqual(["stale"]);
+        expect(yield* Ref.get(second.loaderCalls)).toEqual(["stale"]);
+      }).pipe(Effect.provide(threadPrewarmRunGateLayer)),
     ),
   );
 

@@ -22,6 +22,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { threadKey } from "./entities.ts";
@@ -52,6 +53,7 @@ const PREWARM_COOLDOWN_MS = 60_000;
 const PREWARM_THREAD_LIMIT = 5;
 const PREWARM_CONCURRENCY = 2;
 const PREWARM_RUN_TIMEOUT_MS = 30_000;
+const PREWARM_SESSION_WAIT_MS = 2_000;
 
 const DEFAULT_PREWARM_HISTORY_WINDOW = {
   messageWindowLimit: DEFAULT_MESSAGE_WINDOW_LIMIT,
@@ -222,12 +224,28 @@ export function selectPrewarmCandidates(
     .slice(0, limit);
 }
 
+function wouldNarrowCachedHistory(
+  stored: OrchestrationThreadDetailSnapshot,
+  fetched: OrchestrationThreadDetailSnapshot,
+): boolean {
+  const storedOldestMessageId = stored.thread.messages[0]?.id;
+  const storedNewestMessageId = stored.thread.messages[stored.thread.messages.length - 1]?.id;
+  if (storedOldestMessageId === undefined || storedNewestMessageId === undefined) {
+    return false;
+  }
+  const fetchedMessageIds = new Set(fetched.thread.messages.map((message) => message.id));
+  // A fetched window that still contains the stored newest message but dropped
+  // the oldest is a narrower version of the same history. No overlap means the
+  // bounded window advanced entirely and may replace the stale cached page.
+  return (
+    !fetchedMessageIds.has(storedOldestMessageId) && fetchedMessageIds.has(storedNewestMessageId)
+  );
+}
+
 /**
- * Commits a prewarmed detail snapshot unless the cache already holds the same
- * sequence or a newer one. The stored sequence is re-read immediately before
- * writing so a warm fetch that raced a live thread's own persistence cannot
- * regress the cache or replace equal-sequence message artifacts.
- * Returns whether the snapshot was written.
+ * Atomically commits a prewarmed snapshot without regressing live persistence,
+ * narrowing already-loaded history, or downgrading turn-page metadata to the
+ * legacy protocol.
  */
 export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(function* (
   cache: EnvironmentCacheStore["Service"],
@@ -235,26 +253,66 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
   snapshot: OrchestrationThreadDetailSnapshot,
   messageWindowLimit?: number | null,
 ) {
-  const stored = yield* cache
-    .loadThread(environmentId, snapshot.thread.id)
-    .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
-  if (Option.isSome(stored) && stored.value.snapshotSequence >= snapshot.snapshotSequence) {
-    return false;
-  }
-  const retainedSnapshot = {
-    ...snapshot,
-    thread: retainRecentThreadHistory(
-      snapshot.thread,
-      // A turn page's opaque cursor describes its message range, so retain its
-      // messages verbatim while still applying the shared activity/checkpoint
-      // caps. Legacy snapshots carry messageWindow metadata and can safely use
-      // the configured message-count retention path.
-      snapshot.page === undefined && messageWindowLimit !== undefined ? { messageWindowLimit } : {},
-    ),
-  };
-  yield* cache.saveThread(environmentId, retainedSnapshot);
-  return true;
+  return yield* withEnvironmentCacheMutationLock(
+    cache,
+    environmentId,
+    Effect.gen(function* () {
+      const stored = yield* cache
+        .loadThread(environmentId, snapshot.thread.id)
+        .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
+      if (Option.isSome(stored)) {
+        if (stored.value.page !== undefined && snapshot.page === undefined) return false;
+        if (wouldNarrowCachedHistory(stored.value, snapshot)) return false;
+        if (snapshot.page !== undefined) {
+          const fetchedThreadSequence = snapshot.page.threadSequence;
+          if (
+            fetchedThreadSequence === undefined ||
+            fetchedThreadSequence <= stored.value.snapshotSequence
+          ) {
+            return false;
+          }
+        } else if (stored.value.snapshotSequence >= snapshot.snapshotSequence) {
+          return false;
+        }
+      }
+      // Turn pages are already bounded by a coherent server-selected turn range.
+      // Retaining any row type independently would create gaps that its opaque
+      // cursor cannot recover. Legacy snapshots can safely use client retention
+      // because messageWindow is rewritten with the retained message boundary.
+      const retainedSnapshot =
+        snapshot.page === undefined
+          ? {
+              ...snapshot,
+              thread: retainRecentThreadHistory(
+                snapshot.thread,
+                messageWindowLimit === undefined ? {} : { messageWindowLimit },
+              ),
+            }
+          : snapshot;
+      yield* cache.saveThread(environmentId, retainedSnapshot);
+      return true;
+    }),
+  );
 });
+
+const waitForPrewarmSession = (
+  supervisor: EnvironmentSupervisor["Service"],
+): Effect.Effect<boolean> =>
+  SubscriptionRef.get(supervisor.session).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: () => Effect.succeed(true),
+        onNone: () =>
+          SubscriptionRef.changes(supervisor.session).pipe(
+            Stream.filter(Option.isSome),
+            Stream.runHead,
+            Effect.as(true),
+          ),
+      }),
+    ),
+    Effect.timeoutOption(Duration.millis(PREWARM_SESSION_WAIT_MS)),
+    Effect.map(Option.getOrElse(() => false)),
+  );
 
 const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(function* (input: {
   readonly supervisor: EnvironmentSupervisor["Service"];
@@ -270,10 +328,10 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
     return null;
   }
   const session = yield* SubscriptionRef.get(input.supervisor.session);
-  const config = yield* Option.match(session, {
-    onNone: () => Effect.succeed({}),
-    onSome: (value) => value.initialConfig.pipe(Effect.orElseSucceed(() => ({}))),
-  });
+  if (Option.isNone(session)) {
+    return null;
+  }
+  const config = yield* session.value.initialConfig.pipe(Effect.orElseSucceed(() => ({})));
   const snapshotWindow = selectPrewarmSnapshotWindow(config, input.historyWindow);
   // Candidates come from the cached shell rather than a live shell
   // subscription so prewarming never adds a socket or shell request of its
@@ -471,6 +529,11 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
             }
             const previous = yield* Ref.get(lastStatus);
             const run = Effect.gen(function* () {
+              // A foreground trigger may land after preparation but before the
+              // RPC session is installed. Briefly await it without occupying the
+              // mobile-wide run gate; the connected-generation trigger retries
+              // later if connection setup takes longer.
+              const sessionReady = yield* waitForPrewarmSession(supervisor);
               const warm = warmEnvironmentOnce({
                 supervisor,
                 cache,
@@ -493,10 +556,12 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                   ),
                 ),
               );
-              const attempt = yield* Option.match(gate, {
-                onNone: () => warm,
-                onSome: (service) => service.run(warm),
-              });
+              const attempt = sessionReady
+                ? yield* Option.match(gate, {
+                    onNone: () => warm,
+                    onSome: (service) => service.run(warm),
+                  })
+                : { kind: "completed" as const, status: null };
               let settled: EnvironmentThreadPrewarmStatus;
               if (attempt.kind === "completed" && attempt.status !== null) {
                 settled = attempt.status;
