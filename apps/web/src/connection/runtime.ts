@@ -19,6 +19,11 @@ const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
 );
 
 const snapshotLoaderLayer = Layer.merge(threadSnapshotLoaderLayer, shellSnapshotLoaderLayer);
+// Web/desktop stay on full thread history: `messageWindowLimit: null` disables
+// the legacy message window and the omitted `initialTurnLimit` opts out of turn
+// pagination, so the client sends no window parameters and the server returns
+// the whole thread (getThreadDetailSnapshot only windows when `turnLimit` is
+// present). Revisit once the web timeline can page.
 const webThreadHistoryWindowLayer = threadHistoryWindowLayer({
   messageWindowLimit: null,
   messageOlderPageSize: 200,

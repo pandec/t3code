@@ -604,7 +604,7 @@ describe("EnvironmentThreads", () => {
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const state = yield* awaitThreadState(
         harness.observed,
         (value) => Option.isSome(value.data) && value.data.value.messages.length === 4,
@@ -652,7 +652,7 @@ describe("EnvironmentThreads", () => {
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
-      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* Effect.forkChild(harness.loadOlderMessages());
       yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
       yield* SubscriptionRef.update(harness.state, (value) => ({
         ...value,
@@ -663,7 +663,7 @@ describe("EnvironmentThreads", () => {
         olderMessages: { ...value.olderMessages, error: "existing page error" },
       }));
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const concurrentSettlement = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 1,
@@ -689,7 +689,7 @@ describe("EnvironmentThreads", () => {
       const harness = yield* makeHarness();
       yield* awaitThreadState(harness.observed, (value) => Option.isNone(value.data));
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const settled = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 1,
@@ -739,7 +739,7 @@ describe("EnvironmentThreads", () => {
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
       for (const expectedLength of [250, 350, 450, 550, 650, 750]) {
-        yield* harness.loadOlderMessages;
+        yield* harness.loadOlderMessages();
         yield* awaitThreadState(
           harness.observed,
           (value) =>
@@ -751,7 +751,7 @@ describe("EnvironmentThreads", () => {
       expect(capped.messageWindow?.hasMoreOlder).toBe(false);
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(6);
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const cappedAttempt = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 7,
@@ -771,7 +771,7 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.lastMessagePageBefore)).toBeNull();
       expect(yield* Ref.get(harness.messagePageLoaderCalls)).toBe(7);
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const paged = yield* awaitThreadState(
         harness.observed,
         (value) => Option.isSome(value.data) && value.data.value.messages[0]?.id === "message-551",
@@ -801,7 +801,7 @@ describe("EnvironmentThreads", () => {
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const rejected = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 1,
@@ -841,7 +841,7 @@ describe("EnvironmentThreads", () => {
       );
       yield* SubscriptionRef.set(harness.prepared, Option.none());
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       yield* awaitThreadState(harness.observed, (value) => value.olderMessages.settledCount === 1);
 
       yield* Queue.offer(
@@ -865,7 +865,7 @@ describe("EnvironmentThreads", () => {
         settledCount: 1,
       });
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const rejected = yield* awaitThreadState(
         harness.observed,
         (value) => value.status === "deleted" && value.olderMessages.settledCount === 2,
@@ -910,7 +910,7 @@ describe("EnvironmentThreads", () => {
       for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
       expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).messages).toHaveLength(2);
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const state = yield* awaitThreadState(
         harness.observed,
         (value) =>
@@ -966,7 +966,7 @@ describe("EnvironmentThreads", () => {
         }),
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       yield* awaitThreadState(
         harness.observed,
         (value) => Option.isSome(value.data) && value.data.value.messages.length === 4,
@@ -1015,7 +1015,7 @@ describe("EnvironmentThreads", () => {
         }),
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* Effect.forkChild(harness.loadOlderMessages());
       yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
 
       const moved = [makeThreadMessage(4), makeThreadMessage(5)];
@@ -1080,7 +1080,7 @@ describe("EnvironmentThreads", () => {
           }),
         });
         yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-        yield* Effect.forkChild(harness.loadOlderMessages);
+        yield* Effect.forkChild(harness.loadOlderMessages());
         yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
 
         // A hard snapshot (e.g. after a reconnect/install) reinstalls the
@@ -1147,7 +1147,7 @@ describe("EnvironmentThreads", () => {
         }),
       });
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-      yield* Effect.forkChild(harness.loadOlderMessages);
+      yield* Effect.forkChild(harness.loadOlderMessages());
       yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
 
       yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 1));
@@ -1180,7 +1180,7 @@ describe("EnvironmentThreads", () => {
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
       yield* SubscriptionRef.set(harness.prepared, Option.none());
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const first = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 1,
@@ -1191,7 +1191,7 @@ describe("EnvironmentThreads", () => {
         settledCount: 1,
       });
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const second = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 2,
@@ -1228,7 +1228,7 @@ describe("EnvironmentThreads", () => {
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
       yield* SubscriptionRef.set(harness.prepared, Option.none());
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const disconnected = yield* awaitThreadState(
         harness.observed,
         (value) => value.olderMessages.settledCount === 1,
@@ -1254,7 +1254,7 @@ describe("EnvironmentThreads", () => {
       expect(ready.olderMessages.settledCount).toBe(1);
       expect(Option.getOrThrow(ready.data).messages[0]?.id).toBe("message-3");
 
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       const paged = yield* awaitThreadState(
         harness.observed,
         (value) =>
@@ -1825,7 +1825,7 @@ describe("EnvironmentThreads", () => {
       }).pipe(Scope.provide(teardownScope));
       yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
 
-      const pageFiber = yield* Effect.forkChild(harness.loadOlderMessages);
+      const pageFiber = yield* Effect.forkChild(harness.loadOlderMessages());
       yield* awaitThreadState(harness.observed, (value) => value.olderMessages.isLoading);
       yield* Scope.close(teardownScope, Exit.void);
       const stateAfterTeardown = yield* SubscriptionRef.get(harness.state);
@@ -1833,7 +1833,7 @@ describe("EnvironmentThreads", () => {
 
       yield* Deferred.succeed(messagePageLoadGate, undefined);
       yield* Fiber.await(pageFiber);
-      yield* harness.loadOlderMessages;
+      yield* harness.loadOlderMessages();
       for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
 
       expect(yield* SubscriptionRef.get(harness.state)).toEqual(stateAfterTeardown);

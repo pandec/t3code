@@ -240,6 +240,11 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           skipped += 1;
           return;
         }
+        // Deliberately unwindowed: a prewarmed snapshot is a FULL thread with
+        // no `page` metadata, so opening it renders complete history and the
+        // "load earlier" path correctly reports nothing older to fetch. It does
+        // mean prewarming forgoes the turn window's transfer/memory savings —
+        // tracked separately; see PR #123.
         const fetched = yield* input.loader.load(prepared.value, thread.id);
         if (Option.isNone(fetched)) {
           failed += 1;

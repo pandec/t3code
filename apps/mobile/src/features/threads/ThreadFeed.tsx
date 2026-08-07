@@ -2038,7 +2038,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         })
       ) {
         olderPageRequestedRef.current = true;
-        historyWindow.onLoadOlderMessages();
+        // Underfill recovery is the app paging on the user's behalf, so it
+        // observes the resident-message ceiling.
+        historyWindow.onLoadOlderMessages({ automatic: true });
       }
     },
     [historyWindow, viewportHeight],
@@ -2071,7 +2073,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // first becomes measurable or readiness clears a disconnected error.
       // Other settlements wait for user input or a measured size change.
       olderPageRequestedRef.current = true;
-      historyWindow.onLoadOlderMessages();
+      // Automatic for the same reason as the callback above.
+      historyWindow.onLoadOlderMessages({ automatic: true });
     }
   }, [historyWindow, props.threadId, viewportHeight]);
 
@@ -2581,6 +2584,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onScroll={handleScroll}
             onContentSizeChange={handleContentSizeChange}
             scrollEventThrottle={16}
+            // No "load earlier" header row: older pages are requested
+            // automatically as the feed nears the top (see
+            // threadHistoryLoadMore) and progress is shown by the absolute
+            // overlay spinner below. A header row would add and remove content
+            // exactly while maintainVisibleContentPosition is absorbing the
+            // prepended page, which visibly jumps the feed.
             ListHeaderComponent={
               usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
             }

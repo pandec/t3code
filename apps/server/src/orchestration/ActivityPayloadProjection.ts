@@ -478,6 +478,24 @@ function dropSupersededToolUpdatedActivities(
   });
 }
 
+/**
+ * Applies the activity slimming/payload projection to a thread detail
+ * snapshot, and — for LEGACY `messageLimit` clients only — the message-count
+ * window.
+ *
+ * This is the single enforcement point for the either/or rule between the two
+ * windowing modes. A snapshot the projection query already bounded to a turn
+ * page carries `page` metadata; slicing it again by message count would
+ * compute `hasMoreOlder`/`totalCount` against a partial page and tell the
+ * client history is complete when it is not. So when `page` is present,
+ * `messageLimit` is ignored outright and no `messageWindow` is emitted: a
+ * response carries `page` or `messageWindow`, never both, and is never sliced
+ * twice.
+ *
+ * Note that every thread-detail response — full snapshot, first turn page, and
+ * older turn pages alike — goes through here, so activity projection is
+ * applied uniformly; the live-event equivalent is `projectActivityEvent`.
+ */
 export function projectThreadDetailSnapshot(
   snapshot: OrchestrationThreadDetailSnapshot,
   options: { readonly messageLimit?: number } = {},
@@ -490,7 +508,7 @@ export function projectThreadDetailSnapshot(
   };
   delete thread.messageWindow;
 
-  if (options.messageLimit === undefined) {
+  if (options.messageLimit === undefined || snapshot.page !== undefined) {
     return { ...snapshot, thread };
   }
 

@@ -22,6 +22,42 @@ import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./envir
 const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
 
 /**
+ * Turn window for a snapshot fetch. Only send one to servers that advertise
+ * `threadSnapshotPagination`; older servers reject unknown query parameters.
+ */
+export interface ThreadSnapshotWindow {
+  readonly turnLimit: number;
+  readonly beforeCursor?: string;
+}
+
+/**
+ * LEGACY message-count window, for servers that predate turn windows.
+ */
+export interface ThreadSnapshotMessageWindow {
+  readonly messageLimit: number;
+}
+
+/**
+ * A snapshot request carries at most ONE window mode. Sending both would make
+ * the server ignore `messageLimit` (the turn page wins) and leave the client
+ * guessing which shape came back, so the type makes the choice explicit.
+ */
+export type ThreadSnapshotLoadWindow = ThreadSnapshotWindow | ThreadSnapshotMessageWindow;
+
+function windowQuery(window: ThreadSnapshotLoadWindow | undefined): {
+  readonly messageLimit?: number;
+  readonly turnLimit?: number;
+  readonly beforeCursor?: string;
+} {
+  if (window === undefined) return {};
+  if ("messageLimit" in window) return { messageLimit: window.messageLimit };
+  return {
+    turnLimit: window.turnLimit,
+    ...(window.beforeCursor === undefined ? {} : { beforeCursor: window.beforeCursor }),
+  };
+}
+
+/**
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
  * WebSocket subscription's first frame. The response is gzip-compressible by
  * the transport and keeps the (potentially multi-KB) snapshot off the socket.
@@ -32,16 +68,15 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
-  readonly messageLimit?: number;
+  readonly window?: ThreadSnapshotLoadWindow;
   readonly timeoutMs?: number;
 }) {
-  const query =
-    input.messageLimit === undefined
-      ? ""
-      : `?messageLimit=${encodeURIComponent(input.messageLimit)}`;
+  // No query string here on purpose: DPoP's `htu` is normalized to exclude the
+  // query per RFC 9449, and this URL is only used for signing and error
+  // annotation — the client below appends the real query parameters.
   const requestUrl = environmentEndpointUrl(
     input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}${query}`,
+    `/api/orchestration/threads/${input.threadId}`,
   );
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
@@ -57,7 +92,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
-        query: input.messageLimit === undefined ? {} : { messageLimit: input.messageLimit },
+        query: windowQuery(input.window),
         headers,
       }),
     ),
@@ -78,7 +113,7 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
-      options?: { readonly messageLimit?: number },
+      window?: ThreadSnapshotLoadWindow,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -96,12 +131,12 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId, options) =>
+      load: (prepared: PreparedConnection, threadId: ThreadId, window) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           signer,
-          ...(options?.messageLimit === undefined ? {} : { messageLimit: options.messageLimit }),
+          ...(window === undefined ? {} : { window }),
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),

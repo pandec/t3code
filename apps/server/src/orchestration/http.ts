@@ -105,7 +105,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           const snapshot = yield* projectionSnapshotQuery
-            .getThreadDetailSnapshot(args.params.threadId)
+            .getThreadDetailSnapshot(
+              args.params.threadId,
+              args.query.turnLimit === undefined
+                ? undefined
+                : {
+                    turnLimit: args.query.turnLimit,
+                    ...(args.query.beforeCursor !== undefined
+                      ? { beforeCursor: args.query.beforeCursor }
+                      : {}),
+                  },
+            )
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
@@ -114,7 +124,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return projectThreadDetailSnapshot(snapshot.value, args.query);
+          // `messageLimit` is the legacy window; it is ignored when the
+          // response already carries turn-page metadata (see
+          // projectThreadDetailSnapshot).
+          return projectThreadDetailSnapshot(
+            snapshot.value,
+            args.query.messageLimit === undefined ? {} : { messageLimit: args.query.messageLimit },
+          );
         }),
       )
       .handle(

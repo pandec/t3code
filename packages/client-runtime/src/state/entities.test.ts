@@ -336,6 +336,7 @@ describe("environment entity projections", () => {
         data: Option.some(detail),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
         olderMessages: { isLoading: false, error: null, settledCount: 0 },
       }),
     );
@@ -365,6 +366,7 @@ describe("environment entity projections", () => {
         }),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
         olderMessages: { isLoading: false, error: null, settledCount: 0 },
       }),
     );

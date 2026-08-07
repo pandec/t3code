@@ -28,6 +28,7 @@ import {
   AuthSessionId,
   MessageId,
   NonNegativeInt,
+  PositiveInt,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -524,9 +525,24 @@ export const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+/**
+ * Query-string window for thread snapshots. Every field is optional: omitting
+ * them all keeps the full-snapshot behavior, so pagination stays opt-in per
+ * request (this is what web/desktop rely on for full history).
+ *
+ * `turnLimit`/`beforeCursor` are the current user-anchored turn window.
+ * `messageLimit` is the LEGACY message-count window kept for already-deployed
+ * mobile builds. They are mutually exclusive: when `turnLimit` is present the
+ * server ignores `messageLimit` entirely so a turn page is never sliced again
+ * (see projectThreadDetailSnapshot).
+ */
 export const EnvironmentOrchestrationThreadSnapshotUrlParams = Schema.Struct({
+  turnLimit: Schema.optionalKey(PositiveInt),
+  beforeCursor: Schema.optionalKey(TrimmedNonEmptyString),
   messageLimit: Schema.optionalKey(NonNegativeInt),
 });
+export type EnvironmentOrchestrationThreadSnapshotUrlParams =
+  typeof EnvironmentOrchestrationThreadSnapshotUrlParams.Type;
 
 export const EnvironmentOrchestrationThreadMessagesUrlParams = Schema.Struct({
   before: Schema.optionalKey(MessageId),

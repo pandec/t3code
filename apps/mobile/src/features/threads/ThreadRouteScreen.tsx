@@ -194,6 +194,9 @@ function ThreadRouteContent(
   const recordThreadVisit = useRecordThreadVisit();
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  // No explicit "load earlier" control on mobile: older pages are requested by
+  // the feed itself (top-scroll proximity plus automatic underfill recovery,
+  // see threadHistoryLoadMore) and surfaced through `threadHistoryWindow`.
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();

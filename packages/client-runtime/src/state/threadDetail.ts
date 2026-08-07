@@ -16,7 +16,9 @@ import type { EnvironmentThread, EnvironmentThreadShell } from "./models.ts";
 import { scopeThread } from "./models.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
+  threadHasOlderHistory,
   type EnvironmentThreadState,
+  type ThreadLoadOlderHistoryOptions,
   type ThreadOlderMessagesState,
 } from "./threadState.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
@@ -77,10 +79,13 @@ export function createEnvironmentThreadDetailAtoms<E>(
     environmentId: ScopedThreadRef["environmentId"],
     threadId: ScopedThreadRef["threadId"],
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentThreadState, E>>,
+  // Writable input is the older-history request options (see
+  // `ThreadLoadOlderHistoryOptions`): callers pass `{ automatic: true }` for
+  // app-initiated paging so it observes the resident-message ceiling.
   loadOlderMessagesAtom?: (
     environmentId: ScopedThreadRef["environmentId"],
     threadId: ScopedThreadRef["threadId"],
-  ) => Atom.Writable<unknown, void>,
+  ) => Atom.Writable<unknown, ThreadLoadOlderHistoryOptions | undefined>,
 ) {
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -147,6 +152,17 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ),
   );
 
+  // Mode-agnostic "more history exists" signal: the turn window's `hasMore`
+  // when the server paginates, the legacy message window's `hasMoreOlder`
+  // otherwise. UI must read this rather than `messageWindow` directly, which is
+  // absent on turn-windowed threads.
+  const threadHasOlderHistoryAtomFamily = Atom.family((key: string) =>
+    Atom.make((get): boolean => threadHasOlderHistory(get(threadStateValueAtomFamily(key)))).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-has-older-history:${key}`),
+    ),
+  );
+
   const threadOlderMessagesAtomFamily = Atom.family((key: string) =>
     Atom.make(
       (get): ThreadOlderMessagesState => get(threadStateValueAtomFamily(key)).olderMessages,
@@ -206,7 +222,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
 
   const noOpLoadOlderMessagesAtom = Atom.writable(
     () => undefined,
-    () => undefined,
+    (_ctx, _value: ThreadLoadOlderHistoryOptions | undefined) => undefined,
   ).pipe(
     Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
     Atom.withLabel("environment-thread-load-older-messages:unavailable"),
@@ -219,6 +235,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     errorAtom: (ref: ScopedThreadRef) => threadErrorAtomFamily(threadKey(ref)),
     messagesAtom: (ref: ScopedThreadRef) => threadMessagesAtomFamily(threadKey(ref)),
     messageWindowAtom: (ref: ScopedThreadRef) => threadMessageWindowAtomFamily(threadKey(ref)),
+    hasOlderHistoryAtom: (ref: ScopedThreadRef) => threadHasOlderHistoryAtomFamily(threadKey(ref)),
     olderMessagesAtom: (ref: ScopedThreadRef) => threadOlderMessagesAtomFamily(threadKey(ref)),
     loadOlderMessagesAtom: (ref: ScopedThreadRef) =>
       loadOlderMessagesAtom?.(ref.environmentId, ref.threadId) ?? noOpLoadOlderMessagesAtom,

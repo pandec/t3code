@@ -6,6 +6,7 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   EMPTY_THREAD_OLDER_MESSAGES_STATE,
   type EnvironmentThreadState,
+  type ThreadLoadOlderHistoryOptions,
   type ThreadOlderMessagesState,
   createThreadEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/threads";
@@ -84,6 +85,7 @@ const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_
 );
 const EMPTY_MESSAGES_ATOM = Atom.make<ReadonlyArray<OrchestrationMessage>>([]);
 const EMPTY_MESSAGE_WINDOW_ATOM = Atom.make<OrchestrationThreadMessageWindow | null>(null);
+const EMPTY_HAS_OLDER_HISTORY_ATOM = Atom.make<boolean>(false);
 const EMPTY_OLDER_MESSAGES_ATOM = Atom.make<ThreadOlderMessagesState>(
   EMPTY_THREAD_OLDER_MESSAGES_STATE,
 );
@@ -116,16 +118,22 @@ export function useThreadMessageWindow(
   const olderMessages = useAtomValue(
     ref === null ? EMPTY_OLDER_MESSAGES_ATOM : environmentThreadDetails.olderMessagesAtom(ref),
   );
+  // Mode-agnostic: turn-windowed threads carry no `messageWindow`, so the
+  // "more history exists" signal must come from the state-level helper.
+  const hasOlderMessages = useAtomValue(
+    ref === null ? EMPTY_HAS_OLDER_HISTORY_ATOM : environmentThreadDetails.hasOlderHistoryAtom(ref),
+  );
   return useMemo(
     () => ({
       messages,
       messageWindow,
-      hasOlderMessages: messageWindow?.hasMoreOlder === true,
+      hasOlderMessages,
       loadingOlderMessages: olderMessages.isLoading,
       settledCount: olderMessages.settledCount,
       error: olderMessages.error,
     }),
     [
+      hasOlderMessages,
       messageWindow,
       messages,
       olderMessages.error,
@@ -138,14 +146,16 @@ export function useThreadMessageWindow(
 export function useLoadOlderMessages(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
-): () => void {
+): (options?: ThreadLoadOlderHistoryOptions) => void {
   const ref = useScopedThreadRef(environmentId, threadId);
   const load = useAtomSet(
     ref === null
       ? EMPTY_LOAD_OLDER_MESSAGES_ATOM
       : environmentThreadDetails.loadOlderMessagesAtom(ref),
   );
-  return useCallback(() => load(), [load]);
+  // `automatic` requests (underfill recovery) observe the resident-message
+  // ceiling; explicit scrollback does not. See ThreadLoadOlderHistoryOptions.
+  return useCallback((options?: ThreadLoadOlderHistoryOptions) => load(options), [load]);
 }
 
 export function useEnvironmentThread(

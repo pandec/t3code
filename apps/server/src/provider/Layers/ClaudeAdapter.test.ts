@@ -2719,7 +2719,7 @@ describe("ClaudeAdapterLive", () => {
     { terminalReason: "aborted_tools" },
     { terminalReason: "aborted_streaming" },
   ])(
-    "treats Claude $terminalReason results as interrupted without a runtime error",
+    "treats Claude $terminalReason results as interrupted, hiding ede_diagnostic errors",
     ({ terminalReason }) => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -2773,7 +2773,8 @@ describe("ClaudeAdapterLive", () => {
         if (turnCompleted?.type === "turn.completed") {
           assert.equal(String(turnCompleted.turnId), String(turn.turnId));
           assert.equal(turnCompleted.payload.state, "interrupted");
-          assert.equal(turnCompleted.payload.errorMessage, diagnostic);
+          // "[ede_diagnostic] ..." is CLI-internal telemetry, never a banner.
+          assert.equal(turnCompleted.payload.errorMessage, undefined);
           assert.equal(turnCompleted.payload.stopReason, "tool_use");
         }
       }).pipe(
@@ -3478,6 +3479,24 @@ describe("ClaudeAdapterLive", () => {
           tasks: [{ task_id: "t1", task_type: "local_agent", description: "Say hi" }],
           session_id: "session",
           uuid: "roster",
+        },
+        {
+          type: "system",
+          subtype: "vcs_state_changed",
+          kind: "push",
+          cwd: "/tmp/worktree",
+          session_id: "session",
+          uuid: "vcs",
+        },
+        {
+          type: "system",
+          subtype: "code_change_published",
+          provider: "github",
+          url: "https://github.com/pingdotgg/t3code/pull/1",
+          repo: "pingdotgg/t3code",
+          identifier: "1",
+          session_id: "session",
+          uuid: "ccp",
         },
         {
           type: "system",

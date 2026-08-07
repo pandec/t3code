@@ -69,6 +69,7 @@ import {
   projectActivityEvent,
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
+import { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
@@ -256,30 +257,6 @@ function projectFileFailureContext(
     default:
       return unexpectedCompatibilityError(error);
   }
-}
-
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
-  OrchestrationEvent,
-  {
-    type:
-      | "thread.message-sent"
-      | "thread.history-imported"
-      | "thread.proposed-plan-upserted"
-      | "thread.activity-appended"
-      | "thread.turn-diff-completed"
-      | "thread.reverted"
-      | "thread.session-set";
-  }
-> {
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.history-imported" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
-  );
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -781,6 +758,7 @@ const makeWsRpcLayer = (
           },
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
+          threadSnapshotPagination: true,
         };
       });
 
@@ -1155,7 +1133,14 @@ const makeWsRpcLayer = (
               }
 
               const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId)
+                .getThreadDetailSnapshot(
+                  input.threadId,
+                  // Windowing the fallback snapshot is opt-in per subscription:
+                  // clients that don't send turnLimit (including all
+                  // pre-pagination clients) get the full thread, since they
+                  // have no way to load older pages.
+                  input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+                )
                 .pipe(
                   Effect.mapError(
                     (cause) =>

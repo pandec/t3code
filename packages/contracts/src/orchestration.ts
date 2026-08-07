@@ -13,6 +13,7 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ProviderItemId,
   ThreadId,
@@ -246,6 +247,14 @@ export const OrchestrationMessage = Schema.Struct({
 });
 export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
+/**
+ * LEGACY message-count window, produced only for `messageLimit` requests from
+ * pre-turn-window clients. A response carries either this or
+ * `OrchestrationThreadDetailPage`, never both: the two describe different
+ * slicing units (messages vs. user-anchored turns) and combining them would
+ * compute `hasMoreOlder`/`totalCount` against an already-bounded turn page and
+ * falsely report history complete.
+ */
 export const OrchestrationThreadMessageWindow = Schema.Struct({
   hasMoreOlder: Schema.Boolean,
   oldestLoadedMessageId: Schema.NullOr(MessageId),
@@ -567,14 +576,71 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * snapshot or catch-up replay and before it begins emitting live events.
    */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  /** Limits message history included in snapshot frames. */
+  /**
+   * LEGACY (pre-turn-window clients): limits the message history included in
+   * snapshot frames and makes the response carry `thread.messageWindow`.
+   * Mutually exclusive with `turnLimit` — a snapshot carries either `page`
+   * metadata or `messageWindow`, never both, and is never sliced twice. Kept
+   * so already-deployed mobile builds keep working against a new server.
+   */
   messageLimit: Schema.optionalKey(NonNegativeInt),
+  /**
+   * When provided, the fallback snapshot frame (sent when `afterSequence` is
+   * missing or the catch-up gap is too large) is windowed to the last
+   * `turnLimit` user-anchored turns and carries `page` metadata. Absent means
+   * the fallback snapshot is the full thread, preserving pre-pagination client
+   * behavior. Live events are unaffected either way. Takes precedence over
+   * `messageLimit` when a client sends both.
+   */
+  turnLimit: Schema.optionalKey(PositiveInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
+
+/**
+ * Bounds a thread detail read to a window of recent turns. `turnLimit` counts
+ * turns with a user pending message (subagent/fan-out turns between them ride
+ * along), so the window always contains the last N user prompts. `beforeCursor`
+ * requests the disjoint page of older turns strictly before a previously
+ * returned cursor. Requests without a window get the full thread; pagination is
+ * strictly opt-in so older clients keep today's behavior on both HTTP and the
+ * WebSocket fallback snapshot.
+ */
+export const OrchestrationThreadDetailWindow = Schema.Struct({
+  turnLimit: Schema.optionalKey(PositiveInt),
+  beforeCursor: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type OrchestrationThreadDetailWindow = typeof OrchestrationThreadDetailWindow.Type;
+
+/**
+ * Page metadata for a windowed thread detail read. `beforeCursor` is opaque and
+ * exclusive: passing it back returns the adjacent disjoint slice of older
+ * turns. `null` means the thread is fully loaded below this page. The
+ * `snapshotSequence` mirrors the top-level snapshot sequence so history pages
+ * can be sequence-checked against live state before merging.
+ */
+export const OrchestrationThreadDetailPage = Schema.Struct({
+  beforeCursor: Schema.NullOr(TrimmedNonEmptyString),
+  hasMore: Schema.Boolean,
+  snapshotSequence: NonNegativeInt,
+  /**
+   * Highest event sequence applied to THIS thread at page read time. The
+   * global `snapshotSequence` advances with every thread's events, so a
+   * client cannot wait for it via its per-thread subscription; this
+   * thread-scoped watermark is reachable. A client merging an older page
+   * must first have applied live events up to it — otherwise a streaming
+   * turn outside the loaded window could have deltas replayed on top of
+   * page content that already includes them, duplicating text.
+   */
+  threadSequence: Schema.optionalKey(NonNegativeInt),
+});
+export type OrchestrationThreadDetailPage = typeof OrchestrationThreadDetailPage.Type;
 
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
+  // Present only on windowed responses. Absent on full snapshots (and from
+  // pre-pagination servers), which clients treat as fully loaded.
+  page: Schema.optional(OrchestrationThreadDetailPage),
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
 

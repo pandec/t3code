@@ -18,8 +18,14 @@ export interface ThreadHistoryWindowState {
   readonly settledCount: number;
   /** The most recent older-page failure. */
   readonly error?: string | null;
-  /** Requests the next older page. Safe to call when nothing is pending. */
-  readonly onLoadOlderMessages: () => void;
+  /**
+   * Requests the next older page. Safe to call when nothing is pending.
+   *
+   * Pass `{ automatic: true }` for requests the app makes on the user's behalf
+   * (underfill recovery). Those observe the client's soft resident-message
+   * ceiling; explicit top-scroll paging omits it and is never capped.
+   */
+  readonly onLoadOlderMessages: (options?: { readonly automatic?: boolean }) => void;
 }
 
 export interface ThreadHistoryRequestSignals {
