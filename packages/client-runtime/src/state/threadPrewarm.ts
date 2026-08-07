@@ -100,7 +100,10 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
 );
 
 export interface EnvironmentThreadPrewarmStatus {
+  /** Latest successful run; drives the user-facing "last synced" label. */
   readonly lastRunAt: number | null;
+  /** Completion cursor for manual requests, including unavailable outcomes. */
+  readonly lastManualRequestCompletedAt: number | null;
   readonly refreshed: number;
   readonly skipped: number;
   readonly failed: number;
@@ -111,6 +114,7 @@ export interface EnvironmentThreadPrewarmStatus {
 export const EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS: EnvironmentThreadPrewarmStatus =
   Object.freeze({
     lastRunAt: null,
+    lastManualRequestCompletedAt: null,
     refreshed: 0,
     skipped: 0,
     failed: 0,
@@ -224,40 +228,10 @@ export function selectPrewarmCandidates(
     .slice(0, limit);
 }
 
-function userAnchoredTurnCount(snapshot: OrchestrationThreadDetailSnapshot): number {
-  return new Set(
-    snapshot.thread.messages.flatMap((message) =>
-      message.role === "user" && message.turnId !== null ? [message.turnId] : [],
-    ),
-  ).size;
-}
-
-function wouldDiscardWiderCachedHistory(
-  stored: OrchestrationThreadDetailSnapshot,
-  fetched: OrchestrationThreadDetailSnapshot,
-): boolean {
-  const storedWidth =
-    fetched.page === undefined ? stored.thread.messages.length : userAnchoredTurnCount(stored);
-  const fetchedWidth =
-    fetched.page === undefined ? fetched.thread.messages.length : userAnchoredTurnCount(fetched);
-  if (storedWidth <= fetchedWidth) {
-    return false;
-  }
-  const storedOldestMessageId = stored.thread.messages[0]?.id;
-  const storedNewestMessageId = stored.thread.messages[stored.thread.messages.length - 1]?.id;
-  if (storedOldestMessageId === undefined || storedNewestMessageId === undefined) {
-    return false;
-  }
-  const fetchedMessageIds = new Set(fetched.thread.messages.map((message) => message.id));
-  return (
-    !fetchedMessageIds.has(storedOldestMessageId) && fetchedMessageIds.has(storedNewestMessageId)
-  );
-}
-
 /**
- * Atomically commits a prewarmed snapshot without regressing live persistence,
- * narrowing already-loaded history, or downgrading turn-page metadata to the
- * legacy protocol.
+ * Atomically populates a missing cache entry. Prewarm never replaces an
+ * existing entry: the client cannot reliably infer whether it contains
+ * explicitly loaded scrollback, and the live open path repairs stale entries.
  */
 export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(function* (
   cache: EnvironmentCacheStore["Service"],
@@ -272,29 +246,7 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
       const stored = yield* cache
         .loadThread(environmentId, snapshot.thread.id)
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
-      if (Option.isSome(stored)) {
-        if (stored.value.page !== undefined && snapshot.page === undefined) return false;
-        if (snapshot.page !== undefined) {
-          const fetchedThreadSequence = snapshot.page.threadSequence;
-          if (
-            fetchedThreadSequence === undefined ||
-            fetchedThreadSequence <= stored.value.snapshotSequence
-          ) {
-            return false;
-          }
-          // Fresh equal-width pages may slide forward with partial overlap
-          // ([A…J] → [B…K]). Width is measured in user-anchored turns, matching
-          // the server limit rather than variable message/activity fan-out. Reject
-          // only when the cached page is strictly wider and the fetched page keeps
-          // its newest edge while omitting its oldest, proving loaded scrollback
-          // would be discarded. No edge overlap means the bounded window fully
-          // advanced and may replace the stale cached page.
-          if (wouldDiscardWiderCachedHistory(stored.value, snapshot)) return false;
-        } else {
-          if (stored.value.snapshotSequence >= snapshot.snapshotSequence) return false;
-          if (wouldDiscardWiderCachedHistory(stored.value, snapshot)) return false;
-        }
-      }
+      if (Option.isSome(stored)) return false;
       // Turn pages are already bounded by a coherent server-selected turn range.
       // Retaining any row type independently would create gaps that its opaque
       // cursor cannot recover. Legacy snapshots can safely use client retention
@@ -340,6 +292,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   readonly loader: ThreadSnapshotLoader["Service"];
   readonly environmentId: EnvironmentIdType;
   readonly historyWindow: ThreadHistoryWindowConfig;
+  readonly previousManualRequestCompletedAt: number | null;
   /** Restricts a targeted (settle-triggered) run to these threads. */
   readonly only?: ReadonlySet<ThreadIdType>;
 }) {
@@ -380,13 +333,10 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
         const stored = yield* input.cache
           .loadThread(input.environmentId, thread.id)
           .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
-        // The sequence is environment-global, so a cached detail at or past
-        // the shell's cursor cannot be behind any change the shell knows
-        // about — skip the fetch entirely.
-        if (
-          Option.isSome(stored) &&
-          stored.value.snapshotSequence >= shell.value.snapshotSequence
-        ) {
+        // Prewarm only fills cold-cache misses. Any existing entry may contain
+        // explicitly loaded scrollback that a bounded initial page cannot safely
+        // replace, and the live open path will reconcile its freshness.
+        if (Option.isSome(stored)) {
           skipped += 1;
           return;
         }
@@ -416,6 +366,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   const lastRunAt = yield* Clock.currentTimeMillis;
   const status: EnvironmentThreadPrewarmStatus = {
     lastRunAt,
+    lastManualRequestCompletedAt: input.previousManualRequestCompletedAt,
     refreshed,
     skipped,
     failed,
@@ -540,6 +491,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
             if (!runFull && batch.settled.size === 0) {
               return Stream.empty;
             }
+            const previous = yield* Ref.get(lastStatus);
             // Checked before the run is announced, not just inside it: a
             // wakeup that arrives before the environment is connected does no
             // work at all and must not raise an in-flight indicator.
@@ -548,17 +500,20 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
               if (!batch.manual && batch.settled.size === 0) {
                 return Stream.empty;
               }
-              // Manual and settle callers cannot rely on a later connection
-              // trigger. Complete their request explicitly instead of leaving
-              // status observers waiting for lastRunAt to advance.
+              // Complete on-demand requests explicitly without claiming that a
+              // sync succeeded. Only manual requests advance the UI completion
+              // cursor; settled-only requests still report unavailability.
               const settled = {
                 ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
-                lastRunAt: yield* Clock.currentTimeMillis,
+                lastRunAt: previous.lastRunAt,
+                lastManualRequestCompletedAt: batch.manual
+                  ? yield* Clock.currentTimeMillis
+                  : previous.lastManualRequestCompletedAt,
+                failed: 1,
               };
               yield* Ref.set(lastStatus, settled);
               return Stream.make(settled);
             }
-            const previous = yield* Ref.get(lastStatus);
             const run = Effect.gen(function* () {
               // A foreground trigger may land after preparation but before the
               // RPC session is installed. Briefly await it without occupying the
@@ -571,6 +526,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                 loader,
                 environmentId,
                 historyWindow,
+                previousManualRequestCompletedAt: previous.lastManualRequestCompletedAt,
                 ...(runFull ? {} : { only: batch.settled }),
               }).pipe(
                 Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
@@ -622,12 +578,12 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                 };
               } else if (attempt.kind === "session-unavailable") {
                 if (batch.manual || batch.settled.size > 0) {
-                  // Manual and settle triggers have no later connection event
-                  // guaranteed to retry them. Complete their status explicitly
-                  // so callers waiting on lastRunAt do not remain in-flight.
+                  // On-demand requests complete explicitly, but an unavailable
+                  // session is a failed outcome and must not look like a sync.
                   settled = {
                     ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
-                    lastRunAt: yield* Clock.currentTimeMillis,
+                    lastRunAt: previous.lastRunAt,
+                    failed: 1,
                   };
                 } else {
                   // Lifecycle intent is retried by the connected-generation
@@ -635,10 +591,24 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                   settled = { ...previous, running: false };
                 }
               } else {
-                // A run that found no cached shell still has to close the pair,
-                // but it must not claim a run it never completed.
-                settled = { ...previous, running: false };
+                // Preparation/session teardown can race the readiness check, and
+                // a cache may have no shell yet. On-demand callers need an
+                // explicit unavailable outcome; lifecycle runs remain retryable.
+                settled =
+                  batch.manual || batch.settled.size > 0
+                    ? {
+                        ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+                        lastRunAt: previous.lastRunAt,
+                        failed: 1,
+                      }
+                    : { ...previous, running: false };
               }
+              settled = {
+                ...settled,
+                lastManualRequestCompletedAt: batch.manual
+                  ? yield* Clock.currentTimeMillis
+                  : previous.lastManualRequestCompletedAt,
+              };
               yield* Ref.set(lastStatus, settled);
               return settled;
             });
@@ -684,8 +654,10 @@ export interface ThreadPrewarmSummary {
   readonly refreshed: number;
   /** True while any environment has a prewarm run in flight. */
   readonly syncing: boolean;
-  /** Per-environment completion cursors used to track a manual all-environment run. */
+  /** Per-environment successful-run timestamps. */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
+  /** Per-environment cursors used to track manual request completion. */
+  readonly environmentLastManualRequestCompletedAt: ReadonlyMap<EnvironmentIdType, number | null>;
 }
 
 const EMPTY_THREAD_PREWARM_SUMMARY: ThreadPrewarmSummary = Object.freeze({
@@ -693,6 +665,7 @@ const EMPTY_THREAD_PREWARM_SUMMARY: ThreadPrewarmSummary = Object.freeze({
   refreshed: 0,
   syncing: false,
   environmentLastRunAt: new Map<EnvironmentIdType, number | null>(),
+  environmentLastManualRequestCompletedAt: new Map<EnvironmentIdType, number | null>(),
 });
 
 function environmentRunTimesEqual(
@@ -708,7 +681,7 @@ function environmentRunTimesEqual(
 
 /**
  * Returns true after every environment present when a manual sync was
- * requested has completed another run. Removed environments stop blocking;
+ * requested has reached a terminal outcome. Removed environments stop blocking;
  * environments added after the request join the next manual sync instead.
  */
 export function didEnvironmentPrewarmRunsAdvance(
@@ -738,6 +711,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
     let refreshed = 0;
     let syncing = false;
     const environmentLastRunAt = new Map<EnvironmentIdType, number | null>();
+    const environmentLastManualRequestCompletedAt = new Map<EnvironmentIdType, number | null>();
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
       const status = Option.getOrElse(
         AsyncResult.value(get(input.statusAtom(environmentId))),
@@ -746,13 +720,17 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       refreshed += status.refreshed;
       syncing ||= status.running;
       // A stream restart re-emits the empty baseline to clear a stranded
-      // `running`, which would otherwise roll this cursor back to null — long
-      // enough for "last synced" to read "Not synced yet" and for a pending
-      // manual sync to see a false completion. Warmed threads survive the
-      // restart, so the cursor does too.
+      // `running`. Successful-run and manual-completion cursors must survive
+      // that baseline so labels do not roll back and pending requests do not
+      // observe a false completion.
       const environmentLastRun =
         status.lastRunAt ?? previous.environmentLastRunAt.get(environmentId) ?? null;
+      const environmentLastManualCompletion =
+        status.lastManualRequestCompletedAt ??
+        previous.environmentLastManualRequestCompletedAt.get(environmentId) ??
+        null;
       environmentLastRunAt.set(environmentId, environmentLastRun);
+      environmentLastManualRequestCompletedAt.set(environmentId, environmentLastManualCompletion);
       if (environmentLastRun !== null && (lastRunAt === null || environmentLastRun > lastRunAt)) {
         lastRunAt = environmentLastRun;
       }
@@ -761,11 +739,21 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       previous.lastRunAt === lastRunAt &&
       previous.refreshed === refreshed &&
       previous.syncing === syncing &&
-      environmentRunTimesEqual(previous.environmentLastRunAt, environmentLastRunAt)
+      environmentRunTimesEqual(previous.environmentLastRunAt, environmentLastRunAt) &&
+      environmentRunTimesEqual(
+        previous.environmentLastManualRequestCompletedAt,
+        environmentLastManualRequestCompletedAt,
+      )
     ) {
       return previous;
     }
-    previous = { lastRunAt, refreshed, syncing, environmentLastRunAt };
+    previous = {
+      lastRunAt,
+      refreshed,
+      syncing,
+      environmentLastRunAt,
+      environmentLastManualRequestCompletedAt,
+    };
     return previous;
   }).pipe(Atom.withLabel("environment-thread-prewarm-summary"));
 }

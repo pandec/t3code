@@ -41,10 +41,11 @@ export type { ThreadPrewarmSummary };
 
 /**
  * Keeps the per-environment thread prewarm streams mounted for as long as the
- * caller stays mounted, and fires a targeted rewarm whenever a thread's
- * session leaves the streaming states — so a conversation that just finished
- * is re-cached while the app sits on the thread list. Mirrors the web
- * turn-completion snapshot/diff pattern; the first observation seeds silently.
+ * caller stays mounted, and fires a targeted cache-fill attempt whenever a
+ * thread's session leaves the streaming states. Existing details are preserved;
+ * this only helps threads that settled remotely without a local cache entry.
+ * Mirrors the web turn-completion snapshot/diff pattern; the first observation
+ * seeds silently.
  */
 export function useThreadPrewarm(): void {
   useAtomValue(threadPrewarmSummaryAtom);

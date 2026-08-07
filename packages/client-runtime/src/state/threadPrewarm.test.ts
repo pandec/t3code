@@ -145,7 +145,9 @@ function retainedFixtureSnapshot(protocol: "turn" | "legacy"): OrchestrationThre
     id: MessageId.make(`message-${index}`),
     role: "user" as const,
     text: `Message ${index}`,
-    turnId: TurnId.make(`turn-${index}`),
+    // Production user messages are anchors through projection_turns and do not
+    // carry their turn id in the message shape.
+    turnId: null,
     streaming: false,
     createdAt: "2026-04-01T00:00:00.000Z",
     updatedAt: "2026-04-01T00:00:00.000Z",
@@ -218,6 +220,15 @@ const makeCacheStore = Effect.fn("TestThreadPrewarm.makeCacheStore")(function* (
   return { cache, stored, saveCalls };
 });
 
+function withoutStoredThread(
+  map: ReadonlyMap<string, OrchestrationThreadDetailSnapshot>,
+  threadId: string,
+): ReadonlyMap<string, OrchestrationThreadDetailSnapshot> {
+  const next = new Map(map);
+  next.delete(threadId);
+  return next;
+}
+
 describe("selectPrewarmCandidates", () => {
   it("prefers recently updated threads and drops archived and streaming ones", () => {
     const threads = [
@@ -242,25 +253,28 @@ describe("selectPrewarmCandidates", () => {
 });
 
 describe("commitPrewarmedThreadSnapshot", () => {
-  it.effect("writes newer snapshots and rejects equal or older ones", () =>
+  it.effect("only populates missing cache entries", () =>
     Effect.gen(function* () {
-      const { cache, stored } = yield* makeCacheStore({
+      const existing = detailSnapshot("thread-existing", 5);
+      const missing = detailSnapshot("thread-missing", 8);
+      const { cache, stored, saveCalls } = yield* makeCacheStore({
         shell: Option.none(),
-        threads: [detailSnapshot("thread-1", 5)],
+        threads: [existing],
       });
 
       expect(
-        yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, detailSnapshot("thread-1", 4)),
+        yield* commitPrewarmedThreadSnapshot(
+          cache,
+          ENVIRONMENT_ID,
+          detailSnapshot("thread-existing", 8),
+        ),
       ).toBe(false);
-      expect((yield* Ref.get(stored)).get("thread-1")?.snapshotSequence).toBe(5);
+      expect((yield* Ref.get(stored)).get("thread-existing")).toEqual(existing);
+      expect(yield* Ref.get(saveCalls)).toEqual([]);
 
-      expect(
-        yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, detailSnapshot("thread-1", 5)),
-      ).toBe(false);
-      expect(
-        yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, detailSnapshot("thread-1", 8)),
-      ).toBe(true);
-      expect((yield* Ref.get(stored)).get("thread-1")?.snapshotSequence).toBe(8);
+      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, missing)).toBe(true);
+      expect((yield* Ref.get(stored)).get("thread-missing")).toEqual(missing);
+      expect(yield* Ref.get(saveCalls)).toEqual([missing]);
     }),
   );
 
@@ -311,261 +325,12 @@ describe("commitPrewarmedThreadSnapshot", () => {
     }),
   );
 
-  it.effect("does not replace wider cached turn history after unrelated global activity", () =>
+  it.effect("serializes missing-entry population with live persistence", () =>
     Effect.gen(function* () {
-      const wider = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-wider",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const fetched = {
-        ...wider,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-initial",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 50,
-        },
-        thread: {
-          ...wider.thread,
-          messages: wider.thread.messages.slice(-1),
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [wider],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(wider);
-      expect(yield* Ref.get(saveCalls)).toEqual([]);
-    }),
-  );
-
-  it.effect("does not discard wider loaded scrollback for a fresher initial page", () =>
-    Effect.gen(function* () {
-      const wider = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-wider",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const fetched = {
-        ...wider,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-initial",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 101,
-        },
-        thread: {
-          ...wider.thread,
-          messages: wider.thread.messages.slice(-1),
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [wider],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(wider);
-      expect(yield* Ref.get(saveCalls)).toEqual([]);
-    }),
-  );
-
-  it.effect("does not discard wider legacy history for a newer initial window", () =>
-    Effect.gen(function* () {
-      const wider = {
-        ...retainedFixtureSnapshot("legacy"),
-        snapshotSequence: 100,
-      };
-      const fetched = {
-        ...wider,
-        snapshotSequence: 110,
-        thread: {
-          ...wider.thread,
-          messages: wider.thread.messages.slice(-1),
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [wider],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
-      expect((yield* Ref.get(stored)).get("thread-legacy")).toEqual(wider);
-      expect(yield* Ref.get(saveCalls)).toEqual([]);
-    }),
-  );
-
-  it.effect("uses thread activity rather than unrelated global activity for turn freshness", () =>
-    Effect.gen(function* () {
-      const storedSnapshot = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-stored",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const fetched = {
-        ...storedSnapshot,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-fetched",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 50,
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [storedSnapshot],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(false);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(storedSnapshot);
-      expect(yield* Ref.get(saveCalls)).toEqual([]);
-    }),
-  );
-
-  it.effect("persists a turn page when its thread changed after the cached snapshot", () =>
-    Effect.gen(function* () {
-      const storedSnapshot = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-stored",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const fetched = {
-        ...storedSnapshot,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-fetched",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 101,
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [storedSnapshot],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(true);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(fetched);
-      expect(yield* Ref.get(saveCalls)).toEqual([fetched]);
-    }),
-  );
-
-  it.effect("accepts a fresh equal-sized turn window with partial overlap", () =>
-    Effect.gen(function* () {
-      const storedSnapshot = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-stored",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const lastStored = storedSnapshot.thread.messages[storedSnapshot.thread.messages.length - 1]!;
-      const fetched = {
-        ...storedSnapshot,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-fetched",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 101,
-        },
-        thread: {
-          ...storedSnapshot.thread,
-          messages: [
-            ...storedSnapshot.thread.messages.slice(1),
-            {
-              ...lastStored,
-              id: MessageId.make("message-new"),
-              turnId: TurnId.make("turn-new"),
-            },
-          ],
-        },
-      };
-      const { cache, stored } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [storedSnapshot],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(true);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(fetched);
-    }),
-  );
-
-  it.effect("refreshes an equally bounded turn window after it slides forward", () =>
-    Effect.gen(function* () {
-      const storedSnapshot = {
-        ...retainedFixtureSnapshot("turn"),
-        snapshotSequence: 100,
-        page: {
-          beforeCursor: "cursor-stored",
-          hasMore: true,
-          snapshotSequence: 100,
-          threadSequence: 50,
-        },
-      };
-      const fetched = {
-        ...storedSnapshot,
-        snapshotSequence: 110,
-        page: {
-          beforeCursor: "cursor-fetched",
-          hasMore: true,
-          snapshotSequence: 110,
-          threadSequence: 101,
-        },
-        thread: {
-          ...storedSnapshot.thread,
-          messages: storedSnapshot.thread.messages.map((message, index) => ({
-            ...message,
-            id: MessageId.make(`new-message-${index}`),
-          })),
-        },
-      };
-      const { cache, stored } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [storedSnapshot],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, fetched, 150)).toBe(true);
-      expect((yield* Ref.get(stored)).get("thread-turn")).toEqual(fetched);
-    }),
-  );
-
-  it.effect("serializes the cache comparison with live persistence", () =>
-    Effect.gen(function* () {
-      const initial = detailSnapshot("thread-race", 100);
       const prewarm = detailSnapshot("thread-race", 110);
       const live = detailSnapshot("thread-race", 111);
       const stored = yield* Ref.make<Option.Option<OrchestrationThreadDetailSnapshot>>(
-        Option.some(initial),
+        Option.none(),
       );
       const prewarmLoaded = yield* Deferred.make<void>();
       const releasePrewarmLoad = yield* Deferred.make<void>();
@@ -607,34 +372,10 @@ describe("commitPrewarmedThreadSnapshot", () => {
       expect(yield* Ref.get(saveOrder)).toEqual([]);
 
       yield* Deferred.succeed(releasePrewarmLoad, undefined);
-      yield* Fiber.join(prewarmFiber);
+      expect(yield* Fiber.join(prewarmFiber)).toBe(true);
       yield* Fiber.join(liveFiber);
       expect(yield* Ref.get(saveOrder)).toEqual([110, 111]);
       expect(Option.getOrThrow(yield* Ref.get(stored)).snapshotSequence).toBe(111);
-    }),
-  );
-
-  it.effect("does not downgrade a cached turn page to legacy metadata", () =>
-    Effect.gen(function* () {
-      const turn = retainedFixtureSnapshot("turn");
-      const legacy = {
-        ...retainedFixtureSnapshot("legacy"),
-        snapshotSequence: 20,
-        thread: {
-          ...retainedFixtureSnapshot("legacy").thread,
-          id: turn.thread.id,
-        },
-      };
-      const { cache, stored, saveCalls } = yield* makeCacheStore({
-        shell: Option.none(),
-        threads: [turn],
-      });
-
-      expect(yield* commitPrewarmedThreadSnapshot(cache, ENVIRONMENT_ID, legacy, 150)).toBe(false);
-      const persisted = (yield* Ref.get(stored)).get(turn.thread.id);
-      expect(persisted?.page).toEqual(turn.page);
-      expect(persisted?.thread.messageWindow).toBeUndefined();
-      expect(yield* Ref.get(saveCalls)).toEqual([]);
     }),
   );
 });
@@ -713,11 +454,11 @@ describe("makeEnvironmentThreadPrewarm", () => {
       ],
       updatedAt: "2026-04-06T00:00:00.000Z",
     };
-    const { cache, stored } = yield* makeCacheStore({
+    const { cache, stored, saveCalls } = yield* makeCacheStore({
       shell: options?.cachedShell === false ? Option.none() : Option.some(shell),
-      // "current" already sits at the shell's cursor, so it must be skipped
-      // without a fetch; "stale" is behind it and must be refreshed.
-      threads: [detailSnapshot("current", 10), detailSnapshot("stale", 3)],
+      // Existing entries are never fetched or replaced; "stale" is absent and
+      // therefore exercises cold-cache population.
+      threads: [detailSnapshot("current", 10)],
     });
     const loaderCalls = yield* Ref.make<ReadonlyArray<string>>([]);
     const loaderWindows = yield* Ref.make<ReadonlyArray<ThreadSnapshotLoadWindow | undefined>>([]);
@@ -817,6 +558,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       statuses,
       started,
       stored,
+      saveCalls,
       loaderCalls,
       loaderWindows,
       initialStatus,
@@ -837,7 +579,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
-  it.effect("warms stale recent threads once the environment connects", () =>
+  it.effect("fetches and writes missing entries while skipping existing ones", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
@@ -852,6 +594,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.failed).toBe(0);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
         expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(10);
+        expect((yield* Ref.get(harness.saveCalls)).map((snapshot) => snapshot.thread.id)).toEqual([
+          "stale",
+        ]);
       }),
     ),
   );
@@ -868,6 +613,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
 
         const windows = yield* Ref.get(harness.loaderWindows);
         expect(windows).toEqual([{ turnLimit: 10 }]);
+        expect((yield* Ref.get(harness.saveCalls)).map((snapshot) => snapshot.thread.id)).toEqual([
+          "stale",
+        ]);
         expect(windows.some((window) => window !== undefined && "messageLimit" in window)).toBe(
           false,
         );
@@ -969,18 +717,20 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const manualStatus = yield* Queue.take(manual.statuses);
         const settledStatus = yield* Queue.take(settled.statuses);
         expect(manualStatus.running).toBe(false);
-        expect(manualStatus.failed).toBe(0);
-        expect(manualStatus.lastRunAt).not.toBe(null);
+        expect(manualStatus.failed).toBe(1);
+        expect(manualStatus.lastRunAt).toBe(null);
+        expect(manualStatus.lastManualRequestCompletedAt).not.toBe(null);
         expect(settledStatus.running).toBe(false);
-        expect(settledStatus.failed).toBe(0);
-        expect(settledStatus.lastRunAt).not.toBe(null);
+        expect(settledStatus.failed).toBe(1);
+        expect(settledStatus.lastRunAt).toBe(null);
+        expect(settledStatus.lastManualRequestCompletedAt).toBe(null);
         expect(yield* Ref.get(manual.loaderCalls)).toEqual([]);
         expect(yield* Ref.get(settled.loaderCalls)).toEqual([]);
       }),
     ),
   );
 
-  it.effect("explicitly completes a manual trigger while unprepared", () =>
+  it.effect("completes an offline manual request without claiming a successful sync", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness({
@@ -994,8 +744,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
 
         const status = yield* Queue.take(harness.statuses);
         expect(status.running).toBe(false);
-        expect(status.failed).toBe(0);
-        expect(status.lastRunAt).not.toBe(null);
+        expect(status.failed).toBe(1);
+        expect(status.lastRunAt).toBe(null);
+        expect(status.lastManualRequestCompletedAt).not.toBe(null);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual([]);
         expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
       }),
@@ -1101,6 +852,24 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.running).toBe(false);
         expect(status.lastRunAt).toBe(null);
+      }),
+    ),
+  );
+
+  it.effect("reports a manual request with no cached shell as unavailable", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ cachedShell: false });
+
+        yield* harness.fire({ reason: "manual" });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        expect((yield* Queue.take(harness.started)).running).toBe(true);
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.failed).toBe(1);
+        expect(status.lastRunAt).toBe(null);
+        expect(status.lastManualRequestCompletedAt).not.toBe(null);
       }),
     ),
   );
@@ -1239,7 +1008,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.refreshed).toBe(0);
         expect(status.skipped).toBe(2);
-        expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(3);
+        expect((yield* Ref.get(harness.stored)).has("stale")).toBe(false);
       }),
     ),
   );
@@ -1283,9 +1052,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
 
         // The turn that just settled produced events the cached detail does
         // not have yet.
-        yield* Ref.update(harness.stored, (map) =>
-          new Map(map).set("stale", detailSnapshot("stale", 3)),
-        );
+        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
         yield* harness.fire({
           reason: "thread-settled",
           environmentId: ENVIRONMENT_ID,
@@ -1335,9 +1102,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         yield* TestClock.adjust("3 seconds");
         yield* Queue.take(harness.statuses);
 
-        yield* Ref.update(harness.stored, (map) =>
-          new Map(map).set("stale", detailSnapshot("stale", 3)),
-        );
+        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
         yield* harness.fire({ reason: "manual" });
         yield* Effect.yieldNow;
         yield* TestClock.adjust("3 seconds");
@@ -1345,6 +1110,8 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.refreshed).toBe(1);
         expect(status.skipped).toBe(1);
+        expect(status.lastRunAt).not.toBe(null);
+        expect(status.lastManualRequestCompletedAt).not.toBe(null);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
 
         // The manual run completed three seconds after the lifecycle run. A
@@ -1370,9 +1137,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         yield* TestClock.adjust("3 seconds");
         yield* Queue.take(harness.statuses);
 
-        yield* Ref.update(harness.stored, (map) =>
-          new Map(map).set("stale", detailSnapshot("stale", 3)),
-        );
+        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
         // A foreground wakeup lands in the same batch as the manual request
         // while the cooldown is still active: the run must stay full (manual
         // wins over the targeted path) without the suppressed lifecycle
@@ -1409,9 +1174,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         yield* Queue.take(harness.statuses);
 
         yield* Ref.update(harness.stored, (map) =>
-          new Map(map)
-            .set("stale", detailSnapshot("stale", 3))
-            .set("current", detailSnapshot("current", 3)),
+          new Map(withoutStoredThread(map, "stale")).set("current", detailSnapshot("current", 3)),
         );
         yield* Queue.offer(harness.wakeups, "application-active");
         yield* harness.fire({
@@ -1562,6 +1325,7 @@ describe("createThreadPrewarmSummaryAtom", () => {
       harness.statusAtoms(ENVIRONMENT_ID),
       AsyncResult.success<EnvironmentThreadPrewarmStatus>({
         lastRunAt: 1_000,
+        lastManualRequestCompletedAt: 900,
         refreshed: 2,
         skipped: 0,
         failed: 0,
@@ -1581,10 +1345,53 @@ describe("createThreadPrewarmSummaryAtom", () => {
     const summary = harness.registry.get(harness.summaryAtom);
     expect(summary.lastRunAt).toBe(1_000);
     expect(summary.environmentLastRunAt.get(ENVIRONMENT_ID)).toBe(1_000);
+    expect(summary.environmentLastManualRequestCompletedAt.get(ENVIRONMENT_ID)).toBe(900);
     expect(
       didEnvironmentPrewarmRunsAdvance(
-        summary.environmentLastRunAt,
-        new Map([[ENVIRONMENT_ID, 1_000]]),
+        summary.environmentLastManualRequestCompletedAt,
+        new Map([[ENVIRONMENT_ID, 900]]),
+      ),
+    ).toBe(false);
+  });
+
+  it("completes an offline request without advancing the successful-sync timestamp", () => {
+    const harness = makeHarness();
+    harness.registry.set(
+      harness.statusAtoms(ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>({
+        ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+        lastManualRequestCompletedAt: 1_000,
+        failed: 1,
+      }),
+    );
+
+    const summary = harness.registry.get(harness.summaryAtom);
+    expect(summary.lastRunAt).toBe(null);
+    expect(summary.environmentLastRunAt.get(ENVIRONMENT_ID)).toBe(null);
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        summary.environmentLastManualRequestCompletedAt,
+        new Map([[ENVIRONMENT_ID, null]]),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat a background run as manual request completion", () => {
+    const harness = makeHarness();
+    harness.registry.set(
+      harness.statusAtoms(ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>({
+        ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+        lastRunAt: 1_000,
+      }),
+    );
+
+    const summary = harness.registry.get(harness.summaryAtom);
+    expect(summary.lastRunAt).toBe(1_000);
+    expect(
+      didEnvironmentPrewarmRunsAdvance(
+        summary.environmentLastManualRequestCompletedAt,
+        new Map([[ENVIRONMENT_ID, null]]),
       ),
     ).toBe(false);
   });
