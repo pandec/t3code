@@ -70,6 +70,10 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
+// Re-exported for tests that import it from here (upstream's original home).
+// The predicate itself must stay in threadDetailEvents.ts: the replay filter
+// and the threadSequence watermark SQL have to read one shared list.
+export { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";

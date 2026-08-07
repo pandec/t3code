@@ -61,6 +61,7 @@ export function BetaSettingsPanel() {
   const sidebarAutoSettleAfterDays = useClientSettings(
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
+  const planModeEnabled = useClientSettings((settings) => settings.planModeEnabled);
   const updateSettings = useUpdateClientSettings();
 
   return (
@@ -120,6 +121,17 @@ export function BetaSettingsPanel() {
             ) : null}
           </>
         ) : null}
+        <SettingsRow
+          {...searchableSetting("restore-plan-mode")}
+          description="Legacy feature. Brings back the Build/Plan toggle in the composer along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode."
+          control={
+            <Switch
+              checked={planModeEnabled}
+              onCheckedChange={(checked) => updateSettings({ planModeEnabled: Boolean(checked) })}
+              aria-label="Restore plan mode (legacy)"
+            />
+          }
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );

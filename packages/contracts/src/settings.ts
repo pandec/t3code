@@ -259,7 +259,6 @@ export const ClientSettingsSchema = Schema.Struct({
   accentTintIntensityPercent: AccentTintIntensityPercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ACCENT_TINT_INTENSITY_PERCENT)),
   ),
-  autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -337,6 +336,10 @@ export const ClientSettingsSchema = Schema.Struct({
   /** Web-only: obscure provider account emails in the usage meter. */
   maskProviderUsageEmails: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   threadAutoSettleEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
+  // default UI; this beta flag restores it (plus the /plan and /default slash
+  // commands) for users who still rely on the old workflow.
+  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1072,7 +1075,6 @@ export const ClientSettingsPatch = Schema.Struct({
   archivedSectionVisibleCount: Schema.optionalKey(ArchivedSectionVisibleCount),
   accentTintsEnabled: Schema.optionalKey(Schema.Boolean),
   accentTintIntensityPercent: Schema.optionalKey(AccentTintIntensityPercent),
-  autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -1115,6 +1117,7 @@ export const ClientSettingsPatch = Schema.Struct({
   providerUsageCriticalPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   maskProviderUsageEmails: Schema.optionalKey(Schema.Boolean),
   threadAutoSettleEnabled: Schema.optionalKey(Schema.Boolean),
+  planModeEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

@@ -1,25 +1,4 @@
 export type TimelineScrollMode = "following-end" | "anchoring-new-turn" | "free-scrolling";
-export type TimelineFollowDecision = "follow" | "detach" | "preserve";
-
-export function resolveTimelineFollowDecision({
-  isAtEnd,
-  isUserNavigation,
-}: {
-  readonly isAtEnd: boolean;
-  readonly isUserNavigation: boolean;
-}): TimelineFollowDecision {
-  if (!isUserNavigation) {
-    return "preserve";
-  }
-  return isAtEnd ? "follow" : "detach";
-}
-
-export function isTimelineDetachedForThread(
-  detachedThreadKey: string | null,
-  activeThreadKey: string,
-): boolean {
-  return detachedThreadKey === activeThreadKey;
-}
 
 export function shouldPositionTimelineAnchor({
   scrollMode,
