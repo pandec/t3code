@@ -224,19 +224,31 @@ export function selectPrewarmCandidates(
     .slice(0, limit);
 }
 
-function wouldNarrowCachedHistory(
+function userAnchoredTurnCount(snapshot: OrchestrationThreadDetailSnapshot): number {
+  return new Set(
+    snapshot.thread.messages.flatMap((message) =>
+      message.role === "user" && message.turnId !== null ? [message.turnId] : [],
+    ),
+  ).size;
+}
+
+function wouldDiscardWiderCachedHistory(
   stored: OrchestrationThreadDetailSnapshot,
   fetched: OrchestrationThreadDetailSnapshot,
 ): boolean {
+  const storedWidth =
+    fetched.page === undefined ? stored.thread.messages.length : userAnchoredTurnCount(stored);
+  const fetchedWidth =
+    fetched.page === undefined ? fetched.thread.messages.length : userAnchoredTurnCount(fetched);
+  if (storedWidth <= fetchedWidth) {
+    return false;
+  }
   const storedOldestMessageId = stored.thread.messages[0]?.id;
   const storedNewestMessageId = stored.thread.messages[stored.thread.messages.length - 1]?.id;
   if (storedOldestMessageId === undefined || storedNewestMessageId === undefined) {
     return false;
   }
   const fetchedMessageIds = new Set(fetched.thread.messages.map((message) => message.id));
-  // A fetched window that still contains the stored newest message but dropped
-  // the oldest is a narrower version of the same history. No overlap means the
-  // bounded window advanced entirely and may replace the stale cached page.
   return (
     !fetchedMessageIds.has(storedOldestMessageId) && fetchedMessageIds.has(storedNewestMessageId)
   );
@@ -262,7 +274,6 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
       if (Option.isSome(stored)) {
         if (stored.value.page !== undefined && snapshot.page === undefined) return false;
-        if (wouldNarrowCachedHistory(stored.value, snapshot)) return false;
         if (snapshot.page !== undefined) {
           const fetchedThreadSequence = snapshot.page.threadSequence;
           if (
@@ -271,8 +282,17 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
           ) {
             return false;
           }
-        } else if (stored.value.snapshotSequence >= snapshot.snapshotSequence) {
-          return false;
+          // Fresh equal-width pages may slide forward with partial overlap
+          // ([A…J] → [B…K]). Width is measured in user-anchored turns, matching
+          // the server limit rather than variable message/activity fan-out. Reject
+          // only when the cached page is strictly wider and the fetched page keeps
+          // its newest edge while omitting its oldest, proving loaded scrollback
+          // would be discarded. No edge overlap means the bounded window fully
+          // advanced and may replace the stale cached page.
+          if (wouldDiscardWiderCachedHistory(stored.value, snapshot)) return false;
+        } else {
+          if (stored.value.snapshotSequence >= snapshot.snapshotSequence) return false;
+          if (wouldDiscardWiderCachedHistory(stored.value, snapshot)) return false;
         }
       }
       // Turn pages are already bounded by a coherent server-selected turn range.
@@ -504,10 +524,10 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
         Ref.update(pending, (current) => accumulateTrigger(current, trigger)),
       ),
       Stream.debounce(PREWARM_SETTLE_DELAY),
-      // A run emits a pair: `running: true` the moment the batch commits to
-      // doing work, then the settled counts. A batch that decides to do
-      // nothing emits neither, so an in-flight indicator never flashes for a
-      // no-op sweep.
+      // A runnable batch emits `running: true` followed by settled counts. An
+      // unprepared manual/settled request emits only an explicit completion so
+      // its caller can stop waiting; a lifecycle no-op emits nothing and never
+      // flashes an in-flight indicator.
       Stream.flatMap(() =>
         Stream.unwrap(
           Effect.gen(function* () {
@@ -525,7 +545,18 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
             // work at all and must not raise an in-flight indicator.
             const prepared = yield* SubscriptionRef.get(supervisor.prepared);
             if (Option.isNone(prepared)) {
-              return Stream.empty;
+              if (!batch.manual && batch.settled.size === 0) {
+                return Stream.empty;
+              }
+              // Manual and settle callers cannot rely on a later connection
+              // trigger. Complete their request explicitly instead of leaving
+              // status observers waiting for lastRunAt to advance.
+              const settled = {
+                ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+                lastRunAt: yield* Clock.currentTimeMillis,
+              };
+              yield* Ref.set(lastStatus, settled);
+              return Stream.make(settled);
             }
             const previous = yield* Ref.get(lastStatus);
             const run = Effect.gen(function* () {
@@ -561,7 +592,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                     onNone: () => warm,
                     onSome: (service) => service.run(warm),
                   })
-                : { kind: "completed" as const, status: null };
+                : { kind: "session-unavailable" as const };
               let settled: EnvironmentThreadPrewarmStatus;
               if (attempt.kind === "completed" && attempt.status !== null) {
                 settled = attempt.status;
@@ -589,6 +620,20 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                   lastRunAt: previous.lastRunAt,
                   failed: 1,
                 };
+              } else if (attempt.kind === "session-unavailable") {
+                if (batch.manual || batch.settled.size > 0) {
+                  // Manual and settle triggers have no later connection event
+                  // guaranteed to retry them. Complete their status explicitly
+                  // so callers waiting on lastRunAt do not remain in-flight.
+                  settled = {
+                    ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+                    lastRunAt: yield* Clock.currentTimeMillis,
+                  };
+                } else {
+                  // Lifecycle intent is retried by the connected-generation
+                  // trigger and must not consume cooldown while sessionless.
+                  settled = { ...previous, running: false };
+                }
               } else {
                 // A run that found no cached shell still has to close the pair,
                 // but it must not claim a run it never completed.
