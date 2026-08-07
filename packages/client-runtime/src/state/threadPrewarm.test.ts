@@ -9,7 +9,9 @@ import {
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -36,6 +38,9 @@ import {
   makeEnvironmentThreadPrewarm,
   seedThreadStreamingSnapshot,
   selectPrewarmCandidates,
+  ThreadHistoryWindow,
+  ThreadPrewarmRunGate,
+  threadPrewarmRunGateLayer,
   ThreadPrewarmTriggers,
   ThreadSnapshotLoader,
   type EnvironmentThreadPrewarmStatus,
@@ -196,11 +201,45 @@ describe("commitPrewarmedThreadSnapshot", () => {
   );
 });
 
+describe("thread prewarm run gate", () => {
+  it.effect("runs at most one environment batch at a time", () =>
+    Effect.gen(function* () {
+      const gate = yield* ThreadPrewarmRunGate;
+      const firstStarted = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const order = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const first = yield* gate
+        .run(
+          Ref.update(order, (current) => [...current, "first"]).pipe(
+            Effect.andThen(Deferred.succeed(firstStarted, undefined)),
+            Effect.andThen(Deferred.await(releaseFirst)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      const second = yield* gate
+        .run(Ref.update(order, (current) => [...current, "second"]))
+        .pipe(Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(order)).toEqual(["first"]);
+
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(yield* Ref.get(order)).toEqual(["first", "second"]);
+    }).pipe(Effect.provide(threadPrewarmRunGateLayer)),
+  );
+});
+
 describe("makeEnvironmentThreadPrewarm", () => {
   const makeHarness = Effect.fn("TestThreadPrewarm.makeHarness")(function* (options?: {
     readonly initialPrepared?: Option.Option<PreparedConnection>;
     readonly cachedShell?: false;
     readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
+    readonly hangSnapshotLoad?: boolean;
+    readonly messageWindowLimit?: number | null;
   }) {
     const shell: OrchestrationShellSnapshot = {
       snapshotSequence: 10,
@@ -222,11 +261,21 @@ describe("makeEnvironmentThreadPrewarm", () => {
       threads: [detailSnapshot("current", 10), detailSnapshot("stale", 3)],
     });
     const loaderCalls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const loaderOptions = yield* Ref.make<
+      ReadonlyArray<{ readonly messageLimit?: number } | undefined>
+    >([]);
     const loader = ThreadSnapshotLoader.of({
-      load: (_prepared, threadId) =>
-        Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
-          Effect.as(
-            Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+      load: (_prepared, threadId, loadOptions) =>
+        Effect.all([
+          Ref.update(loaderCalls, (calls) => [...calls, threadId]),
+          Ref.update(loaderOptions, (calls) => [...calls, loadOptions]),
+        ]).pipe(
+          Effect.andThen(
+            options?.hangSnapshotLoad
+              ? Effect.never
+              : Effect.succeed(
+                  Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+                ),
           ),
         ),
     });
@@ -253,7 +302,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     // the settled status without stepping over the run's opening event.
     const started = yield* Queue.unbounded<EnvironmentThreadPrewarmStatus>();
 
-    const stream = yield* makeEnvironmentThreadPrewarm().pipe(
+    const streamEffect = makeEnvironmentThreadPrewarm().pipe(
       Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       Effect.provideService(Persistence.EnvironmentCacheStore, cache),
       Effect.provideService(ThreadSnapshotLoader, loader),
@@ -269,6 +318,17 @@ describe("makeEnvironmentThreadPrewarm", () => {
         }),
       ),
     );
+    const stream = yield* options?.messageWindowLimit === undefined
+      ? streamEffect
+      : streamEffect.pipe(
+          Effect.provideService(
+            ThreadHistoryWindow,
+            ThreadHistoryWindow.of({
+              messageWindowLimit: options.messageWindowLimit,
+              messageOlderPageSize: 50,
+            }),
+          ),
+        );
     yield* Effect.forkScoped(
       Stream.runForEach(stream, (status) =>
         Queue.offer(status.running ? started : statuses, status),
@@ -286,6 +346,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       started,
       stored,
       loaderCalls,
+      loaderOptions,
       initialStatus,
       fire,
     };
@@ -319,6 +380,51 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.failed).toBe(0);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
         expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(10);
+      }),
+    ),
+  );
+
+  it.effect("passes the configured message window to snapshot loads", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ messageWindowLimit: 150 });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        expect(yield* Ref.get(harness.loaderOptions)).toEqual([{ messageLimit: 150 }]);
+      }),
+    ),
+  );
+
+  it.effect("requests full history when no message window is configured", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        expect(yield* Ref.get(harness.loaderOptions)).toEqual([undefined]);
+      }),
+    ),
+  );
+
+  it.effect("requests full history for an explicitly unbounded message window", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ messageWindowLimit: null });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        expect(yield* Ref.get(harness.loaderOptions)).toEqual([undefined]);
       }),
     ),
   );
@@ -373,6 +479,33 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.running).toBe(false);
         expect(status.lastRunAt).toBe(null);
+      }),
+    ),
+  );
+
+  it.effect("reports a timed-out run and suppresses an immediate reconnect retry", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ hangSnapshotLoad: true });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.started);
+        yield* TestClock.adjust("30 seconds");
+
+        const timedOut = yield* Queue.take(harness.statuses);
+        expect(timedOut.failed).toBe(1);
+        expect(timedOut.lastRunAt).toBe(null);
+
+        yield* SubscriptionRef.set(harness.supervisorState, {
+          ...CONNECTED_STATE,
+          generation: 2,
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
       }),
     ),
   );
