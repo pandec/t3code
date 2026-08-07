@@ -2352,7 +2352,6 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         threadId,
         payload: {
           cwd: "/tmp/project-cwd-binding/.claude/worktrees/feature",
-          previousCwd: "/tmp/project-cwd-binding",
           sessionGenerationId: session.sessionGenerationId,
         },
       });

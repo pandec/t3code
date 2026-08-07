@@ -2853,7 +2853,7 @@ describe("ProviderRuntimeIngestion", () => {
       provider: ProviderDriverKind.make("codex"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
-      payload: { cwd: worktreePath, previousCwd: harness.workspaceRoot },
+      payload: { cwd: worktreePath },
     });
     await harness.drain();
 
@@ -2874,7 +2874,7 @@ describe("ProviderRuntimeIngestion", () => {
       provider: ProviderDriverKind.make("codex"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
-      payload: { cwd: harness.workspaceRoot, previousCwd: worktreePath },
+      payload: { cwd: harness.workspaceRoot },
     });
     await harness.drain();
 
@@ -2900,7 +2900,7 @@ describe("ProviderRuntimeIngestion", () => {
       provider: ProviderDriverKind.make("codex"),
       createdAt: "2026-01-01T00:00:00.000Z",
       threadId: asThreadId("thread-1"),
-      payload: { cwd: plainDirectory, previousCwd: harness.workspaceRoot },
+      payload: { cwd: plainDirectory },
     });
     harness.emit({
       type: "session.cwd.changed",
@@ -2908,7 +2908,7 @@ describe("ProviderRuntimeIngestion", () => {
       provider: ProviderDriverKind.make("codex"),
       createdAt: "2026-01-01T00:00:00.000Z",
       threadId: asThreadId("thread-1"),
-      payload: { cwd: foreignCheckout, previousCwd: harness.workspaceRoot },
+      payload: { cwd: foreignCheckout },
     });
     await harness.drain();
 
@@ -2945,7 +2945,6 @@ describe("ProviderRuntimeIngestion", () => {
       threadId: asThreadId("thread-1"),
       payload: {
         cwd: worktreePath,
-        previousCwd: harness.workspaceRoot,
         sessionGenerationId: "generation-1",
       },
     });

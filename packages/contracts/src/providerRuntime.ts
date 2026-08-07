@@ -287,12 +287,10 @@ export type SessionStateChangedPayload = typeof SessionStateChangedPayload.Type;
 /**
  * The provider runtime reported that the live session changed its working
  * directory (for example, the agent entered or left a worktree). `cwd` is the
- * directory the session is running in now; `previousCwd` is where it ran
- * before, when the runtime reports it.
+ * directory the session is running in now.
  */
 const SessionCwdChangedPayload = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  previousCwd: Schema.optional(TrimmedNonEmptyStringSchema),
   sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type SessionCwdChangedPayload = typeof SessionCwdChangedPayload.Type;
