@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -25,14 +26,22 @@ import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { threadKey } from "./entities.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
+import { retainRecentThreadHistory } from "./threadReducer.ts";
+import {
+  DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  DEFAULT_MESSAGE_WINDOW_LIMIT,
+  DEFAULT_OLDER_TURN_LIMIT,
+  ThreadHistoryWindow,
+  type ThreadHistoryWindowConfig,
+} from "./threadRetention.ts";
+import { ThreadSnapshotLoader, type ThreadSnapshotLoadWindow } from "./threadSnapshotHttp.ts";
 
 /**
  * Opportunistic thread-detail prewarming: shortly after an environment
- * connects (and on later app foregrounds), fetch full detail snapshots for a
- * few recently active threads and store them in the offline cache. Opening one
+ * connects (and on later app foregrounds), fetch detail snapshots for a few
+ * recently active threads and store them in the offline cache. Opening one
  * of those threads then paints instantly from cache and only needs the cheap
- * `afterSequence` socket catch-up instead of blocking on a full detail fetch.
+ * `afterSequence` socket catch-up instead of blocking on a detail fetch.
  *
  * This is deliberately best-effort: every failure is swallowed after logging,
  * and the regular open-path reconciliation remains the source of truth.
@@ -43,6 +52,50 @@ const PREWARM_COOLDOWN_MS = 60_000;
 const PREWARM_THREAD_LIMIT = 5;
 const PREWARM_CONCURRENCY = 2;
 const PREWARM_RUN_TIMEOUT_MS = 30_000;
+
+const DEFAULT_PREWARM_HISTORY_WINDOW = {
+  messageWindowLimit: DEFAULT_MESSAGE_WINDOW_LIMIT,
+  messageOlderPageSize: DEFAULT_MESSAGE_OLDER_PAGE_SIZE,
+  initialTurnLimit: null,
+  olderTurnLimit: DEFAULT_OLDER_TURN_LIMIT,
+  residentMessageCeiling: null,
+} satisfies ThreadHistoryWindowConfig;
+
+/**
+ * Mirrors the live thread state's capability-gated choice between the current
+ * turn page and the legacy message-count window. Web/desktop configure both
+ * modes as unbounded, so their prewarm requests remain full-history reads.
+ */
+function selectPrewarmSnapshotWindow(
+  config: { readonly threadSnapshotPagination?: boolean },
+  historyWindow: ThreadHistoryWindowConfig,
+): ThreadSnapshotLoadWindow | undefined {
+  const initialTurnLimit = historyWindow.initialTurnLimit ?? null;
+  if (config.threadSnapshotPagination === true && initialTurnLimit !== null) {
+    return { turnLimit: initialTurnLimit };
+  }
+  return historyWindow.messageWindowLimit === null
+    ? undefined
+    : { messageLimit: historyWindow.messageWindowLimit };
+}
+
+export class ThreadPrewarmRunGate extends Context.Service<
+  ThreadPrewarmRunGate,
+  {
+    readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  }
+>()("@t3tools/client-runtime/state/threadPrewarm/ThreadPrewarmRunGate") {}
+
+/** Mobile provides one shared instance so environment batches cannot overlap. */
+export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Layer.effect(
+  ThreadPrewarmRunGate,
+  Effect.gen(function* () {
+    const semaphore = yield* Semaphore.make(1);
+    return ThreadPrewarmRunGate.of({
+      run: (effect) => semaphore.withPermits(1)(effect),
+    });
+  }),
+);
 
 export interface EnvironmentThreadPrewarmStatus {
   readonly lastRunAt: number | null;
@@ -180,6 +233,7 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
   cache: EnvironmentCacheStore["Service"],
   environmentId: EnvironmentIdType,
   snapshot: OrchestrationThreadDetailSnapshot,
+  messageWindowLimit?: number | null,
 ) {
   const stored = yield* cache
     .loadThread(environmentId, snapshot.thread.id)
@@ -187,7 +241,18 @@ export const commitPrewarmedThreadSnapshot = Effect.fn("ThreadPrewarm.commit")(f
   if (Option.isSome(stored) && stored.value.snapshotSequence >= snapshot.snapshotSequence) {
     return false;
   }
-  yield* cache.saveThread(environmentId, snapshot);
+  const retainedSnapshot = {
+    ...snapshot,
+    thread: retainRecentThreadHistory(
+      snapshot.thread,
+      // A turn page's opaque cursor describes its message range, so retain its
+      // messages verbatim while still applying the shared activity/checkpoint
+      // caps. Legacy snapshots carry messageWindow metadata and can safely use
+      // the configured message-count retention path.
+      snapshot.page === undefined && messageWindowLimit !== undefined ? { messageWindowLimit } : {},
+    ),
+  };
+  yield* cache.saveThread(environmentId, retainedSnapshot);
   return true;
 });
 
@@ -196,6 +261,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   readonly cache: EnvironmentCacheStore["Service"];
   readonly loader: ThreadSnapshotLoader["Service"];
   readonly environmentId: EnvironmentIdType;
+  readonly historyWindow: ThreadHistoryWindowConfig;
   /** Restricts a targeted (settle-triggered) run to these threads. */
   readonly only?: ReadonlySet<ThreadIdType>;
 }) {
@@ -203,6 +269,12 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   if (Option.isNone(prepared)) {
     return null;
   }
+  const session = yield* SubscriptionRef.get(input.supervisor.session);
+  const config = yield* Option.match(session, {
+    onNone: () => Effect.succeed({}),
+    onSome: (value) => value.initialConfig.pipe(Effect.orElseSucceed(() => ({}))),
+  });
+  const snapshotWindow = selectPrewarmSnapshotWindow(config, input.historyWindow);
   // Candidates come from the cached shell rather than a live shell
   // subscription so prewarming never adds a socket or shell request of its
   // own. The shell state persists each applied snapshot, and the settle delay
@@ -240,12 +312,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           skipped += 1;
           return;
         }
-        // Deliberately unwindowed: a prewarmed snapshot is a FULL thread with
-        // no `page` metadata, so opening it renders complete history and the
-        // "load earlier" path correctly reports nothing older to fetch. It does
-        // mean prewarming forgoes the turn window's transfer/memory savings —
-        // tracked separately; see PR #123.
-        const fetched = yield* input.loader.load(prepared.value, thread.id);
+        const fetched = yield* input.loader.load(prepared.value, thread.id, snapshotWindow);
         if (Option.isNone(fetched)) {
           failed += 1;
           return;
@@ -258,6 +325,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           input.cache,
           input.environmentId,
           fetched.value,
+          input.historyWindow.messageWindowLimit,
         ).pipe(Effect.orElseSucceed(() => false));
         if (committed) {
           refreshed += 1;
@@ -323,6 +391,12 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
     const supervisor = yield* EnvironmentSupervisor;
     const cache = yield* EnvironmentCacheStore;
     const loader = yield* ThreadSnapshotLoader;
+    const configuredHistoryWindow = yield* Effect.serviceOption(ThreadHistoryWindow);
+    const historyWindow = Option.getOrElse(
+      configuredHistoryWindow,
+      () => DEFAULT_PREWARM_HISTORY_WINDOW,
+    );
+    const gate = yield* Effect.serviceOption(ThreadPrewarmRunGate);
     const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
     const triggers = yield* Effect.serviceOption(ThreadPrewarmTriggers);
     const environmentId = supervisor.target.environmentId;
@@ -397,31 +471,64 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
             }
             const previous = yield* Ref.get(lastStatus);
             const run = Effect.gen(function* () {
-              const result = yield* warmEnvironmentOnce({
+              const warm = warmEnvironmentOnce({
                 supervisor,
                 cache,
                 loader,
                 environmentId,
+                historyWindow,
                 ...(runFull ? {} : { only: batch.settled }),
               }).pipe(
                 Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
-                Effect.map((result) =>
-                  Option.flatMap(result, (status) => Option.fromNullishOr(status)),
+                Effect.map(
+                  Option.match({
+                    onNone: () => ({ kind: "timed-out" as const }),
+                    onSome: (status) => ({ kind: "completed" as const, status }),
+                  }),
                 ),
                 Effect.catchCause((cause) =>
                   Effect.logWarning("Thread prewarm run failed.").pipe(
                     Effect.annotateLogs({ environmentId, cause: String(cause) }),
-                    Effect.as(Option.none<EnvironmentThreadPrewarmStatus>()),
+                    Effect.as({ kind: "failed" as const }),
                   ),
                 ),
               );
-              if (consumeCooldown && Option.isSome(result)) {
-                yield* Ref.set(lastFullRunAt, result.value.lastRunAt);
+              const attempt = yield* Option.match(gate, {
+                onNone: () => warm,
+                onSome: (service) => service.run(warm),
+              });
+              let settled: EnvironmentThreadPrewarmStatus;
+              if (attempt.kind === "completed" && attempt.status !== null) {
+                settled = attempt.status;
+                if (consumeCooldown) {
+                  yield* Ref.set(lastFullRunAt, settled.lastRunAt);
+                }
+              } else if (attempt.kind === "timed-out") {
+                yield* Effect.logWarning("Thread prewarm run timed out.").pipe(
+                  Effect.annotateLogs({ environmentId, timeoutMs: PREWARM_RUN_TIMEOUT_MS }),
+                );
+                // Suppress an identical lifecycle sweep on an immediate reconnect;
+                // a later wakeup retries after the normal cooldown.
+                if (consumeCooldown) {
+                  const timedOutAt = yield* Clock.currentTimeMillis;
+                  yield* Ref.set(lastFullRunAt, timedOutAt);
+                }
+                settled = {
+                  ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+                  lastRunAt: previous.lastRunAt,
+                  failed: 1,
+                };
+              } else if (attempt.kind === "failed") {
+                settled = {
+                  ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+                  lastRunAt: previous.lastRunAt,
+                  failed: 1,
+                };
+              } else {
+                // A run that found no cached shell still has to close the pair,
+                // but it must not claim a run it never completed.
+                settled = { ...previous, running: false };
               }
-              // A run that timed out, failed, or found no connection still has
-              // to close the pair — but it must not claim a fresher
-              // `lastRunAt` than the last run that actually completed.
-              const settled = Option.getOrElse(result, () => ({ ...previous, running: false }));
               yield* Ref.set(lastStatus, settled);
               return settled;
             });

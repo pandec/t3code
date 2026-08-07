@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  EventId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -9,7 +11,9 @@ import {
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -36,8 +40,12 @@ import {
   makeEnvironmentThreadPrewarm,
   seedThreadStreamingSnapshot,
   selectPrewarmCandidates,
+  threadPrewarmRunGateLayer,
+  ThreadHistoryWindow,
+  ThreadPrewarmRunGate,
   ThreadPrewarmTriggers,
   ThreadSnapshotLoader,
+  type ThreadSnapshotLoadWindow,
   type EnvironmentThreadPrewarmStatus,
   type ThreadPrewarmTriggerRequest,
 } from "./threads.ts";
@@ -63,6 +71,13 @@ const CONNECTED_STATE: SupervisorConnectionState = {
   phase: "connected",
   generation: 1,
 };
+const TEST_HISTORY_WINDOW = ThreadHistoryWindow.of({
+  messageWindowLimit: 150,
+  messageOlderPageSize: 100,
+  initialTurnLimit: 10,
+  olderTurnLimit: 20,
+  residentMessageCeiling: 750,
+});
 
 function threadShell(
   id: string,
@@ -119,6 +134,49 @@ function detailSnapshot(id: string, snapshotSequence: number): OrchestrationThre
       proposedPlans: [],
       activities: [],
       checkpoints: [],
+    },
+  };
+}
+
+function retainedFixtureSnapshot(protocol: "turn" | "legacy"): OrchestrationThreadDetailSnapshot {
+  const snapshot = detailSnapshot(`thread-${protocol}`, 10);
+  const messages = Array.from({ length: 3 }, (_, index) => ({
+    id: MessageId.make(`message-${index}`),
+    role: "user" as const,
+    text: `Message ${index}`,
+    turnId: TurnId.make(`turn-${index}`),
+    streaming: false,
+    createdAt: "2026-04-01T00:00:00.000Z",
+    updatedAt: "2026-04-01T00:00:00.000Z",
+  }));
+  const activities = Array.from({ length: 501 }, (_, index) => ({
+    id: EventId.make(`activity-${index}`),
+    tone: "tool" as const,
+    kind: "command",
+    summary: `Ran command ${index}`,
+    payload: {},
+    turnId: TurnId.make(`turn-${index}`),
+    sequence: index,
+    createdAt: "2026-04-01T00:00:00.000Z",
+  }));
+  return {
+    ...snapshot,
+    ...(protocol === "turn"
+      ? { page: { beforeCursor: "cursor-1", hasMore: true, snapshotSequence: 10 } }
+      : {}),
+    thread: {
+      ...snapshot.thread,
+      messages,
+      activities,
+      ...(protocol === "legacy"
+        ? {
+            messageWindow: {
+              hasMoreOlder: true,
+              oldestLoadedMessageId: messages[0]!.id,
+              totalCount: 10,
+            },
+          }
+        : {}),
     },
   };
 }
@@ -194,6 +252,84 @@ describe("commitPrewarmedThreadSnapshot", () => {
       expect((yield* Ref.get(stored)).get("thread-1")?.snapshotSequence).toBe(8);
     }),
   );
+
+  it.effect("retains bounded history without mixing pagination metadata", () =>
+    Effect.gen(function* () {
+      const { cache, stored } = yield* makeCacheStore({ shell: Option.none() });
+
+      expect(
+        yield* commitPrewarmedThreadSnapshot(
+          cache,
+          ENVIRONMENT_ID,
+          retainedFixtureSnapshot("turn"),
+          2,
+        ),
+      ).toBe(true);
+      expect(
+        yield* commitPrewarmedThreadSnapshot(
+          cache,
+          ENVIRONMENT_ID,
+          retainedFixtureSnapshot("legacy"),
+          2,
+        ),
+      ).toBe(true);
+
+      const turn = (yield* Ref.get(stored)).get("thread-turn");
+      expect(turn?.thread.activities).toHaveLength(500);
+      expect(turn?.thread.messages).toHaveLength(3);
+      expect(turn?.page).toEqual({
+        beforeCursor: "cursor-1",
+        hasMore: true,
+        snapshotSequence: 10,
+      });
+      expect(turn?.thread.messageWindow).toBeUndefined();
+
+      const legacy = (yield* Ref.get(stored)).get("thread-legacy");
+      expect(legacy?.thread.activities).toHaveLength(500);
+      expect(legacy?.thread.messages.map((message) => message.id)).toEqual([
+        "message-1",
+        "message-2",
+      ]);
+      expect(legacy?.page).toBeUndefined();
+      expect(legacy?.thread.messageWindow).toEqual({
+        hasMoreOlder: true,
+        oldestLoadedMessageId: "message-1",
+        totalCount: 10,
+      });
+    }),
+  );
+});
+
+describe("thread prewarm run gate", () => {
+  it.effect("runs at most one environment batch at a time", () =>
+    Effect.gen(function* () {
+      const gate = yield* ThreadPrewarmRunGate;
+      const firstStarted = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const order = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const first = yield* gate
+        .run(
+          Ref.update(order, (current) => [...current, "first"]).pipe(
+            Effect.andThen(Deferred.succeed(firstStarted, undefined)),
+            Effect.andThen(Deferred.await(releaseFirst)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      const second = yield* gate
+        .run(Ref.update(order, (current) => [...current, "second"]))
+        .pipe(Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(order)).toEqual(["first"]);
+
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(yield* Ref.get(order)).toEqual(["first", "second"]);
+    }).pipe(Effect.provide(threadPrewarmRunGateLayer)),
+  );
 });
 
 describe("makeEnvironmentThreadPrewarm", () => {
@@ -201,6 +337,9 @@ describe("makeEnvironmentThreadPrewarm", () => {
     readonly initialPrepared?: Option.Option<PreparedConnection>;
     readonly cachedShell?: false;
     readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
+    readonly hangSnapshotLoad?: boolean;
+    readonly paginationCapability?: boolean;
+    readonly historyWindow?: ThreadHistoryWindow["Service"];
   }) {
     const shell: OrchestrationShellSnapshot = {
       snapshotSequence: 10,
@@ -222,11 +361,17 @@ describe("makeEnvironmentThreadPrewarm", () => {
       threads: [detailSnapshot("current", 10), detailSnapshot("stale", 3)],
     });
     const loaderCalls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const loaderWindows = yield* Ref.make<ReadonlyArray<ThreadSnapshotLoadWindow | undefined>>([]);
     const loader = ThreadSnapshotLoader.of({
-      load: (_prepared, threadId) =>
+      load: (_prepared, threadId, window) =>
         Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
-          Effect.as(
-            Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+          Effect.andThen(Ref.update(loaderWindows, (windows) => [...windows, window])),
+          Effect.andThen(
+            options?.hangSnapshotLoad === true
+              ? Effect.never
+              : Effect.succeed(
+                  Option.some(options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10)),
+                ),
           ),
         ),
     });
@@ -236,7 +381,13 @@ describe("makeEnvironmentThreadPrewarm", () => {
     const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
       options?.initialPrepared ?? Option.some(PREPARED),
     );
-    const session = yield* SubscriptionRef.make(Option.none());
+    const session = yield* SubscriptionRef.make(
+      Option.some({
+        initialConfig: Effect.succeed({
+          threadSnapshotPagination: options?.paginationCapability === true,
+        } as never),
+      } as never),
+    );
     const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
       target: TARGET,
       state: supervisorState,
@@ -257,6 +408,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       Effect.provideService(Persistence.EnvironmentCacheStore, cache),
       Effect.provideService(ThreadSnapshotLoader, loader),
+      Effect.provideService(ThreadHistoryWindow, options?.historyWindow ?? TEST_HISTORY_WINDOW),
       Effect.provideService(
         ConnectionWakeups.ConnectionWakeups,
         ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
@@ -286,6 +438,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       started,
       stored,
       loaderCalls,
+      loaderWindows,
       initialStatus,
       fire,
     };
@@ -319,6 +472,63 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.failed).toBe(0);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
         expect((yield* Ref.get(harness.stored)).get("stale")?.snapshotSequence).toBe(10);
+      }),
+    ),
+  );
+
+  it.effect("requests a turn page when the server advertises pagination", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ paginationCapability: true });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        const windows = yield* Ref.get(harness.loaderWindows);
+        expect(windows).toEqual([{ turnLimit: 10 }]);
+        expect(windows.some((window) => window !== undefined && "messageLimit" in window)).toBe(
+          false,
+        );
+      }),
+    ),
+  );
+
+  it.effect("falls back to only the legacy message window without the capability", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ paginationCapability: false });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        const windows = yield* Ref.get(harness.loaderWindows);
+        expect(windows).toEqual([{ messageLimit: 150 }]);
+        expect(windows.some((window) => window !== undefined && "turnLimit" in window)).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("keeps web and desktop prewarm requests unbounded", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          paginationCapability: true,
+          historyWindow: ThreadHistoryWindow.of({
+            messageWindowLimit: null,
+            messageOlderPageSize: 200,
+          }),
+        });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([undefined]);
       }),
     ),
   );
@@ -373,6 +583,33 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.running).toBe(false);
         expect(status.lastRunAt).toBe(null);
+      }),
+    ),
+  );
+
+  it.effect("reports a timed-out run and suppresses an immediate reconnect retry", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ hangSnapshotLoad: true });
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.started);
+        yield* TestClock.adjust("30 seconds");
+
+        const timedOut = yield* Queue.take(harness.statuses);
+        expect(timedOut.failed).toBe(1);
+        expect(timedOut.lastRunAt).toBe(null);
+
+        yield* SubscriptionRef.set(harness.supervisorState, {
+          ...CONNECTED_STATE,
+          generation: 2,
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
+        expect(Option.isNone(yield* Queue.poll(harness.statuses))).toBe(true);
       }),
     ),
   );
