@@ -1,3 +1,5 @@
+import * as NodeChildProcess from "node:child_process";
+
 import type { ExpoConfig } from "expo/config";
 
 import {
@@ -15,6 +17,12 @@ type AppVariant = "development" | "preview" | "production";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
+
+// Stamp the source commit into the bundle so the diagnostics journal's `meta` event can
+// map a build back to a commit. EAS build numbers are not recoverable locally and OTA
+// update ids only change per published update, so without this a journal pulled off a
+// device cannot identify what code produced it. EXPO_PUBLIC_* is inlined at bundle time.
+process.env.EXPO_PUBLIC_MOBILE_DIAGNOSTIC_COMMIT = resolveDiagnosticCommit();
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
@@ -141,6 +149,33 @@ const VARIANT_CONFIG = {
     assets: RELEASE_ASSETS,
   },
 } as const;
+
+// Explicit override first, then the hash EAS injects for cloud builds, then the local
+// checkout. Local builds append `-dirty` when the tree has uncommitted changes, so a
+// journal from a hand-built app never claims to be exactly its commit when it is not.
+function resolveDiagnosticCommit(): string {
+  const explicit = process.env.EXPO_PUBLIC_MOBILE_DIAGNOSTIC_COMMIT?.trim();
+  if (explicit) return explicit;
+
+  const easCommit = process.env.EAS_BUILD_GIT_COMMIT_HASH?.trim();
+  if (easCommit) return easCommit.slice(0, 12);
+
+  const git = (args: readonly string[]) =>
+    NodeChildProcess.execFileSync("git", args, {
+      cwd: __dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+
+  try {
+    const head = git(["rev-parse", "--short=12", "HEAD"]);
+    return git(["status", "--porcelain"]) ? `${head}-dirty` : head;
+  } catch {
+    // Not a git checkout (a published tarball, a sandboxed build). An absent commit is
+    // reported as "unknown" rather than crashing the config.
+    return "unknown";
+  }
+}
 
 function resolveAppVariant(value: string | undefined): AppVariant {
   switch (value) {
