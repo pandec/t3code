@@ -248,12 +248,13 @@ export const OrchestrationMessage = Schema.Struct({
 export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
 /**
- * LEGACY message-count window, produced only for `messageLimit` requests from
- * pre-turn-window clients. A response carries either this or
- * `OrchestrationThreadDetailPage`, never both: the two describe different
- * slicing units (messages vs. user-anchored turns) and combining them would
- * compute `hasMoreOlder`/`totalCount` against an already-bounded turn page and
- * falsely report history complete.
+ * LEGACY message-count window. No longer produced by this server — it is kept
+ * so a client can DECODE a response from a pre-turn-window server, and so the
+ * client's own retention trimming can report the same shape. A response never
+ * carries this alongside `OrchestrationThreadDetailPage`: the two describe
+ * different slicing units (messages vs. user-anchored turns) and combining them
+ * would compute `hasMoreOlder`/`totalCount` against an already-bounded turn
+ * page and falsely report history complete.
  */
 export const OrchestrationThreadMessageWindow = Schema.Struct({
   hasMoreOlder: Schema.Boolean,
@@ -577,11 +578,13 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
-   * LEGACY (pre-turn-window clients): limits the message history included in
-   * snapshot frames and makes the response carry `thread.messageWindow`.
-   * Mutually exclusive with `turnLimit` — a snapshot carries either `page`
-   * metadata or `messageWindow`, never both, and is never sliced twice. Kept
-   * so already-deployed mobile builds keep working against a new server.
+   * RETIRED message-count window. This server no longer reads it — a
+   * subscription that carries it gets the full thread in its snapshot frame.
+   * It stays declared only so this client can still send it to a
+   * pre-turn-window server (one that does not advertise
+   * `threadSnapshotPagination`); the schema is what encodes the RPC payload,
+   * so dropping the field here would silently stop emitting it and make old
+   * servers stream unbounded history.
    */
   messageLimit: Schema.optionalKey(NonNegativeInt),
   /**
@@ -589,8 +592,7 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * missing or the catch-up gap is too large) is windowed to the last
    * `turnLimit` user-anchored turns and carries `page` metadata. Absent means
    * the fallback snapshot is the full thread, preserving pre-pagination client
-   * behavior. Live events are unaffected either way. Takes precedence over
-   * `messageLimit` when a client sends both.
+   * behavior. Live events are unaffected either way.
    */
   turnLimit: Schema.optionalKey(PositiveInt),
 });

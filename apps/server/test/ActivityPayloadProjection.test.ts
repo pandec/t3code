@@ -326,41 +326,36 @@ describe("thread message projection", () => {
     thread: makeThread(activities, messages),
   };
 
-  it("preserves full history without message window metadata when no limit is requested", () => {
+  it("preserves full history without message window metadata", () => {
     const projected = projectThreadDetailSnapshot(snapshot);
 
     expect(projected.thread.messages).toEqual(messages);
     expect(Object.hasOwn(projected.thread, "messageWindow")).toBe(false);
   });
 
-  it("keeps the newest clamped message window with an authoritative total", () => {
-    const projected = projectThreadDetailSnapshot(snapshot, { messageLimit: 2 });
-    expect(projected.thread.messages.map((message) => message.id)).toEqual([
-      messages[3]!.id,
-      messages[4]!.id,
-    ]);
-    expect(projected.thread.messageWindow).toEqual({
-      hasMoreOlder: true,
-      oldestLoadedMessageId: messages[3]!.id,
-      totalCount: 5,
+  // The server no longer windows thread detail by message count — turn pages
+  // are the only server-side windowing mode — so nothing here may slice
+  // messages, and any `messageWindow` reaching the projection is dropped.
+  it("never slices messages and strips inbound message-window metadata", () => {
+    const projected = projectThreadDetailSnapshot({
+      snapshotSequence: 17,
+      thread: {
+        ...makeThread(activities, messages),
+        messageWindow: {
+          hasMoreOlder: true,
+          oldestLoadedMessageId: messages[3]!.id,
+          totalCount: 5,
+        },
+      },
     });
+
+    expect(projected.thread.messages).toEqual(messages);
+    expect(Object.hasOwn(projected.thread, "messageWindow")).toBe(false);
     expect(projected.thread.activities).toEqual([projectActivityPayload(activities[1]!)]);
-
-    const minimum = projectThreadDetailSnapshot(snapshot, { messageLimit: 0 });
-    expect(minimum.thread.messages.map((message) => message.id)).toEqual([messages[4]!.id]);
-
-    const manyMessages = Array.from({ length: 501 }, (_, index) => makeMessage(index + 1));
-    const maximum = projectThreadDetailSnapshot(
-      { snapshotSequence: 18, thread: makeThread([], manyMessages) },
-      { messageLimit: 1_000 },
-    );
-    expect(maximum.thread.messages).toHaveLength(500);
-    expect(maximum.thread.messages[0]?.id).toBe(manyMessages[1]!.id);
-    expect(maximum.thread.messageWindow?.totalCount).toBe(501);
   });
 
   // Cursor+limit paging for GET /api/orchestration/threads/:threadId/messages
-  // is now served by a dedicated bounded SQL query
+  // is served by a dedicated bounded SQL query
   // (ProjectionSnapshotQuery.getThreadMessagePage) rather than this in-memory
   // projection — see ProjectionSnapshotQuery.test.ts for that coverage.
 });

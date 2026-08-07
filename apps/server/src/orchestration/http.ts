@@ -35,6 +35,12 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
  * ProjectionSnapshotQuery.getThreadMessagePage — a dedicated bounded SQL
  * query (cursor+limit pushdown, ORDER BY created_at, message_id) — instead
  * of hydrating the full thread-detail snapshot just to page messages.
+ *
+ * This route is only reached by a client talking to a server that does not
+ * advertise `threadSnapshotPagination`; current clients page by turn cursor
+ * instead. It stays because the endpoint declaration is shared with the
+ * client (which still needs to call it against pre-turn-window servers) and
+ * the HTTP API requires every declared endpoint to be handled.
  */
 export const getThreadMessagesHttp = Effect.fn("environment.orchestration.threadMessages.handler")(
   function* (
@@ -124,13 +130,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          // `messageLimit` is the legacy window; it is ignored when the
-          // response already carries turn-page metadata (see
-          // projectThreadDetailSnapshot).
-          return projectThreadDetailSnapshot(
-            snapshot.value,
-            args.query.messageLimit === undefined ? {} : { messageLimit: args.query.messageLimit },
-          );
+          return projectThreadDetailSnapshot(snapshot.value);
         }),
       )
       .handle(

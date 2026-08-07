@@ -49,7 +49,6 @@ import {
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
-import { clampThreadMessageLimit, MAX_THREAD_MESSAGE_LIMIT } from "../ActivityPayloadProjection.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
@@ -75,6 +74,18 @@ import {
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+
+/**
+ * Upper bound on message pages served by
+ * `GET /api/orchestration/threads/:threadId/messages`
+ * (`getThreadMessagePage` below), which is the only remaining consumer now
+ * that the thread-detail snapshot no longer windows by message count.
+ */
+const MAX_THREAD_MESSAGE_LIMIT = 500;
+
+function clampThreadMessageLimit(limit: number): number {
+  return Math.max(1, Math.min(MAX_THREAD_MESSAGE_LIMIT, limit));
+}
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);

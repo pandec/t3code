@@ -4,18 +4,6 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 
-/**
- * Upper bound on message pages, shared with the dedicated bounded SQL query
- * behind `GET /api/orchestration/threads/:threadId/messages`
- * (ProjectionSnapshotQuery.getThreadMessagePage) and the `messageLimit`
- * window used here for the thread-detail snapshot.
- */
-export const MAX_THREAD_MESSAGE_LIMIT = 500;
-
-export function clampThreadMessageLimit(limit: number): number {
-  return Math.max(1, Math.min(MAX_THREAD_MESSAGE_LIMIT, limit));
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -479,18 +467,14 @@ function dropSupersededToolUpdatedActivities(
 }
 
 /**
- * Applies the activity slimming/payload projection to a thread detail
- * snapshot, and — for LEGACY `messageLimit` clients only — the message-count
- * window.
+ * Applies the activity slimming/payload projection to a thread detail snapshot.
  *
- * This is the single enforcement point for the either/or rule between the two
- * windowing modes. A snapshot the projection query already bounded to a turn
- * page carries `page` metadata; slicing it again by message count would
- * compute `hasMoreOlder`/`totalCount` against a partial page and tell the
- * client history is complete when it is not. So when `page` is present,
- * `messageLimit` is ignored outright and no `messageWindow` is emitted: a
- * response carries `page` or `messageWindow`, never both, and is never sliced
- * twice.
+ * Turn windows (`page` metadata) are the only server-side windowing mode; the
+ * projection query has already bounded the snapshot by the time it gets here,
+ * so nothing is sliced a second time. `messageWindow` is stripped
+ * unconditionally: it belonged to the retired message-count window and is now
+ * only ever produced client-side (from an old server's response, or by the
+ * client's own retention trimming).
  *
  * Note that every thread-detail response — full snapshot, first turn page, and
  * older turn pages alike — goes through here, so activity projection is
@@ -498,7 +482,6 @@ function dropSupersededToolUpdatedActivities(
  */
 export function projectThreadDetailSnapshot(
   snapshot: OrchestrationThreadDetailSnapshot,
-  options: { readonly messageLimit?: number } = {},
 ): OrchestrationThreadDetailSnapshot {
   const thread = {
     ...snapshot.thread,
@@ -507,25 +490,7 @@ export function projectThreadDetailSnapshot(
     ).map(projectActivityPayload),
   };
   delete thread.messageWindow;
-
-  if (options.messageLimit === undefined || snapshot.page !== undefined) {
-    return { ...snapshot, thread };
-  }
-
-  const messageLimit = clampThreadMessageLimit(options.messageLimit);
-  const messages = snapshot.thread.messages.slice(-messageLimit);
-  return {
-    ...snapshot,
-    thread: {
-      ...thread,
-      messages,
-      messageWindow: {
-        hasMoreOlder: messages.length < snapshot.thread.messages.length,
-        oldestLoadedMessageId: messages[0]?.id ?? null,
-        totalCount: snapshot.thread.messages.length,
-      },
-    },
-  };
+  return { ...snapshot, thread };
 }
 
 export function projectActivityEvent(event: OrchestrationEvent): OrchestrationEvent {

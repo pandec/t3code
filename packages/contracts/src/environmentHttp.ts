@@ -531,10 +531,13 @@ export const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
  * request (this is what web/desktop rely on for full history).
  *
  * `turnLimit`/`beforeCursor` are the current user-anchored turn window.
- * `messageLimit` is the LEGACY message-count window kept for already-deployed
- * mobile builds. They are mutually exclusive: when `turnLimit` is present the
- * server ignores `messageLimit` entirely so a turn page is never sliced again
- * (see projectThreadDetailSnapshot).
+ *
+ * `messageLimit` is the RETIRED message-count window. This server no longer
+ * reads it — a request that carries it gets the full thread. It stays declared
+ * only so this client can still send it to a pre-turn-window server (one that
+ * does not advertise `threadSnapshotPagination`); the schema is what encodes
+ * the query string, so dropping the field here would silently stop emitting it
+ * and make old servers return unbounded history.
  */
 export const EnvironmentOrchestrationThreadSnapshotUrlParams = Schema.Struct({
   turnLimit: Schema.optionalKey(PositiveInt),
