@@ -5,7 +5,6 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   canArchiveThreadNow,
-  canForkConversation,
   createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
@@ -258,42 +257,6 @@ describe("canArchiveThreadNow", () => {
     expect(
       canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
     ).toBe(true);
-  });
-});
-
-describe("canForkConversation", () => {
-  const thread = {
-    latestTurn: null,
-    session: {
-      providerName: "codex",
-      status: "ready",
-      activeTurnId: null,
-      lastError: null,
-    },
-  } as Pick<import("../types").SidebarThreadSummary, "latestTurn" | "session">;
-
-  it("allows an idle supported provider session", () => {
-    expect(canForkConversation(thread)).toBe(true);
-  });
-
-  it("rejects running sessions and prior fork failures", () => {
-    expect(
-      canForkConversation({
-        ...thread,
-        session: thread.session ? { ...thread.session, status: "running" } : null,
-      }),
-    ).toBe(false);
-    expect(
-      canForkConversation({
-        ...thread,
-        session: thread.session
-          ? {
-              ...thread.session,
-              lastError: "Conversation fork failed: source is unavailable",
-            }
-          : null,
-      }),
-    ).toBe(false);
   });
 });
 

@@ -12,7 +12,6 @@ import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
-import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -159,21 +158,6 @@ export type ThreadTraversalDirection = "previous" | "next";
 export function canArchiveThreadNow(thread: Pick<SidebarThreadSummary, "session">): boolean {
   const session = thread.session;
   return !(session?.status === "running" && session.activeTurnId != null);
-}
-
-export function canForkConversation(
-  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
-): boolean {
-  const session = thread.session;
-  return (
-    (session?.providerName === "codex" || session?.providerName === "claudeAgent") &&
-    session.status !== "starting" &&
-    session.status !== "running" &&
-    session.status !== "error" &&
-    session.activeTurnId === null &&
-    thread.latestTurn?.state !== "running" &&
-    !isThreadForkFailure(session.lastError)
-  );
 }
 
 export async function archiveSelectedThreadEntries<
