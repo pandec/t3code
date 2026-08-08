@@ -16,7 +16,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSettle } from "@t3tools/client-runtime/state/thread-settled";
+import { canSettle, effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import {
   type DesktopWslState,
   type EnvironmentId,
@@ -76,6 +76,7 @@ import {
   useClientSettings,
   useLegacySidebarEnabled,
 } from "../hooks/useSettings";
+import { useNowMinute } from "../hooks/useNowMinute";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
@@ -83,6 +84,7 @@ import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -152,7 +154,11 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import {
+  resolveThreadPr,
+  ThreadRowLeadingStatus,
+  ThreadRowTrailingStatus,
+} from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
@@ -1532,6 +1538,34 @@ function OpenCommandPaletteDialog(props: {
             thread.archivedAt === null,
         ) ?? null);
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
+  // Settled classification needs the same inputs the sidebar partition and
+  // the chat header use, or the palette would offer a verb that contradicts
+  // what the user sees. The git status this reads is the one ChatView already
+  // subscribes to for the open thread (same environment, same cwd), so it is
+  // a cache read rather than an extra query.
+  const openThreadGitCwd =
+    openUnarchivedThread === null
+      ? null
+      : (openUnarchivedThread.worktreePath ??
+        projects.find(
+          (project) =>
+            project.environmentId === openUnarchivedThread.environmentId &&
+            project.id === openUnarchivedThread.projectId,
+        )?.workspaceRoot ??
+        null);
+  const openThreadGitStatus = useEnvironmentQuery(
+    openUnarchivedThread === null || openThreadGitCwd === null
+      ? null
+      : vcsEnvironment.status({
+          environmentId: openUnarchivedThread.environmentId,
+          input: { cwd: openThreadGitCwd },
+        }),
+  );
+  // Minute-quantized like every other settled-state consumer, so the palette
+  // can never disagree with them within the same minute — and so clock-derived
+  // state (the queued-turn settle blocker) refreshes while the palette is open.
+  const nowMinute = useNowMinute();
+  const quantizedNow = `${nowMinute}:00.000Z`;
   const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
     threadRef:
       defaultSidebarEnabled &&
@@ -1566,15 +1600,28 @@ function OpenCommandPaletteDialog(props: {
     ...buildCurrentThreadActionItems({
       threadRef: openUnarchivedThreadRef,
       isPinned: openUnarchivedThread?.pinnedAt != null,
-      canSettleNow:
+      isSettled:
+        openThreadCapabilities?.threadSettlement === true &&
         openUnarchivedThread !== null &&
-        canSettle(openUnarchivedThread, { now: new Date().toISOString() }),
+        effectiveSettled(openUnarchivedThread, {
+          now: quantizedNow,
+          autoSettleEnabled: clientSettings.threadAutoSettleEnabled,
+          autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
+          changeRequestState:
+            resolveThreadPr({
+              threadBranch: openUnarchivedThread.branch ?? null,
+              gitStatus: openThreadGitStatus.data ?? null,
+            })?.state ?? null,
+        }),
+      canSettleNow:
+        openUnarchivedThread !== null && canSettle(openUnarchivedThread, { now: quantizedNow }),
       canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
-        // The legacy sidebar never renders pin state, so offering the action
-        // there would mutate a field with no visible effect.
-        pinning: defaultSidebarEnabled && openThreadCapabilities?.threadPinning === true,
+        // Not gated on the sidebar variant: pinning is server-side state the
+        // mobile thread list renders, and the sibling thread menus offer it
+        // regardless of which sidebar the web client shows.
+        pinning: openThreadCapabilities?.threadPinning === true,
       },
       icon: (id) => threadActionIcon(id),
       run: async (id, threadRef) => {

@@ -93,6 +93,7 @@ describe("buildCurrentThreadActionItems", () => {
   const baseInput = {
     threadRef,
     isPinned: false,
+    isSettled: false,
     canSettleNow: true,
     canFork: true,
     supports: { settlement: true, pinning: true },
@@ -104,22 +105,26 @@ describe("buildCurrentThreadActionItems", () => {
     expect(buildCurrentThreadActionItems({ ...baseInput, threadRef: null })).toEqual([]);
   });
 
-  it("lists pin, both settle verbs, fork, and copy for a pinnable settled-capable thread", () => {
+  it("lists one verb per lifecycle pair for an active pinnable thread", () => {
     expect(buildCurrentThreadActionItems(baseInput).map((item) => item.value)).toEqual([
       "action:thread:pin",
       "action:thread:settle",
-      "action:thread:unsettle",
       "action:thread:fork",
       "action:thread:copy-thread-id",
     ]);
   });
 
-  it("swaps pin for unpin on a pinned thread", () => {
-    const values = buildCurrentThreadActionItems({ ...baseInput, isPinned: true }).map(
-      (item) => item.value,
-    );
-    expect(values).toContain("action:thread:unpin");
-    expect(values).not.toContain("action:thread:pin");
+  it("swaps each lifecycle verb for its inverse on a pinned settled thread", () => {
+    expect(
+      buildCurrentThreadActionItems({ ...baseInput, isPinned: true, isSettled: true }).map(
+        (item) => item.value,
+      ),
+    ).toEqual([
+      "action:thread:unpin",
+      "action:thread:unsettle",
+      "action:thread:fork",
+      "action:thread:copy-thread-id",
+    ]);
   });
 
   it("drops capability-gated and unavailable actions", () => {
@@ -133,13 +138,21 @@ describe("buildCurrentThreadActionItems", () => {
   });
 
   it("disables settle while the thread cannot be settled", () => {
-    const items = buildCurrentThreadActionItems({ ...baseInput, canSettleNow: false });
-    expect(items.find((item) => item.value === "action:thread:settle")).toMatchObject({
-      disabled: true,
-    });
-    expect(items.find((item) => item.value === "action:thread:unsettle")).not.toHaveProperty(
-      "disabled",
-    );
+    expect(
+      buildCurrentThreadActionItems({ ...baseInput, canSettleNow: false }).find(
+        (item) => item.value === "action:thread:settle",
+      ),
+    ).toMatchObject({ disabled: true });
+  });
+
+  it("never disables un-settle, which has no activity precondition", () => {
+    expect(
+      buildCurrentThreadActionItems({
+        ...baseInput,
+        isSettled: true,
+        canSettleNow: false,
+      }).find((item) => item.value === "action:thread:unsettle"),
+    ).not.toHaveProperty("disabled");
   });
 
   it("dispatches the action id and the open thread ref", async () => {

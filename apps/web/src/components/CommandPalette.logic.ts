@@ -261,6 +261,7 @@ const THREAD_ACTION_SPECS = {
 export function buildCurrentThreadActionItems(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly isPinned: boolean;
+  readonly isSettled: boolean;
   /** Client-side twin of the server's settle invariants (no live/queued work). */
   readonly canSettleNow: boolean;
   readonly canFork: boolean;
@@ -276,19 +277,15 @@ export function buildCurrentThreadActionItems(input: {
     return [];
   }
 
+  // One verb per lifecycle pair, resolved from the same state the sidebar row
+  // and chat header menus resolve theirs from, so the three surfaces cannot
+  // disagree about what the open thread is.
   const ids: CommandPaletteThreadActionId[] = [];
   if (input.supports.pinning) {
-    // Pinning is a plain field on the thread shell, so the palette can show
-    // exactly the one verb that applies.
     ids.push(input.isPinned ? "unpin" : "pin");
   }
   if (input.supports.settlement) {
-    // Settled classification depends on the thread's pull-request state,
-    // which the palette does not load. Rather than show a verb derived from
-    // an incomplete input — and strand auto-settled threads with no way to
-    // un-settle from here — both verbs stay listed and the search query
-    // picks one.
-    ids.push("settle", "unsettle");
+    ids.push(input.isSettled ? "unsettle" : "settle");
   }
   if (input.canFork) {
     ids.push("fork");
@@ -324,7 +321,7 @@ export function buildArchivedThreadsActionItems(input: {
     {
       kind: "action",
       value: "action:archived-threads",
-      searchTerms: ["archived", "archive", "archived threads", "history", "settings"],
+      searchTerms: ["open archived threads", "archived", "archive", "history", "settings"],
       title: "Open archived threads",
       icon: input.icon,
       run: async () => {
@@ -339,9 +336,9 @@ export function buildArchivedThreadsActionItems(input: {
       kind: "action",
       value: "action:archived-threads-in-project",
       searchTerms: [
+        "open archived threads",
         "archived",
         "archive",
-        "archived threads",
         "project",
         "current project",
         input.projectTitle,
