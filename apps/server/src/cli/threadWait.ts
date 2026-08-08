@@ -92,25 +92,27 @@ const drainPending = (thread: OrchestrationThreadShell, drain: ThreadWaitDrainMo
 };
 
 export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEvaluation => {
+  const thread = input.snapshot.threads.find(
+    (candidate) => candidate.id === input.threadId && candidate.archivedAt === null,
+  );
+  const drainUnsupported =
+    thread !== undefined && input.options.drain !== null && thread.backgroundLiveness === undefined;
   if (
     input.options.afterSequence !== null &&
     input.snapshot.snapshotSequence < input.options.afterSequence
   ) {
-    return pendingOrTimeout(input.deadlineReached);
+    return pendingOrTimeout(input.deadlineReached, { drainUnsupported });
   }
 
-  const thread = input.snapshot.threads.find(
-    (candidate) => candidate.id === input.threadId && candidate.archivedAt === null,
-  );
   if (thread === undefined) {
     return input.observedThread ? terminal("vanished") : pendingOrTimeout(input.deadlineReached);
   }
 
-  if (thread.session?.status === "error") return terminal("error");
+  if (thread.session?.status === "error") return terminal("error", { drainUnsupported });
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
     return input.options.onBlocked === "return"
-      ? terminal("blocked")
-      : pendingOrTimeout(input.deadlineReached);
+      ? terminal("blocked", { drainUnsupported })
+      : pendingOrTimeout(input.deadlineReached, { drainUnsupported });
   }
 
   let settledOutcome: Exclude<ThreadWaitOutcome, "timeout" | "blocked" | "vanished"> | null = null;
@@ -135,10 +137,9 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   if (settledOutcome === null) {
-    return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut });
+    return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut, drainUnsupported });
   }
 
-  const drainUnsupported = input.options.drain !== null && thread.backgroundLiveness === undefined;
   if (drainPending(thread, input.options.drain)) {
     return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut, drainUnsupported });
   }

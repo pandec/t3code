@@ -196,6 +196,22 @@ it("reports drain as unsupported when an old server omits liveness", () => {
   assert.isTrue(result.drainUnsupported);
 });
 
+it("retains unsupported-drain diagnostics when the turn times out first", () => {
+  const thread = threadWith({
+    latestTurn: { ...completedTurn!, state: "running" },
+    backgroundLiveness: undefined,
+  });
+
+  const result = evaluate({
+    thread,
+    options: { drain: "all" },
+    deadlineReached: true,
+  });
+
+  assert.strictEqual(result.outcome, "timeout");
+  assert.isTrue(result.drainUnsupported);
+});
+
 it("collapses terminal exit codes under --exit-zero", () => {
   for (const outcome of ["timeout", "error", "interrupted", "blocked", "vanished"] as const) {
     assert.strictEqual(threadWaitExitCode(outcome, true), 0);
