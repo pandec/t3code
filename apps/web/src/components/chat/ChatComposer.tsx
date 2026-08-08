@@ -99,6 +99,11 @@ import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../Compos
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+import { ComposerThreadWaitMenu } from "./ComposerThreadWaitMenu";
+import {
+  buildThreadWaitInsertionText,
+  type ThreadWaitPickerEntry,
+} from "./composerThreadWaitPicker";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import type { ThreadOutboxDeliveryIntent } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -1316,6 +1321,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+  // Non-null while the /t3-wait thread picker is open: the prompt offset the
+  // picked thread's wait instruction is inserted at (the cleared trigger's
+  // position, so the insertion lands where the user typed the command).
+  const [threadWaitInsertionOffset, setThreadWaitInsertionOffset] = useState<number | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
@@ -1455,6 +1464,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 command: "t3-status" as const,
                 label: "/t3-status",
                 description: "Set this thread's status emoji",
+              },
+              {
+                id: "slash:t3-wait",
+                type: "slash-command" as const,
+                command: "t3-wait" as const,
+                label: "/t3-wait",
+                description: "Wait for another thread to finish first",
               },
             ]
           : []),
@@ -2124,6 +2140,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "t3-wait") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            setThreadWaitInsertionOffset(trigger.rangeStart);
+          }
+          return;
+        }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2177,6 +2204,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resolveActiveComposerTrigger,
     ],
   );
+
+  const onThreadWaitPick = useCallback(
+    (entry: ThreadWaitPickerEntry) => {
+      if (threadWaitInsertionOffset === null) return;
+      const insertionOffset = Math.min(threadWaitInsertionOffset, promptRef.current.length);
+      setThreadWaitInsertionOffset(null);
+      applyPromptReplacement(insertionOffset, insertionOffset, buildThreadWaitInsertionText(entry));
+    },
+    [applyPromptReplacement, promptRef, threadWaitInsertionOffset],
+  );
+
+  const onThreadWaitClose = useCallback(() => {
+    setThreadWaitInsertionOffset(null);
+    composerEditorRef.current?.focusAt(composerCursor);
+  }, [composerCursor]);
 
   const onComposerMenuItemHighlighted = useCallback(
     (itemId: string | null) => {
@@ -3337,6 +3379,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               </ComposerCommandMenuLayer>
             )}
+
+            {threadWaitInsertionOffset !== null &&
+              !composerMenuOpen &&
+              !isComposerApprovalState && (
+                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+                  <ComposerThreadWaitMenu
+                    environmentId={environmentId}
+                    excludeThreadId={activeThread?.id ?? null}
+                    onPick={onThreadWaitPick}
+                    onClose={onThreadWaitClose}
+                  />
+                </ComposerCommandMenuLayer>
+              )}
 
             {composerMenuOpen && !isComposerApprovalState && (
               <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
