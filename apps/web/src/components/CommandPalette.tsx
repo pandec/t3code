@@ -1572,7 +1572,9 @@ function OpenCommandPaletteDialog(props: {
       canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
-        pinning: openThreadCapabilities?.threadPinning === true,
+        // The legacy sidebar never renders pin state, so offering the action
+        // there would mutate a field with no visible effect.
+        pinning: defaultSidebarEnabled && openThreadCapabilities?.threadPinning === true,
       },
       icon: (id) => threadActionIcon(id),
       run: async (id, threadRef) => {
