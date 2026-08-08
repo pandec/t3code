@@ -99,6 +99,11 @@ import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../Compos
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+import { ComposerThreadWaitMenu } from "./ComposerThreadWaitMenu";
+import {
+  buildThreadWaitInsertionText,
+  type ThreadWaitPickerEntry,
+} from "./composerThreadWaitPicker";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import type { ThreadOutboxDeliveryIntent } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -1316,6 +1321,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+  // Non-null while the /t3-wait thread picker is open: the prompt offset the
+  // picked thread's wait instruction is inserted at (the cleared trigger's
+  // position) together with the prompt it was computed against, so a prompt
+  // that mutated meanwhile falls back to the live cursor instead of landing
+  // the insertion mid-word.
+  const [threadWaitInsertion, setThreadWaitInsertion] = useState<{
+    offset: number;
+    promptAtOpen: string;
+  } | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
@@ -1455,6 +1469,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 command: "t3-status" as const,
                 label: "/t3-status",
                 description: "Set this thread's status emoji",
+              },
+              {
+                id: "slash:t3-wait",
+                type: "slash-command" as const,
+                command: "t3-wait" as const,
+                label: "/t3-wait",
+                description: "Wait for another thread to finish first",
               },
             ]
           : []),
@@ -1796,6 +1817,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   useEffect(() => {
     setComposerHighlightedItemId(null);
+    setThreadWaitInsertion(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     dragDepthRef.current = 0;
@@ -2124,6 +2146,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "t3-wait") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            setThreadWaitInsertion({
+              offset: trigger.rangeStart,
+              promptAtOpen: promptRef.current,
+            });
+          }
+          return;
+        }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2177,6 +2213,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resolveActiveComposerTrigger,
     ],
   );
+
+  const onThreadWaitPick = useCallback(
+    (entry: ThreadWaitPickerEntry) => {
+      if (threadWaitInsertion === null) return;
+      const snapshot = readComposerSnapshot();
+      const insertionOffset =
+        snapshot.value === threadWaitInsertion.promptAtOpen
+          ? Math.min(threadWaitInsertion.offset, snapshot.value.length)
+          : snapshot.cursor;
+      setThreadWaitInsertion(null);
+      applyPromptReplacement(
+        insertionOffset,
+        insertionOffset,
+        buildThreadWaitInsertionText(entry),
+        {
+          expectedText: "",
+        },
+      );
+    },
+    [applyPromptReplacement, readComposerSnapshot, threadWaitInsertion],
+  );
+
+  const onThreadWaitClose = useCallback(() => {
+    setThreadWaitInsertion(null);
+    composerEditorRef.current?.focusAt(composerCursor);
+  }, [composerCursor]);
+
+  // An approval taking over the composer or a reappearing trigger menu
+  // unmounts the picker; strand no insertion target behind either gate.
+  useEffect(() => {
+    if (composerMenuOpen || isComposerApprovalState) setThreadWaitInsertion(null);
+  }, [composerMenuOpen, isComposerApprovalState]);
 
   const onComposerMenuItemHighlighted = useCallback(
     (itemId: string | null) => {
@@ -3327,16 +3395,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               onToggleMenu={toggleStashMenu}
             />
 
-            {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
-              <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
-                <ComposerStashMenu
-                  entries={stashQueue}
-                  onRestore={restoreStashEntry}
-                  onDelete={deleteStashEntry}
-                  onClose={() => setIsStashMenuOpen(false)}
-                />
-              </ComposerCommandMenuLayer>
-            )}
+            {isStashMenuOpen &&
+              !composerMenuOpen &&
+              threadWaitInsertion === null &&
+              !isComposerApprovalState && (
+                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+                  <ComposerStashMenu
+                    entries={stashQueue}
+                    onRestore={restoreStashEntry}
+                    onDelete={deleteStashEntry}
+                    onClose={() => setIsStashMenuOpen(false)}
+                  />
+                </ComposerCommandMenuLayer>
+              )}
+
+            {threadWaitInsertion !== null &&
+              !isStashMenuOpen &&
+              !composerMenuOpen &&
+              !isComposerApprovalState && (
+                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+                  <ComposerThreadWaitMenu
+                    environmentId={environmentId}
+                    excludeThreadId={activeThreadId}
+                    onPick={onThreadWaitPick}
+                    onClose={onThreadWaitClose}
+                  />
+                </ComposerCommandMenuLayer>
+              )}
 
             {composerMenuOpen && !isComposerApprovalState && (
               <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
