@@ -14,11 +14,7 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 
-import {
-  canArchiveThreadNow,
-  canForkConversation,
-  nextSidebarThreadBumpAt,
-} from "../components/Sidebar.logic";
+import { canArchiveThreadNow, canForkConversation } from "../components/Sidebar.logic";
 import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
@@ -32,15 +28,15 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
-  readThreadShells,
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
-import { useClientSettings } from "./useSettings";
+import { useClientSettings, useLegacySidebarEnabled } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -81,8 +77,8 @@ export function useThreadActionMenu(input: {
     unpinThread,
     deleteThread,
     attemptArchiveThread,
+    attemptMoveThreadToTop,
     forkThread,
-    moveThreadToTop,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -93,9 +89,7 @@ export function useThreadActionMenu(input: {
   const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  const sortActiveByLatestUserMessage = useClientSettings(
-    (s) => s.sidebarV2SortActiveByLatestUserMessage,
-  );
+  const legacySidebarEnabled = useLegacySidebarEnabled();
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -135,7 +129,9 @@ export function useThreadActionMenu(input: {
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
-        const snoozePresets = resolveSnoozePresets(now, timestampFormat);
+        const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
+          untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
+        });
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
           isPinned: thread.pinnedAt != null,
@@ -156,11 +152,13 @@ export function useThreadActionMenu(input: {
           supports,
           snoozePresets,
           forkExtras: {
-            moveToTop: readEnvironmentSupportsMoveToTop(threadRef.environmentId),
+            // The legacy sidebar never reads movedToTopAt, so offering this
+            // there would mutate a field nothing renders. Same guard as the
+            // command palette's Move to top action.
+            moveToTop:
+              !legacySidebarEnabled && readEnvironmentSupportsMoveToTop(threadRef.environmentId),
             fork: canForkConversation(thread),
-            archive: true,
             canArchiveNow: canArchiveThreadNow(thread),
-            copyThreadId: true,
           },
         });
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));
@@ -251,24 +249,9 @@ export function useThreadActionMenu(input: {
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
-          case "move-to-top": {
-            // The bump must outrank every other active thread's sort key, so
-            // it is computed against a snapshot of the whole unarchived set —
-            // read at open time rather than subscribed to, since the chat
-            // header has no other reason to re-render on sidebar churn.
-            const unarchivedThreads = readThreadShells().filter(
-              (shell) => shell.archivedAt === null,
-            );
-            await reportFailure("Failed to move thread to top", () =>
-              moveThreadToTop(
-                threadRef,
-                nextSidebarThreadBumpAt(unarchivedThreads, {
-                  sortByLatestUserMessage: sortActiveByLatestUserMessage,
-                }),
-              ),
-            );
+          case "move-to-top":
+            await attemptMoveThreadToTop(threadRef);
             return;
-          }
           case "fork":
             await reportFailure("Failed to fork conversation", () => forkThread(threadRef));
             return;
@@ -332,6 +315,7 @@ export function useThreadActionMenu(input: {
     },
     [
       attemptArchiveThread,
+      attemptMoveThreadToTop,
       autoSettleAfterDays,
       autoSettleEnabled,
       changeRequestState,
@@ -342,14 +326,13 @@ export function useThreadActionMenu(input: {
       deleteThread,
       forkThread,
       handleNewThread,
+      legacySidebarEnabled,
       markThreadUnread,
-      moveThreadToTop,
       onStartRename,
       pinThread,
       projectCwd,
       settleThread,
       snoozeThread,
-      sortActiveByLatestUserMessage,
       threadRef,
       timestampFormat,
       unpinThread,

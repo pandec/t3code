@@ -152,10 +152,9 @@ export function resolveSidebarProjectScopePhysicalKeys(
 export type ThreadTraversalDirection = "previous" | "next";
 
 /**
- * Archiving mid-turn would strand a running session, so the action stays
- * visible but disabled until the turn ends. Shared by every surface offering
- * archive from a thread menu (sidebar row, chat header) so they cannot
- * disagree about when it is safe.
+ * Archiving mid-turn would strand a running session. Every surface that
+ * offers, gates, or enforces archive routes through this, so a menu can never
+ * enable an archive that `archiveThread` then rejects.
  */
 export function canArchiveThreadNow(thread: Pick<SidebarThreadSummary, "session">): boolean {
   const session = thread.session;

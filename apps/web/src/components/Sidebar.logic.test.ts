@@ -233,40 +233,31 @@ describe("Sidebar V2 project scope", () => {
 });
 
 describe("canArchiveThreadNow", () => {
-  type ArchiveInput = Pick<import("../types").SidebarThreadSummary, "session">;
-  const session = (
-    overrides: Partial<NonNullable<ArchiveInput["session"]>>,
-  ): ArchiveInput["session"] =>
-    ({
-      providerName: "codex",
-      status: "ready",
-      activeTurnId: null,
-      lastError: null,
-      ...overrides,
-    }) as ArchiveInput["session"];
+  const session = {
+    providerName: "codex",
+    status: "ready",
+    activeTurnId: null,
+    lastError: null,
+  } as NonNullable<Pick<import("../types").SidebarThreadSummary, "session">["session"]>;
 
-  it("allows archiving a thread with no session", () => {
+  it("allows archiving an idle thread, or one with no session at all", () => {
     expect(canArchiveThreadNow({ session: null })).toBe(true);
-  });
-
-  it("allows archiving an idle session", () => {
-    expect(canArchiveThreadNow({ session: session({}) })).toBe(true);
+    expect(canArchiveThreadNow({ session })).toBe(true);
   });
 
   it("blocks archiving only while a turn is actually running", () => {
     expect(
       canArchiveThreadNow({
-        session: session({ status: "running", activeTurnId: TurnId.make("turn-1") }),
+        session: { ...session, status: "running", activeTurnId: TurnId.make("turn-1") },
       }),
     ).toBe(false);
-    // Running with no active turn is a live session between turns — the
-    // archive is safe, so it must not be disabled.
-    expect(canArchiveThreadNow({ session: session({ status: "running" }) })).toBe(true);
-    // An active turn on a session that is no longer running is stale state,
-    // not a reason to block.
-    expect(canArchiveThreadNow({ session: session({ activeTurnId: TurnId.make("turn-1") }) })).toBe(
-      true,
-    );
+    // Both halves must hold: a running session between turns is safe to
+    // archive, and an active turn on a stopped session is stale state, not a
+    // reason to block. Either mis-simplified to OR would break one of these.
+    expect(canArchiveThreadNow({ session: { ...session, status: "running" } })).toBe(true);
+    expect(
+      canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
+    ).toBe(true);
   });
 });
 

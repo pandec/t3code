@@ -65,9 +65,7 @@ describe("buildThreadActionMenuItems", () => {
   const forkExtras = {
     moveToTop: true,
     fork: true,
-    archive: true,
     canArchiveNow: true,
-    copyThreadId: true,
   };
 
   it("omits the fork-only entries for surfaces that pass no extras", () => {

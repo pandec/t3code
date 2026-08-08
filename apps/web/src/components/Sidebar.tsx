@@ -178,7 +178,6 @@ import {
   resolveWorkingStartedAt,
   sidebarProjectScopeSignature,
   shouldNavigateAfterProjectRemoval,
-  nextSidebarThreadBumpAt,
   sortLogicalProjectsForSidebar,
   sortActiveThreadsForSidebar,
   sortPinnedThreadsForSidebar,
@@ -879,9 +878,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // on blocked-on-you work or queued turns (the server rejects both).
   const showSnoozeButton =
     props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
-  const showArchiveButton = !(
-    thread.session?.status === "running" && thread.session.activeTurnId != null
-  );
+  const showArchiveButton = canArchiveThreadNow(thread);
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
   // stale true from permanently hiding the status label / pinning the
@@ -1612,12 +1609,12 @@ export default function Sidebar() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     attemptArchiveThread,
+    attemptMoveThreadToTop,
     unarchiveThread,
     settleThread,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
-    moveThreadToTop,
     pinThread,
     unpinThread,
     reorderPinnedThread,
@@ -2419,29 +2416,6 @@ export default function Sidebar() {
     sortActiveByLatestUserMessage,
     threads,
   ]);
-
-  const attemptMoveThreadToTop = useCallback(
-    async (threadRef: ScopedThreadRef) => {
-      const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
-      const result = await moveThreadToTop(
-        threadRef,
-        nextSidebarThreadBumpAt(unarchivedThreads, {
-          sortByLatestUserMessage: sortActiveByLatestUserMessage,
-        }),
-      );
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to move thread to top",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
-    },
-    [moveThreadToTop, sortActiveByLatestUserMessage, threads],
-  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3444,9 +3418,7 @@ export default function Sidebar() {
               forkExtras: {
                 moveToTop: supportsMoveToTop,
                 fork: canForkConversation(thread),
-                archive: true,
                 canArchiveNow: canArchiveThreadNow(thread),
-                copyThreadId: true,
               },
             }),
             position,

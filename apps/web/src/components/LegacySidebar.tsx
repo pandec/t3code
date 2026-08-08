@@ -178,6 +178,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
+  canArchiveThreadNow,
   canForkConversation,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
@@ -496,8 +497,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [discoveredPorts, navigateToThread, openPreview, threadRef],
   );
-  const isThreadRunning =
-    thread.session?.status === "running" && thread.session.activeTurnId != null;
+  const isThreadRunning = !canArchiveThreadNow(thread);
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -1913,7 +1913,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return threadRef && thread ? [{ threadKey, threadRef, thread }] : [];
       });
       const hasRunningThread = selectedThreadEntries.some(
-        ({ thread }) => thread.session?.status === "running" && thread.session.activeTurnId != null,
+        ({ thread }) => !canArchiveThreadNow(thread),
       );
 
       const clicked = await api.contextMenu.show(
