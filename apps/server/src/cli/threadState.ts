@@ -24,13 +24,13 @@ export const threadHasActiveTurn = (thread: OrchestrationThreadShell): boolean =
 
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
-type QueuedTurnStartShell = Pick<
+export type QueuedTurnStartShell = Pick<
   OrchestrationThreadShell,
   "latestUserMessageAt" | "latestTurn" | "session"
 >;
 
-const hasUnadoptedTurnStart = (thread: QueuedTurnStartShell): boolean => {
-  if (thread.latestUserMessageAt === null || thread.session?.status === "error") return false;
+export const hasUnadoptedTurnStart = (thread: QueuedTurnStartShell): boolean => {
+  if (thread.latestUserMessageAt === null) return false;
   const messageAt = Date.parse(thread.latestUserMessageAt);
   if (Number.isNaN(messageAt)) return false;
   const turn = thread.latestTurn;
@@ -53,7 +53,6 @@ export const hasQueuedTurnStart = (
 
 export interface ThreadQuiescence {
   readonly quiescent: boolean;
-  readonly adoptionTimedOut: boolean;
 }
 
 export const threadIsQuiescent = (
@@ -61,16 +60,13 @@ export const threadIsQuiescent = (
   options: { readonly now: string },
 ): ThreadQuiescence => {
   if (thread.session?.status === "starting" || thread.session?.status === "running") {
-    return { quiescent: false, adoptionTimedOut: false };
+    return { quiescent: false };
   }
   if (thread.latestTurn?.state === "running") {
-    return { quiescent: false, adoptionTimedOut: false };
+    return { quiescent: false };
   }
   if (hasQueuedTurnStart(thread, options)) {
-    return { quiescent: false, adoptionTimedOut: false };
+    return { quiescent: false };
   }
-  return {
-    quiescent: true,
-    adoptionTimedOut: hasUnadoptedTurnStart(thread),
-  };
+  return { quiescent: true };
 };

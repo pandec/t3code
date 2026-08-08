@@ -30,10 +30,7 @@ it("presents session startup as running without claiming an interruptible turn",
 
   assert.equal(threadCliState(thread), "running");
   assert.isFalse(threadHasActiveTurn(thread));
-  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), {
-    quiescent: false,
-    adoptionTimedOut: false,
-  });
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: false });
 });
 
 it("requires evidence of an active turn before allowing interruption", () => {
@@ -54,28 +51,32 @@ it("requires evidence of an active turn before allowing interruption", () => {
 it("keeps a freshly queued turn start non-quiescent", () => {
   const thread = threadWith({ latestUserMessageAt: "2026-08-08T11:59:30.000Z" });
 
-  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), {
-    quiescent: false,
-    adoptionTimedOut: false,
-  });
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: false });
 });
 
-it("marks an unadopted turn quiescent after the grace expires", () => {
+it("detects a fresh queued start after every timestamp on the prior turn", () => {
+  const thread = threadWith({
+    latestUserMessageAt: "2026-08-08T11:59:30.000Z",
+    latestTurn: {
+      requestedAt: "2026-08-08T11:58:00.000Z",
+      startedAt: "2026-08-08T11:58:01.000Z",
+      completedAt: "2026-08-08T11:59:00.000Z",
+    } as OrchestrationThreadShell["latestTurn"],
+  });
+
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: false });
+});
+
+it("becomes quiescent after the queued-start grace expires", () => {
   const thread = threadWith({ latestUserMessageAt: "2026-08-08T11:57:59.999Z" });
 
-  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), {
-    quiescent: true,
-    adoptionTimedOut: true,
-  });
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: true });
 });
 
 it("does not wedge on negative clock skew outside the grace bound", () => {
   const thread = threadWith({ latestUserMessageAt: "2026-08-08T12:05:00.000Z" });
 
-  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), {
-    quiescent: true,
-    adoptionTimedOut: true,
-  });
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: true });
 });
 
 it("treats an adopted ready thread as quiescent", () => {
@@ -91,8 +92,5 @@ it("treats an adopted ready thread as quiescent", () => {
     } as OrchestrationThreadShell["latestTurn"],
   });
 
-  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), {
-    quiescent: true,
-    adoptionTimedOut: false,
-  });
+  assert.deepEqual(threadIsQuiescent(thread, { now: NOW }), { quiescent: true });
 });

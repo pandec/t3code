@@ -142,11 +142,14 @@ seq=$(t3 thread send "$thread_id" --message "Run the checks" --json | jq .sequen
 t3 thread wait "$thread_id" --after-sequence "$seq"
 ```
 
-Use `--turn <turn-id>` to wait for one specific turn. By default a pending approval or user-input
-request returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A newly
-dispatched turn can briefly exist before a provider session adopts it, so `wait` treats a recent
-unadopted user message as pending for up to two minutes. If adoption never appears before that grace
-expires, it returns `idle` with `adoptionTimedOut: true` rather than hanging forever.
+Use `--turn <turn-id>` to wait for one specific turn. If another turn becomes latest first, the wait
+returns `superseded` with exit code 0; an unknown or mistyped turn id has the same result because the
+shell cannot distinguish it from an older turn. By default a pending approval or user-input request
+returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A newly dispatched
+turn can briefly exist before a provider session adopts it, so `wait` treats a queued start it observes
+as pending for up to two minutes. If that observed start never adopts before the grace expires, it
+returns `unadopted` with exit code 2 and `adoptionTimedOut: true`. An already-old message on a plain idle
+thread is not treated as an adoption timeout.
 
 After the turn settles, `--drain` (equivalent to `--drain=agents`) also waits for native subagents and
 workflows. `--drain=all` additionally waits for monitoring/watch loops. This signal is intentionally
@@ -165,8 +168,8 @@ Terminal outcomes use these exit codes:
 
 | Outcome                                                              | Exit code |
 | -------------------------------------------------------------------- | --------: |
-| `completed` or `idle`                                                |         0 |
-| `timeout`                                                            |         2 |
+| `completed`, `idle`, or `superseded`                                 |         0 |
+| `timeout` or `unadopted`                                             |         2 |
 | `error`                                                              |         3 |
 | `interrupted`                                                        |         4 |
 | `blocked`                                                            |         5 |

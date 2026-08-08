@@ -5,11 +5,14 @@ import {
   type OrchestrationShellSnapshot,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import { Command } from "effect/unstable/cli";
+import * as CliError from "effect/unstable/cli/CliError";
 
 import {
   CliOrchestrationDeclaredResponseError,
@@ -21,9 +24,45 @@ import {
   compensateFailedThreadStart,
   resolveThreadCliWorkspaceSelection,
   threadSummary,
+  threadWaitDrainFlag,
   threadWaitSummary,
 } from "./thread.ts";
 import type { WaitForThreadResult } from "./threadWait.ts";
+
+const parseDrainFlag = (args: ReadonlyArray<string>) => {
+  let parsed: "agents" | "all" | null | undefined;
+  const command = Command.make("wait", { drain: threadWaitDrainFlag }).pipe(
+    Command.withHandler(({ drain }) =>
+      Effect.sync(() => {
+        parsed = drain;
+      }),
+    ),
+  );
+  return Command.runWith(command, { version: "0.0.0" })(args).pipe(
+    Effect.map(() => parsed),
+    Effect.provide(NodeServices.layer),
+  );
+};
+
+it.effect("parses every supported drain flag form", () =>
+  Effect.gen(function* () {
+    assert.isNull(yield* parseDrainFlag([]));
+    assert.strictEqual(yield* parseDrainFlag(["--drain"]), "agents");
+    assert.strictEqual(yield* parseDrainFlag(["--drain=agents"]), "agents");
+    assert.strictEqual(yield* parseDrainFlag(["--drain=all"]), "all");
+  }),
+);
+
+it.effect("rejects the unsupported space-separated drain value", () =>
+  Effect.gen(function* () {
+    const error = yield* parseDrainFlag(["--drain", "agents"]).pipe(Effect.flip);
+    assert.isTrue(CliError.isCliError(error));
+    assert.strictEqual(error._tag, "ShowHelp");
+    if (error._tag === "ShowHelp") {
+      assert.strictEqual(error.errors[0]?._tag, "UnexpectedArgument");
+    }
+  }),
+);
 
 const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThreadShell =>
   ({

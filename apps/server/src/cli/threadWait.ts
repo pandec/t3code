@@ -5,10 +5,13 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import type * as HttpClient from "effect/unstable/http/HttpClient";
 
 import {
+  type CliOrchestrationCallError,
   CliOrchestrationReadTimeoutError,
   CliOrchestrationRequestError,
+  CliOrchestrationUndeclaredStatusError,
   CliOrchestrationWaitOutcomeUnknownError,
   type CliLiveOrchestrationServer,
   type CliLiveServerReadTimeouts,
@@ -16,11 +19,13 @@ import {
   isConnectionRefused,
   isProcessAlive,
 } from "./orchestration.ts";
-import { threadIsQuiescent } from "./threadState.ts";
+import { hasQueuedTurnStart, hasUnadoptedTurnStart, threadIsQuiescent } from "./threadState.ts";
 
 export type ThreadWaitOutcome =
   | "completed"
   | "idle"
+  | "superseded"
+  | "unadopted"
   | "timeout"
   | "error"
   | "interrupted"
@@ -51,7 +56,7 @@ export interface EvaluateThreadWaitInput {
   readonly options: ThreadWaitOptions;
   readonly now: string;
   readonly deadlineReached: boolean;
-  readonly observedThread: boolean;
+  readonly queuedStartObserved: boolean;
 }
 
 const pendingOrTimeout = (
@@ -82,13 +87,24 @@ const terminal = (
 
 const turnOutcome = (
   state: NonNullable<OrchestrationThreadShell["latestTurn"]>["state"],
-): Exclude<ThreadWaitOutcome, "timeout" | "blocked" | "vanished" | "idle"> | null =>
-  state === "running" ? null : state;
+): Exclude<
+  ThreadWaitOutcome,
+  "timeout" | "blocked" | "vanished" | "idle" | "superseded" | "unadopted"
+> | null => (state === "running" ? null : state);
 
 const drainPending = (thread: OrchestrationThreadShell, drain: ThreadWaitDrainMode): boolean => {
   if (drain === null || thread.backgroundLiveness === undefined) return false;
   if (drain === "all") return thread.backgroundLiveness !== null;
   return thread.backgroundLiveness === "working";
+};
+
+const sessionErrorIsFresh = (thread: OrchestrationThreadShell): boolean => {
+  if (thread.session?.status !== "error") return false;
+  if (thread.latestUserMessageAt === null) return true;
+  const sessionUpdatedAt = Date.parse(thread.session.updatedAt);
+  const latestUserMessageAt = Date.parse(thread.latestUserMessageAt);
+  if (Number.isNaN(sessionUpdatedAt) || Number.isNaN(latestUserMessageAt)) return true;
+  return sessionUpdatedAt > latestUserMessageAt;
 };
 
 export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEvaluation => {
@@ -105,10 +121,14 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   if (thread === undefined) {
-    return input.observedThread ? terminal("vanished") : pendingOrTimeout(input.deadlineReached);
+    return terminal("vanished", { drainUnsupported });
   }
 
-  if (thread.session?.status === "error") return terminal("error", { drainUnsupported });
+  const queuedStart = hasQueuedTurnStart(thread, { now: input.now });
+  const queuedStartObserved = input.queuedStartObserved || queuedStart;
+  const adoptionTimedOut = queuedStartObserved && hasUnadoptedTurnStart(thread) && !queuedStart;
+
+  if (sessionErrorIsFresh(thread)) return terminal("error", { drainUnsupported });
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
     return input.options.onBlocked === "return"
       ? terminal("blocked", { drainUnsupported })
@@ -116,20 +136,21 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   let settledOutcome: Exclude<ThreadWaitOutcome, "timeout" | "blocked" | "vanished"> | null = null;
-  let adoptionTimedOut = false;
 
   if (input.options.turnId !== null) {
     if (thread.latestTurn?.turnId !== input.options.turnId) {
-      settledOutcome = "idle";
+      if (queuedStart || thread.session?.status === "starting") {
+        return pendingOrTimeout(input.deadlineReached, { drainUnsupported });
+      }
+      settledOutcome = adoptionTimedOut ? "unadopted" : "superseded";
     } else if (thread.latestTurn.state !== "running") {
       settledOutcome = turnOutcome(thread.latestTurn.state);
     }
   } else {
     const quiescence = threadIsQuiescent(thread, { now: input.now });
-    adoptionTimedOut = quiescence.adoptionTimedOut;
     if (quiescence.quiescent) {
       settledOutcome = adoptionTimedOut
-        ? "idle"
+        ? "unadopted"
         : thread.latestTurn === null
           ? "idle"
           : turnOutcome(thread.latestTurn.state);
@@ -137,7 +158,7 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   if (settledOutcome === null) {
-    return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut, drainUnsupported });
+    return pendingOrTimeout(input.deadlineReached, { drainUnsupported });
   }
 
   if (drainPending(thread, input.options.drain)) {
@@ -148,9 +169,12 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
 };
 
 export const threadWaitExitCode = (outcome: ThreadWaitOutcome, exitZero: boolean): number => {
-  if (exitZero || outcome === "completed" || outcome === "idle") return 0;
+  if (exitZero || outcome === "completed" || outcome === "idle" || outcome === "superseded") {
+    return 0;
+  }
   switch (outcome) {
     case "timeout":
+    case "unadopted":
       return 2;
     case "error":
       return 3;
@@ -182,37 +206,113 @@ export interface WaitForThreadResult {
   readonly waitedMs: number;
 }
 
+export interface ThreadWaitDependencies<R = never> {
+  readonly fetchShell: (
+    origin: string,
+    token: string,
+    timeouts: CliLiveServerReadTimeouts,
+  ) => Effect.Effect<OrchestrationShellSnapshot, CliOrchestrationCallError, R>;
+  readonly processAlive: (pid: number) => Effect.Effect<boolean>;
+}
+
+const defaultThreadWaitDependencies: ThreadWaitDependencies<HttpClient.HttpClient> = {
+  fetchShell: (origin, token, timeouts) =>
+    fetchLiveOrchestrationShell(origin, token, timeouts, {
+      phase: "wait",
+      timeout: timeouts.read,
+    }),
+  processAlive: isProcessAlive,
+};
+
 const THREAD_WAIT_POLL_SCHEDULE = Schedule.exponential(Duration.millis(250), 1.5).pipe(
   Schedule.modifyDelay(({ duration }) =>
     Effect.succeed(Duration.min(duration, Duration.seconds(2))),
   ),
 );
-const THREAD_WAIT_FAILURE_GRACE_MS = 30_000;
+export const THREAD_WAIT_FAILURE_GRACE_MS = 30_000;
 
 const isReadTimeout = Schema.is(CliOrchestrationReadTimeoutError);
 const isRequestError = Schema.is(CliOrchestrationRequestError);
+const isUndeclaredStatusError = Schema.is(CliOrchestrationUndeclaredStatusError);
 const isTransientWaitReadError = (error: unknown): boolean =>
-  isReadTimeout(error) || isRequestError(error);
+  isReadTimeout(error) ||
+  isRequestError(error) ||
+  (isUndeclaredStatusError(error) && error.status >= 500);
 
-export const waitForThread = Effect.fn("waitForThread")(function* (input: WaitForThreadInput) {
+export type WaitReadFailureAction = "retry" | "probe-process" | "give-up" | "timeout";
+
+export const classifyWaitReadFailure = (input: {
+  readonly error: unknown;
+  readonly nowMs: number;
+  readonly failureStartedAtMs: number | null;
+  readonly consecutiveFailures: number;
+  readonly deadlineExceeded: boolean;
+}): WaitReadFailureAction => {
+  if (!isTransientWaitReadError(input.error)) return "give-up";
+  const failureStartedAtMs = input.failureStartedAtMs ?? input.nowMs;
+  const failureGraceExpired = input.nowMs - failureStartedAtMs >= THREAD_WAIT_FAILURE_GRACE_MS;
+  if (failureGraceExpired) return input.deadlineExceeded ? "timeout" : "give-up";
+  if (isConnectionRefused(input.error) || input.consecutiveFailures >= 3) {
+    return "probe-process";
+  }
+  return "retry";
+};
+
+const timeoutResult = (input: {
+  readonly snapshot: OrchestrationShellSnapshot;
+  readonly thread: OrchestrationThreadShell;
+  readonly waited: boolean;
+  readonly waitedMs: number;
+  readonly options: ThreadWaitOptions;
+  readonly queuedStartObserved: boolean;
+  readonly now: string;
+}): WaitForThreadResult => {
+  const evaluated = evaluateThreadWait({
+    snapshot: input.snapshot,
+    threadId: input.thread.id,
+    options: input.options,
+    now: input.now,
+    deadlineReached: true,
+    queuedStartObserved: input.queuedStartObserved,
+  });
+  return {
+    evaluation: {
+      ...evaluated,
+      status: "terminal",
+      outcome: "timeout",
+    },
+    thread: input.thread,
+    snapshot: input.snapshot,
+    waited: input.waited,
+    waitedMs: input.waitedMs,
+  };
+};
+
+const waitForThreadImpl = Effect.fn("waitForThread")(function* <R>(
+  input: WaitForThreadInput,
+  dependencies: ThreadWaitDependencies<R>,
+) {
   const startedAt = yield* Clock.currentTimeMillis;
   const nextPollDelay = yield* Schedule.toStep(THREAD_WAIT_POLL_SCHEDULE);
   let snapshot = input.live.shell;
   let lastThread = input.thread;
   let waited = false;
+  let queuedStartObserved = false;
   let consecutiveFailures = 0;
   let failureStartedAt: number | null = null;
 
   while (true) {
     const nowMs = yield* Clock.currentTimeMillis;
+    const now = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const waitedMs = Math.max(0, nowMs - startedAt);
+    queuedStartObserved ||= hasQueuedTurnStart(lastThread, { now });
     const evaluated = evaluateThreadWait({
       snapshot,
       threadId: input.thread.id,
       options: input.options,
-      now: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+      now,
       deadlineReached: waitedMs >= input.options.timeoutMs,
-      observedThread: true,
+      queuedStartObserved,
     });
     if (evaluated.status === "terminal" && evaluated.outcome !== null) {
       return {
@@ -230,10 +330,7 @@ export const waitForThread = Effect.fn("waitForThread")(function* (input: WaitFo
     waited = true;
 
     const attempted = yield* Effect.result(
-      fetchLiveOrchestrationShell(input.live.origin, input.token, input.timeouts, {
-        phase: "wait",
-        timeout: input.timeouts.read,
-      }),
+      dependencies.fetchShell(input.live.origin, input.token, input.timeouts),
     );
     if (attempted._tag === "Success") {
       snapshot = attempted.success;
@@ -246,24 +343,45 @@ export const waitForThread = Effect.fn("waitForThread")(function* (input: WaitFo
       continue;
     }
 
-    if (!isTransientWaitReadError(attempted.failure)) {
-      return yield* attempted.failure;
-    }
-
     const failedAt = yield* Clock.currentTimeMillis;
     failureStartedAt ??= failedAt;
     consecutiveFailures += 1;
-    if (isConnectionRefused(attempted.failure) || consecutiveFailures >= 3) {
-      if (!(yield* isProcessAlive(input.live.pid))) {
-        return yield* new CliOrchestrationWaitOutcomeUnknownError({
-          operation: "waitLiveServer",
-          pid: input.live.pid,
-          cause: attempted.failure,
-        });
-      }
+    const action = classifyWaitReadFailure({
+      error: attempted.failure,
+      nowMs: failedAt,
+      failureStartedAtMs: failureStartedAt,
+      consecutiveFailures,
+      deadlineExceeded: failedAt - startedAt >= input.options.timeoutMs,
+    });
+    if (action === "retry") continue;
+    if (action === "probe-process") {
+      if (yield* dependencies.processAlive(input.live.pid)) continue;
+      return yield* new CliOrchestrationWaitOutcomeUnknownError({
+        operation: "waitLiveServer",
+        pid: input.live.pid,
+        cause: attempted.failure,
+      });
     }
-    if (failedAt - failureStartedAt >= THREAD_WAIT_FAILURE_GRACE_MS) {
-      return yield* attempted.failure;
+    if (action === "timeout") {
+      return timeoutResult({
+        snapshot,
+        thread: lastThread,
+        waited,
+        waitedMs: Math.max(0, failedAt - startedAt),
+        options: input.options,
+        queuedStartObserved,
+        now: DateTime.formatIso(DateTime.makeUnsafe(failedAt)),
+      });
     }
+    return yield* attempted.failure;
   }
 });
+
+export const waitForThread = <R = HttpClient.HttpClient>(
+  input: WaitForThreadInput,
+  dependencies?: ThreadWaitDependencies<R>,
+) =>
+  waitForThreadImpl(
+    input,
+    dependencies ?? (defaultThreadWaitDependencies as ThreadWaitDependencies<R>),
+  );

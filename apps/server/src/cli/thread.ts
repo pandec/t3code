@@ -73,7 +73,7 @@ const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDefault(false),
 );
 
-const drainFlag = Flag.boolean("drain").pipe(
+export const threadWaitDrainFlag = Flag.boolean("drain").pipe(
   Flag.map((enabled): ThreadWaitDrainMode => (enabled ? "agents" : null)),
   Flag.orElse(() => Flag.choice("drain", ["agents", "all"] as const)),
   Flag.withDescription(
@@ -950,7 +950,7 @@ const threadWaitCommand = Command.make("wait", {
     Flag.withDescription("Maximum wait duration, for example `30s`, `5m`, or `1h`."),
     Flag.withDefault(Duration.minutes(30)),
   ),
-  drain: drainFlag,
+  drain: threadWaitDrainFlag,
   onBlocked: Flag.choice("on-blocked", ["wait", "return"] as const).pipe(
     Flag.withDescription("Whether approvals or user-input requests keep waiting."),
     Flag.withDefault("return"),
