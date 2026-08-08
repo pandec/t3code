@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +22,18 @@ const MAC_APP_ID = "com.t3tools.t3code.dev";
 const LINUX_APP_PROCESS = "t3code-dev";
 const LINUX_SERVICE = "t3code.service";
 const PROCESS_STATE_ATTEMPTS = 20;
+const PROCESS_POLL_INTERVAL = Duration.millis(250);
+// The launch we saw fail died about a second in, so watch a little longer than
+// that before believing the app started.
+const STARTUP_STABILITY_WINDOW = Duration.seconds(2);
+const STARTUP_STABILITY_SAMPLES = Math.ceil(
+  Duration.toMillis(STARTUP_STABILITY_WINDOW) / Duration.toMillis(PROCESS_POLL_INTERVAL),
+);
+// Whatever makes a launch die on arrival is transient but not instant, so give
+// it room rather than relaunching into the same moment.
+const RELAUNCH_BACKOFF = Duration.seconds(2);
+const MAC_DIAGNOSTICS_HINT = `Inspect the launch with: log show --predicate 'process == "${MAC_APP_PROCESS}"' --last 5m`;
+const LINUX_DIAGNOSTICS_HINT = `Inspect the launch with: journalctl --user -u ${LINUX_SERVICE} -n 100`;
 
 export class DesktopInstallError extends Data.TaggedError("DesktopInstallError")<{
   readonly message: string;
@@ -112,19 +125,39 @@ const waitForProcessToStop = Effect.fn("installDesktopDev.waitForProcessToStop")
 ) {
   for (let attempt = 0; attempt < PROCESS_STATE_ATTEMPTS; attempt += 1) {
     if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]))) return true;
-    yield* Effect.sleep("250 millis");
+    yield* Effect.sleep(PROCESS_POLL_INTERVAL);
   }
   return !(yield* commandSucceeds(spawner, "pgrep", ["-x", processPattern]));
 });
 
-const waitForAppToStart = Effect.fn("installDesktopDev.waitForAppToStart")(function* (
+const waitForAppToAppear = Effect.fn("installDesktopDev.waitForAppToAppear")(function* (
   isRunning: Effect.Effect<boolean, DesktopInstallError>,
+  delay: Effect.Effect<void>,
 ) {
   for (let attempt = 0; attempt < PROCESS_STATE_ATTEMPTS; attempt += 1) {
     if (yield* isRunning) return true;
-    yield* Effect.sleep("250 millis");
+    yield* delay;
   }
   return yield* isRunning;
+});
+
+// Seeing the process once proves it launched, not that it survived. A freshly
+// installed bundle has been observed appearing and then exiting about a second
+// later, before the app writes any log of its own; losing Electron's
+// single-instance race is the leading suspect, but it was never reproduced.
+// Confirm the process is still there before reporting success, so the retry in
+// startAppWithVerification gets the chance it was written for.
+export const waitForAppToStart = Effect.fn("installDesktopDev.waitForAppToStart")(function* (
+  isRunning: Effect.Effect<boolean, DesktopInstallError>,
+  delay: Effect.Effect<void> = Effect.sleep(PROCESS_POLL_INTERVAL),
+) {
+  if (!(yield* waitForAppToAppear(isRunning, delay))) return false;
+
+  for (let sample = 0; sample < STARTUP_STABILITY_SAMPLES; sample += 1) {
+    yield* delay;
+    if (!(yield* isRunning)) return false;
+  }
+  return true;
 });
 
 export const startAppWithVerification = Effect.fn("installDesktopDev.startAppWithVerification")(
@@ -132,13 +165,18 @@ export const startAppWithVerification = Effect.fn("installDesktopDev.startAppWit
     appName: string,
     start: Effect.Effect<void, DesktopInstallError>,
     waitForStart: () => Effect.Effect<boolean, DesktopInstallError>,
+    // An app that dies on arrival leaves no log of its own, so the error has to
+    // say where the evidence actually is.
+    diagnosticsHint: string,
+    backoff: Effect.Effect<void> = Effect.sleep(RELAUNCH_BACKOFF),
   ) {
     yield* start;
     if (yield* waitForStart()) return;
+    yield* backoff;
     yield* start;
     if (!(yield* waitForStart())) {
       return yield* new DesktopInstallError({
-        message: `${appName} did not start`,
+        message: `${appName} did not start. ${diagnosticsHint}`,
         cause: undefined,
       });
     }
@@ -300,7 +338,12 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
     stop: stopMacApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev"], { cwd: repoRoot }),
     install: installMacArtifact(spawner, fs, path, releaseDirectory),
-    start: startAppWithVerification(MAC_APP_PROCESS, start, () => waitForAppToStart(isRunning)),
+    start: startAppWithVerification(
+      MAC_APP_PROCESS,
+      start,
+      () => waitForAppToStart(isRunning),
+      MAC_DIAGNOSTICS_HINT,
+    ),
   } satisfies DesktopInstallLifecycle;
 });
 
@@ -417,7 +460,12 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
     stop: stopLinuxApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev:linux"], { cwd: repoRoot }),
     install: installLinuxArtifact(spawner, fs, path, repoRoot, homeDirectory),
-    start: startAppWithVerification("T3 Code (Dev)", start, () => waitForAppToStart(isRunning)),
+    start: startAppWithVerification(
+      "T3 Code (Dev)",
+      start,
+      () => waitForAppToStart(isRunning),
+      LINUX_DIAGNOSTICS_HINT,
+    ),
   } satisfies DesktopInstallLifecycle;
 });
 
