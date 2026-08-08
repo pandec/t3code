@@ -17,6 +17,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSettle, effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import {
   type DesktopWslState,
   type EnvironmentId,
@@ -141,11 +142,7 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import {
-  canForkConversation,
-  orderItemsByPreferredIds,
-  sortLogicalProjectsForSidebar,
-} from "./Sidebar.logic";
+import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";

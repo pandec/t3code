@@ -61,6 +61,7 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -179,7 +180,6 @@ import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   canArchiveThreadNow,
-  canForkConversation,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,

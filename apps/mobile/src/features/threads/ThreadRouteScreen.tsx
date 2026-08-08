@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { Alert, Platform, ScrollView, View } from "react-native";
@@ -498,15 +499,7 @@ function ThreadRouteContent(
       },
     });
   }, [interruptThreadTurn, selectedThread]);
-  const canForkThread =
-    (selectedThread?.session?.providerName === "codex" ||
-      selectedThread?.session?.providerName === "claudeAgent") &&
-    selectedThread.session.status !== "starting" &&
-    selectedThread.session.status !== "running" &&
-    selectedThread.session.status !== "error" &&
-    selectedThread.session.activeTurnId === null &&
-    selectedThread.latestTurn?.state !== "running" &&
-    !isThreadForkFailure(selectedThread.session.lastError);
+  const canForkThread = selectedThread !== null && canForkConversation(selectedThread);
   const shownForkFailureRef = useRef<string | null>(null);
   useEffect(() => {
     const lastError = selectedThread?.session?.lastError;
