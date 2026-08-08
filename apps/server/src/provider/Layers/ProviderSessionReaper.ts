@@ -101,6 +101,19 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // The turn can settle while background work runs on (subagent
+        // fleets, workflow runs, Monitor watch loops). Those live inside the
+        // provider process, so stopping the session would kill them silently,
+        // and nothing bumps lastSeenAt between turns.
+        if (thread?.backgroundLiveness != null && idleDurationMs < maxPendingExtensionMs) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
+            threadId: binding.threadId,
+            backgroundLiveness: thread.backgroundLiveness,
+            idleDurationMs,
+          });
+          continue;
+        }
+
         // The projection lookup yields, so a turn completion or replacement may
         // have refreshed the binding after the sweep snapshot was captured.
         // Re-read before stopping and evaluate only the same current owner.
@@ -140,7 +153,11 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const reason = hasPendingWork ? "pending_work_expired" : "inactivity_threshold";
+        const reason = hasPendingWork
+          ? "pending_work_expired"
+          : thread?.backgroundLiveness != null
+            ? "background_work_expired"
+            : "inactivity_threshold";
 
         const reaped = yield* providerService.stopSessionIfUnchanged(currentBinding).pipe(
           Effect.tap((didStop) =>
