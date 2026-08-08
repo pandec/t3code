@@ -83,3 +83,17 @@ export function snoozeWakeDescription(
   const date = wake.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return `${date}, ${time}`;
 }
+
+/**
+ * Toast title for a completed snooze. The single place that maps the
+ * indefinite preset's null wake time onto prose, so `snoozeWakeDescription`
+ * is never called with null from any surface.
+ */
+export function snoozedUntilToastTitle(
+  snoozedUntil: string | null,
+  timestampFormat: TimestampFormat,
+): string {
+  return snoozedUntil === null
+    ? "Snoozed until you wake it"
+    : `Snoozed until ${snoozeWakeDescription(snoozedUntil, new Date(), timestampFormat)}`;
+}

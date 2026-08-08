@@ -1,11 +1,9 @@
 import type { WorkspaceState } from "../../state/workspaceModel";
 
-export function isWorkspaceConnectionSynchronizing(state: WorkspaceState): boolean {
-  return (
-    state.networkStatus !== "offline" &&
-    state.connectionError === null &&
-    (state.connectingEnvironments.length > 0 || state.hasPendingShellSnapshot)
-  );
+export interface WorkspaceConnectionStatusPresentation {
+  readonly label: string;
+  /** True while actively working (connecting/syncing) — render a spinner. False for offline/error/idle states — render a wifi-slash icon. */
+  readonly showsProgress: boolean;
 }
 
 export function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
@@ -33,28 +31,16 @@ export function workspaceConnectionStatusLabel(state: WorkspaceState): string {
   return "Not connected";
 }
 
-export function workspaceConnectionStatusShortLabel(state: WorkspaceState): string {
-  if (state.networkStatus === "offline") return "Offline";
-  if (state.connectionError !== null) return "Connection issue";
-  if (state.connectingEnvironments.length > 0) return "Reconnecting…";
-  if (state.hasPendingShellSnapshot) {
-    return state.hasLoadedShellSnapshot ? "Syncing…" : "Loading…";
-  }
-  return "Not connected";
-}
-
-export interface WorkspaceConnectionStatusPresentation {
-  readonly fullLabel: string;
-  readonly shortLabel: string;
-  readonly synchronizing: boolean;
-}
-
+/** Header-title presentation of the connection state, or null while connected. */
 export function workspaceConnectionStatusPresentation(
   state: WorkspaceState,
-): WorkspaceConnectionStatusPresentation {
+): WorkspaceConnectionStatusPresentation | null {
+  if (!shouldShowWorkspaceConnectionStatus(state)) return null;
   return {
-    fullLabel: workspaceConnectionStatusLabel(state),
-    shortLabel: workspaceConnectionStatusShortLabel(state),
-    synchronizing: isWorkspaceConnectionSynchronizing(state),
+    label: workspaceConnectionStatusLabel(state),
+    showsProgress:
+      state.networkStatus !== "offline" &&
+      state.connectionError === null &&
+      (state.connectingEnvironments.length > 0 || state.hasPendingShellSnapshot),
   };
 }

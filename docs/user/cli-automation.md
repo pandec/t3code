@@ -126,7 +126,8 @@ for approval. Pass `--runtime-mode approval-required` for unattended automation 
 trust. `--runtime-mode auto` is provider-specific: Codex sends on-request approvals to its AI
 reviewer, Claude uses Claude Code's native Auto permission mode, and providers without Auto support
 continue prompting the user. It is not equivalent to full access and is not suitable for fully
-unattended runs. `thread send` inherits the mode the thread was created with and cannot change it.
+unattended runs. `thread send` uses the thread's current runtime and interaction modes and cannot
+change them.
 
 ### Workspaces
 

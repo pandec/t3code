@@ -93,10 +93,10 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
-describe("ClientSettings sidebar v2", () => {
-  it("defaults the beta off with a three-day auto-settle threshold", () => {
+describe("ClientSettings sidebar", () => {
+  it("defaults to the current sidebar with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
-    expect(settings.sidebarV2Enabled).toBe(false);
+    expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarV2CompactCards).toBe(false);
     expect(settings.sidebarV2SortActiveByLatestUserMessage).toBe(false);
     expect(settings.sidebarV2NewThreadButtonInProjectRow).toBe(false);
@@ -120,29 +120,21 @@ describe("ClientSettings sidebar v2", () => {
     ).toBe(true);
   });
 
-  it("treats settings written before the beta had a per-channel default as unconfigured", () => {
-    // The stored blob always carries `sidebarV2Enabled`, so only the companion
-    // flag can distinguish "user opted out" from "never touched it".
-    expect(decodeClientSettings({ sidebarV2Enabled: false }).sidebarV2ConfiguredByUser).toBe(false);
-    expect(decodeClientSettings({ sidebarV2Enabled: true }).sidebarV2ConfiguredByUser).toBe(false);
-  });
-
-  it("preserves an explicit beta choice", () => {
-    const settings = decodeClientSettings({
+  it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
+    const decoded = decodeClientSettings({
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(settings.sidebarV2Enabled).toBe(false);
-    expect(settings.sidebarV2ConfiguredByUser).toBe(true);
+    expect(decoded.legacySidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("sidebarV2Enabled");
+    expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
-  it("carries an explicit beta opt-out through the patch the beta toggle writes", () => {
-    const patch = decodeClientSettingsPatch({
-      sidebarV2Enabled: false,
-      sidebarV2ConfiguredByUser: true,
-    });
-    expect(patch.sidebarV2Enabled).toBe(false);
-    expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  it("preserves an explicit legacy sidebar opt-in", () => {
+    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
+    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
+      true,
+    );
   });
 
   it("accepts disabling all automatic settling", () => {

@@ -1,0 +1,114 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { buildThreadActionMenuItems, type ThreadActionMenuState } from "./threadActionMenu.logic";
+
+const baseState: ThreadActionMenuState = {
+  branch: null,
+  isPinned: false,
+  isSettled: false,
+  isSnoozed: false,
+  canSnoozeNow: true,
+  isRegeneratingTitle: false,
+  supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
+  snoozePresets: [{ id: "hour", label: "In 1 hour", whenLabel: "3:00 PM" }],
+};
+
+function ids(state: ThreadActionMenuState): string[] {
+  return buildThreadActionMenuItems(state).map((item) => item.id);
+}
+
+describe("buildThreadActionMenuItems", () => {
+  it("hides lifecycle items when the environment lacks the capabilities", () => {
+    expect(
+      ids({
+        ...baseState,
+        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+      }),
+    ).toEqual(["rename", "mark-unread", "copy-path", "delete"]);
+  });
+
+  it("includes branch items only for threads with a branch", () => {
+    const withBranch = ids({ ...baseState, branch: "feat/menu" });
+    expect(withBranch).toContain("new-thread-on-branch");
+    expect(withBranch).toContain("copy-branch");
+    expect(ids(baseState)).not.toContain("new-thread-on-branch");
+    expect(ids(baseState)).not.toContain("copy-branch");
+  });
+
+  it("flips lifecycle labels with thread state", () => {
+    expect(ids({ ...baseState, isPinned: true, isSettled: true, isSnoozed: true })).toEqual(
+      expect.arrayContaining(["unpin", "unsettle", "unsnooze"]),
+    );
+    expect(ids(baseState)).toEqual(expect.arrayContaining(["pin", "settle", "snooze"]));
+  });
+
+  it("disables snooze when the thread cannot snooze, keeping presets visible", () => {
+    const snooze = buildThreadActionMenuItems({ ...baseState, canSnoozeNow: false }).find(
+      (item) => item.id === "snooze",
+    );
+    expect(snooze?.disabled).toBe(true);
+    expect(snooze?.children?.map((child) => child.id)).toEqual(["snooze:hour"]);
+  });
+
+  it("disables title regeneration while one is in flight", () => {
+    const item = buildThreadActionMenuItems({ ...baseState, isRegeneratingTitle: true }).find(
+      (candidate) => candidate.id === "regenerate-title",
+    );
+    expect(item).toMatchObject({ label: "Regenerating…", disabled: true });
+  });
+
+  it("marks delete as destructive and keeps it last", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
+    expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });
+  });
+
+  const forkExtras = {
+    moveToTop: true,
+    fork: true,
+    archive: true,
+    canArchiveNow: true,
+    copyThreadId: true,
+  };
+
+  it("omits the fork-only entries for surfaces that pass no extras", () => {
+    expect(ids(baseState)).not.toContain("move-to-top");
+    expect(ids(baseState)).not.toContain("fork");
+    expect(ids(baseState)).not.toContain("archive");
+    expect(ids(baseState)).not.toContain("copy-thread-id");
+  });
+
+  it("adds the fork-only entries when extras are supplied", () => {
+    expect(ids({ ...baseState, forkExtras })).toEqual([
+      "pin",
+      "settle",
+      "snooze",
+      "rename",
+      "regenerate-title",
+      "mark-unread",
+      "move-to-top",
+      "fork",
+      "archive",
+      "copy-path",
+      "copy-thread-id",
+      "delete",
+    ]);
+  });
+
+  it("hides move to top on rows whose order it cannot affect", () => {
+    for (const state of [
+      { ...baseState, forkExtras, isPinned: true },
+      { ...baseState, forkExtras, isSettled: true },
+      { ...baseState, forkExtras, isSnoozed: true },
+    ]) {
+      expect(ids(state)).not.toContain("move-to-top");
+    }
+  });
+
+  it("keeps archive visible but disabled during a running turn", () => {
+    const item = buildThreadActionMenuItems({
+      ...baseState,
+      forkExtras: { ...forkExtras, canArchiveNow: false },
+    }).find((candidate) => candidate.id === "archive");
+    expect(item).toMatchObject({ label: "Archive thread", disabled: true });
+  });
+});

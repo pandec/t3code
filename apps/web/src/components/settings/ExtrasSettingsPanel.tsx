@@ -21,7 +21,7 @@ import {
 import { isElectron } from "../../env";
 import {
   usePrimarySettings,
-  useSidebarV2Enabled,
+  useLegacySidebarEnabled,
   useUpdatePrimarySettings,
 } from "../../hooks/useSettings";
 import {
@@ -414,7 +414,7 @@ function ProviderUsageExtrasSection() {
 function SidebarExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const sidebarV2Enabled = useSidebarV2Enabled();
+  const defaultSidebarEnabled = !useLegacySidebarEnabled();
   const archivedSectionVisibleCount = clampArchivedSectionVisibleCount(
     settings.archivedSectionVisibleCount,
   );
@@ -489,7 +489,7 @@ function SidebarExtrasSection() {
         }
       />
 
-      {sidebarV2Enabled ? (
+      {defaultSidebarEnabled ? (
         <>
           <SettingsRow
             title="New thread button beside projects"

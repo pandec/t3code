@@ -2,11 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkspaceState } from "../../state/workspaceModel";
 import {
-  isWorkspaceConnectionSynchronizing,
   shouldShowWorkspaceConnectionStatus,
   workspaceConnectionStatusLabel,
   workspaceConnectionStatusPresentation,
-  workspaceConnectionStatusShortLabel,
 } from "./workspace-connection-status";
 
 function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
@@ -37,8 +35,7 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("You are offline");
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Offline");
-    expect(isWorkspaceConnectionSynchronizing(state)).toBe(false);
+    expect(workspaceConnectionStatusPresentation(state)?.showsProgress).toBe(false);
   });
 
   it("names the environment while reconnecting", () => {
@@ -60,8 +57,7 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Reconnecting to Julius’s Mac mini");
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Reconnecting…");
-    expect(isWorkspaceConnectionSynchronizing(state)).toBe(true);
+    expect(workspaceConnectionStatusPresentation(state)?.showsProgress).toBe(true);
   });
 
   it("surfaces connection errors before the generic disconnected fallback", () => {
@@ -73,8 +69,7 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Could not reach Julius’s Mac mini");
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Connection issue");
-    expect(isWorkspaceConnectionSynchronizing(state)).toBe(false);
+    expect(workspaceConnectionStatusPresentation(state)?.showsProgress).toBe(false);
   });
 
   it("shows shell catch-up while cached threads remain visible", () => {
@@ -82,8 +77,7 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Syncing threads...");
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Syncing…");
-    expect(isWorkspaceConnectionSynchronizing(state)).toBe(true);
+    expect(workspaceConnectionStatusPresentation(state)?.showsProgress).toBe(true);
   });
 
   it("distinguishes initial shell loading from cached catch-up", () => {
@@ -94,18 +88,6 @@ describe("workspace connection status", () => {
 
     expect(shouldShowWorkspaceConnectionStatus(state)).toBe(true);
     expect(workspaceConnectionStatusLabel(state)).toBe("Loading threads...");
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Loading…");
-  });
-
-  it("uses a compact disconnected fallback without exposing raw errors", () => {
-    const connectionError = "Authentication failed with private account details";
-    const state = workspaceState({
-      connectionError,
-      hasReadyEnvironment: false,
-    });
-
-    expect(workspaceConnectionStatusShortLabel(state)).toBe("Connection issue");
-    expect(workspaceConnectionStatusShortLabel(state)).not.toContain(connectionError);
   });
 
   it("prioritizes an error consistently when another environment is reconnecting", () => {
@@ -128,9 +110,40 @@ describe("workspace connection status", () => {
     });
 
     expect(workspaceConnectionStatusPresentation(state)).toEqual({
-      fullLabel: connectionError,
-      shortLabel: "Connection issue",
-      synchronizing: false,
+      label: connectionError,
+      showsProgress: false,
+    });
+  });
+
+  it("presents nothing while connected", () => {
+    expect(workspaceConnectionStatusPresentation(workspaceState())).toBeNull();
+  });
+
+  it("presents progress while reconnecting but not while offline", () => {
+    const reconnecting = workspaceState({
+      hasConnectingEnvironment: true,
+      hasReadyEnvironment: false,
+      connectingEnvironments: [
+        {
+          environmentId: "environment-1" as never,
+          environmentLabel: "Julius’s Mac mini",
+          displayUrl: "",
+          isRelayManaged: false,
+          connectionState: "reconnecting",
+          connectionError: null,
+          connectionErrorTraceId: null,
+        },
+      ],
+    });
+    expect(workspaceConnectionStatusPresentation(reconnecting)).toEqual({
+      label: "Reconnecting to Julius’s Mac mini",
+      showsProgress: true,
+    });
+
+    const offline = workspaceState({ networkStatus: "offline", hasReadyEnvironment: false });
+    expect(workspaceConnectionStatusPresentation(offline)).toEqual({
+      label: "You are offline",
+      showsProgress: false,
     });
   });
 });

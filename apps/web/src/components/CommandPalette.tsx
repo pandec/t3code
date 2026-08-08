@@ -64,7 +64,7 @@ import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import {
   useAccentTintSettings,
   useClientSettings,
-  useSidebarV2Enabled,
+  useLegacySidebarEnabled,
 } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -126,7 +126,7 @@ import {
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import {
-  nextSidebarV2ThreadBumpAt,
+  nextSidebarThreadBumpAt,
   orderItemsByPreferredIds,
   sortLogicalProjectsForSidebar,
 } from "./Sidebar.logic";
@@ -598,7 +598,7 @@ function OpenCommandPaletteDialog(props: {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();
-  const sidebarV2Enabled = useSidebarV2Enabled();
+  const defaultSidebarEnabled = !useLegacySidebarEnabled();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -1462,7 +1462,7 @@ function OpenCommandPaletteDialog(props: {
       : null;
   const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
     threadRef:
-      sidebarV2Enabled &&
+      defaultSidebarEnabled &&
       openUnarchivedThreadRef !== null &&
       serverConfigs.get(openUnarchivedThreadRef.environmentId)?.environment.capabilities
         .threadMoveToTop === true
@@ -1473,7 +1473,7 @@ function OpenCommandPaletteDialog(props: {
       const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
       const result = await moveThreadToTop(
         threadRef,
-        nextSidebarV2ThreadBumpAt(unarchivedThreads, {
+        nextSidebarThreadBumpAt(unarchivedThreads, {
           sortByLatestUserMessage: clientSettings.sidebarV2SortActiveByLatestUserMessage,
         }),
       );

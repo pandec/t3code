@@ -155,6 +155,7 @@ export const make = Effect.gen(function* () {
       projectAccentColors: true,
       projectAccentColorsFill: true,
       threadPinning: true,
+      threadPinReorder: true,
       threadTitleRegeneration: true,
       turnStartBootstrap: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),

@@ -539,21 +539,27 @@ export function resolveThreadRowClassName(input: {
   );
 }
 
-// ── Sidebar v2 status model ─────────────────────────────────────────
+// ── Sidebar thread status model ─────────────────────────────────────
 // Five visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
 // whether it finished, asked a question, or proposed a plan.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarV2Status = "approval" | "input" | "working" | "monitoring" | "failed" | "ready";
+export type SidebarThreadStatus =
+  | "approval"
+  | "input"
+  | "working"
+  | "monitoring"
+  | "failed"
+  | "ready";
 
-type SidebarV2StatusInput = Pick<
+type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
 >;
 
-export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2Status {
+export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
@@ -604,7 +610,7 @@ export function hasUnseenWake(input: {
 export function isSidebarV2AttentionThread(
   thread: ThreadStatusInput & { wokeAt?: string | null | undefined },
 ): boolean {
-  const status = resolveSidebarV2Status(thread);
+  const status = resolveSidebarThreadStatus(thread);
   const isWoke = hasUnseenWake({
     wokeAt: thread.wokeAt ?? null,
     ...(thread.lastVisitedAt === undefined ? {} : { lastVisitedAt: thread.lastVisitedAt }),
@@ -693,11 +699,11 @@ export function firstValidTimestamp(
   return null;
 }
 
-// v2 sort: static creation order, newest thread on top. Activity NEVER
+// Sidebar sort: static creation order, newest thread on top. Activity NEVER
 // reorders the list — a row holds its position from open until settled, so
 // the screen only moves at lifecycle transitions. Status (including pending
 // approval) is carried by each card's edge strip, not by position.
-export function sortThreadsForSidebarV2<
+export function sortThreadsForSidebar<
   T extends { readonly id: string; readonly createdAt: string },
 >(threads: readonly T[]): T[] {
   return [...threads].toSorted(
@@ -707,7 +713,16 @@ export function sortThreadsForSidebarV2<
   );
 }
 
-export interface SidebarV2ActiveThreadSortOptions {
+// Pinned-reorder key math and the keyed sort live in client-runtime
+// (state/thread-sort) so web and mobile compute identical pinned orders.
+export {
+  generateSpreadPinOrderKeys,
+  pinOrderKeyBetween,
+  planPinnedReorder,
+} from "@t3tools/client-runtime/state/thread-sort";
+export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
+
+export interface SidebarActiveThreadSortOptions {
   readonly sortByLatestUserMessage: boolean;
 }
 
@@ -717,7 +732,7 @@ function activeThreadSortTimestamp<
     readonly latestUserMessageAt?: string | null;
     readonly movedToTopAt?: string | null | undefined;
   },
->(thread: T, options: SidebarV2ActiveThreadSortOptions): number {
+>(thread: T, options: SidebarActiveThreadSortOptions): number {
   const baseTimestamp = options.sortByLatestUserMessage
     ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
     : parseTimestampMs(thread.createdAt);
@@ -727,16 +742,16 @@ function activeThreadSortTimestamp<
 /** Optional Sidebar V2 recency layers. The default creation-order helper stays
     unchanged; server-backed manual moves and latest-user-message sorting only
     affect active threads. */
-export function sortActiveThreadsForSidebarV2<
+export function sortActiveThreadsForSidebar<
   T extends {
     readonly id: string;
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
     readonly movedToTopAt?: string | null | undefined;
   },
->(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions): T[] {
+>(threads: readonly T[], options: SidebarActiveThreadSortOptions): T[] {
   if (!options.sortByLatestUserMessage && threads.every((thread) => thread.movedToTopAt == null)) {
-    return sortThreadsForSidebarV2(threads);
+    return sortThreadsForSidebar(threads);
   }
   return [...threads].toSorted(
     (left, right) =>
@@ -747,13 +762,13 @@ export function sortActiveThreadsForSidebarV2<
 
 /** Produces a synthetic recency newer than every active sort key, including
     future-skewed remote timestamps, so a manual move always reaches the top. */
-export function nextSidebarV2ThreadBumpAt<
+export function nextSidebarThreadBumpAt<
   T extends {
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
     readonly movedToTopAt?: string | null | undefined;
   },
->(threads: readonly T[], options: SidebarV2ActiveThreadSortOptions): string {
+>(threads: readonly T[], options: SidebarActiveThreadSortOptions): string {
   const latestTimestamp = threads.reduce(
     (latest, thread) => Math.max(latest, activeThreadSortTimestamp(thread, options)),
     Date.now(),
@@ -808,7 +823,7 @@ export function resolveSettledTimestamp(thread: SettledTimestampInput): string |
 
 // Settled rows are history, so they order by when the work ENDED, not when
 // the thread was created or last touched.
-export function sortSettledThreadsForSidebarV2<
+export function sortSettledThreadsForSidebar<
   T extends SettledTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
   const timestampMs = (thread: T) => {

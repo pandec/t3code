@@ -58,6 +58,9 @@ import Migration0042 from "./Migrations/042_ProjectionThreadTitleRegeneration.ts
 import Migration0043 from "./Migrations/043_ProjectionThreadsMovedToTop.ts";
 import Migration0044 from "./Migrations/044_ProjectionThreadsPinned.ts";
 import Migration0045 from "./Migrations/045_ProjectionTurnsKeysetIndex.ts";
+// Upstream shipped this as 038; renumbered because fork migrations already
+// occupy 033-045 and the migrator tracks only the latest numeric id.
+import Migration0046 from "./Migrations/046_ProjectionThreadsPinOrderKey.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -115,6 +118,7 @@ export const migrationEntries = [
   [43, "ProjectionThreadsMovedToTop", Migration0043],
   [44, "ProjectionThreadsPinned", Migration0044],
   [45, "ProjectionTurnsKeysetIndex", Migration0045],
+  [46, "ProjectionThreadsPinOrderKey", Migration0046],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

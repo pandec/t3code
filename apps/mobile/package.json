@@ -144,5 +144,10 @@
         "@react-native-menu/menu"
       ]
     }
+  },
+  "reanimated": {
+    "staticFeatureFlags": {
+      "DISABLE_COMMIT_PAUSING_MECHANISM": true
+    }
   }
 }

@@ -184,10 +184,12 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import {
   useClientSettings,
+  useClientSettingsHydrated,
   useEnvironmentSettings,
   useSteerGraceWindowMs,
 } from "../hooks/useSettings";
@@ -199,9 +201,11 @@ import { preventRepeatedTerminalCloseShortcut } from "../lib/terminalCloseShortc
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { draftSubmissionTracker } from "../draftSubmissionState";
 import {
+  derivePhysicalProjectKey,
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
@@ -324,6 +328,8 @@ import {
   deriveComposerSendState,
   hasStandaloneComposerCommandContext,
   dismissBranchMismatchForSession,
+  hasEnvironmentReconnectWarningGraceElapsed,
+  scheduleEnvironmentReconnectWarning,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   shouldShowBranchMismatchBanner,
@@ -1568,6 +1574,7 @@ function ChatViewContent(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
+  const activeThreadEnvironmentId = activeThread?.environmentId ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -1603,8 +1610,11 @@ function ChatViewContent(props: ChatViewProps) {
     return labels;
   }, [activeThreadKnownSessions]);
   const activeThreadRef = useMemo(
-    () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
-    [activeThread],
+    () =>
+      activeThreadEnvironmentId && activeThreadId
+        ? scopeThreadRef(activeThreadEnvironmentId, activeThreadId)
+        : null,
+    [activeThreadEnvironmentId, activeThreadId],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const [timelineAnchor, setTimelineAnchor] = useState<{
@@ -1729,6 +1739,8 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
     : null;
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const clientSettingsHydrated = useClientSettingsHydrated();
   const [pendingFileSurfaceIdsByProject, setPendingFileSurfaceIdsByProject] = useState<
     ReadonlyMap<string, ReadonlySet<string>>
   >(() => new Map());
@@ -1767,11 +1779,54 @@ function ChatViewContent(props: ChatViewProps) {
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
+  useEffect(() => {
+    if (!clientSettingsHydrated || !activeThreadRef || !activeProject) return;
+    // Reuse the sidebar's grouping so history follows the project rows the user
+    // sees. Deriving the key from the active project alone would miss the
+    // identity a duplicate row borrows from its siblings.
+    const logicalKeyByPhysicalKey = buildPhysicalToLogicalProjectKeyMap({
+      projects: allProjects,
+      settings: projectGroupingSettings,
+      primaryEnvironmentId,
+    });
+    useBrowserHistoryStore
+      .getState()
+      .registerThreadProject(
+        activeThreadRef,
+        logicalKeyByPhysicalKey.get(derivePhysicalProjectKey(activeProject)) ??
+          deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
+      );
+  }, [
+    activeProject,
+    activeThreadRef,
+    allProjects,
+    clientSettingsHydrated,
+    primaryEnvironmentId,
+    projectGroupingSettings,
+  ]);
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
+  const activeReconnectingEnvironmentId =
+    activeEnvironmentConnectionPhase === "connecting" ||
+    activeEnvironmentConnectionPhase === "reconnecting"
+      ? (activeEnvironment?.environmentId ?? null)
+      : null;
+  const [reconnectWarningGraceElapsedEnvironmentId, setReconnectWarningGraceElapsedEnvironmentId] =
+    useState<EnvironmentId | null>(null);
+  const reconnectWarningGraceElapsed = hasEnvironmentReconnectWarningGraceElapsed(
+    activeReconnectingEnvironmentId,
+    reconnectWarningGraceElapsedEnvironmentId,
+  );
+  useEffect(() => {
+    setReconnectWarningGraceElapsedEnvironmentId(null);
+    if (activeReconnectingEnvironmentId === null) return;
+    return scheduleEnvironmentReconnectWarning(() =>
+      setReconnectWarningGraceElapsedEnvironmentId(activeReconnectingEnvironmentId),
+    );
+  }, [activeReconnectingEnvironmentId]);
   const activeEnvironmentUnavailableLabel = activeEnvironment?.label ?? null;
   const activeEnvironmentUnavailableState = useMemo<EnvironmentUnavailableState | null>(() => {
     if (!activeEnvironmentUnavailable || !activeEnvironmentUnavailableLabel || !activeEnvironment) {
@@ -1800,7 +1855,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [retryEnvironment],
   );
-  const projectGroupingSettings = selectProjectGroupingSettings(settings);
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
@@ -2026,12 +2080,16 @@ function ChatViewContent(props: ChatViewProps) {
     // While an update runs, transient connect blips are expected (the server
     // restarts) and the update banner already shows progress. Hard failure
     // phases still surface so the Reconnect action stays reachable.
-    const suppressUnavailableBanner = updateRunning && environmentReconnecting;
+    const suppressUnavailableBanner =
+      environmentReconnecting &&
+      (updateRunning || (!reconnectingThroughVersionSkew && !reconnectWarningGraceElapsed));
     if (activeEnvironmentUnavailableState && unavailableConnection && !suppressUnavailableBanner) {
       if (reconnectingThroughVersionSkew) {
         items.push({
           id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
           variant: "default",
+          // Live connection status: calm styling, but it must front the stack.
+          urgent: true,
           icon: (
             <span
               className="size-1.5 animate-status-pulse rounded-full bg-foreground"
@@ -2086,6 +2144,9 @@ function ChatViewContent(props: ChatViewProps) {
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
         variant: updateFailed ? "error" : "default",
+        // A running update is live progress the user is waiting on; only the
+        // idle "update available" offer is calm enough to stack behind.
+        urgent: updateInProgress,
         // In-flight and failed states carry their own status dot inside
         // ServerUpdateProgress; only the idle offer needs an icon.
         icon:
@@ -2149,6 +2210,7 @@ function ChatViewContent(props: ChatViewProps) {
     return items;
   }, [
     activeEnvironmentUnavailableState,
+    reconnectWarningGraceElapsed,
     handleReconnectActiveEnvironment,
     navigate,
     setDismissedVersionMismatchKey,
@@ -3642,6 +3704,8 @@ function ChatViewContent(props: ChatViewProps) {
   const activeTimelineAnchorIndexRef = useRef<number | null>(null);
   const anchorUserScrollGenerationRef = useRef(0);
   const liveFollowUserScrollGenerationRef = useRef<number | null>(0);
+  // Manual navigation stops live-follow without removing anchored end space.
+  // Collapsing that space during a gesture clamps the viewport back to the end.
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
     anchorUserScrollGenerationRef.current += 1;
     isAtEndRef.current = false;
@@ -3710,7 +3774,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [composerOverlayHeight],
   );
-
   // Live-follow stays active after send/thread-open until an actual list scroll
   // gesture opts out.
   const scrollToEnd = useCallback((animated = false) => {
@@ -3722,7 +3785,12 @@ function ChatViewContent(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    void legendListRef.current?.scrollToEnd?.({ animated });
+    setTimelineAnchor((current) =>
+      current.messageId === null ? current : { ...current, messageId: null },
+    );
+    requestAnimationFrame(() => {
+      void legendListRef.current?.scrollToEnd?.({ animated });
+    });
   }, []);
   useEffect(() => {
     let removeListeners: (() => void) | null = null;
@@ -3881,38 +3949,31 @@ function ChatViewContent(props: ChatViewProps) {
           }
           return;
         }
-        const scrollNode = list.getScrollableNode();
-        let finished = false;
-        const finishAnimatedPositioning = () => {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          window.clearTimeout(fallbackTimer);
-          scrollNode.removeEventListener("scrollend", finishAnimatedPositioning);
-          if (!hasPositionOwnership()) {
-            releasePositioning();
-            return;
-          }
-          if (positionedTimelineAnchorRef.current !== messageId) {
-            return;
-          }
-          const scrollOffset = list.getState().scroll;
-          void list.scrollToOffset({ offset: scrollOffset, animated: false });
-          settledTimelineAnchorRef.current = messageId;
-        };
-        const fallbackTimer = window.setTimeout(finishAnimatedPositioning, 750);
-        scrollNode.addEventListener("scrollend", finishAnimatedPositioning, { once: true });
-        void list.scrollToIndex({
-          index: anchorIndex,
-          animated: true,
-          viewPosition: 0,
-          viewOffset: CHAT_LIST_ANCHOR_OFFSET,
-        });
+        void list
+          .scrollToIndex({
+            index: anchorIndex,
+            animated: true,
+            viewPosition: 0,
+            viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+          })
+          .then(() => {
+            // The scroll resolves a frame or more later, so ownership can have
+            // moved to the user in the meantime; settling anyway would fight
+            // their gesture.
+            if (!hasPositionOwnership()) {
+              releasePositioning();
+              return;
+            }
+            if (positionedTimelineAnchorRef.current !== messageId) {
+              return;
+            }
+            settledTimelineAnchorRef.current = messageId;
+          });
       });
     };
     requestAnimationFrame(() => positionAnchor(12));
   }, []);
+
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (
       !isAtEnd &&
@@ -3937,11 +3998,17 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, []);
 
+  // Anchored end space intentionally disables LegendList's normal end-follow so
+  // the sent message can stay near the top. T3 only owns streaming adjustments
+  // during that mode; LegendList owns ordinary end-follow everywhere else.
   useEffect(() => {
     if (!activeThread?.id) {
       return;
     }
     if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
+      return;
+    }
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") {
       return;
     }
 
@@ -3965,28 +4032,13 @@ function ChatViewContent(props: ChatViewProps) {
           return;
         }
 
-        if (timelineScrollModeRef.current === "anchoring-new-turn") {
-          const metrics = getActiveTimelineTurnMetrics(list);
-          if (!metrics) {
-            return;
-          }
-          if (metrics.scrollDeltaToRevealEnd <= 1) {
-            return;
-          }
-
-          const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
-          void list.scrollToOffset({ offset: nextOffset, animated: false });
+        const metrics = getActiveTimelineTurnMetrics(list);
+        if (!metrics || metrics.scrollDeltaToRevealEnd <= 1) {
           return;
         }
 
-        if (timelineScrollModeRef.current !== "following-end") {
-          return;
-        }
-        if (!timelineRealContentOverflowsViewport(list)) {
-          return;
-        }
-
-        void list.scrollToEnd?.({ animated: false });
+        const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
+        void list.scrollToOffset({ offset: nextOffset, animated: false });
       });
     });
 
@@ -3996,12 +4048,7 @@ function ChatViewContent(props: ChatViewProps) {
         cancelAnimationFrame(secondFrame);
       }
     };
-  }, [
-    activeThread?.id,
-    timelineEntries,
-    getActiveTimelineTurnMetrics,
-    timelineRealContentOverflowsViewport,
-  ]);
+  }, [activeThread?.id, timelineEntries, getActiveTimelineTurnMetrics]);
 
   useEffect(() => {
     setPullRequestDialogState(null);
@@ -4461,8 +4508,12 @@ function ChatViewContent(props: ChatViewProps) {
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
   // The stack renders items[0] front-most and tucks the rest behind hover, so
-  // ordering is priority: system banners, then the branch-mismatch notice,
-  // and the informational parked-thread banner last — it must never cover another.
+  // ordering is priority: urgent system banners (error/warning variants plus
+  // calm-styled live states flagged `urgent`, like update progress), then
+  // background liveness — its Stop button is the only stop affordance for
+  // settled turns, so a passive "update available" notice must not cover it —
+  // then calm system banners, the woke and branch-mismatch notices, and the
+  // informational parked-thread banner last — it must never cover another.
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -4512,21 +4563,27 @@ function ChatViewContent(props: ChatViewProps) {
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const isUrgentSystemItem = (item: ComposerBannerStackItem) =>
+      item.urgent === true || item.variant === "error" || item.variant === "warning";
+    const urgentSystemItems = systemComposerBannerItems.filter(isUrgentSystemItem);
+    const calmSystemItems = systemComposerBannerItems.filter((item) => !isUrgentSystemItem(item));
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
-        ...systemComposerBannerItems,
+        ...urgentSystemItems,
         ...backgroundLivenessItems,
+        ...calmSystemItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
       ];
     }
     return [
-      ...systemComposerBannerItems,
+      ...urgentSystemItems,
       ...backgroundLivenessItems,
+      ...calmSystemItems,
       ...wokeThreadItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -6715,6 +6772,8 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            isServerThread={isServerThread}
+            changeRequestState={activeThreadPr?.state ?? null}
             activeProjectName={activeProject?.title}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
             openInCwd={gitCwd}

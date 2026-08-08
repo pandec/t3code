@@ -3,7 +3,6 @@ import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
-import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -18,10 +17,10 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
-import { buildHomeProjectScopes, hasHomeThreadListContent } from "./homeThreadList";
+import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
-import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
@@ -60,16 +59,11 @@ export function HomeRouteScreen() {
     unsnoozeThread,
     pinThread,
     unpinThread,
+    movePinnedThread,
     unsettleThread,
   } = useThreadListActions();
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
-  const hasAnyThreads = hasHomeThreadListContent({
-    threads,
-    pendingTaskCount: pendingTasks.length,
-  });
-  const compactHeaderConnectionStatusState =
-    hasAnyThreads && shouldShowWorkspaceConnectionStatus(catalogState) ? catalogState : null;
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(() => {
     const connectionStateByEnvironmentId = new Map(
@@ -153,12 +147,20 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Restore the compact title after the split branch blanks the detail header. */}
-        <NativeStackScreenOptions options={getCompactBrandHeaderOptions()} />
+        {/* Restore the compact title after the split branch blanks the detail
+            header. The brand slot doubles as the connection status surface:
+            while an environment reconnects, the lockup fades to a status label
+            in place (no layout shift in the list below). */}
+        <NativeStackScreenOptions
+          options={getConnectionAwareBrandHeaderOptions({
+            onOpenEnvironments: () =>
+              navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" }),
+            showThreadSync: true,
+          })}
+        />
         <HomeHeader
           attentionFilterEnabled={attentionFilter.enabled}
           attentionFilterReady={attentionFilter.ready}
-          connectionStatusState={compactHeaderConnectionStatusState}
           environments={environments}
           projects={projectFilterOptions}
           models={modelFilterOptions}
@@ -200,11 +202,9 @@ export function HomeRouteScreen() {
           onUnsettleThread={unsettleThread}
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
+          onMovePinnedThread={movePinnedThread}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
-          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onOpenAllArchivedThreads={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsArchive" })

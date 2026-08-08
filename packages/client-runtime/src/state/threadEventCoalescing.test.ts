@@ -111,6 +111,7 @@ const STRUCTURAL_EVENT_TYPES = {
   "thread.moved-to-top": true,
   "thread.pinned": true,
   "thread.unpinned": true,
+  "thread.pin-reordered": true,
   "thread.meta-updated": true,
   "thread.runtime-mode-set": true,
   "thread.interaction-mode-set": true,

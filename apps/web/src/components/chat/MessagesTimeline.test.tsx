@@ -18,7 +18,6 @@ vi.mock("@legendapp/list/react", async () => {
       anchorMaxSize?: number;
       anchorOffset?: number;
       onReady?: (info: { anchorIndex: number }) => void;
-      onSizeChanged?: (size: number) => void;
     };
     contentInsetEndAdjustment?: number;
     className?: string;
@@ -42,7 +41,6 @@ vi.mock("@legendapp/list/react", async () => {
     ref?: Ref<LegendListRef>;
   }) => {
     if (props.anchoredEndSpace) {
-      props.anchoredEndSpace.onSizeChanged?.(240);
       props.anchoredEndSpace.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
     }
     return (
@@ -88,6 +86,11 @@ vi.mock("@legendapp/list/react", async () => {
         data-maintain-visible-content-position-size={
           typeof props.maintainVisibleContentPosition === "object"
             ? props.maintainVisibleContentPosition.size
+            : undefined
+        }
+        data-maintain-visible-content-position-restore={
+          typeof props.maintainVisibleContentPosition === "object"
+            ? Boolean(props.maintainVisibleContentPosition.shouldRestorePosition)
             : undefined
         }
       >
@@ -543,7 +546,10 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
     expect(markup).toContain('data-maintain-visible-content-position="object"');
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
+    // `size` tracks !liveFollowEnabled (upstream hardcodes true): while
+    // following, size compensation must not fight the end-scroll.
     expect(markup).toContain('data-maintain-visible-content-position-size="false"');
+    expect(markup).toContain('data-maintain-visible-content-position-restore="true"');
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(secondEntry.message.id, 1);
   });

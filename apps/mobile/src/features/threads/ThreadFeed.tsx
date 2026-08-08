@@ -63,14 +63,7 @@ import {
 import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, {
-  FadeIn,
-  FadeInUp,
-  useSharedValue,
-  withTiming,
-  type LayoutAnimationsValues,
-  type SharedValue,
-} from "react-native-reanimated";
+import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
@@ -162,14 +155,6 @@ function formatMessageTime(input: string): string {
   }
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
-
-// Rows shift when content above them grows (streaming text, work-log folds);
-// animating the container position turns those jumps into slides. Applied
-// conditionally — see the gated transition in ThreadFeed: while browsing
-// history the animation must NOT run, or every estimate→actual size
-// correction plays as a visible slide against the instant scroll-offset
-// compensation from maintainVisibleContentPosition.
-const FEED_ITEM_LAYOUT_DURATION_MS = 180;
 
 // Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
 // classNames. The fold row's min-h-11 (44px) stays taller than its single
@@ -1987,11 +1972,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
-  // True while the viewport sits within ~one screen of the list end — the
-  // only region where layout shifts should animate. Starts true because the
-  // list opens pinned to the end.
-  const nearListEnd = useSharedValue(true);
-
   // Older-message paging. The latch stops a burst of scroll events from asking
   // for the same page repeatedly: `loadingOlderMessages` only turns true once
   // the request has been accepted, a frame or more later.
@@ -2103,9 +2083,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      nearListEnd.value =
-        contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
+      const { contentOffset } = event.nativeEvent;
       requestOlderMessagesIfNeeded(
         distanceFromFeedTop({
           contentOffsetY: contentOffset.y,
@@ -2131,7 +2109,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [
       reportHeaderMaterialVisibility,
       anchorTopInset,
-      nearListEnd,
       requestOlderMessagesIfNeeded,
       props.listRef,
       setEndFollow,
@@ -2162,30 +2139,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     userScrollSessionRef.current = false;
   }, []);
 
-  // Gated variant of the 180ms feed layout slide. Instant while browsing
-  // history: maintainVisibleContentPosition compensates the scroll offset in
-  // the same frame a row's measured size lands, so an instant reposition is
-  // invisible — animating it is exactly what made cold upward scrolls slide
-  // and jump. Near the end the slide stays on: streaming growth and sends
-  // shift rows at rest, where the animation is the thing preventing a hard
-  // visual snap. Dimensions still land synchronously so a growing row cannot
-  // overlap the following row while its measured height catches up.
-  const feedItemLayoutTransition = useMemo(() => {
-    return (values: LayoutAnimationsValues) => {
-      "worklet";
-      const duration = nearListEnd.value ? FEED_ITEM_LAYOUT_DURATION_MS : 0;
-      return {
-        initialValues: {
-          originX: values.currentOriginX,
-          originY: values.currentOriginY,
-        },
-        animations: {
-          originX: withTiming(values.targetOriginX, { duration }),
-          originY: withTiming(values.targetOriginY, { duration }),
-        },
-      };
-    };
-  }, [nearListEnd]);
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -2579,7 +2532,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            itemLayoutAnimation={feedItemLayoutTransition}
             // Patched LegendList prop (patches/@legendapp__list@3.2.0.patch):
             // lets its scroll math clamp programmatic scrolls to -headerInset
             // instead of 0, so initialScrollAtEnd/maintainScrollAtEnd on short

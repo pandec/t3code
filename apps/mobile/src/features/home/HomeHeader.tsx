@@ -12,10 +12,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
-import { useMinimumVisibleFlag } from "../../lib/useMinimumVisibleFlag";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { useThreadPrewarmSummary } from "../../state/prewarm";
-import type { WorkspaceState } from "../../state/workspaceModel";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import {
@@ -28,6 +25,7 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
+import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
@@ -40,12 +38,8 @@ import {
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
-import { HomeHeaderConnectionStatus } from "./HomeHeaderConnectionStatus";
-import { workspaceConnectionStatusPresentation } from "./workspace-connection-status";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
-
-const THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS = 700;
 
 export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
@@ -57,7 +51,6 @@ export function HomeHeader(props: {
   readonly selectedModel: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
-  readonly connectionStatusState: WorkspaceState | null;
   readonly attentionFilterEnabled: boolean;
   /** False while thread shells are still loading; gates enabling the filter. */
   readonly attentionFilterReady: boolean;
@@ -68,8 +61,8 @@ export function HomeHeader(props: {
   readonly onModelChange: (model: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-  readonly onOpenSettings: () => void;
   readonly onOpenEnvironments: () => void;
+  readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
   if (Platform.OS === "android") {
@@ -290,20 +283,30 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       >
         <View className="w-full max-w-[720px] self-center gap-3">
           <View className="flex-row items-center gap-2.5">
-            <View className="flex-1 flex-row items-center gap-2">
-              {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
-              <T3Wordmark color={iconColor} height={15} />
-              <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
-                Code
-              </RNText>
-              {stageLabel === null ? null : (
-                <View className="rounded-full bg-subtle px-2 py-0.75">
-                  <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                    {stageLabel}
+            {/* Brand slot doubles as the connection status surface: while an
+                environment reconnects, the lockup fades to a status label in
+                place (no layout shift in the list below). */}
+            <WorkspaceConnectionTitle
+              grow
+              onPress={props.onOpenEnvironments}
+              showThreadSync
+              brand={
+                <View className="flex-row items-center gap-2">
+                  {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
+                  <T3Wordmark color={iconColor} height={15} />
+                  <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
+                    Code
                   </RNText>
+                  {stageLabel === null ? null : (
+                    <View className="rounded-full bg-subtle px-2 py-0.75">
+                      <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                        {stageLabel}
+                      </RNText>
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
+              }
+            />
 
             {/* Built identically to the filter button so the two circles
                 match exactly (ControlPill sizes via Tailwind classes and
@@ -425,34 +428,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
     },
     listOrganization: !threadListV2Enabled,
   });
-  const connectionStatusState = props.connectionStatusState;
-  const connectionStatusPresentation =
-    connectionStatusState === null
-      ? null
-      : workspaceConnectionStatusPresentation(connectionStatusState);
-  // Background conversation prewarming. A fully cached sweep can finish inside
-  // a frame or two, so hold the indicator long enough to be read.
-  const syncingThreads = useMinimumVisibleFlag(
-    useThreadPrewarmSummary().syncing,
-    THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS,
-  );
-  // Always a custom title so the settled "Threads" label stays tappable and
-  // keeps opening the environments panel, same as the sync indicator.
-  const headerTitle = () => (
-    <HomeHeaderConnectionStatus
-      presentation={connectionStatusPresentation}
-      syncingThreads={syncingThreads}
-      onPress={props.onOpenEnvironments}
-    />
-  );
-
   return (
     <>
       <NativeStackScreenOptions
         optionsVersion={[
           filterMenu.items,
-          connectionStatusPresentation,
-          syncingThreads,
           props.attentionFilterEnabled,
           props.attentionFilterReady,
         ]}
@@ -460,7 +440,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           title: "Threads",
-          headerTitle,
           headerTintColor: iconColor,
           unstable_headerRightItems:
             Platform.OS === "ios"
