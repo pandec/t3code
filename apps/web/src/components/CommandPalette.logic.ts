@@ -206,6 +206,157 @@ export function buildMoveCurrentThreadToTopAction(input: {
   };
 }
 
+/**
+ * Per-thread actions the palette offers for the open thread, mirroring the
+ * per-thread context menu. Ids are shared between the item builder and the
+ * dispatcher so labels and handlers cannot drift apart.
+ */
+export type CommandPaletteThreadActionId =
+  | "settle"
+  | "unsettle"
+  | "pin"
+  | "unpin"
+  | "fork"
+  | "copy-thread-id";
+
+interface CommandPaletteThreadActionSpec {
+  readonly id: CommandPaletteThreadActionId;
+  readonly title: string;
+  readonly searchTerms: ReadonlyArray<string>;
+}
+
+const THREAD_ACTION_SPECS = {
+  settle: {
+    id: "settle",
+    title: "Settle current thread",
+    searchTerms: ["settle", "done", "park", "current thread"],
+  },
+  unsettle: {
+    id: "unsettle",
+    title: "Un-settle current thread",
+    searchTerms: ["unsettle", "un-settle", "reactivate", "keep active", "current thread"],
+  },
+  pin: {
+    id: "pin",
+    title: "Pin current thread",
+    searchTerms: ["pin", "keep on top", "current thread"],
+  },
+  unpin: {
+    id: "unpin",
+    title: "Unpin current thread",
+    searchTerms: ["unpin", "remove pin", "current thread"],
+  },
+  fork: {
+    id: "fork",
+    title: "Fork current thread",
+    searchTerms: ["fork", "fork conversation", "branch", "duplicate", "current thread"],
+  },
+  "copy-thread-id": {
+    id: "copy-thread-id",
+    title: "Copy current thread ID",
+    searchTerms: ["copy thread id", "thread id", "identifier", "clipboard", "current thread"],
+  },
+} as const satisfies Record<CommandPaletteThreadActionId, CommandPaletteThreadActionSpec>;
+
+export function buildCurrentThreadActionItems(input: {
+  readonly threadRef: ScopedThreadRef | null;
+  readonly isPinned: boolean;
+  /** Client-side twin of the server's settle invariants (no live/queued work). */
+  readonly canSettleNow: boolean;
+  readonly canFork: boolean;
+  readonly supports: {
+    readonly settlement: boolean;
+    readonly pinning: boolean;
+  };
+  readonly icon: (id: CommandPaletteThreadActionId) => ReactNode;
+  readonly run: (id: CommandPaletteThreadActionId, threadRef: ScopedThreadRef) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const threadRef = input.threadRef;
+  if (!threadRef) {
+    return [];
+  }
+
+  const ids: CommandPaletteThreadActionId[] = [];
+  if (input.supports.pinning) {
+    // Pinning is a plain field on the thread shell, so the palette can show
+    // exactly the one verb that applies.
+    ids.push(input.isPinned ? "unpin" : "pin");
+  }
+  if (input.supports.settlement) {
+    // Settled classification depends on the thread's pull-request state,
+    // which the palette does not load. Rather than show a verb derived from
+    // an incomplete input — and strand auto-settled threads with no way to
+    // un-settle from here — both verbs stay listed and the search query
+    // picks one.
+    ids.push("settle", "unsettle");
+  }
+  if (input.canFork) {
+    ids.push("fork");
+  }
+  ids.push("copy-thread-id");
+
+  return ids.map((id) => {
+    const spec: CommandPaletteThreadActionSpec = THREAD_ACTION_SPECS[id];
+    return {
+      kind: "action",
+      value: `action:thread:${id}`,
+      searchTerms: [...spec.searchTerms],
+      title: spec.title,
+      icon: input.icon(id),
+      ...(id === "settle" && !input.canSettleNow
+        ? { disabled: true, description: "Thread has running or pending work" }
+        : {}),
+      run: async () => {
+        await input.run(id, threadRef);
+      },
+    };
+  });
+}
+
+export function buildArchivedThreadsActionItems(input: {
+  /** Scoped project key of the open thread's project, when there is one. */
+  readonly projectFilterKey: string | null;
+  readonly projectTitle: string | null;
+  readonly icon: ReactNode;
+  readonly openArchived: (projectFilterKey: string | null) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const items: CommandPaletteActionItem[] = [
+    {
+      kind: "action",
+      value: "action:archived-threads",
+      searchTerms: ["archived", "archive", "archived threads", "history", "settings"],
+      title: "Open archived threads",
+      icon: input.icon,
+      run: async () => {
+        await input.openArchived(null);
+      },
+    },
+  ];
+
+  if (input.projectFilterKey !== null && input.projectTitle !== null) {
+    const projectFilterKey = input.projectFilterKey;
+    items.push({
+      kind: "action",
+      value: "action:archived-threads-in-project",
+      searchTerms: [
+        "archived",
+        "archive",
+        "archived threads",
+        "project",
+        "current project",
+        input.projectTitle,
+      ],
+      title: `Open archived threads in ${input.projectTitle}`,
+      icon: input.icon,
+      run: async () => {
+        await input.openArchived(projectFilterKey);
+      },
+    });
+  }
+
+  return items;
+}
+
 export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"
