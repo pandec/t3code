@@ -11,10 +11,12 @@ import {
   getFilesystemBrowsePath,
 } from "@t3tools/client-runtime/state/filesystem";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { canSettle, effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import {
   type DesktopWslState,
   type EnvironmentId,
@@ -23,6 +25,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type ThreadId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -31,13 +34,19 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   ArrowUpToLineIcon,
+  CircleCheckIcon,
+  CircleDotIcon,
+  CopyIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  GitForkIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PinIcon,
+  PinOffIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -58,6 +67,7 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
@@ -66,6 +76,7 @@ import {
   useClientSettings,
   useLegacySidebarEnabled,
 } from "../hooks/useSettings";
+import { useNowMinute } from "../hooks/useNowMinute";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
@@ -73,6 +84,7 @@ import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -90,6 +102,7 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
+import { archivedProjectFilterKey } from "../archivedProjectFilter";
 import { onOpenCommandPalette } from "../commandPaletteBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -107,6 +120,8 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildArchiveCurrentThreadAction,
+  buildArchivedThreadsActionItems,
+  buildCurrentThreadActionItems,
   buildMoveCurrentThreadToTopAction,
   buildBrowseGroups,
   buildProjectActionItems,
@@ -114,6 +129,7 @@ import {
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   type CommandPaletteActionItem,
+  type CommandPaletteThreadActionId,
   type CommandPaletteOpenIntent,
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
@@ -125,7 +141,11 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import {
+  canForkConversation,
+  orderItemsByPreferredIds,
+  sortLogicalProjectsForSidebar,
+} from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -134,7 +154,11 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import {
+  resolveThreadPr,
+  ThreadRowLeadingStatus,
+  ThreadRowTrailingStatus,
+} from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
@@ -377,6 +401,39 @@ const OVERLAY_MODE_BY_COMMAND = {
   "projectSearch.toggle": "content",
 } as const satisfies Partial<Record<string, SearchOverlayMode>>;
 
+function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
+  switch (id) {
+    case "settle":
+      return <CircleCheckIcon className={ITEM_ICON_CLASS} />;
+    case "unsettle":
+      return <CircleDotIcon className={ITEM_ICON_CLASS} />;
+    case "pin":
+      return <PinIcon className={ITEM_ICON_CLASS} />;
+    case "unpin":
+      return <PinOffIcon className={ITEM_ICON_CLASS} />;
+    case "fork":
+      return <GitForkIcon className={ITEM_ICON_CLASS} />;
+    case "copy-thread-id":
+      return <CopyIcon className={ITEM_ICON_CLASS} />;
+  }
+}
+
+async function reportThreadActionFailure(
+  title: string,
+  run: () => Promise<AtomCommandResult<unknown, unknown>>,
+): Promise<void> {
+  const result = await run();
+  if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title,
+        description: errorMessage(squashAtomCommandFailure(result)),
+      }),
+    );
+  }
+}
+
 function overlayModeForCommand(command: string | null): SearchOverlayMode | null {
   if (command === null) return null;
   return command in OVERLAY_MODE_BY_COMMAND
@@ -587,7 +644,32 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { attemptArchiveThread, attemptMoveThreadToTop } = useThreadActions();
+  const {
+    attemptArchiveThread,
+    attemptMoveThreadToTop,
+    forkThread,
+    pinThread,
+    settleThread,
+    unpinThread,
+    unsettleThread,
+  } = useThreadActions();
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
+    threadId: ThreadId;
+  }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
+          description: errorMessage(error),
+        }),
+      );
+    },
+  });
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -1446,16 +1528,45 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const openUnarchivedThreadRef =
-    routeThreadRef &&
-    threads.some(
-      (thread) =>
-        thread.environmentId === routeThreadRef.environmentId &&
-        thread.id === routeThreadRef.threadId &&
-        thread.archivedAt === null,
-    )
-      ? routeThreadRef
-      : null;
+  const openUnarchivedThread =
+    routeThreadRef === null
+      ? null
+      : (threads.find(
+          (thread) =>
+            thread.environmentId === routeThreadRef.environmentId &&
+            thread.id === routeThreadRef.threadId &&
+            thread.archivedAt === null,
+        ) ?? null);
+  const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
+  // Settled classification needs the same inputs the sidebar partition and
+  // the chat header use, or the palette would offer a verb that contradicts
+  // what the user sees. Subscription atoms are keyed by their serialized
+  // arguments, and this resolves the same environment and cwd ChatView
+  // already subscribes to for the open thread, so the palette joins that
+  // stream rather than opening a second one.
+  const openThreadGitCwd =
+    openUnarchivedThread === null
+      ? null
+      : (openUnarchivedThread.worktreePath ??
+        projects.find(
+          (project) =>
+            project.environmentId === openUnarchivedThread.environmentId &&
+            project.id === openUnarchivedThread.projectId,
+        )?.workspaceRoot ??
+        null);
+  const openThreadGitStatus = useEnvironmentQuery(
+    openUnarchivedThread === null || openThreadGitCwd === null
+      ? null
+      : vcsEnvironment.status({
+          environmentId: openUnarchivedThread.environmentId,
+          input: { cwd: openThreadGitCwd },
+        }),
+  );
+  // Minute-quantized like every other settled-state consumer, so the palette
+  // can never disagree with them within the same minute — and so clock-derived
+  // state (the queued-turn settle blocker) refreshes while the palette is open.
+  const nowMinute = useNowMinute();
+  const quantizedNow = `${nowMinute}:00.000Z`;
   const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
     threadRef:
       defaultSidebarEnabled &&
@@ -1480,6 +1591,70 @@ function OpenCommandPaletteDialog(props: {
   if (archiveCurrentThreadAction) {
     actionItems.push(archiveCurrentThreadAction);
   }
+
+  const openThreadCapabilities =
+    openUnarchivedThreadRef === null
+      ? null
+      : (serverConfigs.get(openUnarchivedThreadRef.environmentId)?.environment.capabilities ??
+        null);
+  actionItems.push(
+    ...buildCurrentThreadActionItems({
+      threadRef: openUnarchivedThreadRef,
+      isPinned: openUnarchivedThread?.pinnedAt != null,
+      isSettled:
+        openThreadCapabilities?.threadSettlement === true &&
+        openUnarchivedThread !== null &&
+        effectiveSettled(openUnarchivedThread, {
+          now: quantizedNow,
+          autoSettleEnabled: clientSettings.threadAutoSettleEnabled,
+          autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
+          changeRequestState:
+            resolveThreadPr({
+              threadBranch: openUnarchivedThread.branch ?? null,
+              gitStatus: openThreadGitStatus.data ?? null,
+            })?.state ?? null,
+        }),
+      canSettleNow:
+        openUnarchivedThread !== null && canSettle(openUnarchivedThread, { now: quantizedNow }),
+      canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
+      supports: {
+        settlement: openThreadCapabilities?.threadSettlement === true,
+        // Not gated on the sidebar variant: pinning is server-side state the
+        // mobile thread list renders, and the sibling thread menus offer it
+        // regardless of which sidebar the web client shows.
+        pinning: openThreadCapabilities?.threadPinning === true,
+      },
+      icon: (id) => threadActionIcon(id),
+      run: async (id, threadRef) => {
+        switch (id) {
+          case "settle":
+            await reportThreadActionFailure("Failed to settle thread", () =>
+              settleThread(threadRef),
+            );
+            return;
+          case "unsettle":
+            await reportThreadActionFailure("Failed to un-settle thread", () =>
+              unsettleThread(threadRef),
+            );
+            return;
+          case "pin":
+            await reportThreadActionFailure("Failed to pin thread", () => pinThread(threadRef));
+            return;
+          case "unpin":
+            await reportThreadActionFailure("Failed to unpin thread", () => unpinThread(threadRef));
+            return;
+          case "fork":
+            await reportThreadActionFailure("Failed to fork conversation", () =>
+              forkThread(threadRef),
+            );
+            return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(threadRef.threadId, { threadId: threadRef.threadId });
+            return;
+        }
+      },
+    }),
+  );
 
   actionItems.push({
     kind: "action",
@@ -1578,6 +1753,27 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/settings" });
     },
   });
+
+  actionItems.push(
+    ...buildArchivedThreadsActionItems({
+      projectFilterKey:
+        currentProjectEnvironmentId !== null && currentProjectId !== null
+          ? archivedProjectFilterKey({
+              environmentId: currentProjectEnvironmentId,
+              id: currentProjectId,
+            })
+          : null,
+      projectTitle:
+        currentProjectId !== null ? (projectTitleById.get(currentProjectId) ?? null) : null,
+      icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
+      openArchived: async (projectFilterKey) => {
+        await navigate({
+          to: "/settings/archived",
+          search: projectFilterKey === null ? {} : { project: projectFilterKey },
+        });
+      },
+    }),
+  );
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
   const sourceSelectionViewValue =

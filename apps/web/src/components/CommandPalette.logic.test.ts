@@ -6,6 +6,8 @@ import type { Project, Thread } from "../types";
 import {
   buildBrowseGroups,
   buildArchiveCurrentThreadAction,
+  buildArchivedThreadsActionItems,
+  buildCurrentThreadActionItems,
   buildMoveCurrentThreadToTopAction,
   buildProjectActionItems,
   buildThreadActionItems,
@@ -80,6 +82,118 @@ describe("buildMoveCurrentThreadToTopAction", () => {
     expect(item).not.toHaveProperty("shortcutCommand");
     await item?.run();
     expect(runThread).toHaveBeenCalledWith(threadRef);
+  });
+});
+
+describe("buildCurrentThreadActionItems", () => {
+  const threadRef = scopeThreadRef(
+    EnvironmentId.make("environment-local"),
+    ThreadId.make("thread-current"),
+  );
+  const baseInput = {
+    threadRef,
+    isPinned: false,
+    isSettled: false,
+    canSettleNow: true,
+    canFork: true,
+    supports: { settlement: true, pinning: true },
+    icon: () => null,
+    run: async () => undefined,
+  };
+
+  it("omits every action when no thread is open", () => {
+    expect(buildCurrentThreadActionItems({ ...baseInput, threadRef: null })).toEqual([]);
+  });
+
+  it("lists one verb per lifecycle pair for an active pinnable thread", () => {
+    expect(buildCurrentThreadActionItems(baseInput).map((item) => item.value)).toEqual([
+      "action:thread:pin",
+      "action:thread:settle",
+      "action:thread:fork",
+      "action:thread:copy-thread-id",
+    ]);
+  });
+
+  it("swaps each lifecycle verb for its inverse on a pinned settled thread", () => {
+    expect(
+      buildCurrentThreadActionItems({ ...baseInput, isPinned: true, isSettled: true }).map(
+        (item) => item.value,
+      ),
+    ).toEqual([
+      "action:thread:unpin",
+      "action:thread:unsettle",
+      "action:thread:fork",
+      "action:thread:copy-thread-id",
+    ]);
+  });
+
+  it("drops capability-gated and unavailable actions", () => {
+    expect(
+      buildCurrentThreadActionItems({
+        ...baseInput,
+        canFork: false,
+        supports: { settlement: false, pinning: false },
+      }).map((item) => item.value),
+    ).toEqual(["action:thread:copy-thread-id"]);
+  });
+
+  it("disables settle while the thread cannot be settled", () => {
+    expect(
+      buildCurrentThreadActionItems({ ...baseInput, canSettleNow: false }).find(
+        (item) => item.value === "action:thread:settle",
+      ),
+    ).toMatchObject({ disabled: true });
+  });
+
+  it("never disables un-settle, which has no activity precondition", () => {
+    expect(
+      buildCurrentThreadActionItems({
+        ...baseInput,
+        isSettled: true,
+        canSettleNow: false,
+      }).find((item) => item.value === "action:thread:unsettle"),
+    ).not.toHaveProperty("disabled");
+  });
+
+  it("dispatches the action id and the open thread ref", async () => {
+    const run = vi.fn(async () => undefined);
+    const items = buildCurrentThreadActionItems({ ...baseInput, run });
+    await items.find((item) => item.value === "action:thread:fork")?.run();
+    expect(run).toHaveBeenCalledWith("fork", threadRef);
+  });
+});
+
+describe("buildArchivedThreadsActionItems", () => {
+  it("offers only the unfiltered entry without a resolvable project", () => {
+    expect(
+      buildArchivedThreadsActionItems({
+        projectFilterKey: null,
+        projectTitle: "Ignored",
+        icon: null,
+        openArchived: vi.fn(),
+      }).map((item) => item.value),
+    ).toEqual(["action:archived-threads"]);
+  });
+
+  it("adds a project-scoped entry naming the current project", async () => {
+    const openArchived = vi.fn(async () => undefined);
+    const items = buildArchivedThreadsActionItems({
+      projectFilterKey: "environment-local:project-a",
+      projectTitle: "T3 Code",
+      icon: null,
+      openArchived,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      "action:archived-threads",
+      "action:archived-threads-in-project",
+    ]);
+    expect(items[1]).toMatchObject({ title: "Open archived threads in T3 Code" });
+
+    await items[0]?.run();
+    expect(openArchived).toHaveBeenCalledWith(null);
+    await items[1]?.run();
+    expect(openArchived).toHaveBeenCalledWith("environment-local:project-a");
   });
 });
 
