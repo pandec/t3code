@@ -35,11 +35,9 @@ export interface ThreadActionMenuForkExtras {
   // thread is pinned, settled, or snoozed (those rows have their own order).
   readonly moveToTop: boolean;
   readonly fork: boolean;
-  readonly archive: boolean;
-  // Archiving mid-turn would strand a running session, so the row offers the
-  // action but disables it until the turn ends.
+  // Archiving mid-turn would strand a running session, so the entry stays
+  // visible but disabled until the turn ends.
   readonly canArchiveNow: boolean;
-  readonly copyThreadId: boolean;
 }
 
 export interface ThreadActionMenuState {
@@ -132,7 +130,7 @@ export function buildThreadActionMenuItems(
       ? [{ id: "move-to-top" as const, label: "Move to top" }]
       : []),
     ...(state.forkExtras?.fork ? [{ id: "fork" as const, label: "Fork conversation" }] : []),
-    ...(state.forkExtras?.archive
+    ...(state.forkExtras
       ? [
           {
             id: "archive" as const,
@@ -142,7 +140,7 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "copy-path", label: "Copy path", icon: "copy" },
-    ...(state.forkExtras?.copyThreadId
+    ...(state.forkExtras
       ? [{ id: "copy-thread-id" as const, label: "Copy thread ID", icon: "copy" }]
       : []),
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),

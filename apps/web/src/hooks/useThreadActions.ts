@@ -17,7 +17,12 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef } from "react";
 
-import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
+import {
+  canArchiveThreadNow,
+  getFallbackThreadIdAfterDelete,
+  nextSidebarThreadBumpAt,
+  pinOrderKeyBetween,
+} from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
@@ -222,6 +227,9 @@ export function useThreadActions() {
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
+  const sortActiveByLatestUserMessage = useClientSettings(
+    (settings) => settings.sidebarV2SortActiveByLatestUserMessage,
+  );
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
@@ -258,7 +266,7 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return AsyncResult.success(undefined);
       const { thread, threadRef } = resolved;
-      if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+      if (!canArchiveThreadNow(thread)) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadArchiveBlockedError({
@@ -806,6 +814,36 @@ export function useThreadActions() {
     [moveThreadToTopMutation],
   );
 
+  /**
+   * Move-to-top for menu callers. The bump has to outrank every other active
+   * thread's sort key, so it is computed against the whole unarchived set
+   * rather than the caller's filtered view — a sidebar scoped to one project
+   * must still move the thread above threads it cannot see.
+   */
+  const attemptMoveThreadToTop = useCallback(
+    async (target: ScopedThreadRef) => {
+      const unarchivedThreads = readThreadShells().filter((shell) => shell.archivedAt === null);
+      const result = await moveThreadToTop(
+        target,
+        nextSidebarThreadBumpAt(unarchivedThreads, {
+          sortByLatestUserMessage: sortActiveByLatestUserMessage,
+        }),
+      );
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to move thread to top",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return result;
+    },
+    [moveThreadToTop, sortActiveByLatestUserMessage],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -846,6 +884,7 @@ export function useThreadActions() {
       unsettleThread,
       snoozeThread,
       unsnoozeThread,
+      attemptMoveThreadToTop,
       moveThreadToTop,
       pinThread,
       unpinThread,
@@ -857,6 +896,7 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       deleteThread,
       forkThread,
+      attemptMoveThreadToTop,
       moveThreadToTop,
       pinThread,
       reorderPinnedThread,
