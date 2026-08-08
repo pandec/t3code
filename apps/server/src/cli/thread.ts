@@ -16,6 +16,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -31,7 +32,12 @@ import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import {
+  type CliAuthLocationFlags,
+  DurationFromString,
+  projectLocationFlags,
+  resolveCliAuthConfig,
+} from "./config.ts";
 import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationOutcomeUnknownError,
@@ -55,10 +61,24 @@ import {
   SessionCliServerUnsupportedError,
 } from "./session.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
+import {
+  type ThreadWaitDrainMode,
+  type WaitForThreadResult,
+  threadWaitExitCode,
+  waitForThread,
+} from "./threadWait.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
+);
+
+export const threadWaitDrainFlag = Flag.boolean("drain").pipe(
+  Flag.map((enabled): ThreadWaitDrainMode => (enabled ? "agents" : null)),
+  Flag.orElse(() => Flag.choice("drain", ["agents", "all"] as const)),
+  Flag.withDescription(
+    "After the turn settles, wait for background agents/workflows; use --drain=all to include monitors.",
+  ),
 );
 
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
@@ -336,12 +356,34 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   worktreePath: thread.worktreePath ?? null,
   sessionStatus: thread.session?.status ?? null,
   activeTurnId: thread.session?.activeTurnId ?? null,
+  backgroundLiveness: thread.backgroundLiveness ?? null,
   snoozedUntil: thread.snoozedUntil ?? null,
   snoozedAt: thread.snoozedAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
   hasPendingUserInput: thread.hasPendingUserInput,
   latestUserMessageAt: thread.latestUserMessageAt,
   updatedAt: thread.updatedAt,
+});
+
+export const threadWaitSummary = (result: WaitForThreadResult) => ({
+  ...threadSummary(result.thread),
+  outcome: result.evaluation.outcome,
+  waited: result.waited,
+  waitedMs: result.waitedMs,
+  observedSequence: result.snapshot.snapshotSequence,
+  adoptionTimedOut: result.evaluation.adoptionTimedOut,
+  drainUnsupported: result.evaluation.drainUnsupported,
+  ...(result.thread.latestTurn === null
+    ? {}
+    : {
+        turn: {
+          turnId: result.thread.latestTurn.turnId,
+          state: result.thread.latestTurn.state,
+          requestedAt: result.thread.latestTurn.requestedAt,
+          startedAt: result.thread.latestTurn.startedAt,
+          completedAt: result.thread.latestTurn.completedAt,
+        },
+      }),
 });
 
 const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
@@ -891,6 +933,66 @@ const threadStatusCommand = Command.make("status", {
   ),
 );
 
+const threadWaitCommand = Command.make("wait", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  afterSequence: Flag.integer("after-sequence").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    Flag.withDescription("Wait only after the shell reaches this projection sequence."),
+    Flag.optional,
+  ),
+  turn: Flag.string("turn").pipe(
+    Flag.withDescription("Wait for this specific turn id to settle."),
+    Flag.optional,
+  ),
+  timeout: Flag.string("timeout").pipe(
+    Flag.withSchema(DurationFromString),
+    Flag.withDescription("Maximum wait duration, for example `30s`, `5m`, or `1h`."),
+    Flag.withDefault(Duration.minutes(30)),
+  ),
+  drain: threadWaitDrainFlag,
+  onBlocked: Flag.choice("on-blocked", ["wait", "return"] as const).pipe(
+    Flag.withDescription("Whether approvals or user-input requests keep waiting."),
+    Flag.withDefault("return"),
+  ),
+  exitZero: Flag.boolean("exit-zero").pipe(
+    Flag.withDescription("Return exit code 0 for every observed terminal outcome."),
+    Flag.withDefault(false),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Wait for a thread turn to settle."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const result = yield* waitForThread({
+          live: input.live,
+          token: input.token,
+          timeouts: input.timeouts,
+          thread,
+          options: {
+            afterSequence: Option.getOrNull(flags.afterSequence),
+            turnId: Option.getOrNull(flags.turn),
+            timeoutMs: Duration.toMillis(flags.timeout),
+            drain: flags.drain,
+            onBlocked: flags.onBlocked,
+          },
+        });
+        const summary = threadWaitSummary(result);
+        yield* Console.log(
+          flags.json
+            ? jsonOutput(summary)
+            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).`,
+        );
+        yield* Effect.sync(() => {
+          process.exitCode = threadWaitExitCode(summary.outcome, flags.exitZero);
+        });
+      }),
+    ),
+  ),
+);
+
 const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
@@ -929,6 +1031,7 @@ export const threadCommand = Command.make("thread").pipe(
     threadRenameCommand,
     threadInterruptCommand,
     threadStatusCommand,
+    threadWaitCommand,
     threadArchiveCommand,
   ]),
 );

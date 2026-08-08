@@ -5,9 +5,15 @@ import * as Schema from "effect/Schema";
 import * as CliError from "effect/unstable/cli/CliError";
 import * as CliOutput from "effect/unstable/cli/CliOutput";
 
-import { CliOrchestrationOutcomeUnknownError } from "./orchestration.ts";
+import {
+  CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationWaitOutcomeUnknownError,
+} from "./orchestration.ts";
 
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
+const isCliOrchestrationWaitOutcomeUnknownError = Schema.is(
+  CliOrchestrationWaitOutcomeUnknownError,
+);
 
 export interface CliJsonError {
   readonly code: string;
@@ -40,7 +46,10 @@ export const serializeCliError = (error: unknown): CliJsonError => {
       message: typeof message === "string" ? message : String(error),
       // A lost acknowledgement or unconfirmed multi-step compensation leaves
       // the mutation outcome ambiguous.
-      ...(isCliOrchestrationOutcomeUnknownError(error) ? { outcome: "unknown" as const } : {}),
+      ...(isCliOrchestrationOutcomeUnknownError(error) ||
+      isCliOrchestrationWaitOutcomeUnknownError(error)
+        ? { outcome: "unknown" as const }
+        : {}),
       ...(Object.keys(detail).length > 0 ? { detail } : {}),
     };
   }

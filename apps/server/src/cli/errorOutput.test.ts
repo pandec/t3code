@@ -4,6 +4,7 @@ import * as CliError from "effect/unstable/cli/CliError";
 import {
   CliOrchestrationOutcomeUnknownError,
   CliOrchestrationReadTimeoutError,
+  CliOrchestrationWaitOutcomeUnknownError,
 } from "./orchestration.ts";
 import { isCliJsonOutputRequested, serializeCliError } from "./errorOutput.ts";
 
@@ -47,6 +48,20 @@ it("marks a lost acknowledgement as an unknown outcome", () => {
 
   assert.strictEqual(serialized.code, "CliOrchestrationOutcomeUnknownError");
   assert.strictEqual(serialized.outcome, "unknown");
+});
+
+it("marks a server death during wait as an unknown outcome", () => {
+  const serialized = serializeCliError(
+    new CliOrchestrationWaitOutcomeUnknownError({
+      operation: "waitLiveServer",
+      pid: 123,
+      cause: new Error("server exited"),
+    }),
+  );
+
+  assert.strictEqual(serialized.code, "CliOrchestrationWaitOutcomeUnknownError");
+  assert.strictEqual(serialized.outcome, "unknown");
+  assert.deepStrictEqual(serialized.detail, { operation: "waitLiveServer", pid: 123 });
 });
 
 it("serializes plain errors and unknown values", () => {

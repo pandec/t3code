@@ -25,6 +25,8 @@ import {
   CliOrchestrationUndeclaredStatusError,
   defaultCliLiveServerReadTimeouts,
   dispatchLiveOrchestrationCommand,
+  isConnectionRefused,
+  isProcessAlive,
   resolveCliLiveServerReadTimeouts,
   withCliOrchestrationSession,
 } from "./orchestration.ts";
@@ -107,6 +109,17 @@ it("names the timed-out phase and the configured timeout in the error", () => {
   assert.include(error.message, "snapshot");
   assert.include(error.message, "10000ms");
   assert.include(error.message, "--timeout-ms");
+});
+
+it.effect("reports the current process as alive", () =>
+  Effect.gen(function* () {
+    assert.isTrue(yield* isProcessAlive(process.pid));
+  }),
+);
+
+it("detects connection refusal through nested cause chains", () => {
+  assert.isTrue(isConnectionRefused({ cause: { reason: { code: "ECONNREFUSED" } } }));
+  assert.isFalse(isConnectionRefused(new Error("timed out")));
 });
 
 it("detects SQLITE_BUSY codes and lock messages through nested cause chains", () => {
