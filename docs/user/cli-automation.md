@@ -18,10 +18,11 @@ document. On failure it exits non-zero and stdout holds one error document inste
 ```
 
 `code` is the stable error tag and `detail` carries the error's primitive fields (never the cause
-chain). When a mutation's outcome is ambiguous — the acknowledgement was lost, the server answered
-an undeclared 5xx during dispatch, or a multi-step command could not confirm its compensation — the
-error additionally carries `"outcome": "unknown"`; reconcile current state before retrying. Without
-that marker, the failing mutation was not applied or any earlier step was successfully compensated.
+chain). When an outcome is ambiguous — a mutation acknowledgement was lost, the server answered an
+undeclared 5xx during dispatch, a multi-step command could not confirm its compensation, or the server
+stopped during a thread wait — the error additionally carries `"outcome": "unknown"`; reconcile
+current state before retrying. For mutation errors without that marker, the mutation was not applied
+or any earlier step was successfully compensated.
 
 ## Live-read timeouts
 
@@ -104,6 +105,7 @@ t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
 t3 thread interrupt <thread-id> --json
+t3 thread wait <thread-id> --json
 t3 thread archive <thread-id> --json
 ```
 
@@ -115,7 +117,68 @@ it") carries a `snoozedAt` with a `null` `snoozedUntil`. Snooze is an inbox over
 change the thread's turn `state`.
 
 The project argument accepts either a project id or an exact workspace-root path. Thread mutation
-commands intentionally require a thread id so automation cannot act on an ambiguous title.
+commands intentionally require a thread id so automation cannot act on an ambiguous title. Thread
+list and status summaries also include `backgroundLiveness`: `"working"` for native subagents or
+workflows, `"monitoring"` when only watch loops remain, and `null` when no native background work is
+known.
+
+### Waiting for turns
+
+`t3 thread wait <thread-id>` blocks until the thread's current turn settles. The default timeout is 30
+minutes; change it with `--timeout 30s`, `--timeout 5m`, or another duration. This wait deadline is
+separate from `--timeout-ms`, which controls each live-server read. The command is suitable for shell
+composition:
+
+```bash
+t3 thread wait "$thread_id" && run-the-next-step
+```
+
+When a script starts or steers a turn, anchor the wait to the dispatch sequence returned by that
+mutation. This prevents an older, idle-looking shell snapshot from satisfying the wait before the new
+turn is visible:
+
+```bash
+seq=$(t3 thread send "$thread_id" --message "Run the checks" --json | jq .sequence)
+t3 thread wait "$thread_id" --after-sequence "$seq"
+```
+
+Use `--turn <turn-id>` to wait for one specific turn. By default a pending approval or user-input
+request returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A newly
+dispatched turn can briefly exist before a provider session adopts it, so `wait` treats a recent
+unadopted user message as pending for up to two minutes. If adoption never appears before that grace
+expires, it returns `idle` with `adoptionTimedOut: true` rather than hanging forever.
+
+After the turn settles, `--drain` (equivalent to `--drain=agents`) also waits for native subagents and
+workflows. `--drain=all` additionally waits for monitoring/watch loops. This signal is intentionally
+bounded and honest:
+
+- Background liveness is in-memory server state and resets when the server restarts.
+- A lost native `task.completed` event can leave liveness at `"working"`; keep a finite `--timeout`.
+- Detached external processes are invisible to the server and cannot be drained.
+- Older servers omit the field; the wait completes and JSON reports `drainUnsupported: true`.
+
+A successful wait means the observed turn settled, not that every external artifact, filesystem flush,
+or provider checkpoint is durable. Use the relevant artifact or checkpoint receipt when later automation
+requires that stronger guarantee.
+
+Terminal outcomes use these exit codes:
+
+| Outcome                                                              | Exit code |
+| -------------------------------------------------------------------- | --------: |
+| `completed` or `idle`                                                |         0 |
+| `timeout`                                                            |         2 |
+| `error`                                                              |         3 |
+| `interrupted`                                                        |         4 |
+| `blocked`                                                            |         5 |
+| Thread archived or deleted during the wait (`vanished`)              |         6 |
+| Transport, authentication, initial not-found, or other command error |         1 |
+| SIGINT                                                               |       130 |
+
+`--exit-zero` collapses observed terminal outcomes 2–6 to exit code 0; it does not hide transport,
+authentication, or parsing failures. JSON extends the normal thread summary with `outcome`, `waited`,
+`waitedMs`, `observedSequence`, `adoptionTimedOut`, `drainUnsupported`, `backgroundLiveness`, and the
+latest turn timestamps when available. A timeout retains the last observed thread state and background
+liveness so callers can distinguish active work from stale or wedged state.
 
 ### Permissions and Isolation
 
