@@ -4,6 +4,7 @@ import {
   admitNewSidebarV2AttentionThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
+  canArchiveThreadNow,
   canForkConversation,
   createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
@@ -53,6 +54,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 
 import {
@@ -227,6 +229,44 @@ describe("Sidebar V2 project scope", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("canArchiveThreadNow", () => {
+  type ArchiveInput = Pick<import("../types").SidebarThreadSummary, "session">;
+  const session = (
+    overrides: Partial<NonNullable<ArchiveInput["session"]>>,
+  ): ArchiveInput["session"] =>
+    ({
+      providerName: "codex",
+      status: "ready",
+      activeTurnId: null,
+      lastError: null,
+      ...overrides,
+    }) as ArchiveInput["session"];
+
+  it("allows archiving a thread with no session", () => {
+    expect(canArchiveThreadNow({ session: null })).toBe(true);
+  });
+
+  it("allows archiving an idle session", () => {
+    expect(canArchiveThreadNow({ session: session({}) })).toBe(true);
+  });
+
+  it("blocks archiving only while a turn is actually running", () => {
+    expect(
+      canArchiveThreadNow({
+        session: session({ status: "running", activeTurnId: TurnId.make("turn-1") }),
+      }),
+    ).toBe(false);
+    // Running with no active turn is a live session between turns — the
+    // archive is safe, so it must not be disabled.
+    expect(canArchiveThreadNow({ session: session({ status: "running" }) })).toBe(true);
+    // An active turn on a session that is no longer running is stale state,
+    // not a reason to block.
+    expect(canArchiveThreadNow({ session: session({ activeTurnId: TurnId.make("turn-1") }) })).toBe(
+      true,
+    );
   });
 });
 

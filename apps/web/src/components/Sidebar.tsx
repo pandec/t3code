@@ -156,6 +156,7 @@ import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
+  canArchiveThreadNow,
   canForkConversation,
   admitNewSidebarV2AttentionThreads,
   createSidebarV2AttentionFilter,
@@ -3444,9 +3445,7 @@ export default function Sidebar() {
                 moveToTop: supportsMoveToTop,
                 fork: canForkConversation(thread),
                 archive: true,
-                canArchiveNow: !(
-                  thread.session?.status === "running" && thread.session.activeTurnId != null
-                ),
+                canArchiveNow: canArchiveThreadNow(thread),
                 copyThreadId: true,
               },
             }),

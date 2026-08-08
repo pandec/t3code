@@ -14,6 +14,11 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 
+import {
+  canArchiveThreadNow,
+  canForkConversation,
+  nextSidebarThreadBumpAt,
+} from "../components/Sidebar.logic";
 import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
@@ -23,11 +28,13 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
+  readEnvironmentSupportsMoveToTop,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
+  readThreadShells,
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
@@ -73,6 +80,9 @@ export function useThreadActionMenu(input: {
     pinThread,
     unpinThread,
     deleteThread,
+    attemptArchiveThread,
+    forkThread,
+    moveThreadToTop,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -83,6 +93,9 @@ export function useThreadActionMenu(input: {
   const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const sortActiveByLatestUserMessage = useClientSettings(
+    (s) => s.sidebarV2SortActiveByLatestUserMessage,
+  );
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -95,6 +108,13 @@ export function useThreadActionMenu(input: {
       toastManager.add({ type: "success", title: "Branch copied", description: branch });
     },
     onError: (error) => failureToast("Failed to copy branch", error),
+  });
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: string }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
+    },
+    onError: (error) => failureToast("Failed to copy thread ID", error),
   });
 
   const openMenu = useCallback(
@@ -135,6 +155,13 @@ export function useThreadActionMenu(input: {
           isRegeneratingTitle,
           supports,
           snoozePresets,
+          forkExtras: {
+            moveToTop: readEnvironmentSupportsMoveToTop(threadRef.environmentId),
+            fork: canForkConversation(thread),
+            archive: true,
+            canArchiveNow: canArchiveThreadNow(thread),
+            copyThreadId: true,
+          },
         });
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));
         if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -224,6 +251,35 @@ export function useThreadActionMenu(input: {
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
+          case "move-to-top": {
+            // The bump must outrank every other active thread's sort key, so
+            // it is computed against a snapshot of the whole unarchived set —
+            // read at open time rather than subscribed to, since the chat
+            // header has no other reason to re-render on sidebar churn.
+            const unarchivedThreads = readThreadShells().filter(
+              (shell) => shell.archivedAt === null,
+            );
+            await reportFailure("Failed to move thread to top", () =>
+              moveThreadToTop(
+                threadRef,
+                nextSidebarThreadBumpAt(unarchivedThreads, {
+                  sortByLatestUserMessage: sortActiveByLatestUserMessage,
+                }),
+              ),
+            );
+            return;
+          }
+          case "fork":
+            await reportFailure("Failed to fork conversation", () => forkThread(threadRef));
+            return;
+          case "archive":
+            // Owns its own confirmation and forward navigation, and toasts its
+            // own failures — hence no reportFailure wrapper.
+            await attemptArchiveThread(threadRef);
+            return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+            return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;
             if (!workspacePath) {
@@ -275,20 +331,25 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
+      attemptArchiveThread,
       autoSettleAfterDays,
       autoSettleEnabled,
       changeRequestState,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleNewThread,
       markThreadUnread,
+      moveThreadToTop,
       onStartRename,
       pinThread,
       projectCwd,
       settleThread,
       snoozeThread,
+      sortActiveByLatestUserMessage,
       threadRef,
       timestampFormat,
       unpinThread,
