@@ -1540,9 +1540,10 @@ function OpenCommandPaletteDialog(props: {
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
   // Settled classification needs the same inputs the sidebar partition and
   // the chat header use, or the palette would offer a verb that contradicts
-  // what the user sees. The git status this reads is the one ChatView already
-  // subscribes to for the open thread (same environment, same cwd), so it is
-  // a cache read rather than an extra query.
+  // what the user sees. Subscription atoms are keyed by their serialized
+  // arguments, and this resolves the same environment and cwd ChatView
+  // already subscribes to for the open thread, so the palette joins that
+  // stream rather than opening a second one.
   const openThreadGitCwd =
     openUnarchivedThread === null
       ? null
