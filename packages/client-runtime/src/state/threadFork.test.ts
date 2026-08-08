@@ -6,16 +6,23 @@ import { canForkConversation } from "./threadFork.ts";
 describe("canForkConversation", () => {
   const thread = {
     latestTurn: null,
+    archivedAt: null,
     session: {
       providerName: "codex",
       status: "ready",
       activeTurnId: null,
       lastError: null,
     },
-  } as Pick<OrchestrationThreadShell, "latestTurn" | "session">;
+  } as Pick<OrchestrationThreadShell, "latestTurn" | "session" | "archivedAt">;
 
   it("allows an idle supported provider session", () => {
     expect(canForkConversation(thread)).toBe(true);
+  });
+
+  // Archived threads still open and accept messages, so nothing else stops the
+  // chat header or mobile thread screen from offering a fork the server refuses.
+  it("rejects archived threads", () => {
+    expect(canForkConversation({ ...thread, archivedAt: "2026-08-08T00:00:00.000Z" })).toBe(false);
   });
 
   it("rejects running sessions and prior fork failures", () => {
