@@ -14,6 +14,7 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 
+import { canArchiveThreadNow, canForkConversation } from "../components/Sidebar.logic";
 import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
@@ -23,9 +24,11 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
+  readEnvironmentSupportsMoveToTop,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
 } from "../state/entities";
@@ -33,7 +36,7 @@ import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
-import { useClientSettings } from "./useSettings";
+import { useClientSettings, useLegacySidebarEnabled } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -73,6 +76,9 @@ export function useThreadActionMenu(input: {
     pinThread,
     unpinThread,
     deleteThread,
+    attemptArchiveThread,
+    attemptMoveThreadToTop,
+    forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -83,6 +89,7 @@ export function useThreadActionMenu(input: {
   const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const legacySidebarEnabled = useLegacySidebarEnabled();
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -95,6 +102,13 @@ export function useThreadActionMenu(input: {
       toastManager.add({ type: "success", title: "Branch copied", description: branch });
     },
     onError: (error) => failureToast("Failed to copy branch", error),
+  });
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: string }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
+    },
+    onError: (error) => failureToast("Failed to copy thread ID", error),
   });
 
   const openMenu = useCallback(
@@ -115,7 +129,9 @@ export function useThreadActionMenu(input: {
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
-        const snoozePresets = resolveSnoozePresets(now, timestampFormat);
+        const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
+          untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
+        });
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
           isPinned: thread.pinnedAt != null,
@@ -135,6 +151,15 @@ export function useThreadActionMenu(input: {
           isRegeneratingTitle,
           supports,
           snoozePresets,
+          forkExtras: {
+            // The legacy sidebar never reads movedToTopAt, so offering this
+            // there would mutate a field nothing renders. Same guard as the
+            // command palette's Move to top action.
+            moveToTop:
+              !legacySidebarEnabled && readEnvironmentSupportsMoveToTop(threadRef.environmentId),
+            fork: canForkConversation(thread),
+            canArchiveNow: canArchiveThreadNow(thread),
+          },
         });
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));
         if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -224,6 +249,20 @@ export function useThreadActionMenu(input: {
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
+          case "move-to-top":
+            await attemptMoveThreadToTop(threadRef);
+            return;
+          case "fork":
+            await reportFailure("Failed to fork conversation", () => forkThread(threadRef));
+            return;
+          case "archive":
+            // Owns its own confirmation and forward navigation, and toasts its
+            // own failures — hence no reportFailure wrapper.
+            await attemptArchiveThread(threadRef);
+            return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+            return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;
             if (!workspacePath) {
@@ -275,14 +314,19 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
+      attemptArchiveThread,
+      attemptMoveThreadToTop,
       autoSettleAfterDays,
       autoSettleEnabled,
       changeRequestState,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleNewThread,
+      legacySidebarEnabled,
       markThreadUnread,
       onStartRename,
       pinThread,

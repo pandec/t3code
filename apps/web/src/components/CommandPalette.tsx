@@ -125,11 +125,7 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import {
-  nextSidebarThreadBumpAt,
-  orderItemsByPreferredIds,
-  sortLogicalProjectsForSidebar,
-} from "./Sidebar.logic";
+import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -591,7 +587,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { attemptArchiveThread, moveThreadToTop } = useThreadActions();
+  const { attemptArchiveThread, attemptMoveThreadToTop } = useThreadActions();
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -1470,23 +1466,7 @@ function OpenCommandPaletteDialog(props: {
         : null,
     icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
     runThread: async (threadRef) => {
-      const unarchivedThreads = threads.filter((thread) => thread.archivedAt === null);
-      const result = await moveThreadToTop(
-        threadRef,
-        nextSidebarThreadBumpAt(unarchivedThreads, {
-          sortByLatestUserMessage: clientSettings.sidebarV2SortActiveByLatestUserMessage,
-        }),
-      );
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to move thread to top",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
+      await attemptMoveThreadToTop(threadRef);
     },
   });
   if (moveCurrentThreadToTopAction) {

@@ -4,6 +4,7 @@ import {
   admitNewSidebarV2AttentionThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
+  canArchiveThreadNow,
   canForkConversation,
   createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
@@ -53,6 +54,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 
 import {
@@ -227,6 +229,35 @@ describe("Sidebar V2 project scope", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("canArchiveThreadNow", () => {
+  const session = {
+    providerName: "codex",
+    status: "ready",
+    activeTurnId: null,
+    lastError: null,
+  } as NonNullable<Pick<import("../types").SidebarThreadSummary, "session">["session"]>;
+
+  it("allows archiving an idle thread, or one with no session at all", () => {
+    expect(canArchiveThreadNow({ session: null })).toBe(true);
+    expect(canArchiveThreadNow({ session })).toBe(true);
+  });
+
+  it("blocks archiving only while a turn is actually running", () => {
+    expect(
+      canArchiveThreadNow({
+        session: { ...session, status: "running", activeTurnId: TurnId.make("turn-1") },
+      }),
+    ).toBe(false);
+    // Both halves must hold: a running session between turns is safe to
+    // archive, and an active turn on a stopped session is stale state, not a
+    // reason to block. Either mis-simplified to OR would break one of these.
+    expect(canArchiveThreadNow({ session: { ...session, status: "running" } })).toBe(true);
+    expect(
+      canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
+    ).toBe(true);
   });
 });
 
