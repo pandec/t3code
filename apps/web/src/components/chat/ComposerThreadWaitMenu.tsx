@@ -67,8 +67,23 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
     }
   }, [entries, highlightedId]);
 
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Interacting anywhere outside the menu hands control back — the picker
+    // must never behave like a modal keyboard trap.
+    const handler = (event: PointerEvent) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener("pointerdown", handler, true);
+    return () => window.removeEventListener("pointerdown", handler, true);
+  }, [onClose]);
+
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      // During IME composition the keys belong to the IME, not the picker.
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -87,16 +102,19 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
         return;
       }
       if (event.key === "Enter") {
-        if (!highlightedEntry) return;
         event.preventDefault();
         event.stopPropagation();
-        onPick(highlightedEntry);
+        if (highlightedEntry) onPick(highlightedEntry);
         return;
       }
-      // Route stray typing into the filter even when focus is still held by
-      // the composer editor, so filtering works no matter who won the focus
-      // race. The input's own keystrokes bubble here too — let those through.
+      // Route stray typing into the filter when the composer editor held on
+      // to focus despite the input grab, so filtering works no matter who won
+      // the focus race. Typing aimed anywhere else in the app stays theirs.
       if (event.target === inputRef.current) return;
+      const fromComposerEditor =
+        event.target instanceof HTMLElement &&
+        event.target.closest("[data-chat-composer-form]") !== null;
+      if (!fromComposerEditor) return;
       if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         event.stopPropagation();
@@ -117,7 +135,7 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
 
   return (
     <Command autoHighlight={false} mode="none">
-      <div className="dropdown-glass relative w-full overflow-hidden rounded-[20px]">
+      <div ref={menuRef} className="dropdown-glass relative w-full overflow-hidden rounded-[20px]">
         <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
           <SearchIcon className="size-3.5 shrink-0 text-icon-muted" aria-hidden="true" />
           <input
@@ -167,7 +185,9 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
                     )}
                     aria-hidden="true"
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm">{entry.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {entry.title.trim().length > 0 ? entry.title : "Untitled thread"}
+                  </span>
                   {ACTIVITY_LABEL[entry.activity] ? (
                     <span className="shrink-0 text-[10px] text-secondary-label">
                       {ACTIVITY_LABEL[entry.activity]}

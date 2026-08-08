@@ -63,6 +63,19 @@ describe("threadWaitPickerActivity", () => {
     ).toBe("running");
   });
 
+  it("reports idle for a stopped session with no background work", () => {
+    expect(
+      threadWaitPickerActivity(
+        shell({
+          id: "t",
+          title: "t",
+          updatedAt: "2026-08-08T10:00:00.000Z",
+          sessionStatus: "stopped",
+        }),
+      ),
+    ).toBe("idle");
+  });
+
   it("reports background liveness once the session has settled", () => {
     expect(
       threadWaitPickerActivity(
@@ -121,6 +134,24 @@ describe("buildThreadWaitPickerEntries", () => {
       query: "sync",
     });
     expect(entries.map((entry) => entry.id)).toEqual(["running-old"]);
+  });
+
+  it("caps the unfiltered list at twelve entries", () => {
+    const many = Array.from({ length: 20 }, (_, index) =>
+      shell({
+        id: `bulk-${index}`,
+        title: `Bulk thread ${index}`,
+        updatedAt: `2026-08-08T10:${String(index).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const entries = buildThreadWaitPickerEntries({
+      shells: many,
+      environmentId: ENV,
+      excludeThreadId: null,
+      query: "",
+    });
+    expect(entries).toHaveLength(12);
+    expect(entries[0]?.id).toBe("bulk-19");
   });
 
   it("prefers recency between equal-score title matches", () => {

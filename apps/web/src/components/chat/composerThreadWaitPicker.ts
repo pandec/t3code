@@ -36,9 +36,10 @@ export function threadWaitPickerActivity(
 
 /**
  * Threads the user can pick a wait target from: same environment, not
- * archived, not the thread being composed into. Active threads first —
- * waiting on an already-idle thread is legal but rarely what the picker
- * is opened for — then most recent activity.
+ * archived, not the thread being composed into. Unfiltered, active threads
+ * come first — waiting on an already-idle thread is legal but rarely what
+ * the picker is opened for — then most recent activity. With a query the
+ * order is title-match quality, recency breaking ties.
  */
 export function buildThreadWaitPickerEntries(input: {
   readonly shells: ReadonlyArray<EnvironmentThreadShell>;
