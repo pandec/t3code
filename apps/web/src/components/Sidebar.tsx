@@ -22,6 +22,7 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
@@ -157,7 +158,6 @@ import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   canArchiveThreadNow,
-  canForkConversation,
   admitNewSidebarV2AttentionThreads,
   createSidebarV2AttentionFilter,
   buildBulkTitleRegenerationContextMenuItem,

@@ -11,10 +11,11 @@ import {
   effectiveSnoozed,
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 
-import { canArchiveThreadNow, canForkConversation } from "../components/Sidebar.logic";
+import { canArchiveThreadNow } from "../components/Sidebar.logic";
 import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
