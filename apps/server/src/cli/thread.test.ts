@@ -1,4 +1,10 @@
-import { ProjectId, ProviderInstanceId, type OrchestrationThreadShell } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderInstanceId,
+  TurnId,
+  type OrchestrationShellSnapshot,
+  type OrchestrationThreadShell,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -15,7 +21,9 @@ import {
   compensateFailedThreadStart,
   resolveThreadCliWorkspaceSelection,
   threadSummary,
+  threadWaitSummary,
 } from "./thread.ts";
+import type { WaitForThreadResult } from "./threadWait.ts";
 
 const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThreadShell =>
   ({
@@ -203,6 +211,55 @@ it("normalizes missing branch and worktree path to null in thread summaries", ()
 
   assert.isNull(summary.branch);
   assert.isNull(summary.worktreePath);
+});
+
+it("includes background liveness in thread summaries", () => {
+  assert.strictEqual(
+    threadSummary(threadWith({ backgroundLiveness: "working" })).backgroundLiveness,
+    "working",
+  );
+  assert.isNull(threadSummary(threadWith({ backgroundLiveness: undefined })).backgroundLiveness);
+});
+
+it("builds the wait JSON result with diagnostics and turn timestamps", () => {
+  const thread = threadWith({
+    backgroundLiveness: "working",
+    latestTurn: {
+      turnId: TurnId.make("turn-1"),
+      state: "running",
+      requestedAt: "2026-08-08T11:59:00.000Z",
+      startedAt: "2026-08-08T11:59:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } as OrchestrationThreadShell["latestTurn"],
+  });
+  const summary = threadWaitSummary({
+    evaluation: {
+      status: "terminal",
+      outcome: "timeout",
+      adoptionTimedOut: false,
+      drainUnsupported: false,
+    },
+    thread,
+    snapshot: { snapshotSequence: 42 } as OrchestrationShellSnapshot,
+    waited: true,
+    waitedMs: 5_000,
+  } satisfies WaitForThreadResult);
+
+  assert.strictEqual(summary.outcome, "timeout");
+  assert.isTrue(summary.waited);
+  assert.strictEqual(summary.waitedMs, 5_000);
+  assert.strictEqual(summary.observedSequence, 42);
+  assert.isFalse(summary.adoptionTimedOut);
+  assert.strictEqual(summary.state, "running");
+  assert.strictEqual(summary.backgroundLiveness, "working");
+  assert.deepEqual(summary.turn, {
+    turnId: TurnId.make("turn-1"),
+    state: "running",
+    requestedAt: "2026-08-08T11:59:00.000Z",
+    startedAt: "2026-08-08T11:59:01.000Z",
+    completedAt: null,
+  });
 });
 
 const newWorktreeSelection = (input: {

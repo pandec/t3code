@@ -97,6 +97,19 @@ export class CliOrchestrationOutcomeUnknownError extends Schema.TaggedErrorClass
   }
 }
 
+export class CliOrchestrationWaitOutcomeUnknownError extends Schema.TaggedErrorClass<CliOrchestrationWaitOutcomeUnknownError>()(
+  "CliOrchestrationWaitOutcomeUnknownError",
+  {
+    operation: Schema.Literal("waitLiveServer"),
+    pid: Schema.Int,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "The server stopped during the wait, so the thread's final outcome is unknown.";
+  }
+}
+
 export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorClass<CliOrchestrationServerUnavailableError>()(
   "CliOrchestrationServerUnavailableError",
   {
@@ -109,7 +122,12 @@ export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorCl
   }
 }
 
-export const CliLiveServerReadPhase = Schema.Literals(["discovery", "descriptor", "snapshot"]);
+export const CliLiveServerReadPhase = Schema.Literals([
+  "discovery",
+  "descriptor",
+  "snapshot",
+  "wait",
+]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
 
 export class CliOrchestrationReadTimeoutError extends Schema.TaggedErrorClass<CliOrchestrationReadTimeoutError>()(
@@ -402,6 +420,10 @@ export const fetchLiveOrchestrationShell = (
   origin: string,
   bearerToken: string,
   timeouts: CliLiveServerReadTimeouts,
+  options?: {
+    readonly phase?: CliLiveServerReadPhase;
+    readonly timeout?: Duration.Duration;
+  },
 ) =>
   Effect.gen(function* () {
     const client = yield* makeLiveServerClient(origin);
@@ -410,7 +432,10 @@ export const fetchLiveOrchestrationShell = (
     });
   }).pipe(
     Effect.mapError(cliOrchestrationErrorFromRequest),
-    withLiveServerReadTimeout("discovery", timeouts.discovery),
+    withLiveServerReadTimeout(
+      options?.phase ?? "discovery",
+      options?.timeout ?? timeouts.discovery,
+    ),
   );
 
 export const fetchLiveEnvironmentDescriptor = (
@@ -483,7 +508,7 @@ export interface CliLiveOrchestrationServer {
   readonly shell: OrchestrationShellSnapshot;
 }
 
-const isProcessAlive = (pid: number) =>
+export const isProcessAlive = (pid: number) =>
   Effect.sync(() => {
     try {
       process.kill(pid, 0);
@@ -506,7 +531,7 @@ const causeHasCode = (cause: unknown, code: string, seen = new Set<unknown>()): 
   return "reason" in cause && causeHasCode(cause.reason, code, seen);
 };
 
-const isConnectionRefused = (error: unknown): boolean => causeHasCode(error, "ECONNREFUSED");
+export const isConnectionRefused = (error: unknown): boolean => causeHasCode(error, "ECONNREFUSED");
 
 export interface CliResolvedLiveOrchestrationInput {
   readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
