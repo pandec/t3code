@@ -1265,18 +1265,19 @@ export function NewTaskDraftScreen(props: {
           shifts it mid-open. The toolbar rides a KeyboardStickyView (pure
           keyboard-height translate, no frame measurement) and the editor gets a
           keyboard-height inset from the same shared value. */}
-      <Reanimated.View
-        className="relative min-h-0 flex-1 px-5 pt-2"
-        style={editorKeyboardInsetStyle}
-      >
+      <Reanimated.View className="min-h-0 flex-1 px-5 pt-2" style={editorKeyboardInsetStyle}>
         {promptEditor}
-        {skillPopover ? (
-          <View className="absolute inset-x-5 bottom-2 z-10">{skillPopover}</View>
-        ) : null}
       </Reanimated.View>
 
       <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-        <View className="border-t border-border bg-sheet">
+        {/* The popover rides the sticky toolbar rather than the editor box:
+            the editor keeps its full frame under the keyboard (only its
+            padding grows), so anchoring there leaves the list behind the
+            keyboard once it opens. */}
+        <View className="relative border-t border-border bg-sheet">
+          {skillPopover ? (
+            <View className="absolute inset-x-5 bottom-full z-10 mb-2">{skillPopover}</View>
+          ) : null}
           {flow.attachments.length > 0 ? (
             <View className="px-4 pt-3">
               <ComposerAttachmentStrip
