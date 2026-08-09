@@ -45,7 +45,8 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("work")).toEqual([]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual(["project-new-thread-workspace"]);
+    expect(searchSettings("xyzzy")).toEqual([]);
   });
 
   it("keeps catalog order for multiple title matches", () => {
@@ -82,6 +83,22 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+
+  it("includes fork-only project settings ported from the sidebar", () => {
+    expect(searchSettings("thread accent")[0]).toMatchObject({
+      id: "project-thread-accent",
+      to: "/settings/projects",
+    });
+    expect(searchSettings("import cli")[0]).toMatchObject({
+      id: "project-import-session",
+      to: "/settings/projects",
+      targetId: "project-checkouts",
+    });
+    expect(searchSettings("project archived")[0]).toMatchObject({
+      id: "project-archived-threads",
+      to: "/settings/projects",
     });
   });
 

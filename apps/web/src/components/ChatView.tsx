@@ -210,9 +210,9 @@ import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
+  composerDraftHasUserContent,
   type DraftThreadEnvMode,
   flushComposerDraftPersistence,
-  hasComposerDraftContent,
   hydrateImagesFromPersisted,
   persistComposerDraftContentNow,
   useComposerDraftStore,
@@ -4333,7 +4333,7 @@ function ChatViewContent(props: ChatViewProps) {
   // forces a re-render so the banner leaves immediately.
   const [, setBranchMismatchDismissTick] = useState(0);
   const composerHasDraftContent = useComposerDraftStore((store) => {
-    return hasComposerDraftContent(store.getComposerDraft(composerDraftTarget));
+    return composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget));
   });
   const activeBranchMismatchKey = branchMismatchKey(
     activeThread?.id ?? null,
@@ -6663,6 +6663,11 @@ function ChatViewContent(props: ChatViewProps) {
       rightPanelAvailable={activeProject !== null}
       rightPanelOpen={rightPanelOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
+      // Suppressed while the Agents surface is visible: the roster itself is
+      // on screen, so the toggle badge would be pointing at nothing.
+      liveAgentCount={
+        rightPanelOpen && activeRightPanelSurface?.kind === "agents" ? 0 : agentPanelModel.liveCount
+      }
       onToggleTerminal={toggleTerminalVisibility}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -6793,6 +6798,7 @@ function ChatViewContent(props: ChatViewProps) {
             changeRequestState={activeThreadPr?.state ?? null}
             activeProjectName={activeProject?.title}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
+            activeProjectFaviconPath={activeProject?.faviconPath ?? null}
             openInCwd={gitCwd}
             activeProjectScripts={activeProject?.scripts}
             preferredScriptId={
@@ -7190,6 +7196,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -7218,6 +7225,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}
           </RightPanelTabs>

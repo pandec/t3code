@@ -13,6 +13,7 @@
     "dev:desktop:detached": "node scripts/dev-desktop-detached.ts start",
     "dev:desktop:detached:status": "node scripts/dev-desktop-detached.ts status",
     "dev:desktop:detached:stop": "node scripts/dev-desktop-detached.ts stop",
+    "migrate-dev-db": "node apps/server/scripts/migrate-dev-db.ts",
     "start": "vp run --filter t3 start",
     "start:desktop": "vp run --filter @t3tools/desktop start",
     "start:marketing": "vp run --filter @t3tools/marketing preview",

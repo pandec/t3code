@@ -30,7 +30,6 @@ import {
   sidebarProjectScopeSignature,
   searchSidebarThreadsByTitle,
   formatWorkingDurationLabel,
-  shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   nextSidebarThreadBumpAt,
   sortActiveThreadsForSidebar,
@@ -257,56 +256,6 @@ describe("canArchiveThreadNow", () => {
     expect(
       canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
     ).toBe(true);
-  });
-});
-
-describe("shouldNavigateAfterProjectRemoval", () => {
-  const projectThreads = [{ environmentId: "environment-local", id: "thread-1" }];
-
-  it("navigates away from a draft route owned by the removed project", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: { kind: "draft", draftId: "draft-1" as never },
-        projectThreads,
-        projectDraftId: "draft-1",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not navigate away from a different draft route", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: { kind: "draft", draftId: "draft-2" as never },
-        projectThreads,
-        projectDraftId: "draft-1",
-      }),
-    ).toBe(false);
-  });
-
-  it("navigates away from a server thread owned by the removed project", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: {
-          kind: "server",
-          threadRef: {
-            environmentId: EnvironmentId.make("environment-local"),
-            threadId: ThreadId.make("thread-1"),
-          },
-        },
-        projectThreads,
-        projectDraftId: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not navigate from an unrelated route", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: null,
-        projectThreads,
-        projectDraftId: null,
-      }),
-    ).toBe(false);
   });
 });
 

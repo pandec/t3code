@@ -2873,6 +2873,7 @@ export function ArchivedThreadsPanel({
                 <ProjectFavicon
                   environmentId={group.representativeProject.environmentId}
                   cwd={group.representativeProject.workspaceRoot}
+                  faviconPath={group.representativeProject.faviconPath}
                 />
               }
             >

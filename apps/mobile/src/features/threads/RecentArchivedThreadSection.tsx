@@ -74,6 +74,7 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
           {props.project ? (
             <ProjectFavicon
               environmentId={props.thread.environmentId}
+              faviconPath={props.project.faviconPath}
               projectTitle={props.project.title}
               size={15}
               workspaceRoot={props.project.workspaceRoot}
