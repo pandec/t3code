@@ -273,7 +273,7 @@ describe("createThreadSteerPendingStore", () => {
 
   it("replaces a re-tracked message instead of duplicating it", () => {
     const { store, read } = makeStore();
-    store.retainOnly("env:thread");
+    store.retain("env:thread");
     store.track("env:thread", pendingSteer);
     store.track("env:thread", { ...pendingSteer, dispatchedAt: at(20) });
     expect(read()["env:thread"]).toStrictEqual([{ ...pendingSteer, dispatchedAt: at(20) }]);
@@ -281,7 +281,7 @@ describe("createThreadSteerPendingStore", () => {
 
   it("drops a thread's key once nothing is pending for it", () => {
     const { store, read } = makeStore();
-    store.retainOnly("env:thread");
+    store.retain("env:thread");
     store.track("env:thread", pendingSteer);
     store.setThread("env:thread", []);
     expect(read()).toStrictEqual({});
@@ -289,10 +289,10 @@ describe("createThreadSteerPendingStore", () => {
 
   it("keeps only the active thread and rejects late deliveries after release", () => {
     const { store, read } = makeStore();
-    store.retainOnly("env:left");
+    store.retain("env:left");
     store.track("env:left", pendingSteer);
 
-    store.retainOnly("env:open");
+    store.retain("env:open");
     store.track("env:left", pendingSteer);
     store.track("env:open", pendingSteer);
     expect(Object.keys(read())).toStrictEqual(["env:open"]);
@@ -302,9 +302,33 @@ describe("createThreadSteerPendingStore", () => {
     expect(read()).toStrictEqual({});
   });
 
+  it("holds the lease until the last view of a thread releases it", () => {
+    const { store, read } = makeStore();
+    // Mobile's files route stacks a second view of the same thread over the
+    // first; closing it must not stop the still-mounted one from marking.
+    store.retain("env:thread");
+    store.retain("env:thread");
+    store.release("env:thread");
+    store.track("env:thread", pendingSteer);
+    expect(read()["env:thread"]).toStrictEqual([pendingSteer]);
+
+    store.release("env:thread");
+    store.track("env:thread", pendingSteer);
+    expect(read()).toStrictEqual({});
+  });
+
+  it("ignores a release from a view left behind by an earlier thread", () => {
+    const { store, read } = makeStore();
+    store.retain("env:left");
+    store.retain("env:open");
+    store.release("env:left");
+    store.track("env:open", pendingSteer);
+    expect(read()["env:open"]).toStrictEqual([pendingSteer]);
+  });
+
   it("caps the active thread at eight pending steers", () => {
     const { store, read } = makeStore();
-    store.retainOnly("env:thread");
+    store.retain("env:thread");
     for (let index = 0; index < 10; index += 1) {
       store.track("env:thread", {
         ...pendingSteer,

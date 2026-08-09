@@ -248,6 +248,13 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
     {},
   ).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-steer-pending"));
   let retainedThreadKey: string | null = null;
+  /**
+   * How many mounted views are showing `retainedThreadKey`. A thread can be on
+   * screen more than once — mobile's files route stacks a second thread view
+   * over the first — and the one that unmounts first must not revoke the lease
+   * the one still on screen depends on.
+   */
+  let retainedViewCount = 0;
 
   const read = (): Record<string, ReadonlyArray<PendingSteerDispatch>> =>
     options.registry.get(pendingByThreadKeyAtom);
@@ -284,12 +291,18 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
   };
 
   /**
-   * Forgets every thread but the one on screen. A marker only means anything
-   * while its thread is open, and this keeps a steer dispatched into a thread
-   * the user has since left from lingering in memory.
+   * Leases the store to the thread on screen and forgets every other one. A
+   * marker only means anything while its thread is open, and this keeps a steer
+   * dispatched into a thread the user has since left from lingering in memory.
+   * Every call must be paired with a `release` for the same key.
    */
-  const retainOnly = (threadKey: string | null): void => {
+  const retain = (threadKey: string | null): void => {
+    if (threadKey !== null && threadKey === retainedThreadKey) {
+      retainedViewCount += 1;
+      return;
+    }
     retainedThreadKey = threadKey;
+    retainedViewCount = threadKey === null ? 0 : 1;
     const current = read();
     const keys = Object.keys(current);
     if (keys.length === 0 || (keys.length === 1 && keys[0] === threadKey)) {
@@ -302,13 +315,21 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
     );
   };
 
-  /** Stops accepting late deliveries for a thread after its view unmounts. */
+  /**
+   * Stops accepting late deliveries for a thread once its last view unmounts.
+   * Releasing a key the store is not leased to is a no-op, so a view left
+   * behind by an earlier navigation cannot revoke the current lease.
+   */
   const release = (threadKey: string | null): void => {
-    if (retainedThreadKey !== threadKey) {
+    if (threadKey === null || threadKey !== retainedThreadKey) {
       return;
     }
-    retainOnly(null);
+    retainedViewCount -= 1;
+    if (retainedViewCount > 0) {
+      return;
+    }
+    retain(null);
   };
 
-  return { pendingByThreadKeyAtom, track, setThread, retainOnly, release };
+  return { pendingByThreadKeyAtom, track, setThread, retain, release };
 }

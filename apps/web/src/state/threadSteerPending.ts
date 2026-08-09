@@ -73,7 +73,7 @@ export function useSteerPendingMessageIds(
   const pending = unreadSteerDispatches(tracked, snapshot);
 
   useEffect(() => {
-    threadSteerPendingStore.retainOnly(threadKey);
+    threadSteerPendingStore.retain(threadKey);
     return () => {
       threadSteerPendingStore.release(threadKey);
     };
