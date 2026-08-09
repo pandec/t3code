@@ -77,9 +77,7 @@ export function useSteerPendingMessageIds(
   useEffect(() => {
     threadSteerPendingStore.retainOnly(threadKey);
     return () => {
-      if (threadKey !== null) {
-        threadSteerPendingStore.setThread(threadKey, EMPTY_PENDING);
-      }
+      threadSteerPendingStore.release(threadKey);
     };
   }, [threadKey]);
 

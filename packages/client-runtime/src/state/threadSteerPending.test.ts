@@ -176,6 +176,18 @@ describe("isSteerStillUnread", () => {
     ).toBe(true);
   });
 
+  it("uses the server progress watermark when the client clock is skewed", () => {
+    expect(
+      isSteerStillUnread(
+        { ...pendingSteer, dispatchedAt: "2099-01-01T00:00:00.000Z" },
+        {
+          ...runningThread,
+          activities: [blockingToolStarted, activity({ id: "next", createdAt: at(60) })],
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("resolves when the turn completes", () => {
     expect(
       isSteerStillUnread(pendingSteer, {
@@ -261,6 +273,7 @@ describe("createThreadSteerPendingStore", () => {
 
   it("replaces a re-tracked message instead of duplicating it", () => {
     const { store, read } = makeStore();
+    store.retainOnly("env:thread");
     store.track("env:thread", pendingSteer);
     store.track("env:thread", { ...pendingSteer, dispatchedAt: at(20) });
     expect(read()["env:thread"]).toStrictEqual([{ ...pendingSteer, dispatchedAt: at(20) }]);
@@ -268,18 +281,38 @@ describe("createThreadSteerPendingStore", () => {
 
   it("drops a thread's key once nothing is pending for it", () => {
     const { store, read } = makeStore();
+    store.retainOnly("env:thread");
     store.track("env:thread", pendingSteer);
     store.setThread("env:thread", []);
     expect(read()).toStrictEqual({});
   });
 
-  it("forgets every thread but the one on screen", () => {
+  it("keeps only the active thread and rejects late deliveries after release", () => {
     const { store, read } = makeStore();
+    store.retainOnly("env:left");
+    store.track("env:left", pendingSteer);
+
+    store.retainOnly("env:open");
     store.track("env:left", pendingSteer);
     store.track("env:open", pendingSteer);
-    store.retainOnly("env:open");
     expect(Object.keys(read())).toStrictEqual(["env:open"]);
-    store.retainOnly(null);
+
+    store.release("env:open");
+    store.track("env:open", pendingSteer);
     expect(read()).toStrictEqual({});
+  });
+
+  it("caps the active thread at eight pending steers", () => {
+    const { store, read } = makeStore();
+    store.retainOnly("env:thread");
+    for (let index = 0; index < 10; index += 1) {
+      store.track("env:thread", {
+        ...pendingSteer,
+        messageId: MessageId.make(`steer-${index}`),
+      });
+    }
+    expect(read()["env:thread"]?.map(({ messageId }) => messageId)).toStrictEqual(
+      Array.from({ length: 8 }, (_, index) => MessageId.make(`steer-${index + 2}`)),
+    );
   });
 });

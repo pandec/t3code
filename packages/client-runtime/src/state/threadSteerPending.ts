@@ -248,11 +248,17 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
   const pendingByThreadKeyAtom = Atom.make<Record<string, ReadonlyArray<PendingSteerDispatch>>>(
     {},
   ).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-steer-pending"));
+  let retainedThreadKey: string | null = null;
 
   const read = (): Record<string, ReadonlyArray<PendingSteerDispatch>> =>
     options.registry.get(pendingByThreadKeyAtom);
 
   const track = (threadKey: string, dispatch: PendingSteerDispatch): void => {
+    // The outbox drains every thread. A delivery that finishes after navigation
+    // must not recreate state for a thread whose marker can no longer be shown.
+    if (threadKey !== retainedThreadKey) {
+      return;
+    }
     const current = read();
     const existing = current[threadKey] ?? [];
     const next = [
@@ -284,6 +290,7 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
    * the user has since left from lingering in memory.
    */
   const retainOnly = (threadKey: string | null): void => {
+    retainedThreadKey = threadKey;
     const current = read();
     const keys = Object.keys(current);
     if (keys.length === 0 || (keys.length === 1 && keys[0] === threadKey)) {
@@ -296,5 +303,13 @@ export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOp
     );
   };
 
-  return { pendingByThreadKeyAtom, track, setThread, retainOnly };
+  /** Stops accepting late deliveries for a thread after its view unmounts. */
+  const release = (threadKey: string | null): void => {
+    if (retainedThreadKey !== threadKey) {
+      return;
+    }
+    retainOnly(null);
+  };
+
+  return { pendingByThreadKeyAtom, track, setThread, retainOnly, release };
 }
