@@ -16,7 +16,11 @@ import {
   deriveLogicalProjectKeyFromSettings,
   type ProjectGroupingSettings,
 } from "../logicalProject";
-import { resolveCarrySourceLogicalProjectKey, seedNewDraftModelState } from "./useHandleNewThread";
+import {
+  applyCarryModelSelectionToReusedDraft,
+  resolveCarrySourceLogicalProjectKey,
+  seedNewDraftModelState,
+} from "./useHandleNewThread";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
@@ -230,6 +234,73 @@ describe("seedNewDraftModelState", () => {
         codex: modelSelection(CODEX_DRIVER, "gpt-5.4"),
       },
     });
+  });
+});
+
+describe("applyCarryModelSelectionToReusedDraft", () => {
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("applies a same-project carry to the reused draft, replacing options", () => {
+    const draftId = DraftId.make("draft-reuse-same-project");
+    createDraft(draftId);
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(draftId, modelSelection(CODEX_DRIVER, "gpt-5.4", { effort: "low" }));
+
+    applyCarryModelSelectionToReusedDraft({
+      draftId,
+      logicalProjectKey: LOGICAL_PROJECT_KEY,
+      carryModelSelection: modelSelection(CODEX_DRIVER, "gpt-5.5"),
+      carrySourceLogicalProjectKey: LOGICAL_PROJECT_KEY,
+    });
+
+    // replaceOptions: the carry is a complete snapshot, so the stale
+    // draft's options must not survive underneath the carried model.
+    expect(draftFor(draftId)).toMatchObject({
+      activeProvider: "codex",
+      modelSelectionByProvider: {
+        codex: modelSelection(CODEX_DRIVER, "gpt-5.5"),
+      },
+    });
+  });
+
+  it("leaves the reused draft's model untouched for a cross-project carry", () => {
+    const draftId = DraftId.make("draft-reuse-cross-project");
+    createDraft(draftId);
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(draftId, modelSelection(CLAUDE_AGENT_DRIVER, "claude-opus-4-6"));
+
+    applyCarryModelSelectionToReusedDraft({
+      draftId,
+      logicalProjectKey: LOGICAL_PROJECT_KEY,
+      carryModelSelection: modelSelection(CODEX_DRIVER, "gpt-5.4"),
+      carrySourceLogicalProjectKey: OTHER_LOGICAL_PROJECT_KEY,
+    });
+
+    expect(draftFor(draftId)).toMatchObject({
+      activeProvider: "claudeAgent",
+      modelSelectionByProvider: {
+        claudeAgent: modelSelection(CLAUDE_AGENT_DRIVER, "claude-opus-4-6"),
+      },
+    });
+  });
+
+  it("writes nothing without a carried selection", () => {
+    const draftId = DraftId.make("draft-reuse-no-carry");
+    createDraft(draftId);
+    const before = draftFor(draftId);
+
+    applyCarryModelSelectionToReusedDraft({
+      draftId,
+      logicalProjectKey: LOGICAL_PROJECT_KEY,
+      carryModelSelection: null,
+      carrySourceLogicalProjectKey: LOGICAL_PROJECT_KEY,
+    });
+
+    expect(draftFor(draftId)).toBe(before);
   });
 });
 

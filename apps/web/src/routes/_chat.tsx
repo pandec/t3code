@@ -33,7 +33,7 @@ import {
   isEditableKeyboardTarget,
   resolveEmptyDraftIdForArchiveUndo,
 } from "../archiveUndo";
-import { hasComposerDraftContent, useComposerDraftStore } from "../composerDraftStore";
+import { composerDraftHasUserContent, useComposerDraftStore } from "../composerDraftStore";
 import { draftSubmissionTracker } from "../draftSubmissionState";
 import { useThreadActions } from "../hooks/useThreadActions";
 import {
@@ -65,7 +65,7 @@ function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string
   }
   return resolveEmptyDraftIdForArchiveUndo(
     target,
-    hasComposerDraftContent(composerState.getComposerDraft(target.draftId)),
+    composerDraftHasUserContent(composerState.getComposerDraft(target.draftId)),
     hasObservedThread || hasStartedSubmission,
   );
 }

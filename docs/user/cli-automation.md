@@ -32,9 +32,10 @@ seconds, and further data reads (full snapshot, capability descriptor) default t
 Override with `--timeout-ms <n>` or `T3CODE_CLI_TIMEOUT_MS`; an explicit override applies to every
 live read, discovery included, so raising it also helps thread and status commands on a busy
 server. Invalid or non-positive overrides are ignored with a warning on stderr. Timeout errors name
-the phase that expired. Mutations use a separate fixed 30-second acknowledgement bound, except
-`thread new --new-worktree`, which waits up to 3 minutes because the server prepares the worktree
-before acknowledging; `--timeout-ms` does not change either mutation bound.
+the phase that expired. Mutations use a separate fixed 30-second acknowledgement bound, except when `thread new` starts in
+new-worktree mode (explicit `--new-worktree`, or a configured worktree default); that waits up to 3
+minutes because the server prepares the worktree before acknowledging. `--timeout-ms` does not
+change either mutation bound.
 
 Project commands require the selected T3 server to be running. They never read or mutate the local
 SQLite database directly; an unavailable or timed-out server returns a structured server-unavailable
@@ -197,9 +198,20 @@ change them.
 
 ### Workspaces
 
-By default `thread new` runs the thread directly in the project workspace root, so concurrent CLI
-threads on the same project share one working tree. Two flags select a different workspace, matching
-the workspace picker in the app:
+Without a workspace flag, `thread new` honors the same default environment mode as the app's
+new-thread flow: the per-project setting, then the repository's checked-in `t3.json`
+(`defaultThreadEnvMode`), then the server's global setting. When nothing selects worktrees, the
+thread runs directly in the project workspace root, so concurrent CLI threads on the same project
+share one working tree. When the default resolves to worktree mode, `thread new` behaves like
+`--new-worktree` below and also honors the server's "start new worktrees from origin" setting. If
+the server confirms it lacks worktree bootstrap support, a defaults-derived worktree falls back to
+the checkout with a warning on stderr — check the JSON `workspace.mode` when automation relies on
+the configured isolation. A failed capability read still fails the command. Explicit flags always
+win over the configured defaults:
+
+- `--checkout` forces the plain project checkout even when the configured default is a worktree.
+
+Two further flags select a worktree explicitly, matching the workspace picker in the app:
 
 - `--new-worktree` asks the server to create a fresh git worktree for the thread (running the
   project's setup action, the same as "New worktree" in the UI). `--base <ref>` picks the base ref
@@ -215,10 +227,12 @@ the workspace picker in the app:
   automatically, and an explicit `--branch <ref>` fails the command when it does not match.
 
 `thread new --json` always includes a `workspace` object (`mode` plus `branch`/`worktreePath`,
-both `null` for the plain checkout mode). In `--new-worktree` mode the server creates the thread
-as part of the turn start, so `createCommandId` is `null`. Thread list and status summaries also
+both `null` for the plain checkout mode). In new-worktree mode — whether from the explicit flag or
+the configured default — the server creates the thread as part of the turn start, so
+`createCommandId` is `null`. Thread list and status summaries also
 include `branch` and `worktreePath` (both `null` for plain checkout threads), so automation can
-discover where a thread runs.
+discover where a thread runs. `project list --json` reports each project's `defaultThreadEnvMode`
+override (`null` when the checked-in `t3.json` and the global setting decide).
 
 ## Session import
 
