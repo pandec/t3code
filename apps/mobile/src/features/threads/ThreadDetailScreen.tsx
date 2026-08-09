@@ -68,6 +68,12 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  /**
+   * User messages steered into the running turn that are still sitting in the
+   * provider's prompt queue. Their bubbles say so, because "sent" and "read"
+   * can be minutes apart behind a long tool call.
+   */
+  readonly steerPendingMessageIds: ReadonlySet<MessageId>;
   readonly threadHistoryWindow: ThreadHistoryWindowState;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
@@ -501,6 +507,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
+            steerPendingMessageIds={props.steerPendingMessageIds}
             historyWindow={props.threadHistoryWindow}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}

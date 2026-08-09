@@ -46,6 +46,7 @@ import {
   threadDetailToShell,
   threadEnvironment,
 } from "./threads";
+import { noteThreadSteerDispatch } from "./thread-steer-pending";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
@@ -232,10 +233,11 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
-        onDelivered: (message, thread) => {
+        onDelivered: (message, thread, context) => {
           if (thread.archivedAt != null) {
             refreshArchivedThreadsForEnvironment(message.environmentId);
           }
+          noteThreadSteerDispatch(message, context);
         },
         warn: (message, attributes) => {
           console.warn(message, attributes);
@@ -413,7 +415,10 @@ export function useThreadOutboxDrain(): void {
               ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd)
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
             : freshThreadSettings !== undefined
-              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings)
+              ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
+                  sessionStatus: freshThread?.session?.status ?? null,
+                  latestTurnId: freshThread?.latestTurn?.turnId ?? null,
+                })
               : Promise.resolve(false);
       });
       void dispatch

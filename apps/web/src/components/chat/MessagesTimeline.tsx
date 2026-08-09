@@ -60,6 +60,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CircleAlertIcon,
+  CircleDashedIcon,
   EyeIcon,
   FileTextIcon,
   GlobeIcon,
@@ -187,6 +188,8 @@ interface TimelineRowActivityState {
   latestTurnId: TurnId | null;
   /** Current plan step label for the working row, when the turn has a plan. */
   workingStepLabel: string | null;
+  /** User messages steered into the running turn that the agent has not read yet. */
+  steerPendingMessageIds: ReadonlySet<MessageId>;
 }
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
@@ -222,6 +225,7 @@ function TimelineLoadEarlierHeader({
 }
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_STEER_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -248,6 +252,12 @@ interface MessagesTimelineProps {
   runningTurnId: TurnId | null;
   completedTurnAssistantMessageIds: ReadonlySet<MessageId>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /**
+   * User messages that were steered into the running turn and are still sitting
+   * in the provider's prompt queue. Their bubbles say so, because "sent" and
+   * "read" can be minutes apart behind a long tool call.
+   */
+  steerPendingMessageIds?: ReadonlySet<MessageId>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -297,6 +307,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   runningTurnId,
   completedTurnAssistantMessageIds,
   turnDiffSummaryByAssistantMessageId,
+  steerPendingMessageIds = EMPTY_STEER_PENDING_MESSAGE_IDS,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -609,8 +620,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnInProgress,
       latestTurnId: latestTurn?.turnId ?? null,
       workingStepLabel,
+      steerPendingMessageIds,
     }),
-    [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestTurn?.turnId, workingStepLabel],
+    [
+      activeTurnInProgress,
+      isRevertingCheckpoint,
+      isWorking,
+      latestTurn?.turnId,
+      steerPendingMessageIds,
+      workingStepLabel,
+    ],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state
@@ -1015,8 +1034,25 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   );
 });
 
+/**
+ * Ambient note on a steer the agent has not read yet. Claude Code only takes a
+ * mid-turn message between a tool result and the next model request, so this
+ * can stand for minutes behind a long subagent or shell call. Deliberately
+ * quiet and static — it reports a wait, it does not ask for anything.
+ */
+function SteerPendingMarker() {
+  return (
+    <div className="flex items-center gap-1 pe-1 text-[11px] text-muted-foreground">
+      <CircleDashedIcon className="size-3 shrink-0" />
+      <span>Waiting for the agent to pick this up</span>
+    </div>
+  );
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
+  const steerPending = activity.steerPendingMessageIds.has(row.message.id);
   const userImages = row.message.attachments ?? [];
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
@@ -1039,7 +1075,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
+      <div
+        className={cn(
+          "relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground",
+          steerPending && "opacity-75",
+        )}
+      >
         {row.message.inputOrigin === "voice-transcription" ? (
           <div className="mb-1.5 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
             <MicIcon className="size-3" />
@@ -1103,6 +1144,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      {steerPending ? <SteerPendingMarker /> : null}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>

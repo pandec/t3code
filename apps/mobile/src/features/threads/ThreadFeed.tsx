@@ -180,6 +180,11 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  /**
+   * User messages steered into the running turn that the agent has not read
+   * yet. Empty where the caller does not track them (tests, previews).
+   */
+  readonly steerPendingMessageIds?: ReadonlySet<MessageId>;
   /** Older-message paging state. Omitted where history is fully loaded (tests, previews). */
   readonly historyWindow?: ThreadHistoryWindowState;
   readonly contentPresentation: ThreadContentPresentation;
@@ -202,6 +207,23 @@ export interface ThreadFeedProps {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textToSpeechAvailable?: boolean;
   readonly messageSummariesAvailable?: boolean;
+}
+
+/**
+ * Ambient note on a steer the agent has not read yet. Claude Code only takes a
+ * mid-turn message between a tool result and the next model request, so this
+ * can stand for minutes behind a long subagent or shell call. Deliberately
+ * quiet and static — it reports a wait, it does not ask for anything.
+ */
+function SteerPendingMarker({ tintColor }: { readonly tintColor: ColorValue }) {
+  return (
+    <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+      <SymbolView name="circle.dashed" size={11} tintColor={tintColor} type="monochrome" />
+      <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+        Waiting for the agent to pick this up
+      </Text>
+    </View>
+  );
 }
 
 function MessageAttachmentImage(props: {
@@ -869,7 +891,11 @@ function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<
     ThreadFeedProps,
-    "environmentId" | "skills" | "textToSpeechAvailable" | "messageSummariesAvailable"
+    | "environmentId"
+    | "skills"
+    | "textToSpeechAvailable"
+    | "messageSummariesAvailable"
+    | "steerPendingMessageIds"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -949,6 +975,7 @@ function renderFeedEntry(
 
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
+      const steerPending = props.steerPendingMessageIds?.has(message.id) === true;
       return (
         <Animated.View
           className="mb-5 items-end"
@@ -959,6 +986,7 @@ function renderFeedEntry(
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
+              ...(steerPending ? { opacity: 0.75 } : null),
               ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
             }}
           >
@@ -983,6 +1011,7 @@ function renderFeedEntry(
               );
             })}
           </View>
+          {steerPending ? <SteerPendingMarker tintColor={iconSubtleColor} /> : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             {message.inputOrigin === "voice-transcription" ? (
               <View className="flex-row items-center gap-1 pr-1">
@@ -2445,6 +2474,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         environmentId: props.environmentId,
         messageSummariesAvailable: props.messageSummariesAvailable,
         textToSpeechAvailable: props.textToSpeechAvailable,
+        steerPendingMessageIds: props.steerPendingMessageIds,
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
@@ -2483,6 +2513,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.environmentId,
       props.messageSummariesAvailable,
       props.textToSpeechAvailable,
+      props.steerPendingMessageIds,
       props.skills,
     ],
   );

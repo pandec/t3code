@@ -167,6 +167,10 @@
       "types": "./src/state/threadOutboxDelivery.ts",
       "default": "./src/state/threadOutboxDelivery.ts"
     },
+    "./state/thread-steer-pending": {
+      "types": "./src/state/threadSteerPending.ts",
+      "default": "./src/state/threadSteerPending.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

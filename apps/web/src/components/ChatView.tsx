@@ -16,6 +16,7 @@ import {
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
+  type OrchestrationMessage,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -231,6 +232,7 @@ import {
   updateThreadOutboxMessage,
   useQueuedThreadMessages,
 } from "../state/threadOutbox";
+import { useSteerPendingMessageIds } from "../state/threadSteerPending";
 import {
   latestSteerWaitingOutGraceWindow,
   type QueuedThreadMessage,
@@ -384,6 +386,7 @@ import { useAssetUrls } from "../assets/assetUrls";
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
@@ -2232,6 +2235,20 @@ function ChatViewContent(props: ChatViewProps) {
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
+  // Steers dispatched into this turn that the agent has not read yet. Only the
+  // Claude adapter can hold one for long, but the signal is provider-agnostic.
+  const steerPendingMessageIds = useSteerPendingMessageIds(
+    routeThreadKey,
+    useMemo(
+      () => ({
+        sessionStatus: activeThread?.session?.status ?? null,
+        latestTurn: activeLatestTurn,
+        messages: activeThread?.messages ?? EMPTY_THREAD_MESSAGES,
+        activities: threadActivities,
+      }),
+      [activeLatestTurn, activeThread?.messages, activeThread?.session?.status, threadActivities],
+    ),
+  );
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
@@ -6835,6 +6852,7 @@ function ChatViewContent(props: ChatViewProps) {
                 }
                 completedTurnAssistantMessageIds={completedTurnAssistantMessageIds}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                steerPendingMessageIds={steerPendingMessageIds}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 textToSpeechAvailable={
                   serverConfigs.get(activeThread.environmentId)?.textToSpeech.available === true
