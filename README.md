@@ -1,6 +1,6 @@
 # T3 Code — pandec fork
 
-This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Everything about the base project — what T3 Code is, installation, documentation, and contributing — is covered by the [upstream README](https://github.com/pingdotgg/t3code#readme). This file only documents what the fork adds on top.
+This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Everything about the base project — what T3 Code is, installation, documentation, and contributing — is covered by the [upstream README](https://github.com/pingdotgg/t3code#readme). This file only documents what the fork adds on top. Upstream's project-icon customization is covered in [project settings](./docs/user/project-settings.md).
 
 ## Branches
 
