@@ -15,9 +15,9 @@ recall window is five seconds by default; change it in **Settings → Extras** o
 
 ## Queueing for later
 
-On web and desktop, choose **Queue for later** instead and the message waits above the composer
-until the turn finishes. Anything that piled up while the thread was unreachable waits the same way.
-When the turn ends the whole waiting queue goes in together, rather than one message per turn.
+Choose **Queue for later** instead and the message waits above the composer until the turn
+finishes. Anything that piled up while the thread was unreachable waits the same way. When the turn
+ends the whole waiting queue goes in together, rather than one message per turn.
 
 Waiting messages can be steered, edited, or deleted from that list at any time.
 
