@@ -1,4 +1,9 @@
-import { CommandId, type EnvironmentId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type EnvironmentId,
+  type OrchestrationSessionStatus,
+  type TurnId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
@@ -31,6 +36,22 @@ export interface ThreadOutboxDeliveryCommands {
   readonly setInteractionMode: ThreadOutboxCommandExecutor<SetThreadInteractionModeInput>;
 }
 
+/**
+ * The thread's live turn as the drain saw it immediately before sending. The
+ * settings snapshot beside it says how to send; this says what the send landed
+ * on — `sessionStatus: "running"` means the message steered into a turn that
+ * was already in flight rather than starting one of its own.
+ */
+export interface ThreadOutboxDeliveryContext {
+  readonly sessionStatus: OrchestrationSessionStatus | null;
+  readonly latestTurnId: TurnId | null;
+}
+
+const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
+  sessionStatus: null,
+  latestTurnId: null,
+};
+
 export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
@@ -41,7 +62,11 @@ export interface ThreadOutboxDeliveryOptions {
    * sees that the server just auto-unarchived the thread. Throwing here is
    * reported, never unwinds the delivery.
    */
-  readonly onDelivered?: (message: QueuedThreadMessage, thread: ThreadSettingsSnapshot) => void;
+  readonly onDelivered?: (
+    message: QueuedThreadMessage,
+    thread: ThreadSettingsSnapshot,
+    context: ThreadOutboxDeliveryContext,
+  ) => void;
   readonly warn: (message: string, attributes: Record<string, unknown>) => void;
 }
 
@@ -108,6 +133,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
   const sendQueuedMessage = async (
     queuedMessage: QueuedThreadMessage,
     thread: ThreadSettingsSnapshot,
+    context: ThreadOutboxDeliveryContext = IDLE_DELIVERY_CONTEXT,
   ): Promise<boolean> => {
     const settings = resolveQueuedThreadSettings(queuedMessage, thread);
     const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
@@ -202,7 +228,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     const delivered = await completeDelivery(deliveryResult);
     if (delivered) {
       try {
-        options.onDelivered?.(queuedMessage, thread);
+        options.onDelivered?.(queuedMessage, thread, context);
       } catch (error) {
         warn("[thread-outbox] delivered-message callback failed", {
           environmentId: queuedMessage.environmentId,

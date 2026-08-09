@@ -7,6 +7,8 @@ import {
   MessageId,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationMessage,
+  type OrchestrationThreadActivity,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
@@ -53,10 +55,14 @@ import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import type { ThreadOutboxDeliveryIntent } from "./thread-outbox-model";
+import { useSteerPendingMessageIds } from "./thread-steer-pending";
 import { threadEnvironment, useLoadOlderMessages, useThreadMessageWindow } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
+
+const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
+const EMPTY_THREAD_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
 
 /**
  * Overrides for a single send. Omitting `deliveryIntent` keeps the default:
@@ -176,6 +182,21 @@ export function useThreadComposerState() {
       activeTurnId: selectedThread.session.activeTurnId ?? undefined,
     };
   }, [selectedThreadDetail, selectedThreadShell]);
+
+  // Steers dispatched into this turn that the agent has not read yet. Only the
+  // Claude adapter can hold one for long, but the signal is provider-agnostic.
+  const steerPendingMessageIds = useSteerPendingMessageIds(
+    selectedThreadKey,
+    useMemo(
+      () => ({
+        sessionStatus: selectedThreadSessionActivity?.orchestrationStatus ?? null,
+        latestTurn: selectedThreadDetail?.latestTurn ?? null,
+        messages: selectedThreadDetail?.messages ?? EMPTY_THREAD_MESSAGES,
+        activities: selectedThreadDetail?.activities ?? EMPTY_THREAD_ACTIVITIES,
+      }),
+      [selectedThreadDetail, selectedThreadSessionActivity],
+    ),
+  );
 
   const activeWorkStartedAt = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -434,6 +455,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    steerPendingMessageIds,
     threadHistoryWindow,
     selectedThreadQueueCount,
     activeWorkStartedAt,

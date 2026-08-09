@@ -5,10 +5,14 @@ import {
   MessageId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 
-import { createThreadOutboxDelivery } from "./threadOutboxDelivery.ts";
+import {
+  createThreadOutboxDelivery,
+  type ThreadOutboxDeliveryContext,
+} from "./threadOutboxDelivery.ts";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
@@ -86,7 +90,13 @@ describe("thread outbox delivery", () => {
       localCheckoutBranch: "feature/queued-message",
     });
 
-    await expect(delivery.sendQueuedMessage(message, threadSettings)).resolves.toBe(true);
+    const deliveryContext: ThreadOutboxDeliveryContext = {
+      sessionStatus: "running",
+      latestTurnId: TurnId.make("turn-1"),
+    };
+    await expect(
+      delivery.sendQueuedMessage(message, threadSettings, deliveryContext),
+    ).resolves.toBe(true);
     expect(updateMetadata).toHaveBeenCalledTimes(2);
     expect(updateMetadata).toHaveBeenNthCalledWith(1, {
       environmentId: message.environmentId,
@@ -105,7 +115,9 @@ describe("thread outbox delivery", () => {
         worktreePath: null,
       },
     });
-    expect(onDelivered).toHaveBeenCalledWith(message, threadSettings);
+    // The send-time turn reaches the callback so a steer that joined a running
+    // turn can be told apart from one that started its own.
+    expect(onDelivered).toHaveBeenCalledWith(message, threadSettings, deliveryContext);
     expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove", "delivered"]);
   });
 
