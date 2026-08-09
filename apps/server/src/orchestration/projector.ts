@@ -219,6 +219,7 @@ export function projectEvent(
             workspaceRoot: payload.workspaceRoot,
             repositoryIdentity: payload.repositoryIdentity ?? null,
             defaultModelSelection: payload.defaultModelSelection,
+            defaultThreadEnvMode: null,
             scripts: payload.scripts,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -253,6 +254,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
+                    : {}),
+                  ...(payload.defaultThreadEnvMode !== undefined
+                    ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,

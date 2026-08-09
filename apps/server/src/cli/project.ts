@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type OrchestrationProjectShell,
   type OrchestrationReadModel,
   ProjectId,
   ProjectScriptIcon,
@@ -471,6 +472,16 @@ const runProjectList = Effect.fn("runProjectList")(function* (
   );
 });
 
+export const projectListSummary = (project: OrchestrationProjectShell) => ({
+  id: project.id,
+  title: project.title,
+  workspaceRoot: project.workspaceRoot,
+  defaultModelSelection: project.defaultModelSelection,
+  // Per-project thread env-mode override; null means the checked-in
+  // t3.json and the global setting decide (older servers omit it).
+  defaultThreadEnvMode: project.defaultThreadEnvMode ?? null,
+});
+
 const projectListCommand = Command.make("list", {
   ...projectLocationFlags,
   json: jsonFlag,
@@ -479,12 +490,7 @@ const projectListCommand = Command.make("list", {
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const { mode, projects: projectShells } = yield* runProjectList(flags, flags.json);
-      const projects = projectShells.map((project) => ({
-        id: project.id,
-        title: project.title,
-        workspaceRoot: project.workspaceRoot,
-        defaultModelSelection: project.defaultModelSelection,
-      }));
+      const projects = projectShells.map(projectListSummary);
       yield* Console.log(
         flags.json
           ? jsonOutput({ mode, projects })

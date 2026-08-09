@@ -2,6 +2,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
+  | "/settings/projects"
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
@@ -23,6 +24,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
+  "/settings/projects": "Projects",
   "/settings/providers": "Providers",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
@@ -175,6 +177,47 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
+  },
+  {
+    id: "projects",
+    title: "Projects",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-default-model",
+    title: "Project default model",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-new-thread-workspace",
+    title: "Project new-thread workspace",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-thread-accent",
+    title: "Project thread accent",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-scripts",
+    title: "Project scripts",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-checkouts",
+    title: "Project checkouts",
+    to: "/settings/projects",
+  },
+  {
+    id: "project-import-session",
+    title: "Import CLI session",
+    to: "/settings/projects",
+    targetId: "project-checkouts",
+  },
+  {
+    id: "project-archived-threads",
+    title: "Project archived threads",
+    to: "/settings/projects",
   },
   {
     id: "providers",

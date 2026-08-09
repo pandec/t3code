@@ -141,6 +141,8 @@ export function ComposerToolbarButton(props: {
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly accessibilityActions?: ComponentProps<typeof Pressable>["accessibilityActions"];
+  /** Screen-reader value for pills whose visual label truncates (e.g. the settings summary). */
+  readonly accessibilityValue?: ComponentProps<typeof Pressable>["accessibilityValue"];
   readonly onAccessibilityAction?: ComponentProps<typeof Pressable>["onAccessibilityAction"];
   readonly active?: boolean;
   readonly disabled?: boolean;
@@ -184,6 +186,7 @@ export function ComposerToolbarButton(props: {
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
       accessibilityActions={props.accessibilityActions}
+      accessibilityValue={props.accessibilityValue}
       onAccessibilityAction={props.onAccessibilityAction}
       disabled={props.disabled}
       onPress={props.onPress}

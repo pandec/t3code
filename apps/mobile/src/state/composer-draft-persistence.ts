@@ -67,7 +67,7 @@ export class ComposerDraftBatchPersistenceError extends Error {
 }
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
-  mode: Schema.Literals(["local", "worktree"]),
+  mode: Schema.optional(Schema.Literals(["local", "worktree"])),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),

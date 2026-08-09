@@ -47,7 +47,13 @@ export interface ComposerDraftContent {
 }
 
 export interface ComposerDraftWorkspaceSelection {
-  readonly mode: "local" | "worktree";
+  /**
+   * Only set once the user explicitly picks a mode. Left undefined while the
+   * draft is still following the resolved default (project setting → t3.json
+   * → global), so controls that edit worktree metadata never freeze a
+   * provisional or implicit default into the draft.
+   */
+  readonly mode?: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;

@@ -2,22 +2,30 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_SERVER_SETTINGS,
   MessageId,
   ProviderInteractionMode,
   RuntimeMode,
+  ServerSettings,
+  T3_PROJECT_FILE_NAME,
   ThreadId,
   type ClientOrchestrationCommand,
   type ModelSelection,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ThreadEnvMode,
   type ThreadTurnStartBootstrap,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -155,9 +163,11 @@ export class ThreadCliWorktreePathError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
-/** Where `t3 thread new` starts the thread: the project checkout as-is, a
-    fresh server-created worktree, or an existing worktree by path. */
+/** Where `t3 thread new` starts the thread: the configured default (no
+    explicit workspace flag), the project checkout as-is, a fresh
+    server-created worktree, or an existing worktree by path. */
 export type ThreadCliWorkspaceSelection =
+  | { readonly mode: "default" }
   | { readonly mode: "checkout" }
   | {
       readonly mode: "new-worktree";
@@ -172,6 +182,7 @@ export type ThreadCliWorkspaceSelection =
     };
 
 export const resolveThreadCliWorkspaceSelection = (flags: {
+  readonly checkout: boolean;
   readonly newWorktree: boolean;
   readonly worktree: Option.Option<string>;
   readonly branch: Option.Option<string>;
@@ -188,6 +199,12 @@ export const resolveThreadCliWorkspaceSelection = (flags: {
   const base = Option.getOrNull(flags.base)?.trim() ?? null;
   if (base !== null && base.length === 0) {
     return fail("--base cannot be empty.");
+  }
+  if (flags.checkout && flags.newWorktree) {
+    return fail("--checkout and --new-worktree cannot be combined.");
+  }
+  if (flags.checkout && Option.isSome(worktree)) {
+    return fail("--checkout and --worktree cannot be combined.");
   }
   if (flags.newWorktree && Option.isSome(worktree)) {
     return fail("--new-worktree and --worktree cannot be combined.");
@@ -214,7 +231,92 @@ export const resolveThreadCliWorkspaceSelection = (flags: {
   if (branch !== null) {
     return fail("--branch requires --new-worktree or --worktree.");
   }
-  return Effect.succeed({ mode: "checkout" });
+  return Effect.succeed({ mode: flags.checkout ? "checkout" : "default" });
+};
+
+const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(fromLenientJson(ServerSettings));
+
+// Read the settings.json of the selected T3 data directory — the same file
+// the target server serves to clients. Missing or malformed files resolve to
+// the schema defaults, mirroring the server's own loader.
+const readThreadDefaultSettings = Effect.fn("readThreadDefaultSettings")(function* (
+  settingsPath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const raw = yield* fileSystem.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => null));
+  if (raw === null) return DEFAULT_SERVER_SETTINGS;
+  const decoded = decodeServerSettingsJsonExit(raw);
+  return Exit.isSuccess(decoded) ? decoded.value : DEFAULT_SERVER_SETTINGS;
+});
+
+// Read `defaultThreadEnvMode` from the project's checked-in t3.json. Missing,
+// unreadable, or invalid files resolve to null, like the app clients.
+const readT3ProjectFileEnvMode = Effect.fn("readT3ProjectFileEnvMode")(function* (
+  workspaceRoot: string,
+) {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const contents = yield* fileSystem
+    .readFileString(path.join(workspaceRoot, T3_PROJECT_FILE_NAME))
+    .pipe(Effect.orElseSucceed(() => null));
+  if (contents === null) return null;
+  return parseT3ProjectFile(contents)?.defaultThreadEnvMode ?? null;
+});
+
+/** Resolve where a thread starts when no explicit workspace flag was passed.
+    Routes through the shared resolver so the CLI cannot disagree with the
+    web/mobile priority order: per-project setting > checked-in t3.json >
+    global server setting (default: the plain checkout). A worktree default
+    also honors the "new worktrees start from origin" server setting, matching
+    the app's new-thread flow. */
+export const resolveThreadCliDefaultWorkspace = Effect.fn("resolveThreadCliDefaultWorkspace")(
+  function* (input: {
+    readonly projectSetting: ThreadEnvMode | null | undefined;
+    readonly workspaceRoot: string;
+    readonly settingsPath: string;
+  }) {
+    const settings = yield* readThreadDefaultSettings(input.settingsPath);
+    const projectFile =
+      input.projectSetting == null ? yield* readT3ProjectFileEnvMode(input.workspaceRoot) : null;
+    const envMode = resolveDefaultThreadEnvMode({
+      projectSetting: input.projectSetting,
+      projectFile,
+      globalDefault: settings.defaultThreadEnvMode,
+    });
+    return envMode === "worktree"
+      ? {
+          mode: "new-worktree" as const,
+          base: null,
+          branch: null,
+          startFromOrigin: settings.newWorktreesStartFromOrigin,
+        }
+      : { mode: "checkout" as const };
+  },
+);
+
+/** How `t3 thread new` reconciles the requested workspace with the running
+    server's capabilities. */
+export type ThreadCliWorkspaceDecision =
+  | {
+      readonly kind: "proceed";
+      readonly workspace: Exclude<ThreadCliWorkspaceSelection, { mode: "default" }>;
+    }
+  /** Defaults-derived worktree on a server without bootstrap support: start
+      in the checkout instead (with a stderr warning; the JSON `workspace`
+      object remains the authoritative record of what actually happened). */
+  | { readonly kind: "fallback-checkout" }
+  /** Explicit --new-worktree on a server without bootstrap support: fail. */
+  | { readonly kind: "unsupported" };
+
+export const decideThreadCliWorkspace = (input: {
+  readonly requested: Exclude<ThreadCliWorkspaceSelection, { mode: "default" }>;
+  readonly fromDefaults: boolean;
+  readonly bootstrapSupported: boolean;
+}): ThreadCliWorkspaceDecision => {
+  if (input.requested.mode !== "new-worktree" || input.bootstrapSupported) {
+    return { kind: "proceed", workspace: input.requested };
+  }
+  return input.fromDefaults ? { kind: "fallback-checkout" } : { kind: "unsupported" };
 };
 
 // The bootstrap payload for --new-worktree: the server creates the thread,
@@ -393,6 +495,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
     readonly live: CliLiveOrchestrationServer;
     readonly token: string;
     readonly timeouts: CliLiveServerReadTimeouts;
+    readonly settingsPath: string;
   }) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
@@ -404,7 +507,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
       const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
       const outcome = yield* withResolvedLiveOrchestrationServer(
         { environmentAuth, config, label: "t3 thread cli", timeouts },
-        (live, token) => run({ live, token, timeouts }),
+        (live, token) => run({ live, token, timeouts, settingsPath: config.settingsPath }),
       );
       if (Option.isNone(outcome)) {
         return yield* new CliOrchestrationServerUnavailableError({
@@ -526,6 +629,12 @@ const threadNewCommand = Command.make("new", {
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
+  checkout: Flag.boolean("checkout").pipe(
+    Flag.withDescription(
+      "Start the thread in the project checkout even when the configured default is a worktree.",
+    ),
+    Flag.withDefault(false),
+  ),
   newWorktree: Flag.boolean("new-worktree").pipe(
     Flag.withDescription(
       "Start the thread in a fresh worktree created by the server (with the project setup script).",
@@ -559,20 +668,32 @@ const threadNewCommand = Command.make("new", {
     runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const message = yield* requireTrimmedMessage(flags.message);
-        const workspace = yield* resolveThreadCliWorkspaceSelection(flags);
+        const explicitWorkspace = yield* resolveThreadCliWorkspaceSelection(flags);
         const project = yield* findActiveProjectTarget({
           projects: input.live.shell.projects,
           identifier: flags.project,
         });
         const projectShell = input.live.shell.projects.find((item) => item.id === project.id)!;
+        // Without an explicit workspace flag the configured defaults decide,
+        // like the app's new-thread flow: per-project setting > checked-in
+        // t3.json > global server setting.
+        const workspaceFromDefaults = explicitWorkspace.mode === "default";
+        const requestedWorkspace =
+          explicitWorkspace.mode === "default"
+            ? yield* resolveThreadCliDefaultWorkspace({
+                projectSetting: projectShell.defaultThreadEnvMode,
+                workspaceRoot: projectShell.workspaceRoot,
+                settingsPath: input.settingsPath,
+              })
+            : explicitWorkspace;
         // Validate the worktree before any further server round-trips so a
         // mistyped path fails fast.
         const existingWorktree =
-          workspace.mode === "existing-worktree"
+          requestedWorkspace.mode === "existing-worktree"
             ? yield* resolveExistingWorktree({
-                rawPath: workspace.worktreePath,
+                rawPath: requestedWorkspace.worktreePath,
                 projectWorkspaceRoot: projectShell.workspaceRoot,
-                expectedBranch: workspace.branch,
+                expectedBranch: requestedWorkspace.branch,
               })
             : null;
         const hasExplicitTitle = Option.isSome(flags.title);
@@ -595,19 +716,37 @@ const threadNewCommand = Command.make("new", {
             detail: "--instance requires --model for t3 thread new.",
           });
         }
+        // The descriptor read stays fatal even for a defaults-derived
+        // worktree — a failed read says nothing about the server's
+        // capabilities. Only a successful descriptor that lacks the
+        // bootstrap capability downgrades a defaults-derived worktree to
+        // the checkout; the explicit --new-worktree flag keeps failing
+        // loudly either way.
         const descriptor =
-          hasModelFlags || workspace.mode === "new-worktree"
+          hasModelFlags || requestedWorkspace.mode === "new-worktree"
             ? yield* fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts)
             : null;
-        if (
-          workspace.mode === "new-worktree" &&
-          descriptor?.capabilities.turnStartBootstrap !== true
-        ) {
+        const decision = decideThreadCliWorkspace({
+          requested: requestedWorkspace,
+          fromDefaults: workspaceFromDefaults,
+          bootstrapSupported: descriptor?.capabilities.turnStartBootstrap === true,
+        });
+        if (decision.kind === "unsupported") {
           return yield* new SessionCliServerUnsupportedError({
             serverVersion: descriptor?.serverVersion ?? "unknown",
             capability: "turnStartBootstrap",
           });
         }
+        if (decision.kind === "fallback-checkout") {
+          // Stderr in both output modes: the JSON document on stdout stays
+          // authoritative (workspace.mode reports "checkout"), but callers
+          // relying on configured isolation get a human-readable signal.
+          yield* Console.error(
+            "Warning: the configured default requests a worktree, but the running server does not support worktree bootstrap; starting the thread in the project checkout instead.",
+          );
+        }
+        const workspace: Exclude<ThreadCliWorkspaceSelection, { mode: "default" }> =
+          decision.kind === "proceed" ? decision.workspace : { mode: "checkout" };
         const explicitModelSelection = hasModelFlags
           ? yield* Effect.gen(function* () {
               if (descriptor === null || descriptor.capabilities.providerCatalog !== true) {

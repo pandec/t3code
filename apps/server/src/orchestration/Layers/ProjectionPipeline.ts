@@ -555,6 +555,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             workspaceRoot: event.payload.workspaceRoot,
             repositoryIdentity: event.payload.repositoryIdentity ?? null,
             defaultModelSelection: event.payload.defaultModelSelection,
+            defaultThreadEnvMode: null,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -580,6 +581,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
+              : {}),
+            ...(event.payload.defaultThreadEnvMode !== undefined
+              ? { defaultThreadEnvMode: event.payload.defaultThreadEnvMode }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,
