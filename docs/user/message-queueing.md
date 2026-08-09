@@ -1,7 +1,7 @@
 # Sending while the agent is working
 
 You never have to wait for a turn to finish before typing. A message sent into a running thread
-takes one of three routes, and each one looks different so you can tell them apart at a glance.
+either steers or waits for later, and each route looks different at a glance.
 
 ## Steering
 
@@ -9,15 +9,15 @@ By default, sending during a running turn **steers**: the message goes to the ag
 it up part-way through its current work.
 
 It rests above the composer for a few seconds first, so you can fix a typo, edit it, or drop it
-before it leaves. Send an empty composer again to skip that wait and go now. The recall window is
-five seconds by default; change it in **Settings → Extras** on web and desktop, or
+before it leaves. On web and desktop, send an empty composer again to skip that wait and go now. The
+recall window is five seconds by default; change it in **Settings → Extras** on web and desktop, or
 **Settings → General** on mobile, where it is set per device.
 
 ## Queueing for later
 
-Choose **Queue for later** instead and the message waits above the composer until the turn
-finishes. Anything that piled up while the thread was unreachable waits the same way. When the turn
-ends the whole waiting queue goes in together, rather than one message per turn.
+On web and desktop, choose **Queue for later** instead and the message waits above the composer
+until the turn finishes. Anything that piled up while the thread was unreachable waits the same way.
+When the turn ends the whole waiting queue goes in together, rather than one message per turn.
 
 Waiting messages can be steered, edited, or deleted from that list at any time.
 
@@ -29,9 +29,9 @@ sent while a long search, subagent, or shell command is running can sit unread u
 finishes. That can take minutes.
 
 While that is the case the message is shown dimmed, with **Waiting for the agent to pick this up**
-underneath it. The note clears the moment the agent moves on to its next step and reads the
-message, and also if the turn finishes, is interrupted, or fails. Silence from the agent is
-expected while the note is showing; you have not been ignored.
+underneath it. The note clears when the client sees the main agent move on, and also if the turn
+finishes, is interrupted, or fails. Silence from the agent is expected while the note is showing;
+you have not been ignored.
 
 The note is a live view from the device you sent on. It is not part of the conversation, so it does
 not appear on your other devices and it does not come back after a reload — the message itself is
