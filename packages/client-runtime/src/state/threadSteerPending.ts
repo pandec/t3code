@@ -52,12 +52,11 @@ export interface SteerPendingThreadSnapshot {
 }
 
 /**
- * How long a steer must stay unread before the marker appears. Adapters that
- * hand a mid-turn prompt straight to the provider resolve it within a round
- * trip — Codex opens a fresh turn for it, and a Claude steer that happens to
- * land on a drain point is read immediately — so without this delay the common
- * case would be a flicker. Waiting also keeps the marker meaning what it says:
- * it appears only once the message really is sitting in a queue.
+ * How long a steer must stay unresolved before the marker appears. Adapters
+ * that hand a mid-turn prompt straight to the provider usually resolve it
+ * within a round trip — Codex opens a fresh turn for it, and a Claude steer can
+ * land on a drain point — so this presentation grace period suppresses the
+ * common flicker without claiming to prove provider-side queue state.
  */
 export const STEER_PENDING_REVEAL_DELAY_MS = 1_500;
 
@@ -65,21 +64,21 @@ export const STEER_PENDING_REVEAL_DELAY_MS = 1_500;
 const MAX_PENDING_STEERS_PER_THREAD = 8;
 
 /**
- * The one activity kind that proves the main agent issued a new model request,
- * and therefore drained its prompt queue on the way there.
+ * The only activity kind useful as evidence that the main agent issued a new
+ * model request and drained its prompt queue on the way there.
  *
  * Everything else a blocked parent emits keeps arriving while the queue is
  * still unread: a subagent's `task.*` rows carry no `agentId` (that field marks
  * a task launched from *inside* an agent, not one that launched it),
  * `tool.progress` heartbeats tick for the running tool, and
- * `context-window.updated` fires on every token total the subagent moves.
- * Treating any of those as "read" would clear the marker within a second of
- * every steer and make it useless.
+ * `context-window.updated` can fire when subagent task progress reports a
+ * larger token total. Treating any of those as "read" would clear the marker
+ * almost immediately and make it useless.
  *
  * Known imprecision: when the parent issues several tool calls in one request,
- * a short one finishing does not drain the queue, yet the tool it starts is
- * indistinguishable from a post-drain call. That clears the marker early, which
- * degrades to today's behaviour rather than to a lie.
+ * a sibling `tool.started` can arrive after the steer without a new model
+ * request. It is indistinguishable from a post-drain call and clears the marker
+ * early, falling back to the previous unmarked presentation.
  */
 const PARENT_AGENT_PROGRESS_ACTIVITY_KIND = "tool.started";
 
