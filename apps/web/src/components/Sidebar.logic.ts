@@ -48,6 +48,7 @@ type LogicalSidebarProject = SidebarProject & {
 };
 
 export type SidebarProjectScope = ReadonlySet<string> | null;
+export type SidebarEnvironmentScope = ReadonlySet<string> | null;
 
 // Project accent colors moved to
 // `@t3tools/client-runtime/state/project-accent-colors`: they are server
@@ -69,6 +70,13 @@ export function toggleSidebarProjectScope(
     next.add(projectKey);
   }
   return next.size === 0 ? null : next;
+}
+
+export function toggleSidebarEnvironmentScope(
+  scope: SidebarEnvironmentScope,
+  environmentId: string,
+): SidebarEnvironmentScope {
+  return toggleSidebarProjectScope(scope, environmentId);
 }
 
 export interface SidebarProjectFilters {
@@ -112,6 +120,10 @@ export function sidebarProjectScopeSignature(scope: SidebarProjectScope): string
   return scope === null ? "all" : `projects:${JSON.stringify([...scope].toSorted())}`;
 }
 
+export function sidebarEnvironmentScopeSignature(scope: SidebarEnvironmentScope): string {
+  return scope === null ? "all" : `environments:${JSON.stringify([...scope].toSorted())}`;
+}
+
 // The scope stores intent and is resolved against the projects that exist right
 // now instead of being pruned into state: an environment that drops out of the
 // catalog (reconnect, reload) would otherwise silently and permanently narrow a
@@ -128,6 +140,35 @@ export function resolveSidebarProjectScope(
   return new Set(
     projects.flatMap((project) => (scope.has(project.projectKey) ? [project.projectKey] : [])),
   );
+}
+
+export function resolveSidebarEnvironmentScope(
+  environments: readonly { readonly environmentId: string }[],
+  scope: SidebarEnvironmentScope,
+): SidebarEnvironmentScope {
+  if (scope === null) return null;
+
+  return new Set(
+    environments.flatMap((environment) =>
+      scope.has(environment.environmentId) ? [environment.environmentId] : [],
+    ),
+  );
+}
+
+export function selectPrimaryEnvironmentScope(
+  primaryEnvironmentId: string | null,
+): SidebarEnvironmentScope {
+  return primaryEnvironmentId === null ? null : new Set([primaryEnvironmentId]);
+}
+
+export function selectRemoteEnvironmentScope(
+  environments: readonly { readonly environmentId: string }[],
+  primaryEnvironmentId: string | null,
+): SidebarEnvironmentScope {
+  const remoteEnvironmentIds = environments.flatMap((environment) =>
+    environment.environmentId === primaryEnvironmentId ? [] : [environment.environmentId],
+  );
+  return remoteEnvironmentIds.length === 0 ? null : new Set(remoteEnvironmentIds);
 }
 
 export function resolveSidebarProjectScopePhysicalKeys(

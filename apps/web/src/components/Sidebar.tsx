@@ -141,6 +141,8 @@ import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
+import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
+import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
 import {
   canArchiveThreadNow,
   admitNewSidebarV2AttentionThreads,
@@ -608,6 +610,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectCwdByKey: ReadonlyMap<string, string>;
   projectFaviconPathByKey: ReadonlyMap<string, string | null | undefined>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  scopedEnvironmentIds: ReadonlySet<string> | null;
   hiddenProjectKeys: ReadonlySet<string>;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
@@ -648,6 +651,12 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       if (session.promotedTo != null) {
         continue;
       }
+      if (
+        props.scopedEnvironmentIds !== null &&
+        !props.scopedEnvironmentIds.has(session.environmentId)
+      ) {
+        continue;
+      }
       const sessionProjectKey = `${session.environmentId}:${session.projectId}`;
       if (props.hiddenProjectKeys.has(sessionProjectKey)) {
         continue;
@@ -678,6 +687,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     frozenActive,
     props.hiddenProjectKeys,
     props.routeDraftId,
+    props.scopedEnvironmentIds,
     props.scopedProjectKeys,
   ]);
   const handleDiscard = useCallback(
@@ -1896,19 +1906,7 @@ export default function Sidebar() {
     () => openCommandPalette({ open: "add-project" }),
     [],
   );
-  const { environments } = useEnvironments();
-  const archivedEnvironmentIds = useMemo(
-    () => environments.map((environment) => environment.environmentId),
-    [environments],
-  );
-  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
-    archivedEnvironmentIds,
-    archivedSectionVisibleCount,
-  );
-  const recentArchive = useMemo(
-    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
-    [archivedSectionVisibleCount, archivedSnapshots],
-  );
+  const { environments, isReady: environmentsReady } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -2118,6 +2116,23 @@ export default function Sidebar() {
       new Set<string>(),
     [projectGroups, resolvedHiddenProjectKeys],
   );
+  const environmentFilter = useSidebarEnvironmentFilter({
+    environments,
+    environmentsReady,
+    primaryEnvironmentId,
+    threads,
+    hiddenProjectKeys: hiddenPhysicalProjectKeys,
+    scopedProjectKeys,
+    otherFiltersNarrowing: resolvedProjectScopeKeys !== null || hiddenProjectKeys.size > 0,
+  });
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    environmentFilter.environmentIds,
+    archivedSectionVisibleCount,
+  );
+  const recentArchive = useMemo(
+    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+    [archivedSectionVisibleCount, archivedSnapshots],
+  );
   const selectProjectScope = useCallback(
     (scopeKey: string) => {
       updateSidebarProjectFilters((current) => {
@@ -2263,7 +2278,10 @@ export default function Sidebar() {
   }, [attentionFilterState, effectiveAttentionFilterState]);
   const attentionFilterEnabled = effectiveAttentionFilterState !== null;
   const displayedRecentArchive =
-    projectScopeKeys === null && hiddenProjectKeys.size === 0 && !attentionFilterEnabled
+    environmentFilter.scope === null &&
+    projectScopeKeys === null &&
+    hiddenProjectKeys.size === 0 &&
+    !attentionFilterEnabled
       ? recentArchive
       : { threads: [], totalCount: 0 };
   const toggleAttentionFilter = useCallback(() => {
@@ -2307,6 +2325,12 @@ export default function Sidebar() {
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
         continue;
       }
+      if (
+        environmentFilter.resolvedScope !== null &&
+        !environmentFilter.resolvedScope.has(session.environmentId)
+      ) {
+        continue;
+      }
       const sessionProjectKey = `${session.environmentId}:${session.projectId}`;
       if (hiddenPhysicalProjectKeys.has(sessionProjectKey)) {
         continue;
@@ -2318,12 +2342,13 @@ export default function Sidebar() {
     }
     return count;
   });
-  // Project and attention-filter changes drop the selection: rows selected under
-  // the previous view may now be hidden, and bulk actions must never count or
-  // touch invisible rows. Sticky membership growth does not clear selection.
+  // Project, environment, and attention-filter changes drop the selection: rows
+  // selected under the previous view may now be hidden, and bulk actions must
+  // never count or touch invisible rows. Sticky membership growth does not clear
+  // selection.
   useEffect(() => {
     clearSelection();
-  }, [attentionFilterEnabled, clearSelection, projectFilterSignature]);
+  }, [attentionFilterEnabled, clearSelection, environmentFilter.signature, projectFilterSignature]);
 
   const handleProjectActions = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
@@ -2363,6 +2388,8 @@ export default function Sidebar() {
     const visible = threads.filter((thread) => {
       if (
         thread.archivedAt !== null ||
+        (environmentFilter.resolvedScope !== null &&
+          !environmentFilter.resolvedScope.has(thread.environmentId)) ||
         hiddenPhysicalProjectKeys.has(`${thread.environmentId}:${thread.projectId}`) ||
         (scopedProjectKeys !== null &&
           !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
@@ -2453,6 +2480,7 @@ export default function Sidebar() {
     effectiveAttentionFilterState,
     hiddenPhysicalProjectKeys,
     nowMinute,
+    environmentFilter.resolvedScope,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -2510,7 +2538,9 @@ export default function Sidebar() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = `${projectFilterSignature}:${attentionFilterEnabled ? "attention" : "all"}`;
+  const settledResetKey = `${projectFilterSignature}:${environmentFilter.signature}:${
+    attentionFilterEnabled ? "attention" : "all"
+  }`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -3857,6 +3887,14 @@ export default function Sidebar() {
                   </Button>
                 ) : null}
               </div>
+              <SidebarEnvironmentFilterMenu
+                environments={environmentFilter.environments}
+                scope={environmentFilter.menuScope}
+                onToggleEnvironment={environmentFilter.toggleEnvironment}
+                onSelectAll={environmentFilter.selectAll}
+                onSelectPrimaryOnly={environmentFilter.selectPrimaryOnly}
+                onSelectRemoteOnly={environmentFilter.selectRemoteOnly}
+              />
               {!newThreadButtonInProjectRow ? newThreadButton : null}
             </div>
             {projectGroups.length > 0 ? (
@@ -4246,6 +4284,7 @@ export default function Sidebar() {
                       projectCwdByKey={projectCwdByKey}
                       projectFaviconPathByKey={projectFaviconPathByKey}
                       scopedProjectKeys={scopedProjectKeys}
+                      scopedEnvironmentIds={environmentFilter.resolvedScope}
                       hiddenProjectKeys={hiddenPhysicalProjectKeys}
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
@@ -4486,6 +4525,17 @@ export default function Sidebar() {
                     className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     Clear attention filter
+                  </button>
+                </>
+              ) : environmentFilter.emptyStateLabel !== null ? (
+                <>
+                  <span>{environmentFilter.emptyStateLabel}</span>
+                  <button
+                    type="button"
+                    onClick={environmentFilter.selectAll}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    Show all environments
                   </button>
                 </>
               ) : singleScopedProjectGroup ? (

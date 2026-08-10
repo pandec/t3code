@@ -28,6 +28,7 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: typeof THREAD_CHANGED_FILES_EXPANSION_VERSION;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   sidebarEnvironmentFilterId?: string | null;
+  sidebarV2EnvironmentScopeIds?: readonly string[] | null;
   sidebarProjectScopeKeys?: string[] | null;
   sidebarHiddenProjectKeys?: string[];
 }
@@ -37,6 +38,8 @@ export interface UiProjectState {
   projectOrder: string[];
   /** `null` shows every environment. Stale ids fall back to "all" at render. */
   sidebarEnvironmentFilterId: string | null;
+  /** `null` means all environments. Stores raw intent, including stale ids. */
+  sidebarV2EnvironmentScopeIds: readonly string[] | null;
   /** `null` means no explicit project allowlist. */
   sidebarProjectScopeKeys: string[] | null;
   sidebarHiddenProjectKeys: string[];
@@ -57,6 +60,7 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarEnvironmentFilterId: null,
+  sidebarV2EnvironmentScopeIds: null,
   sidebarProjectScopeKeys: null,
   sidebarHiddenProjectKeys: [],
   threadLastVisitedAtById: {},
@@ -132,6 +136,9 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     parsed.projectOrder === undefined
       ? sanitizeStringArray(parsed.projectOrderCwds).map(legacyProjectCwdPreferenceKey)
       : sanitizeStringArray(parsed.projectOrder);
+  const parsedEnvironmentScopeIds = sanitizeStringArray(parsed.sidebarV2EnvironmentScopeIds);
+  const sidebarV2EnvironmentScopeIds =
+    parsedEnvironmentScopeIds.length > 0 ? parsedEnvironmentScopeIds : null;
   const parsedProjectScopeKeys = Array.isArray(parsed.sidebarProjectScopeKeys)
     ? sanitizeStringArray(parsed.sidebarProjectScopeKeys)
     : [];
@@ -149,6 +156,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       parsed.sidebarEnvironmentFilterId.length > 0
         ? parsed.sidebarEnvironmentFilterId
         : null,
+    sidebarV2EnvironmentScopeIds,
     sidebarProjectScopeKeys,
     sidebarHiddenProjectKeys,
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
@@ -230,6 +238,7 @@ export function persistState(state: UiState): void {
         projectExpandedById,
         projectOrder: state.projectOrder,
         sidebarEnvironmentFilterId: state.sidebarEnvironmentFilterId,
+        sidebarV2EnvironmentScopeIds: state.sidebarV2EnvironmentScopeIds,
         sidebarProjectScopeKeys: state.sidebarProjectScopeKeys,
         sidebarHiddenProjectKeys: state.sidebarHiddenProjectKeys,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
@@ -422,6 +431,7 @@ interface UiStateStore extends UiState {
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   setSidebarEnvironmentFilterId: (environmentId: string | null) => void;
+  setSidebarV2EnvironmentScopeIds: (ids: readonly string[] | null) => void;
   updateSidebarProjectFilters: (
     update: (current: SidebarProjectFilterState) => SidebarProjectFilterState,
   ) => void;
@@ -450,6 +460,14 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
         ? state
         : { ...state, sidebarEnvironmentFilterId: environmentId },
     ),
+  setSidebarV2EnvironmentScopeIds: (ids) =>
+    set((state) => {
+      const sanitizedIds = ids === null ? [] : sanitizeStringArray(ids);
+      const nextIds = sanitizedIds.length > 0 ? sanitizedIds : null;
+      return JSON.stringify(state.sidebarV2EnvironmentScopeIds) === JSON.stringify(nextIds)
+        ? state
+        : { ...state, sidebarV2EnvironmentScopeIds: nextIds };
+    }),
   updateSidebarProjectFilters: (update) =>
     set((state) => {
       const next = update({

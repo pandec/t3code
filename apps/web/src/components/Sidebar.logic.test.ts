@@ -20,6 +20,7 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
+  resolveSidebarEnvironmentScope,
   resolveSidebarProjectScope,
   resolveSidebarProjectScopePhysicalKeys,
   resolveSidebarStageBadgeLabel,
@@ -27,8 +28,11 @@ import {
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  sidebarEnvironmentScopeSignature,
   sidebarProjectScopeSignature,
   searchSidebarThreadsByTitle,
+  selectPrimaryEnvironmentScope,
+  selectRemoteEnvironmentScope,
   formatWorkingDurationLabel,
   shouldClearThreadSelectionOnMouseDown,
   nextSidebarThreadBumpAt,
@@ -41,6 +45,7 @@ import {
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  toggleSidebarEnvironmentScope,
   toggleSidebarProjectHidden,
   toggleSidebarProjectScope,
   toggleSidebarProjectSelection,
@@ -63,6 +68,55 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("Sidebar V2 environment scope", () => {
+  const environments = [
+    { environmentId: "environment-local" },
+    { environmentId: "environment-remote" },
+  ];
+
+  it("solo-selects from All and returns to All after the last environment is removed", () => {
+    const selected = toggleSidebarEnvironmentScope(null, "environment-local");
+    expect(selected).toEqual(new Set(["environment-local"]));
+    expect(toggleSidebarEnvironmentScope(selected, "environment-local")).toBeNull();
+  });
+
+  it("builds an order-independent scope signature", () => {
+    expect(
+      sidebarEnvironmentScopeSignature(new Set(["environment-remote", "environment-local"])),
+    ).toBe(sidebarEnvironmentScopeSignature(new Set(["environment-local", "environment-remote"])));
+    expect(sidebarEnvironmentScopeSignature(null)).toBe("all");
+  });
+
+  it("resolves current environments without broadening unavailable intent", () => {
+    expect(
+      resolveSidebarEnvironmentScope(environments, new Set(["environment-local", "missing"])),
+    ).toEqual(new Set(["environment-local"]));
+    expect(resolveSidebarEnvironmentScope(environments, new Set(["missing"]))).toEqual(new Set());
+    expect(resolveSidebarEnvironmentScope(environments, new Set(["missing"]))).not.toBeNull();
+    expect(resolveSidebarEnvironmentScope(environments, null)).toBeNull();
+  });
+
+  it("returns to All when the last available environment is unticked after another was removed", () => {
+    const resolved = resolveSidebarEnvironmentScope(
+      [{ environmentId: "environment-local" }],
+      new Set(["environment-local", "environment-removed"]),
+    );
+
+    expect(toggleSidebarEnvironmentScope(resolved, "environment-local")).toBeNull();
+  });
+
+  it("builds primary-only and remote-only quick action scopes", () => {
+    expect(selectPrimaryEnvironmentScope("environment-local")).toEqual(
+      new Set(["environment-local"]),
+    );
+    expect(selectPrimaryEnvironmentScope(null)).toBeNull();
+    expect(selectRemoteEnvironmentScope(environments, "environment-local")).toEqual(
+      new Set(["environment-remote"]),
+    );
+    expect(selectRemoteEnvironmentScope([environments[0]!], "environment-local")).toBeNull();
+  });
+});
 
 describe("Sidebar V2 project scope", () => {
   it("starts an explicit selection from All and returns to All after the last project is removed", () => {

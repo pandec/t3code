@@ -22,6 +22,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarEnvironmentFilterId: null,
+    sidebarV2EnvironmentScopeIds: null,
     sidebarProjectScopeKeys: null,
     sidebarHiddenProjectKeys: [],
     threadLastVisitedAtById: {},
@@ -177,6 +178,7 @@ describe("parsePersistedState", () => {
       },
       projectOrder: ["physical-b", "physical-a"],
       sidebarEnvironmentFilterId: null,
+      sidebarV2EnvironmentScopeIds: null,
       sidebarProjectScopeKeys: null,
       sidebarHiddenProjectKeys: [],
       threadLastVisitedAtById: {
@@ -200,6 +202,23 @@ describe("parsePersistedState", () => {
       null,
     );
     expect(parsePersistedState({}).sidebarEnvironmentFilterId).toBe(null);
+  });
+
+  it("hydrates the sidebar v2 environment scope and normalizes unusable values", () => {
+    expect(parsePersistedState({}).sidebarV2EnvironmentScopeIds).toBeNull();
+    expect(
+      parsePersistedState({
+        sidebarV2EnvironmentScopeIds: ["env-a", "", "env-a", "env-b"],
+      }).sidebarV2EnvironmentScopeIds,
+    ).toEqual(["env-a", "env-b"]);
+    expect(
+      parsePersistedState({ sidebarV2EnvironmentScopeIds: [] }).sidebarV2EnvironmentScopeIds,
+    ).toBeNull();
+    expect(
+      parsePersistedState({
+        sidebarV2EnvironmentScopeIds: { invalid: true } as unknown as string[],
+      }).sidebarV2EnvironmentScopeIds,
+    ).toBeNull();
   });
 
   it("hydrates mutually exclusive project scope and hidden filters", () => {
@@ -322,6 +341,7 @@ describe("uiStateStore persistence", () => {
       },
       projectOrder: ["physical-b", "physical-a"],
       sidebarEnvironmentFilterId: null,
+      sidebarV2EnvironmentScopeIds: null,
       sidebarProjectScopeKeys: ["project-a"],
       sidebarHiddenProjectKeys: ["project-b"],
       threadLastVisitedAtById: {
@@ -351,6 +371,18 @@ describe("uiStateStore persistence", () => {
     ) as PersistedUiState;
     expect(persisted.sidebarEnvironmentFilterId).toBe("env-a");
     expect(parsePersistedState(persisted).sidebarEnvironmentFilterId).toBe("env-a");
+  });
+
+  it("round-trips a selected sidebar v2 environment scope", () => {
+    const state = makeUiState({ sidebarV2EnvironmentScopeIds: ["env-a", "env-b"] });
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.sidebarV2EnvironmentScopeIds).toEqual(["env-a", "env-b"]);
+    expect(parsePersistedState(persisted).sidebarV2EnvironmentScopeIds).toEqual(["env-a", "env-b"]);
   });
 
   it("drops the temporary expanded-only migration fallback when rewriting state", () => {
