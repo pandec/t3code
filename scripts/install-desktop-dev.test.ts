@@ -4,7 +4,10 @@ import * as Effect from "effect/Effect";
 import {
   DesktopInstallError,
   escapeProcessNameForExactMatch,
+  launchEnvironment,
+  macQuitScript,
   parseMacDmgMountPoint,
+  parseMacRunningAppPid,
   runDesktopInstallLifecycle,
   startAppWithVerification,
   terminateProcessWithEscalation,
@@ -37,6 +40,23 @@ it.effect("escalates process termination from TERM to KILL", () =>
     assert.deepStrictEqual(events, ["TERM", "wait", "KILL", "wait"]);
   }),
 );
+
+it("keeps ELECTRON_RUN_AS_NODE out of the environment used to launch the app", () => {
+  const previous = process.env.ELECTRON_RUN_AS_NODE;
+  process.env.ELECTRON_RUN_AS_NODE = "1";
+  try {
+    const environment = launchEnvironment();
+
+    assert.isUndefined(environment.ELECTRON_RUN_AS_NODE);
+    assert.equal(environment.PATH, process.env.PATH);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.ELECTRON_RUN_AS_NODE;
+    } else {
+      process.env.ELECTRON_RUN_AS_NODE = previous;
+    }
+  }
+});
 
 it.effect("treats an app that keeps running as started", () =>
   Effect.gen(function* () {
@@ -166,13 +186,13 @@ it.effect("stops a running app before building and always launches the installed
   }),
 );
 
-it.effect("launches the installed app even when it was not running before the build", () =>
+it.effect("stops leftover processes even when the app itself is not running", () =>
   Effect.gen(function* () {
     const events: Array<string> = [];
 
     yield* runDesktopInstallLifecycle(lifecycle(events, false));
 
-    assert.deepStrictEqual(events, ["check", "build", "install", "start"]);
+    assert.deepStrictEqual(events, ["check", "stop", "build", "install", "start"]);
   }),
 );
 
@@ -189,6 +209,19 @@ it.effect("restores a previously running app when the rebuild fails", () =>
   }),
 );
 
+it.effect("does not restore an app that was not running when the install failed", () =>
+  Effect.gen(function* () {
+    const events: Array<string> = [];
+
+    const error = yield* runDesktopInstallLifecycle(lifecycle(events, false, "build")).pipe(
+      Effect.flip,
+    );
+
+    assert.equal(error.message, "build failed");
+    assert.deepStrictEqual(events, ["check", "stop", "build"]);
+  }),
+);
+
 it.effect("does not launch an app that was stopped before a failed install", () =>
   Effect.gen(function* () {
     const events: Array<string> = [];
@@ -198,9 +231,26 @@ it.effect("does not launch an app that was stopped before a failed install", () 
     );
 
     assert.equal(error.message, "install failed");
-    assert.deepStrictEqual(events, ["check", "build", "install"]);
+    assert.deepStrictEqual(events, ["check", "stop", "build", "install"]);
   }),
 );
+
+it("only asks the macOS app to quit when it is already running", () => {
+  const script = macQuitScript("com.t3tools.t3code.dev");
+
+  assert.match(script, /^if application id "com\.t3tools\.t3code\.dev" is running then$/mu);
+  assert.match(script, /tell application id "com\.t3tools\.t3code\.dev" to quit/u);
+});
+
+it("reads the running app pid from LaunchServices output", () => {
+  assert.equal(parseMacRunningAppPid('"pid"=31887\n'), 31887);
+  assert.equal(parseMacRunningAppPid('"pid" = 31887'), 31887);
+});
+
+it("treats empty LaunchServices output as the app not running", () => {
+  assert.isUndefined(parseMacRunningAppPid(""));
+  assert.isUndefined(parseMacRunningAppPid('"pid"=\n'));
+});
 
 it("parses macOS DMG mount paths containing spaces", () => {
   assert.equal(
