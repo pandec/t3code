@@ -161,10 +161,19 @@ export function selectPrimaryEnvironmentScope(
   return primaryEnvironmentId === null ? null : new Set([primaryEnvironmentId]);
 }
 
+// Without a known primary, "remote" is not yet a meaningful distinction: every
+// environment would qualify and the result would be an every-environment scope
+// wearing a "remote only" label. Persisted environments hydrate synchronously
+// while the primary registration arrives over an async round-trip, so this is a
+// real window on cold start — and the scope it would persist is a static id set
+// that never corrects itself once the primary lands.
 export function selectRemoteEnvironmentScope(
   environments: readonly { readonly environmentId: string }[],
   primaryEnvironmentId: string | null,
 ): SidebarEnvironmentScope {
+  if (primaryEnvironmentId === null) {
+    return null;
+  }
   const remoteEnvironmentIds = environments.flatMap((environment) =>
     environment.environmentId === primaryEnvironmentId ? [] : [environment.environmentId],
   );

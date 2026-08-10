@@ -116,6 +116,14 @@ describe("Sidebar V2 environment scope", () => {
     );
     expect(selectRemoteEnvironmentScope([environments[0]!], "environment-local")).toBeNull();
   });
+
+  it("refuses to build a remote scope before the primary environment is known", () => {
+    // Persisted environments hydrate before the primary registration lands, and
+    // every row reads as non-primary in that window. Enumerating then would
+    // persist an every-environment scope labelled "remote only" that never
+    // corrects itself once the primary arrives.
+    expect(selectRemoteEnvironmentScope(environments, null)).toBeNull();
+  });
 });
 
 describe("Sidebar V2 project scope", () => {

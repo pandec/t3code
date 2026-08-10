@@ -126,7 +126,11 @@ function SidebarEnvironmentFilterMenuImpl({
       ? "All environments"
       : summarizeEnvironmentScope(selectedEnvironments, unavailableCount);
   const hasPrimaryEnvironment = environments.some((environment) => environment.isPrimary);
-  const hasRemoteEnvironment = environments.some((environment) => !environment.isPrimary);
+  // "Remote" needs a known primary to mean anything. Until one is registered
+  // every row reports isPrimary: false, so this would otherwise offer to select
+  // literally every environment under a "remote only" label.
+  const hasRemoteEnvironment =
+    hasPrimaryEnvironment && environments.some((environment) => !environment.isPrimary);
 
   return (
     <Menu>
@@ -272,10 +276,7 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
   readonly otherFiltersNarrowing: boolean;
 }): string | null {
   const { environments, scope, otherFiltersNarrowing } = input;
-  // Another filter is cutting the list down too, so this one cannot claim to be
-  // the reason it came out empty — and the "Show all environments" button beside
-  // this message would clear the wrong thing.
-  if (scope === null || otherFiltersNarrowing) {
+  if (scope === null) {
     return null;
   }
 
@@ -283,11 +284,14 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
     scope.has(environment.environmentId),
   );
   const connectedEnvironments = selectedEnvironments.filter(isEnvironmentConnected);
-  // Gone from the catalog and merely asleep are different situations for the
-  // user, so they get different sentences.
+  // Gone from the catalog and merely unreachable are different situations for
+  // the user, so they get different sentences.
   const removedCount = scope.size - selectedEnvironments.length;
   const disconnectedCount = selectedEnvironments.length - connectedEnvironments.length;
 
+  // Nothing in the selection can report a thread, so no other filter can be
+  // what emptied the list — this one is the cause even when others are also
+  // narrowing, and it must outrank them rather than yield.
   if (connectedEnvironments.length === 0) {
     const [onlySelected] = selectedEnvironments;
     if (disconnectedCount === 0) {
@@ -296,13 +300,23 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
         : "The selected environments are unavailable";
     }
     if (removedCount > 0) {
-      // Part removed, part merely offline: "unavailable" is the only claim true
-      // of both.
+      // Part removed, part merely unreachable: "unavailable" is the only claim
+      // true of both.
       return "The selected environments are unavailable";
     }
+    // Every non-connected phase lands here — offline, connecting, reconnecting,
+    // available-without-a-session, and error. "Not connected" is the one claim
+    // true of all of them; the row's dot carries which.
     return onlySelected !== undefined && selectedEnvironments.length === 1
-      ? `${onlySelected.label} is disconnected`
-      : "The selected environments are disconnected";
+      ? `Not connected to ${onlySelected.label}`
+      : "Not connected to the selected environments";
+  }
+
+  // Something in the selection could have reported threads, so the emptiness is
+  // not provably ours. Another active filter would make "Show all environments"
+  // clear the wrong thing.
+  if (otherFiltersNarrowing) {
+    return null;
   }
 
   const [onlyConnected] = connectedEnvironments;

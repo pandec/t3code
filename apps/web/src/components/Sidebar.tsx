@@ -4516,6 +4516,20 @@ export default function Sidebar() {
                     Add project
                   </button>
                 </>
+              ) : /* Outranks the attention filter: the label is only non-null when
+                    the environment filter is provably the cause, and clearing
+                    attention would leave the list just as empty. */
+              environmentFilter.emptyStateLabel !== null ? (
+                <>
+                  <span>{environmentFilter.emptyStateLabel}</span>
+                  <button
+                    type="button"
+                    onClick={environmentFilter.selectAll}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    Show all environments
+                  </button>
+                </>
               ) : attentionFilterEnabled ? (
                 <>
                   <span>No threads need attention</span>
@@ -4525,17 +4539,6 @@ export default function Sidebar() {
                     className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     Clear attention filter
-                  </button>
-                </>
-              ) : environmentFilter.emptyStateLabel !== null ? (
-                <>
-                  <span>{environmentFilter.emptyStateLabel}</span>
-                  <button
-                    type="button"
-                    onClick={environmentFilter.selectAll}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                  >
-                    Show all environments
                   </button>
                 </>
               ) : singleScopedProjectGroup ? (

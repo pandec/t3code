@@ -33,9 +33,15 @@ export function useSidebarEnvironmentFilter(input: {
     () => (storedScopeIds === null ? null : new Set(storedScopeIds)),
     [storedScopeIds],
   );
+  // Before the catalog hydrates, an empty environment list is indistinguishable
+  // from "every selection was removed". Resolving against it would either hide
+  // everything or — since null means all — widen the filter for a frame, which
+  // is exactly what the scope is designed never to do. Client-persisted drafts
+  // exist before any environment does and would be the visible tell, so fall
+  // back to raw intent until the catalog can be trusted to answer.
   const resolvedScope = useMemo(
     () =>
-      input.environmentsReady ? resolveSidebarEnvironmentScope(input.environments, scope) : null,
+      input.environmentsReady ? resolveSidebarEnvironmentScope(input.environments, scope) : scope,
     [input.environments, input.environmentsReady, scope],
   );
   const sortedEnvironments = useMemo(
@@ -79,16 +85,15 @@ export function useSidebarEnvironmentFilter(input: {
         : null,
     [environments, input.environmentsReady, input.otherFiltersNarrowing, scope],
   );
+  // Archived recents are hidden outright while any scope is set (matching the
+  // project filter), so subscribing to their per-environment RPCs would page
+  // remote links for rows that are guaranteed not to render.
   const environmentIds = useMemo(
     () =>
-      input.environmentsReady
-        ? input.environments.flatMap((environment) =>
-            resolvedScope === null || resolvedScope.has(environment.environmentId)
-              ? [environment.environmentId]
-              : [],
-          )
+      input.environmentsReady && scope === null
+        ? input.environments.map((environment) => environment.environmentId)
         : [],
-    [input.environments, input.environmentsReady, resolvedScope],
+    [input.environments, input.environmentsReady, scope],
   );
   const toggleEnvironment = useCallback(
     (environmentId: string) => {
@@ -121,7 +126,10 @@ export function useSidebarEnvironmentFilter(input: {
     emptyStateLabel,
     environmentIds,
     environments,
-    menuScope: input.environmentsReady ? scope : null,
+    // Raw intent, hydrated or not: handing the menu null before the catalog
+    // arrives would drop the trigger below its two-environment threshold and
+    // hide an active filter at the one moment the user cannot tell why.
+    menuScope: scope,
     resolvedScope,
     scope,
     selectAll,
