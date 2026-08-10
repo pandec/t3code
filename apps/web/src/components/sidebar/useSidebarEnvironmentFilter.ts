@@ -25,7 +25,6 @@ export function useSidebarEnvironmentFilter(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly hiddenProjectKeys: ReadonlySet<string>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
-  readonly otherFiltersNarrowing: boolean;
   readonly shellsBootstrapped: boolean;
 }) {
   const storedScopeIds = useUiStateStore((store) => store.sidebarV2EnvironmentScopeIds);
@@ -81,17 +80,10 @@ export function useSidebarEnvironmentFilter(input: {
         ? resolveSidebarEnvironmentEmptyStateLabel({
             environments,
             scope,
-            otherFiltersNarrowing: input.otherFiltersNarrowing,
             shellsBootstrapped: input.shellsBootstrapped,
           })
         : null,
-    [
-      environments,
-      input.environmentsReady,
-      input.otherFiltersNarrowing,
-      input.shellsBootstrapped,
-      scope,
-    ],
+    [environments, input.environmentsReady, input.shellsBootstrapped, scope],
   );
   // Archived recents are hidden outright while any scope is set (matching the
   // project filter), so subscribing to their per-environment RPCs would page

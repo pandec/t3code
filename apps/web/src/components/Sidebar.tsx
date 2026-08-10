@@ -142,6 +142,7 @@ import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
+import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
 import {
   canArchiveThreadNow,
@@ -2164,13 +2165,6 @@ export default function Sidebar() {
     // environment message claims a result it did not cause and its button
     // clears the wrong thing. The attention filter is why this state sits above
     // the hook rather than beside its own toggle.
-    // Resolved, not raw: a persisted key for a project that no longer exists
-    // hides nothing, so counting it here would suppress a legitimate
-    // environment message on the strength of a filter that is not narrowing.
-    otherFiltersNarrowing:
-      resolvedProjectScopeKeys !== null ||
-      hiddenPhysicalProjectKeys.size > 0 ||
-      attentionFilterEnabled,
     shellsBootstrapped: allEnvironmentShellsBootstrapped,
   });
   const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
@@ -2397,6 +2391,7 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
+    emptyStateCause,
   } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2405,21 +2400,31 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
+    // Each filter is evaluated separately so the empty state can be attributed
+    // by counterfactual — "would clearing just this one admit a row?" — rather
+    // than by which filters happen to be switched on. It is the same single
+    // pass either way.
+    let admittedWithoutEnvironment = 0;
+    let admittedWithoutProjects = 0;
+    let admittedWithoutAttention = 0;
     const visible = threads.filter((thread) => {
-      if (
-        thread.archivedAt !== null ||
-        (environmentFilter.resolvedScope !== null &&
-          !environmentFilter.resolvedScope.has(thread.environmentId)) ||
-        hiddenPhysicalProjectKeys.has(`${thread.environmentId}:${thread.projectId}`) ||
-        (scopedProjectKeys !== null &&
-          !scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`))
-      ) {
-        return false;
-      }
-      if (effectiveAttentionFilterState === null) return true;
-      return effectiveAttentionFilterState.memberThreadKeys.has(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
+      if (thread.archivedAt !== null) return false;
+      const projectKey = `${thread.environmentId}:${thread.projectId}`;
+      const passesEnvironment =
+        environmentFilter.resolvedScope === null ||
+        environmentFilter.resolvedScope.has(thread.environmentId);
+      const passesProjects =
+        !hiddenPhysicalProjectKeys.has(projectKey) &&
+        (scopedProjectKeys === null || scopedProjectKeys.has(projectKey));
+      const passesAttention =
+        effectiveAttentionFilterState === null ||
+        effectiveAttentionFilterState.memberThreadKeys.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        );
+      if (passesProjects && passesAttention) admittedWithoutEnvironment += 1;
+      if (passesEnvironment && passesAttention) admittedWithoutProjects += 1;
+      if (passesEnvironment && passesProjects) admittedWithoutAttention += 1;
+      return passesEnvironment && passesProjects && passesAttention;
     });
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -2492,6 +2497,14 @@ export default function Sidebar() {
       ),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
+      emptyStateCause: resolveSidebarEmptyStateCause({
+        environmentScopeActive: environmentFilter.scope !== null,
+        projectFiltersActive: scopedProjectKeys !== null || hiddenPhysicalProjectKeys.size > 0,
+        attentionFilterActive: effectiveAttentionFilterState !== null,
+        admittedWithoutEnvironment,
+        admittedWithoutProjects,
+        admittedWithoutAttention,
+      }),
     };
   }, [
     autoSettleAfterDays,
@@ -3911,6 +3924,7 @@ export default function Sidebar() {
                 environments={environmentFilter.environments}
                 scope={environmentFilter.menuScope}
                 catalogReady={environmentsReady}
+                shellsBootstrapped={allEnvironmentShellsBootstrapped}
                 onToggleEnvironment={environmentFilter.toggleEnvironment}
                 onSelectAll={environmentFilter.selectAll}
                 onSelectPrimaryOnly={environmentFilter.selectPrimaryOnly}
@@ -4528,7 +4542,25 @@ export default function Sidebar() {
             0 &&
           displayedRecentArchive.totalCount === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {projects.length === 0 ? (
+              {/* Ordered by which clear action would actually refill the list,
+                  not by which filters are switched on. `emptyStateCause` is the
+                  counterfactual: a filter only appears here when clearing it
+                  alone admits a row. An unavailable environment scope is the one
+                  exception that outranks "No projects yet" — adding a project
+                  under it would land outside the scope and stay hidden. */}
+              {environmentFilter.emptyStateLabel !== null &&
+              (emptyStateCause === "environment" || emptyStateCause === "none") ? (
+                <>
+                  <span>{environmentFilter.emptyStateLabel}</span>
+                  <button
+                    type="button"
+                    onClick={environmentFilter.selectAll}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    Show all environments
+                  </button>
+                </>
+              ) : projects.length === 0 ? (
                 <>
                   <span>No projects yet</span>
                   <button
@@ -4540,21 +4572,8 @@ export default function Sidebar() {
                     Add project
                   </button>
                 </>
-              ) : /* Outranks the attention filter: the label is only non-null when
-                    the environment filter is provably the cause, and clearing
-                    attention would leave the list just as empty. */
-              environmentFilter.emptyStateLabel !== null ? (
-                <>
-                  <span>{environmentFilter.emptyStateLabel}</span>
-                  <button
-                    type="button"
-                    onClick={environmentFilter.selectAll}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                  >
-                    Show all environments
-                  </button>
-                </>
-              ) : attentionFilterEnabled ? (
+              ) : emptyStateCause === "attention" ||
+                (emptyStateCause === "none" && attentionFilterEnabled) ? (
                 <>
                   <span>No threads need attention</span>
                   <button
@@ -4565,6 +4584,10 @@ export default function Sidebar() {
                     Clear attention filter
                   </button>
                 </>
+              ) : emptyStateCause === "multiple" ? (
+                // Several filters are each hiding rows, so no single button
+                // would refill the list and offering one would mislead.
+                "No threads match the active filters"
               ) : singleScopedProjectGroup ? (
                 `No threads in ${singleScopedProjectGroup.displayName} yet`
               ) : resolvedProjectScopeKeys !== null ? (

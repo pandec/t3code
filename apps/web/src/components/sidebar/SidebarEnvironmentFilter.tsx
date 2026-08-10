@@ -49,6 +49,9 @@ export interface SidebarEnvironmentFilterMenuProps {
   /** False until the environment catalog has answered. While false an empty
    *  `environments` means "not known yet", never "all of them were removed". */
   readonly catalogReady: boolean;
+  /** False while any environment's first thread snapshot is still arriving, so
+   *  a missing count means "not known yet" rather than "none". */
+  readonly shellsBootstrapped: boolean;
   readonly onToggleEnvironment: (environmentId: string) => void;
   readonly onSelectAll: () => void;
   readonly onSelectPrimaryOnly: () => void;
@@ -106,6 +109,7 @@ function SidebarEnvironmentFilterMenuImpl({
   environments,
   scope,
   catalogReady,
+  shellsBootstrapped,
   onToggleEnvironment,
   onSelectAll,
   onSelectPrimaryOnly,
@@ -247,15 +251,27 @@ function SidebarEnvironmentFilterMenuImpl({
                   </span>
                 ) : null}
               </span>
-              <ConnectionStatusDot
-                tooltipText={statusText}
-                dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
-                pingClassName={connectionPhasePingClassName(environment.connection.phase)}
-              />
-              {/* The count is only knowledge while the environment is connected.
-                  Blank defers to the dot, which already explains why; a
-                  confident 0 would assert something we cannot see. */}
-              {isEnvironmentConnected(environment) ? (
+              {/* The dot renders its own button for the status tooltip, so its
+                  activation has to be contained — otherwise reading the status
+                  by tap or keyboard toggles the row, like the project menu's
+                  nested buttons already guard against. */}
+              <span
+                className="contents"
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseUp={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <ConnectionStatusDot
+                  tooltipText={statusText}
+                  dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
+                  pingClassName={connectionPhasePingClassName(environment.connection.phase)}
+                />
+              </span>
+              {/* The count is only knowledge while the environment is connected
+                  AND has delivered its first snapshot. Blank defers to the dot;
+                  a confident 0 would assert something we cannot see. */}
+              {isEnvironmentConnected(environment) && shellsBootstrapped ? (
                 <>
                   <span
                     aria-hidden
@@ -283,14 +299,11 @@ export const SidebarEnvironmentFilterMenu = memo(SidebarEnvironmentFilterMenuImp
 export function resolveSidebarEnvironmentEmptyStateLabel(input: {
   readonly environments: readonly SidebarEnvironmentFilterEnvironment[];
   readonly scope: SidebarEnvironmentFilterScope;
-  /** True when another filter — project scope, hidden projects, or attention —
-   *  is ALSO narrowing the list. */
-  readonly otherFiltersNarrowing: boolean;
   /** False while any environment's initial thread snapshot is still arriving.
    *  A count of zero is not yet evidence of an empty environment. */
   readonly shellsBootstrapped: boolean;
 }): string | null {
-  const { environments, scope, otherFiltersNarrowing, shellsBootstrapped } = input;
+  const { environments, scope, shellsBootstrapped } = input;
   if (scope === null) {
     return null;
   }
@@ -301,31 +314,20 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
   const connectedEnvironments = selectedEnvironments.filter(isEnvironmentConnected);
   // Gone from the catalog and merely unreachable are different situations for
   // the user, so they get different sentences.
-  const disconnectedCount = selectedEnvironments.length - connectedEnvironments.length;
+  const removedCount = scope.size - selectedEnvironments.length;
 
-  // Thread refs are keyed off the catalog, so an environment that left it can
-  // hold no rows at all. That makes this the one case the environment filter
-  // provably caused: no other filter can be hiding what cannot exist, so it
-  // outranks them rather than yielding.
   if (selectedEnvironments.length === 0) {
     return scope.size === 1
       ? "The selected environment is unavailable"
       : "The selected environments are unavailable";
   }
 
-  // Everything below is only *possibly* our doing. A disconnected environment
-  // keeps its cached shells — it stays in the catalog — so a project, hidden
-  // project or attention filter may be what actually emptied the list, and
-  // claiming it here would offer a button that fixes nothing.
-  if (otherFiltersNarrowing) {
-    return null;
-  }
-
   if (connectedEnvironments.length === 0) {
     const [onlySelected] = selectedEnvironments;
-    if (disconnectedCount < selectedEnvironments.length) {
+    if (removedCount > 0) {
       // Part removed, part merely unreachable: "unavailable" is the only claim
-      // true of both.
+      // true of both, and saying "not connected" here would silently drop the
+      // removed half of the selection the trigger is still counting.
       return "The selected environments are unavailable";
     }
     // Every non-connected phase lands here — offline, connecting, reconnecting,
