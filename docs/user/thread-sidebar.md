@@ -11,3 +11,25 @@ other connected devices.
 If reordering is unavailable for one environment, update the T3 Code server running in that
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
+
+## Filtering by environment
+
+When you are connected to more than one environment, a button beside the search box narrows the
+thread list to the environments you pick. Choose any combination, or use **This environment only**
+and **Remote environments only** for the two common cases. **All environments** clears the filter.
+The button appears once you have more than one environment to choose between, and stays put while
+a filter is active so you can always clear one.
+
+Each row in the menu shows a status dot and how many threads that environment currently
+contributes, and the machine you are using is marked as this device. Your selection is remembered
+on this device until you change it.
+
+Threads and unsent drafts follow your selection. The recently archived section hides itself while
+a filter is active — as it already does when you filter by project — and comes back when you
+return to all environments.
+
+A filtered environment that stops responding keeps its place in the filter rather than quietly
+widening your view: the list says T3 Code is not connected to it instead of reporting that it has
+no threads, and its thread count is hidden while T3 Code cannot see it. An environment you remove
+from your connections is reported as unavailable instead, so a temporary outage and a deliberate
+removal never look alike.
