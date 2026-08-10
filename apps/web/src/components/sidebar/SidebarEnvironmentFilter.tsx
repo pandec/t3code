@@ -46,6 +46,9 @@ export interface SidebarEnvironmentFilterMenuProps {
   /** Raw intent, not the resolved set: a filter whose environments are all
    *  offline must still read as active, or it cannot be cleared. */
   readonly scope: SidebarEnvironmentFilterScope;
+  /** False until the environment catalog has answered. While false an empty
+   *  `environments` means "not known yet", never "all of them were removed". */
+  readonly catalogReady: boolean;
   readonly onToggleEnvironment: (environmentId: string) => void;
   readonly onSelectAll: () => void;
   readonly onSelectPrimaryOnly: () => void;
@@ -102,6 +105,7 @@ function summarizeEnvironmentScope(
 function SidebarEnvironmentFilterMenuImpl({
   environments,
   scope,
+  catalogReady,
   onToggleEnvironment,
   onSelectAll,
   onSelectPrimaryOnly,
@@ -120,11 +124,18 @@ function SidebarEnvironmentFilterMenuImpl({
       : environments.filter((environment) => scope.has(environment.environmentId));
   // Derived here rather than accepted as a prop: the parent can only compute it
   // from a different array, and the two would agree by coincidence.
-  const unavailableCount = scope === null ? 0 : scope.size - selectedEnvironments.length;
+  //
+  // An unhydrated catalog is empty, so subtracting against it would report the
+  // whole selection as removed at the one moment nothing has gone wrong. The
+  // count is only meaningful once the catalog can actually answer.
+  const unavailableCount =
+    scope === null || !catalogReady ? 0 : scope.size - selectedEnvironments.length;
   const scopeSummary =
     scope === null
       ? "All environments"
-      : summarizeEnvironmentScope(selectedEnvironments, unavailableCount);
+      : !catalogReady
+        ? environmentCountLabel(scope.size)
+        : summarizeEnvironmentScope(selectedEnvironments, unavailableCount);
   const hasPrimaryEnvironment = environments.some((environment) => environment.isPrimary);
   // "Remote" needs a known primary to mean anything. Until one is registered
   // every row reports isPrimary: false, so this would otherwise offer to select
@@ -272,10 +283,14 @@ export const SidebarEnvironmentFilterMenu = memo(SidebarEnvironmentFilterMenuImp
 export function resolveSidebarEnvironmentEmptyStateLabel(input: {
   readonly environments: readonly SidebarEnvironmentFilterEnvironment[];
   readonly scope: SidebarEnvironmentFilterScope;
-  /** True when a project scope or hidden projects are ALSO narrowing the list. */
+  /** True when another filter — project scope, hidden projects, or attention —
+   *  is ALSO narrowing the list. */
   readonly otherFiltersNarrowing: boolean;
+  /** False while any environment's initial thread snapshot is still arriving.
+   *  A count of zero is not yet evidence of an empty environment. */
+  readonly shellsBootstrapped: boolean;
 }): string | null {
-  const { environments, scope, otherFiltersNarrowing } = input;
+  const { environments, scope, otherFiltersNarrowing, shellsBootstrapped } = input;
   if (scope === null) {
     return null;
   }
@@ -286,20 +301,29 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
   const connectedEnvironments = selectedEnvironments.filter(isEnvironmentConnected);
   // Gone from the catalog and merely unreachable are different situations for
   // the user, so they get different sentences.
-  const removedCount = scope.size - selectedEnvironments.length;
   const disconnectedCount = selectedEnvironments.length - connectedEnvironments.length;
 
-  // Nothing in the selection can report a thread, so no other filter can be
-  // what emptied the list — this one is the cause even when others are also
-  // narrowing, and it must outrank them rather than yield.
+  // Thread refs are keyed off the catalog, so an environment that left it can
+  // hold no rows at all. That makes this the one case the environment filter
+  // provably caused: no other filter can be hiding what cannot exist, so it
+  // outranks them rather than yielding.
+  if (selectedEnvironments.length === 0) {
+    return scope.size === 1
+      ? "The selected environment is unavailable"
+      : "The selected environments are unavailable";
+  }
+
+  // Everything below is only *possibly* our doing. A disconnected environment
+  // keeps its cached shells — it stays in the catalog — so a project, hidden
+  // project or attention filter may be what actually emptied the list, and
+  // claiming it here would offer a button that fixes nothing.
+  if (otherFiltersNarrowing) {
+    return null;
+  }
+
   if (connectedEnvironments.length === 0) {
     const [onlySelected] = selectedEnvironments;
-    if (disconnectedCount === 0) {
-      return scope.size === 1
-        ? "The selected environment is unavailable"
-        : "The selected environments are unavailable";
-    }
-    if (removedCount > 0) {
+    if (disconnectedCount < selectedEnvironments.length) {
       // Part removed, part merely unreachable: "unavailable" is the only claim
       // true of both.
       return "The selected environments are unavailable";
@@ -312,10 +336,9 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
       : "Not connected to the selected environments";
   }
 
-  // Something in the selection could have reported threads, so the emptiness is
-  // not provably ours. Another active filter would make "Show all environments"
-  // clear the wrong thing.
-  if (otherFiltersNarrowing) {
+  // A connected environment that has not finished its first snapshot has an
+  // unknown thread count, not a zero one.
+  if (!shellsBootstrapped) {
     return null;
   }
 
@@ -326,7 +349,7 @@ export function resolveSidebarEnvironmentEmptyStateLabel(input: {
       : "No threads on the selected environments yet";
   // Naming one environment while silently dropping the rest of the selection
   // would misrepresent the filter, so the shortfall is stated.
-  const unreachableCount = removedCount + disconnectedCount;
+  const unreachableCount = scope.size - connectedEnvironments.length;
   return unreachableCount === 0
     ? emptyLabel
     : `${emptyLabel} · ${environmentCountLabel(unreachableCount)} unavailable`;

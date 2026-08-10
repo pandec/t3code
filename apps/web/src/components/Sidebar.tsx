@@ -2082,9 +2082,12 @@ export default function Sidebar() {
     [],
   );
 
-  // Project visibility is persisted because settings routes temporarily unmount
-  // Sidebar V2. Scope and hidden keys are mutually exclusive; each interaction
-  // writes both lists together so the latest click wins without stale overlap.
+  // Project visibility is persisted because /settings routes temporarily unmount
+  // Sidebar V2, and because a reload must not silently widen the view. (Project
+  // settings itself moved to /projects/$projectKey and no longer unmounts the
+  // sidebar, so that route is no longer the reason.) Scope and hidden keys are
+  // mutually exclusive; each interaction writes both lists together so the
+  // latest click wins without stale overlap.
   const projectScopeKeys = useMemo<SidebarProjectScope>(
     () => (storedProjectScopeKeys === null ? null : new Set(storedProjectScopeKeys)),
     [storedProjectScopeKeys],
@@ -2122,6 +2125,34 @@ export default function Sidebar() {
       new Set<string>(),
     [projectGroups, resolvedHiddenProjectKeys],
   );
+  const attentionFilterThreads = useMemo(
+    () =>
+      threads.map((thread) => ({
+        threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      })),
+    [threads],
+  );
+  const [attentionFilterState, setAttentionFilterState] =
+    useState<SidebarV2AttentionFilterState | null>(null);
+  const effectiveAttentionFilterState = useMemo(
+    () =>
+      attentionFilterState === null
+        ? null
+        : admitNewSidebarV2AttentionThreads(attentionFilterState, attentionFilterThreads),
+    [attentionFilterState, attentionFilterThreads],
+  );
+  // Admission is derived synchronously so a shell created through the CLI or
+  // another client never flashes out of the filtered list for one render. The
+  // effect only commits the grown known/member sets for the next update.
+  useEffect(() => {
+    if (
+      effectiveAttentionFilterState !== null &&
+      effectiveAttentionFilterState !== attentionFilterState
+    ) {
+      setAttentionFilterState(effectiveAttentionFilterState);
+    }
+  }, [attentionFilterState, effectiveAttentionFilterState]);
+  const attentionFilterEnabled = effectiveAttentionFilterState !== null;
   const environmentFilter = useSidebarEnvironmentFilter({
     environments,
     environmentsReady,
@@ -2129,7 +2160,18 @@ export default function Sidebar() {
     threads,
     hiddenProjectKeys: hiddenPhysicalProjectKeys,
     scopedProjectKeys,
-    otherFiltersNarrowing: resolvedProjectScopeKeys !== null || hiddenProjectKeys.size > 0,
+    // Every filter that can independently empty the list belongs here, or the
+    // environment message claims a result it did not cause and its button
+    // clears the wrong thing. The attention filter is why this state sits above
+    // the hook rather than beside its own toggle.
+    // Resolved, not raw: a persisted key for a project that no longer exists
+    // hides nothing, so counting it here would suppress a legitimate
+    // environment message on the strength of a filter that is not narrowing.
+    otherFiltersNarrowing:
+      resolvedProjectScopeKeys !== null ||
+      hiddenPhysicalProjectKeys.size > 0 ||
+      attentionFilterEnabled,
+    shellsBootstrapped: allEnvironmentShellsBootstrapped,
   });
   const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
     environmentFilter.environmentIds,
@@ -2255,34 +2297,6 @@ export default function Sidebar() {
           scopedProjectGroups.length > 0
         ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
         : projectScopeLabel;
-  const attentionFilterThreads = useMemo(
-    () =>
-      threads.map((thread) => ({
-        threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      })),
-    [threads],
-  );
-  const [attentionFilterState, setAttentionFilterState] =
-    useState<SidebarV2AttentionFilterState | null>(null);
-  const effectiveAttentionFilterState = useMemo(
-    () =>
-      attentionFilterState === null
-        ? null
-        : admitNewSidebarV2AttentionThreads(attentionFilterState, attentionFilterThreads),
-    [attentionFilterState, attentionFilterThreads],
-  );
-  // Admission is derived synchronously so a shell created through the CLI or
-  // another client never flashes out of the filtered list for one render. The
-  // effect only commits the grown known/member sets for the next update.
-  useEffect(() => {
-    if (
-      effectiveAttentionFilterState !== null &&
-      effectiveAttentionFilterState !== attentionFilterState
-    ) {
-      setAttentionFilterState(effectiveAttentionFilterState);
-    }
-  }, [attentionFilterState, effectiveAttentionFilterState]);
-  const attentionFilterEnabled = effectiveAttentionFilterState !== null;
   const displayedRecentArchive =
     environmentFilter.scope === null &&
     projectScopeKeys === null &&
@@ -3896,6 +3910,7 @@ export default function Sidebar() {
               <SidebarEnvironmentFilterMenu
                 environments={environmentFilter.environments}
                 scope={environmentFilter.menuScope}
+                catalogReady={environmentsReady}
                 onToggleEnvironment={environmentFilter.toggleEnvironment}
                 onSelectAll={environmentFilter.selectAll}
                 onSelectPrimaryOnly={environmentFilter.selectPrimaryOnly}
