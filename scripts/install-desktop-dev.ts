@@ -23,14 +23,15 @@ const LINUX_APP_PROCESS = "t3code-dev";
 const LINUX_SERVICE = "t3code.service";
 const PROCESS_STATE_ATTEMPTS = 20;
 const PROCESS_POLL_INTERVAL = Duration.millis(250);
-// The launch we saw fail died about a second in, so watch a little longer than
+// The launches we saw fail died within ~1.3s, so watch a little longer than
 // that before believing the app started.
 const STARTUP_STABILITY_WINDOW = Duration.seconds(2);
 const STARTUP_STABILITY_SAMPLES = Math.ceil(
   Duration.toMillis(STARTUP_STABILITY_WINDOW) / Duration.toMillis(PROCESS_POLL_INTERVAL),
 );
-// Whatever makes a launch die on arrival is transient but not instant, so give
-// it room rather than relaunching into the same moment.
+// A pause before the second attempt, on the assumption that a launch dying on
+// arrival is the moment least worth relaunching into. It only costs time on a
+// path that has already failed.
 const RELAUNCH_BACKOFF = Duration.seconds(2);
 const MAC_DIAGNOSTICS_HINT = `Inspect the launch with: log show --predicate 'process == "${MAC_APP_PROCESS}"' --last 5m`;
 const LINUX_DIAGNOSTICS_HINT = `Inspect the launch with: journalctl --user -u ${LINUX_SERVICE} -n 100`;
@@ -51,6 +52,27 @@ interface DesktopInstallLifecycle {
 interface CommandOptions {
   readonly cwd?: string;
   readonly quiet?: boolean;
+  readonly env?: Record<string, string>;
+}
+
+// `open` hands our environment to the app it launches, and ELECTRON_RUN_AS_NODE
+// makes an Electron binary run as plain Node — so the app we just installed
+// would run nothing and exit within ~50ms, leaving no window and no logs of its
+// own. Anything descended from a process that was itself started with that
+// variable carries it (an editor launched from a poisoned shell hands it to
+// every terminal and agent session it spawns, for the life of that instance),
+// so scrub it here rather than trusting the ambient environment.
+// apps/desktop/scripts/{dev,start}-electron.mjs strip it for the same reason.
+const LAUNCH_ENV_BLOCKLIST = new Set(["ELECTRON_RUN_AS_NODE"]);
+
+export function launchEnvironment(): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !LAUNCH_ENV_BLOCKLIST.has(key)) {
+      environment[key] = value;
+    }
+  }
+  return environment;
 }
 
 function formatCommand(command: string, args: ReadonlyArray<string>): string {
@@ -79,6 +101,7 @@ const runCommand = Effect.fn("installDesktopDev.runCommand")(
         stdin: "ignore",
         stdout: output,
         stderr: output,
+        ...(options.env ? { env: options.env } : {}),
       }),
     );
     if (Number(exitCode) !== 0) {
@@ -141,12 +164,12 @@ const waitForAppToAppear = Effect.fn("installDesktopDev.waitForAppToAppear")(fun
   return yield* isRunning;
 });
 
-// Seeing the process once proves it launched, not that it survived. A freshly
-// installed bundle has been observed appearing and then exiting about a second
-// later, before the app writes any log of its own; losing Electron's
-// single-instance race is the leading suspect, but it was never reproduced.
-// Confirm the process is still there before reporting success, so the retry in
-// startAppWithVerification gets the chance it was written for.
+// Seeing the process once proves it launched, not that it survived. A leaked
+// ELECTRON_RUN_AS_NODE used to make the installed bundle run as plain Node and
+// exit within ~50ms, which the first-sighting check happily reported as a
+// successful launch; launchEnvironment now strips that, but anything else that
+// kills the app on arrival should surface as an error rather than a silent
+// no-op. Confirm the process is still there before reporting success.
 export const waitForAppToStart = Effect.fn("installDesktopDev.waitForAppToStart")(function* (
   isRunning: Effect.Effect<boolean, DesktopInstallError>,
   delay: Effect.Effect<void> = Effect.sleep(PROCESS_POLL_INTERVAL),
@@ -252,18 +275,41 @@ const findLatestArtifact = Effect.fn("installDesktopDev.findLatestArtifact")(
   Effect.mapError((cause) => asDesktopInstallError("Failed to inspect desktop artifacts", cause)),
 );
 
+// pgrep matches on the executable name, and the embedded backend runs the same
+// binary through process.execPath — so `pgrep -x "T3 Code (Dev)"` reports both
+// the app and its backend child, and a lingering child reads as "the app is
+// running". Ask LaunchServices about the bundle instead: it only knows the GUI
+// app. Empty output means it is not running. Stopping still waits on the
+// executable name, which is the stricter check and leaves no orphaned backend
+// behind.
+export function parseMacRunningAppPid(output: string): number | undefined {
+  const match = /"pid"\s*=\s*(\d+)/u.exec(output);
+  if (!match?.[1]) return undefined;
+  const pid = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
 export function parseMacDmgMountPoint(output: string): string | undefined {
   const line = output.split("\n").find((candidate) => candidate.includes("/Volumes/"));
   return line?.slice(line.indexOf("/Volumes/")).trim() || undefined;
 }
 
+// Stopping now runs on every install, including when the app is already closed,
+// so only send the Apple Event when something is there to receive it. Reading
+// `is running` does not launch the app. The pgrep/pkill path below stays
+// unconditional — that is what reaps a backend child that outlived its app.
+export function macQuitScript(bundleId: string): string {
+  return [
+    `if application id "${bundleId}" is running then`,
+    `  tell application id "${bundleId}" to quit`,
+    "end if",
+  ].join("\n");
+}
+
 const stopMacApp = Effect.fn("installDesktopDev.stopMacApp")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) {
-  yield* commandSucceeds(spawner, "osascript", [
-    "-e",
-    `tell application id "${MAC_APP_ID}" to quit`,
-  ]);
+  yield* commandSucceeds(spawner, "osascript", ["-e", macQuitScript(MAC_APP_ID)]);
   if (yield* waitForProcessToStop(spawner, MAC_APP_PROCESS_PATTERN)) return;
   yield* terminateProcess(spawner, MAC_APP_PROCESS, MAC_APP_PROCESS_PATTERN);
 });
@@ -331,8 +377,13 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const releaseDirectory = path.join(repoRoot, "release-dev");
-  const isRunning = commandSucceeds(spawner, "pgrep", ["-x", MAC_APP_PROCESS_PATTERN]);
-  const start = runCommand(spawner, "open", [MAC_APP_PATH]);
+  // Empty output is the ordinary "not running" answer, so only a genuine
+  // failure to reach LaunchServices is an error. Swallowing that would let a
+  // running app read as absent and have its bundle replaced underneath it.
+  const isRunning = captureCommand(spawner, "lsappinfo", ["info", "-only", "pid", MAC_APP_ID]).pipe(
+    Effect.map((output) => parseMacRunningAppPid(output) !== undefined),
+  );
+  const start = runCommand(spawner, "open", [MAC_APP_PATH], { env: launchEnvironment() });
   return {
     isRunning,
     stop: stopMacApp(spawner),
@@ -454,6 +505,9 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
     ]);
     return serviceRunning || (yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]));
   });
+  // No launchEnvironment() here: `systemctl --user start` asks the user manager
+  // to start the unit, so the unit's own environment applies and ours is never
+  // forwarded. Scrubbing the client side would only look like protection.
   const start = runCommand(spawner, "systemctl", ["--user", "start", LINUX_SERVICE]);
   return {
     isRunning,
@@ -472,9 +526,15 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
 export const runDesktopInstallLifecycle = Effect.fn("runDesktopInstallLifecycle")(function* (
   lifecycle: DesktopInstallLifecycle,
 ) {
+  // wasRunning only decides whether to put the app back after a failed build or
+  // install. Stopping is not gated on it: isRunning answers "is the app up",
+  // while stop reaps every process belonging to the bundle, including a backend
+  // child that outlived its app. Skipping it when the app looks absent would
+  // leave that orphan running against the same T3 home as the new install.
+  // Stopping when nothing is running is a no-op.
   const wasRunning = yield* lifecycle.isRunning;
   const install = Effect.gen(function* () {
-    if (wasRunning) yield* lifecycle.stop;
+    yield* lifecycle.stop;
     yield* lifecycle.build;
     yield* lifecycle.install;
   });
