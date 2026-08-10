@@ -11,7 +11,7 @@ import {
   sidebarEnvironmentScopeSignature,
   toggleSidebarEnvironmentScope,
   type SidebarEnvironmentScope,
-} from "../Sidebar.logic";
+} from "./environmentScope";
 import { buildProviderEnvironmentOptions } from "../settings/ProviderSettingsPanel.logic";
 import {
   resolveSidebarEnvironmentEmptyStateLabel,
