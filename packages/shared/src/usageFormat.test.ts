@@ -1,6 +1,7 @@
+// @effect-diagnostics globalDate:off -- Fixed wall-clock instants, so the assertions read the same calendar day in any zone.
 import { describe, expect, it } from "vite-plus/test";
 
-import { enumerateDays, makeWindow, refreshWindow } from "./usageFormat";
+import { enumerateDays, makeWindow, refreshWindow } from "./usageFormat.ts";
 
 // Local-time constructors well inside a day, so the resolved calendar day is
 // the same in any zone the test machine runs in.

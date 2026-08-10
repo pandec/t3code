@@ -54,7 +54,6 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
-  EllipsisIcon,
   EyeIcon,
   EyeOffIcon,
   ListFilterIcon,
@@ -63,6 +62,7 @@ import {
   PlusIcon,
   SearchIcon,
   ServerIcon,
+  SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -174,6 +174,7 @@ import {
 import type { SidebarProjectScope, SidebarV2AttentionFilterState } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
+  ThreadWorktreeIndicator,
   prStatusIndicator,
   resolveThreadPr,
   settledPrHoverColorClass,
@@ -1217,6 +1218,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const diff = latestTurnDiff(thread);
   const cardTrailingMetadata = !isRenaming ? (
     <>
+      {/* Upstream anchors the worktree marker to the branch, which compact
+          cards do not render. Carrying it here covers both card shapes instead
+          of only the expanded one. Slim rows (settled, snoozed) build their own
+          metadata below and stay unmarked, as they do upstream. */}
+      <ThreadWorktreeIndicator thread={thread} />
       {terminalStatusIcon}
       {prBadge}
       {diff ? (
@@ -2350,7 +2356,7 @@ export default function Sidebar() {
     clearSelection();
   }, [attentionFilterEnabled, clearSelection, environmentFilter.signature, projectFilterSignature]);
 
-  const handleProjectActions = useCallback(
+  const handleProjectSettings = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2359,7 +2365,7 @@ export default function Sidebar() {
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/settings/projects/$projectKey",
+        to: "/projects/$projectKey",
         params: { projectKey: projectGroup.projectKey },
       });
     },
@@ -3998,20 +4004,23 @@ export default function Sidebar() {
                             </button>
                             <button
                               type="button"
-                              aria-label={`Project actions for ${project.displayName}`}
-                              title={`Project actions for ${project.displayName}`}
+                              aria-label={`Project settings for ${project.displayName}`}
+                              title={`Project settings for ${project.displayName}`}
+                              // No `ml-auto` here: the hide/show button ahead of
+                              // it already claims the free space, so adding one
+                              // would only split the pair apart.
                               className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                               onPointerDown={(event) => event.stopPropagation()}
                               // Menu items synthesize a click on mouseup once the
                               // trigger's press-drag-release window opens, so a
                               // drag onto this button would toggle the scope
-                              // instead of opening project actions.
+                              // instead of opening project settings.
                               onMouseUp={(event) => event.stopPropagation()}
                               onClick={(event) => {
-                                void handleProjectActions(event, project);
+                                void handleProjectSettings(event, project);
                               }}
                             >
-                              <EllipsisIcon className="size-3.5" />
+                              <SettingsIcon className="size-3.5" />
                             </button>
                           </MenuCheckboxItem>
                         );

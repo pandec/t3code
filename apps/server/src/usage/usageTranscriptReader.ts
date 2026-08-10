@@ -137,9 +137,17 @@ export async function readTranscriptRecords(
         if (!carriesUsage && !line.includes('"turn_context"') && !line.includes('"session_meta"')) {
           continue;
         }
+        const skipsBefore = codexState.deliberateSkips;
         const record = parseCodexLine(line, codexState);
         if (record !== null) records.push(record);
-        else if (carriesUsage) malformedRecords += 1;
+        // A usage-carrying line that yielded nothing is only malformed when the
+        // reducer did not deliberately drop it. Fork copies, duplicate
+        // re-emissions and zero-token events are read correctly and simply not
+        // counted, so charging them here would understate nothing yet still
+        // warn the user that their usage is incomplete.
+        else if (carriesUsage && codexState.deliberateSkips === skipsBefore) {
+          malformedRecords += 1;
+        }
         continue;
       }
 

@@ -151,6 +151,12 @@ export function ComposerToolbarButton(props: {
   readonly onPress?: () => void;
   /** Set by ControlPillMenu on Android when the button anchors a long-press menu. */
   readonly onLongPress?: () => void;
+  /**
+   * Set by ControlPillMenu on iOS alongside `onLongPress`. Without forwarding
+   * it the injected threshold is dropped and a hold released just under the
+   * context-menu delay taps through — sending instead of opening the menu.
+   */
+  readonly delayLongPress?: number;
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
@@ -191,6 +197,7 @@ export function ComposerToolbarButton(props: {
       disabled={props.disabled}
       onPress={props.onPress}
       onLongPress={props.onLongPress}
+      delayLongPress={props.delayLongPress}
       className={cn(
         // Default width cap lives in the class chain (not the inline style)
         // so callers can lift it with max-w-full — flex-filling pills in the
