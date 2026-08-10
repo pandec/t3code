@@ -4,32 +4,33 @@
  * Every connected environment answers the same typed query; the client merges
  * the results. Raw transcripts never leave the machine that produced them.
  *
+ * Mirror of `apps/web/src/state/usage.ts` over mobile's atom wiring; the merge
+ * rules themselves live in `@t3tools/shared/usageMerge`.
+ *
  * @module state/usage
  */
 import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
-import {
-  classifyEnvironmentUsage,
-  usageProgress,
-  type EnvironmentUsageState,
-} from "../usage/usageCoverage";
-import { appAtomRegistry } from "../rpc/atomRegistry";
+import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
-  readonly state: EnvironmentUsageState;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly summary: UsageSummary | null;
 }
 
 /**
@@ -38,11 +39,6 @@ export interface EnvironmentUsageStatus {
  * Keyed by the serialised window so switching ranges does not thrash the atom
  * cache, and so each environment's query is shared with any other reader of the
  * same window.
- *
- * The query atom for an environment that has never connected stays pending
- * forever (it waits for a connection that is not coming), so the connection
- * phase — not the query result — decides whether an unanswered environment is
- * still reporting or terminally unreachable.
  */
 const usageByWindowAtom = Atom.family((windowKey: string) =>
   Atom.make((get): readonly EnvironmentUsageStatus[] => {
@@ -55,15 +51,13 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
-        state: classifyEnvironmentUsage({
-          phase: presentation.connection.phase,
-          failed: result._tag === "Failure",
-          summary: Option.getOrNull(AsyncResult.value(result)),
-        }),
+        isPending: result.waiting,
+        error: result._tag === "Failure" ? "This environment could not report usage." : null,
+        summary: Option.getOrNull(AsyncResult.value(result)),
       });
     }
     return statuses;
-  }).pipe(Atom.withLabel(`web-usage:window:${windowKey}`)),
+  }).pipe(Atom.withLabel(`mobile-usage:window:${windowKey}`)),
 );
 
 export interface UsageView {
@@ -72,10 +66,9 @@ export interface UsageView {
   /** True until at least one environment has answered. */
   readonly isPending: boolean;
   /**
-   * True while environments that can still answer are answering. Failed and
-   * not-connected environments are reported through their own coverage rows:
-   * totals will not improve by waiting on them, so they must not read as
-   * "still reporting".
+   * True while environments that have not failed are still answering. Failed
+   * environments are reported through their own error rows: totals will not
+   * improve by waiting on them, so they must not read as "still reporting".
    */
   readonly isPartial: boolean;
   readonly refresh: () => void;
@@ -96,7 +89,7 @@ export function useUsage(input: UsageSummaryInput): UsageView {
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
-  // environment's query so the button always rescans.
+  // environment's query so pull-to-refresh always rescans.
   const refresh = useCallback(() => {
     const input = JSON.parse(windowKey) as UsageSummaryInput;
     for (const environment of environments) {
@@ -108,26 +101,29 @@ export function useUsage(input: UsageSummaryInput): UsageView {
 
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
-      environment.state.kind === "reported"
-        ? [
+      environment.summary === null
+        ? []
+        : [
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.state.summary,
+              summary: environment.summary,
             },
-          ]
-        : [],
+          ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
   }, [environments]);
 
-  const progress = usageProgress(environments.map((environment) => environment.state));
+  const answeredCount = environments.filter((environment) => environment.summary !== null).length;
+  const stillReporting = environments.filter(
+    (environment) => environment.summary === null && environment.error === null,
+  ).length;
 
   return {
     merged,
     environments,
-    isPending: progress.isPending,
-    isPartial: progress.isPartial,
+    isPending: answeredCount === 0 && stillReporting > 0,
+    isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
   };
 }

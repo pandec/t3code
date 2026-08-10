@@ -45,7 +45,7 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("work").map((item) => item.id)).toEqual(["project-new-thread-workspace"]);
+    expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("xyzzy")).toEqual([]);
   });
 
@@ -86,20 +86,14 @@ describe("searchSettings", () => {
     });
   });
 
-  it("includes fork-only project settings ported from the sidebar", () => {
-    expect(searchSettings("thread accent")[0]).toMatchObject({
-      id: "project-thread-accent",
-      to: "/settings/projects",
-    });
-    expect(searchSettings("import cli")[0]).toMatchObject({
-      id: "project-import-session",
-      to: "/settings/projects",
-      targetId: "project-checkouts",
-    });
-    expect(searchSettings("project archived")[0]).toMatchObject({
-      id: "project-archived-threads",
-      to: "/settings/projects",
-    });
+  // Project settings left this catalog when upstream moved them to the
+  // contextual `/projects/$projectKey` route, which a static SettingsPath
+  // cannot address. They are reached from the sidebar and command palette
+  // instead, so no query here should resolve to one.
+  it("no longer indexes project settings", () => {
+    expect(searchSettings("thread accent")).toEqual([]);
+    expect(searchSettings("import cli")).toEqual([]);
+    expect(searchSettings("project archived")).toEqual([]);
   });
 
   it("includes fork-only Extras settings", () => {

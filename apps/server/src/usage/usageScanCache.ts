@@ -22,8 +22,13 @@ import type { UsageRecord } from "./usageTranscripts.ts";
  * Bumped to 2 when entries gained `malformedRecords`: a v1 entry cannot say how
  * many of its lines failed to parse, and reporting those files as clean would
  * be worse than re-parsing them once.
+ *
+ * Bumped to 3 because upstream independently shipped its own v2, for Codex
+ * fork-copy suppression: it changed what a file parses to, so an entry written
+ * by either v2 would keep serving records this build no longer agrees with.
+ * Only a version neither side has used invalidates both.
  */
-export const USAGE_SCAN_CACHE_VERSION = 2 as const;
+export const USAGE_SCAN_CACHE_VERSION = 3 as const;
 
 export interface CachedFile {
   readonly size: number;
