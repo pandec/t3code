@@ -154,7 +154,10 @@ export function HomeRouteScreen() {
         <NativeStackScreenOptions
           options={getConnectionAwareBrandHeaderOptions({
             onOpenEnvironments: () =>
-              navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" }),
+              navigation.navigate("SettingsSheet", {
+                screen: "SettingsContent",
+                params: { screen: "SettingsEnvironments" },
+              }),
             showThreadSync: true,
           })}
         />
@@ -174,9 +177,17 @@ export function HomeRouteScreen() {
           onProjectChange={setSelectedProjectKey}
           onModelChange={setSelectedModel}
           onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironments" },
+            })
           }
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
@@ -190,7 +201,10 @@ export function HomeRouteScreen() {
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironmentNew" },
+            })
           }
           onArchiveThread={archiveThread}
           onDeleteArchivedThread={confirmDeleteArchivedThread}
@@ -205,9 +219,17 @@ export function HomeRouteScreen() {
           onMovePinnedThread={movePinnedThread}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onOpenAllArchivedThreads={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsArchive" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsArchive" },
+            })
           }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}

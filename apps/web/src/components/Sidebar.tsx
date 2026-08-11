@@ -29,6 +29,7 @@ import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threa
 import {
   scopeProjectRef,
   scopeThreadRef,
+  scopedProjectKey,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import type {
@@ -100,7 +101,7 @@ import { useShortcutModifierState } from "../shortcutModifierState";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { isMacPlatform } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
@@ -113,7 +114,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import {
   useProjectAccentColorMigration,
@@ -141,7 +142,6 @@ import {
 } from "../threadRoutes";
 import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
@@ -165,6 +165,7 @@ import {
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
   searchSidebarThreadsByTitle,
+  shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
   sidebarProjectScopeSignature,
   sortLogicalProjectsForSidebar,
@@ -173,8 +174,9 @@ import {
   sortSettledThreadsForSidebar,
   toggleSidebarProjectHidden,
   toggleSidebarProjectSelection,
+  type SidebarProjectScope,
+  type SidebarV2AttentionFilterState,
 } from "./Sidebar.logic";
-import type { SidebarProjectScope, SidebarV2AttentionFilterState } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
@@ -3707,13 +3709,13 @@ export default function Sidebar() {
             }
             copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
             return;
-          case "copy-thread-id":
-            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
-            return;
           case "copy-branch":
             if (thread.branch) {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
+            return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "delete": {
             if (confirmThreadDelete) {
@@ -3847,29 +3849,62 @@ export default function Sidebar() {
   // falling back to the top project) — same resolution the command palette
   // uses. The command palette already offers a "New thread in..." submenu
   // for multi-project setups.
-  const handleNewThreadClick = useCallback(() => {
-    // One project: nothing to pick, create immediately.
-    if (projectGroups.length <= 1) {
-      if (isMobile) setOpenMobile(false);
-      void startNewThreadFromContext({
+  const handleNewThreadClick = useCallback(
+    (event?: ReactMouseEvent) => {
+      const context = {
         activeDraftThread: newThreadContext.activeDraftThread,
         activeThread: newThreadContext.activeThread ?? undefined,
         defaultProjectRef: newThreadContext.defaultProjectRef,
         handleNewThread: newThreadContext.handleNewThread,
-      });
-      return;
-    }
-    if (isMobile) setOpenMobile(false);
-    openCommandPalette({ open: "new-thread-in" });
-  }, [isMobile, newThreadContext, projectGroups.length, setOpenMobile]);
+      };
+      const targetProjectRef = resolveThreadActionProjectRef(context);
+      const targetProjectKey = targetProjectRef ? scopedProjectKey(targetProjectRef) : null;
+      const targetIsVisible =
+        targetProjectRef !== null &&
+        (environmentFilter.resolvedScope === null ||
+          environmentFilter.resolvedScope.has(targetProjectRef.environmentId)) &&
+        (scopedProjectKeys === null ||
+          (targetProjectKey !== null && scopedProjectKeys.has(targetProjectKey))) &&
+        (targetProjectKey === null || !hiddenPhysicalProjectKeys.has(targetProjectKey));
+
+      // One project: nothing to pick, create immediately. Shift+click creates
+      // directly in the current project even with several projects, skipping
+      // the palette picker. Never create outside active fork filters: if the
+      // route resolves to a hidden project or environment, use the picker.
+      if (
+        targetIsVisible &&
+        shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)
+      ) {
+        if (isMobile) setOpenMobile(false);
+        void startNewThreadFromContext(context);
+        return;
+      }
+      if (isMobile) setOpenMobile(false);
+      openCommandPalette({ open: "new-thread-in" });
+    },
+    [
+      environmentFilter.resolvedScope,
+      hiddenPhysicalProjectKeys,
+      isMobile,
+      newThreadContext,
+      projectGroups.length,
+      scopedProjectKeys,
+      setOpenMobile,
+    ],
+  );
 
   // The button mirrors chat.new: in multi-project setups both route through
   // the command palette's "New thread in..." picker, and in single-project
-  // setups both create immediately. chat.newLocal always creates directly, so
-  // it is only a correct label when chat.new is unbound.
+  // setups both create immediately. In multi-project setups the label is only
+  // the picker's shortcut: falling back to chat.newLocal would advertise the
+  // same shortcut for both the picker and direct create. In single-project
+  // setups both commands create directly, so chat.newLocal is a valid
+  // fallback. The second tooltip line (multi-project only) advertises
+  // shift+click and its keyboard twin chat.newLocal for direct create.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
-    shortcutLabelForCommand(keybindings, "chat.newLocal");
+    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
+  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   const newThreadButton = (
     <Tooltip>
       <TooltipTrigger
@@ -3891,7 +3926,21 @@ export default function Sidebar() {
         />
       </TooltipTrigger>
       <TooltipPopup side="right">
-        {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+        {projectGroups.length > 1 ? (
+          <span className="flex flex-col gap-0.5">
+            <span>
+              {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+            </span>
+            <span className="text-muted-foreground">
+              New thread in current project: Shift+click
+              {newThreadInProjectShortcutLabel ? ` (${newThreadInProjectShortcutLabel})` : ""}
+            </span>
+          </span>
+        ) : newThreadShortcutLabel ? (
+          `New thread (${newThreadShortcutLabel})`
+        ) : (
+          "New thread"
+        )}
       </TooltipPopup>
     </Tooltip>
   );

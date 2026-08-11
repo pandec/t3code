@@ -33,3 +33,11 @@ widening your view: the list says T3 Code is not connected to it instead of repo
 no threads, and its thread count is hidden while T3 Code cannot see it. An environment you remove
 from your connections is reported as unavailable instead, so a temporary outage and a deliberate
 removal never look alike.
+
+## Environment artwork
+
+Development-build and Nightly environments can identify themselves with artwork at the top of the
+sidebar and in the send button. Packaged Dev builds remain protected from development artwork.
+Choose **Artwork**, **Version pill**, or **None** in Settings under environment identification.
+Artwork is recolored to match each built-in theme; custom themes use the **Version pill** fallback
+because their colors are not controlled by T3 Code.

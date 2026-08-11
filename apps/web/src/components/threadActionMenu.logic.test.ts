@@ -24,7 +24,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy-path", "delete"]);
+    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -72,7 +72,7 @@ describe("buildThreadActionMenuItems", () => {
     expect(ids(baseState)).not.toContain("move-to-top");
     expect(ids(baseState)).not.toContain("fork");
     expect(ids(baseState)).not.toContain("archive");
-    expect(ids(baseState)).not.toContain("copy-thread-id");
+    expect(ids(baseState).filter((id) => id === "copy-thread-id")).toHaveLength(1);
   });
 
   it("adds the fork-only entries when extras are supplied", () => {
@@ -87,6 +87,15 @@ describe("buildThreadActionMenuItems", () => {
       "fork",
       "archive",
       "copy-path",
+      "copy-thread-id",
+      "delete",
+    ]);
+  });
+
+  it("keeps branch copy before the single upstream-owned thread ID copy", () => {
+    expect(ids({ ...baseState, branch: "main", forkExtras }).slice(-4)).toEqual([
+      "copy-path",
+      "copy-branch",
       "copy-thread-id",
       "delete",
     ]);

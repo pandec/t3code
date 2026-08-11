@@ -12,7 +12,7 @@ import {
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
 import { canArchiveThreadNow } from "../components/Sidebar.logic";
@@ -104,7 +104,7 @@ export function useThreadActionMenu(input: {
     },
     onError: (error) => failureToast("Failed to copy branch", error),
   });
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: string }>({
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
     target: "thread ID",
     onCopy: ({ threadId }) => {
       toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
@@ -261,9 +261,6 @@ export function useThreadActionMenu(input: {
             // own failures — hence no reportFailure wrapper.
             await attemptArchiveThread(threadRef);
             return;
-          case "copy-thread-id":
-            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
-            return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;
             if (!workspacePath) {
@@ -283,6 +280,9 @@ export function useThreadActionMenu(input: {
             if (thread.branch) {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
+            return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "delete": {
             if (confirmThreadDelete) {

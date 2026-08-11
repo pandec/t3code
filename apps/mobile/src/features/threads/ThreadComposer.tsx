@@ -17,8 +17,17 @@ import {
   serializeComposerFileLink,
   type ComposerTrigger,
 } from "@t3tools/shared/composerTrigger";
-import type { ReactNode } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import * as Haptics from "expo-haptics";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   ActivityIndicator,
   Image,
@@ -94,10 +103,14 @@ import {
   normalizeSearchQuery,
   scoreQueryMatch,
 } from "@t3tools/shared/searchRanking";
-import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
+import {
+  applyProviderOptionSelection,
+  resolveProviderOptionDescriptors,
+} from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { threadComposerSendLabel } from "./threadComposerSendLabel";
+import { buildThreadSettingsMenu } from "./thread-settings-menu";
 import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 import { VoiceRecorderControl } from "./VoiceRecorderControl";
@@ -166,6 +179,8 @@ export interface ThreadComposerProps {
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
   readonly onReconnectEnvironment: () => void;
   readonly onExpandedChange?: (expanded: boolean) => void;
+  /** Fires on editor focus/blur; hosts use it to vet stale keyboard state. */
+  readonly onEditorFocusChange?: (focused: boolean) => void;
 }
 
 /**
@@ -360,14 +375,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
   }, [inputRef]);
 
+  const onEditorFocusChange = props.onEditorFocusChange;
   const handleFocus = useCallback(() => {
     setIsFocused(true);
-  }, []);
+    onEditorFocusChange?.(true);
+  }, [onEditorFocusChange]);
 
   const handleBlur = useCallback(() => {
     setIsFocused(false);
+    onEditorFocusChange?.(false);
     void flushComposerDrafts();
-  }, []);
+  }, [onEditorFocusChange]);
   const showStopAction =
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
@@ -967,6 +985,70 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     interactionMode: currentInteractionMode,
   });
 
+  // iOS gets a native menu on the trigger pill: everyday adjustments apply
+  // without resigning the keyboard. Android still routes through the sheet.
+  const settingsMenu = useMemo(
+    () =>
+      Platform.OS === "ios"
+        ? buildThreadSettingsMenu({
+            providerGroups: threadProviderGroups,
+            selectedModel: currentModelSelection,
+            optionDescriptors: providerOptionDescriptors,
+            runtimeMode: currentRuntimeMode,
+            interactionMode: currentInteractionMode,
+          })
+        : null,
+    [
+      currentInteractionMode,
+      currentModelSelection,
+      currentRuntimeMode,
+      providerOptionDescriptors,
+      threadProviderGroups,
+    ],
+  );
+
+  const onUpdateModelSelection = props.onUpdateModelSelection;
+  const onUpdateRuntimeMode = props.onUpdateRuntimeMode;
+  const handleSettingsMenuAction = useCallback(
+    (eventId: string) => {
+      const event = settingsMenu?.events.get(eventId);
+      if (!event) return;
+      switch (event.type) {
+        case "select-model":
+          void Haptics.selectionAsync();
+          onUpdateModelSelection(event.option.selection);
+          return;
+        case "set-option": {
+          const options = applyProviderOptionSelection(providerOptionDescriptors, {
+            id: event.optionId,
+            value: event.value,
+          });
+          if (options) {
+            void Haptics.selectionAsync();
+            onUpdateModelSelection({ ...currentModelSelection, options });
+          }
+          return;
+        }
+        case "set-runtime":
+          void Haptics.selectionAsync();
+          onUpdateRuntimeMode(event.mode);
+          return;
+        case "set-interaction":
+          void Haptics.selectionAsync();
+          onUpdateInteractionMode(event.mode);
+          return;
+      }
+    },
+    [
+      currentModelSelection,
+      onUpdateInteractionMode,
+      onUpdateModelSelection,
+      onUpdateRuntimeMode,
+      providerOptionDescriptors,
+      settingsMenu,
+    ],
+  );
+
   // The long-press menu is invisible to assistive tech, so while queueing is
   // available the same choice is also exposed as an accessibility action.
   const sendToolbarButton = (
@@ -1167,16 +1249,33 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onTranscript={props.onVoiceTranscript}
                   />
                 ) : null}
-                <ComposerToolbarTrigger
-                  accessibilityLabel="Thread settings"
-                  accessibilityValue={{ text: settingsSummaryLabel }}
-                  iconNode={
-                    <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                  }
-                  label={settingsSummaryLabel}
-                  maxWidth={320}
-                  onPress={settingsSheetPresentation.open}
-                />
+                {settingsMenu ? (
+                  <ControlPillMenu
+                    actions={settingsMenu.actions}
+                    onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
+                  >
+                    <ComposerToolbarTrigger
+                      accessibilityLabel="Thread settings"
+                      accessibilityValue={{ text: settingsSummaryLabel }}
+                      iconNode={
+                        <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
+                      }
+                      label={settingsSummaryLabel}
+                      maxWidth={320}
+                    />
+                  </ControlPillMenu>
+                ) : (
+                  <ComposerToolbarTrigger
+                    accessibilityLabel="Thread settings"
+                    accessibilityValue={{ text: settingsSummaryLabel }}
+                    iconNode={
+                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
+                    }
+                    label={settingsSummaryLabel}
+                    maxWidth={320}
+                    onPress={settingsSheetPresentation.open}
+                  />
+                )}
                 {providerUsageAccounts.length > 0 ? (
                   <ControlPillMenu
                     accessibilityLabel={`${providerUsageMenuLabel} usage`}

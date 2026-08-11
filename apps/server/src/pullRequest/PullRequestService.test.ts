@@ -11,6 +11,7 @@ import type {
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -146,6 +147,7 @@ function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
+  readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
 }) {
   const resolveRepositoryIdentity =
     input.resolveRepositoryIdentity ??
@@ -161,6 +163,10 @@ function makeService(input: {
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
           resolve: resolveRepositoryIdentity,
         }),
+        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+          resolveHandle:
+            input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
+        }),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({
@@ -174,6 +180,110 @@ function makeService(input: {
     ),
   );
 }
+
+it.effect("refines unknown self-hosted GitLab projects before listing merge requests", () =>
+  Effect.gen(function* () {
+    let refinementCalls = 0;
+    const selfHosted = project({
+      id: "p1",
+      title: "self-hosted",
+      workspaceRoot: "/gitlab",
+      repository: "group/project",
+      provider: "unknown",
+      host: "code.example.test",
+    });
+    const service = yield* makeService({
+      projects: [
+        selfHosted,
+        { ...selfHosted, id: "p2" as ProjectId, workspaceRoot: "/gitlab-worktree" },
+      ],
+      providers: [fakeProvider("gitlab")],
+      resolveHandle: ({ context }) => {
+        refinementCalls += 1;
+        assert.strictEqual(context?.remoteUrl, "https://code.example.test/group/project.git");
+        return Effect.succeed({
+          context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
+          provider: undefined as never,
+        });
+      },
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.strictEqual(refinementCalls, 1);
+    assert.strictEqual(result.providers[0]?.host, "code.example.test");
+    assert.strictEqual(result.providers[0]?.kind, "gitlab");
+  }),
+);
+
+it.effect("derives a legacy repository host after refining its provider", () =>
+  Effect.gen(function* () {
+    const current = project({
+      id: "p1",
+      title: "legacy self-hosted",
+      workspaceRoot: "/gitlab",
+      repository: "group/project",
+      provider: "unknown",
+      host: "code.example.test",
+    });
+    const identity = current.repositoryIdentity!;
+    // Persisted identities from before canonicalKey existed are still accepted at runtime.
+    const legacy = {
+      ...current,
+      repositoryIdentity: {
+        locator: identity.locator,
+        provider: identity.provider,
+        displayName: identity.displayName,
+      },
+    } as unknown as OrchestrationProjectShell;
+    const service = yield* makeService({
+      projects: [legacy],
+      providers: [fakeProvider("gitlab")],
+      resolveHandle: ({ context }) =>
+        Effect.succeed({
+          context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
+          provider: undefined as never,
+        }),
+    });
+
+    const result = yield* service.list({ state: "open", host: "gitlab" });
+
+    assert.strictEqual(result.providers[0]?.host, "gitlab");
+    assert.strictEqual(result.providers[0]?.kind, "gitlab");
+  }),
+);
+
+it.effect("tries another checkout when provider refinement remains unknown", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const selfHosted = project({
+      id: "p1",
+      title: "self-hosted",
+      workspaceRoot: "/gone",
+      repository: "group/project",
+      provider: "unknown",
+      host: "code.example.test",
+    });
+    const service = yield* makeService({
+      projects: [selfHosted, { ...selfHosted, id: "p2" as ProjectId, workspaceRoot: "/healthy" }],
+      providers: [fakeProvider("gitlab")],
+      resolveHandle: ({ cwd, context }) => {
+        asked.push(cwd);
+        return cwd === "/gone"
+          ? Effect.succeed({ context: context!, provider: undefined as never })
+          : Effect.succeed({
+              context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
+              provider: undefined as never,
+            });
+      },
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(asked, ["/gone", "/healthy"]);
+    assert.strictEqual(result.providers[0]?.kind, "gitlab");
+  }),
+);
 
 /** A row as a host that reads several repositories at once hands it over. */
 function batchedChangeRequest(number: number, repository: string, updatedAt: string) {
@@ -955,6 +1065,58 @@ it.effect("uses a healthy sibling checkout to verify a mutation", () =>
 
     assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
     assert.deepStrictEqual(permissionRoots, ["/healthy"]);
+    assert.deepStrictEqual(actionRoots, ["/healthy"]);
+  }),
+);
+
+it.effect("refines an unknown self-hosted GitLab sibling before verifying a mutation", () =>
+  Effect.gen(function* () {
+    const refinementRoots: string[] = [];
+    const resolutionRoots: string[] = [];
+    const actionRoots: string[] = [];
+    const selected = project({
+      id: "p1",
+      title: "selected gone",
+      workspaceRoot: "/gone",
+      repository: "group/project",
+      provider: "unknown",
+      host: "code.example.test",
+    });
+    const healthy = { ...selected, id: "p2" as ProjectId, workspaceRoot: "/healthy" };
+    const service = yield* makeService({
+      projects: [selected, healthy],
+      providers: [
+        fakeProvider("gitlab", {
+          runAction: (input) => {
+            actionRoots.push(input.cwd);
+            return Effect.void;
+          },
+        }),
+      ],
+      resolveHandle: ({ cwd, context }) => {
+        refinementRoots.push(cwd);
+        return cwd === "/gone"
+          ? Effect.succeed({ context: context!, provider: undefined as never })
+          : Effect.succeed({
+              context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
+              provider: undefined as never,
+            });
+      },
+      resolveRepositoryIdentity: (cwd) => {
+        resolutionRoots.push(cwd);
+        return Effect.succeed(cwd === "/healthy" ? (healthy.repositoryIdentity ?? null) : null);
+      },
+    });
+
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "group/project",
+      number: 1,
+      action: "close",
+    });
+
+    assert.deepStrictEqual(refinementRoots, ["/gone", "/healthy"]);
+    assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
     assert.deepStrictEqual(actionRoots, ["/healthy"]);
   }),
 );

@@ -21,8 +21,8 @@ export type ThreadActionMenuId =
   | "fork"
   | "archive"
   | "copy-path"
-  | "copy-thread-id"
   | "copy-branch"
+  | "copy-thread-id"
   | "delete";
 
 /**
@@ -140,10 +140,8 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "copy-path", label: "Copy path", icon: "copy" },
-    ...(state.forkExtras
-      ? [{ id: "copy-thread-id" as const, label: "Copy thread ID", icon: "copy" }]
-      : []),
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),
+    { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }

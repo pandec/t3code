@@ -13,7 +13,6 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
-  type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
@@ -21,6 +20,11 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
+import {
+  classifyEnvironmentUsage,
+  usageProgress,
+  type EnvironmentUsageState,
+} from "../lib/usageCoverage";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -28,9 +32,8 @@ import { serverEnvironment } from "./server";
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
-  readonly isPending: boolean;
-  readonly error: string | null;
-  readonly summary: UsageSummary | null;
+  readonly queryPending: boolean;
+  readonly state: EnvironmentUsageState;
 }
 
 /**
@@ -51,9 +54,12 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
-        isPending: result.waiting,
-        error: result._tag === "Failure" ? "This environment could not report usage." : null,
-        summary: Option.getOrNull(AsyncResult.value(result)),
+        queryPending: result.waiting,
+        state: classifyEnvironmentUsage({
+          phase: presentation.connection.phase,
+          failed: result._tag === "Failure",
+          summary: Option.getOrNull(AsyncResult.value(result)),
+        }),
       });
     }
     return statuses;
@@ -66,9 +72,8 @@ export interface UsageView {
   /** True until at least one environment has answered. */
   readonly isPending: boolean;
   /**
-   * True while environments that have not failed are still answering. Failed
-   * environments are reported through their own error rows: totals will not
-   * improve by waiting on them, so they must not read as "still reporting".
+   * True while environments that can still answer are answering. Failed and
+   * unreachable environments are terminal and reported through coverage rows.
    */
   readonly isPartial: boolean;
   readonly refresh: () => void;
@@ -81,8 +86,18 @@ export function useUsage(input: UsageSummaryInput): UsageView {
         sinceDay: input.sinceDay,
         untilDay: input.untilDay,
         timeZone: input.timeZone,
+        resolution: input.resolution,
+        sinceTime: input.sinceTime,
+        untilTime: input.untilTime,
       }),
-    [input.sinceDay, input.untilDay, input.timeZone],
+    [
+      input.sinceDay,
+      input.untilDay,
+      input.timeZone,
+      input.resolution,
+      input.sinceTime,
+      input.untilTime,
+    ],
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
@@ -101,29 +116,26 @@ export function useUsage(input: UsageSummaryInput): UsageView {
 
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
-      environment.summary === null
-        ? []
-        : [
+      environment.state.kind === "reported"
+        ? [
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.summary,
+              summary: environment.state.summary,
             },
-          ],
+          ]
+        : [],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
   }, [environments]);
 
-  const answeredCount = environments.filter((environment) => environment.summary !== null).length;
-  const stillReporting = environments.filter(
-    (environment) => environment.summary === null && environment.error === null,
-  ).length;
+  const progress = usageProgress(environments.map((environment) => environment.state));
 
   return {
     merged,
     environments,
-    isPending: answeredCount === 0 && stillReporting > 0,
-    isPartial: answeredCount > 0 && stillReporting > 0,
+    isPending: progress.isPending,
+    isPartial: progress.isPartial,
     refresh,
   };
 }

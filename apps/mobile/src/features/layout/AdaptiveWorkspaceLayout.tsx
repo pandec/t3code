@@ -4,11 +4,11 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useFocusEffect } from "@react-navigation/native";
 import {
   NavigationContext,
   NavigationRouteContext,
   StackActions,
+  useFocusEffect,
   useNavigation,
 } from "@react-navigation/native";
 import {
@@ -430,17 +430,26 @@ function AdaptiveWorkspaceLayoutContent(
   );
 
   const handleOpenSettings = useCallback(() => {
-    navigation.navigate("SettingsSheet", { screen: "Settings" });
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: { screen: "Settings" },
+    });
   }, [navigation]);
 
   const handleOpenArchivedThreads = useCallback(() => {
-    navigation.navigate("SettingsSheet", { screen: "SettingsArchive" });
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: { screen: "SettingsArchive" },
+    });
   }, [navigation]);
 
   // Minted here (root stack navigation) so the sidebar pane stays free of
   // navigation hooks — on iOS it renders inside an independent nav tree.
   const handleOpenEnvironmentSettings = useCallback(() => {
-    navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" });
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: { screen: "SettingsEnvironments" },
+    });
   }, [navigation]);
 
   const handleNewThreadInProject = useCallback(
