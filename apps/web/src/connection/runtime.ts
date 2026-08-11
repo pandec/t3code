@@ -1,5 +1,6 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
+import { pullRequestDiffLoaderLayer } from "@t3tools/client-runtime/state/pull-requests";
 import {
   threadHistoryWindowLayer,
   threadSnapshotLoaderLayer,
@@ -18,7 +19,11 @@ const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
   Layer.provide(runtimeContextLayer),
 );
 
-const snapshotLoaderLayer = Layer.merge(threadSnapshotLoaderLayer, shellSnapshotLoaderLayer);
+const snapshotLoaderLayer = Layer.mergeAll(
+  threadSnapshotLoaderLayer,
+  shellSnapshotLoaderLayer,
+  pullRequestDiffLoaderLayer,
+);
 // Web/desktop stay on full thread history: `messageWindowLimit: null` disables
 // the legacy message window and the omitted `initialTurnLimit` opts out of turn
 // pagination, so the client sends no window parameters and the server returns

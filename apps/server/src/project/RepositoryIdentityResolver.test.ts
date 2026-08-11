@@ -232,4 +232,38 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       ),
     ),
   );
+
+  it.effect("bypasses a cached identity when fresh resolution is requested", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-fresh-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:acme/old.git"]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const initialIdentity = yield* resolver.resolve(cwd);
+      expect(initialIdentity?.canonicalKey).toBe("github.com/acme/old");
+
+      yield* git(cwd, ["remote", "set-url", "origin", "git@github.com:acme/new.git"]);
+
+      const cachedIdentity = yield* resolver.resolve(cwd);
+      expect(cachedIdentity?.canonicalKey).toBe("github.com/acme/old");
+
+      const freshIdentity = yield* resolver.resolve(cwd, { fresh: true });
+      expect(freshIdentity?.canonicalKey).toBe("github.com/acme/new");
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          TestClock.layer(),
+          makeRepositoryIdentityResolverTestLayer({
+            negativeCacheTtl: Duration.minutes(1),
+            positiveCacheTtl: Duration.minutes(1),
+          }),
+        ),
+      ),
+    ),
+  );
 });

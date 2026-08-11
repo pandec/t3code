@@ -22,10 +22,17 @@ export interface RepositoryIdentityResolverOptions {
   readonly negativeCacheTtl?: Duration.Input;
 }
 
+export interface RepositoryIdentityResolveOptions {
+  readonly fresh?: boolean;
+}
+
 export class RepositoryIdentityResolver extends Context.Service<
   RepositoryIdentityResolver,
   {
-    readonly resolve: (cwd: string) => Effect.Effect<RepositoryIdentity | null>;
+    readonly resolve: (
+      cwd: string,
+      options?: RepositoryIdentityResolveOptions,
+    ) => Effect.Effect<RepositoryIdentity | null>;
   }
 >()("t3/project/RepositoryIdentityResolver") {}
 
@@ -159,10 +166,15 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
 
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fn(
     "RepositoryIdentityResolver.resolve",
-  )(function* (cwd) {
+  )(function* (cwd, resolveOptions) {
     const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd).pipe(
       Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
     );
+    if (resolveOptions?.fresh === true) {
+      return yield* resolveRepositoryIdentityFromCacheKey(cacheKey).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+      );
+    }
     return yield* Cache.get(repositoryIdentityCache, cacheKey);
   });
 
