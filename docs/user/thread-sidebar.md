@@ -41,3 +41,9 @@ sidebar and in the send button. Packaged Dev builds remain protected from develo
 Choose **Artwork**, **Version pill**, or **None** in Settings under environment identification.
 Artwork is recolored to match each built-in theme; custom themes use the **Version pill** fallback
 because their colors are not controlled by T3 Code.
+
+## Regenerating a thread title
+
+To generate a fresh title from the conversation, open a thread's context menu and choose
+**Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
+be selected again. The option is hidden when the connected environment needs a server update.
