@@ -1,5 +1,6 @@
 import type { OrchestrationShellSnapshot, OrchestrationThreadShell } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -611,7 +612,9 @@ it.effect("advancing updatedAt resets the freeze anchor and defers to timeout", 
         // Every read reports fresh thread activity, so the observed freeze
         // never reaches the threshold and the deadline wins.
         return Effect.succeed(
-          snapshotWith(withUpdatedAt(new Date(Date.parse(NOW) + reads * 1_000).toISOString())),
+          snapshotWith(
+            withUpdatedAt(DateTime.formatIso(DateTime.makeUnsafe(Date.parse(NOW) + reads * 1_000))),
+          ),
         );
       }),
     ).pipe(Effect.forkChild({ startImmediately: true }));

@@ -413,6 +413,7 @@ function applyPendingSidebarResize(
 function SidebarRail({
   className,
   onClick,
+  onDoubleClick,
   onPointerCancel,
   onPointerDown,
   onPointerMove,
@@ -603,6 +604,21 @@ function SidebarRail({
     [onClick, open, resolvedResizable, toggleSidebar],
   );
 
+  // A caller resetting the width can only clear what it owns: its own state and
+  // storage. The unclamped preference below lives here, and the reconciliation
+  // effect would restore it before the next paint, so the reset has to drop it
+  // too — otherwise the sidebar snaps straight back and only appears reset after
+  // a reload.
+  const handleDoubleClick = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      onDoubleClick?.(event);
+      if (event.defaultPrevented) return;
+      if (!resolvedResizable || !open) return;
+      preferredWidthRef.current = null;
+    },
+    [onDoubleClick, open, resolvedResizable],
+  );
+
   React.useLayoutEffect(() => {
     const storageKey = resolvedResizable?.storageKey ?? null;
     // Tracked separately from the hydrated key so that leaving a key and coming
@@ -733,6 +749,7 @@ function SidebarRail({
             data-sidebar="rail"
             data-slot="sidebar-rail"
             onClick={handleClick}
+            onDoubleClick={handleDoubleClick}
             onPointerCancel={handlePointerCancel}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
