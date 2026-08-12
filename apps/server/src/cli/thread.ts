@@ -70,6 +70,7 @@ import {
 } from "./session.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
 import {
+  THREAD_WAIT_DRAIN_STALE_MS,
   type ThreadWaitDrainMode,
   type WaitForThreadResult,
   threadWaitExitCode,
@@ -475,6 +476,7 @@ export const threadWaitSummary = (result: WaitForThreadResult) => ({
   observedSequence: result.snapshot.snapshotSequence,
   adoptionTimedOut: result.evaluation.adoptionTimedOut,
   drainUnsupported: result.evaluation.drainUnsupported,
+  drainStale: result.evaluation.drainStale,
   ...(result.thread.latestTurn === null
     ? {}
     : {
@@ -1122,7 +1124,11 @@ const threadWaitCommand = Command.make("wait", {
         yield* Console.log(
           flags.json
             ? jsonOutput(summary)
-            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).`,
+            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).${
+                summary.drainStale
+                  ? ` Drain gave up: no thread activity for ${Math.round(THREAD_WAIT_DRAIN_STALE_MS / 60_000)} minutes, so the "working" status looks stale. Verify background results if you depend on them.`
+                  : ""
+              }`,
         );
         yield* Effect.sync(() => {
           process.exitCode = threadWaitExitCode(summary.outcome, flags.exitZero);

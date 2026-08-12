@@ -33,6 +33,12 @@ interface ThreadLivenessState {
 // INERT_TASK_TYPES: plan-mode bookkeeping) so this registry, ingestion's
 // agentKind stamp, and the client fold can never drift apart.
 
+// Matches the workflow member slot ids ClaudeAdapter synthesizes
+// (`<coordinatorTaskId>:wf:<index>`) — the same slot-id convention the
+// client relies on in subagentRuntime's kindFromPayload — without catching
+// arbitrary provider taskIds that merely contain the literal.
+const WORKFLOW_MEMBER_TASK_ID = /:wf:\d+$/;
+
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
@@ -46,11 +52,13 @@ export class ThreadBackgroundLivenessService extends Context.Service<
   {
     /**
      * Feed one task lifecycle transition. taskType may be absent on
-     * synthesized rows (workflow members, Codex children) — those count as
-     * agents. agentId marks a task launched from inside a subagent: its
-     * internal shells are covered by the owning agent's liveness, but a
-     * NESTED AGENT (agentId + agent-flavored taskType) still counts — it
-     * can outlive its parent and must keep the thread Working.
+     * synthesized rows (workflow members, Codex children); untyped rows
+     * count as agents, except workflow member slots (`:wf:<index>`
+     * taskIds), which are excluded entirely. agentId marks a task launched
+     * from inside a subagent: its internal shells are covered by the owning
+     * agent's liveness, but a NESTED AGENT (agentId + agent-flavored
+     * taskType) still counts — it can outlive its parent and must keep the
+     * thread Working.
      */
     readonly recordTaskLiveness: (input: {
       readonly threadId: string;
@@ -103,6 +111,19 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
 
   return {
     recordTaskLiveness: (input) => {
+      // Workflow member slots are synthesized from the coordinator's
+      // workflow_progress array: no taskType, no reliable terminal
+      // transition (errored or vanished members never get one, and a
+      // trailing status-less progress row can land after a completed row
+      // and re-add the slot). The coordinator's own local_workflow task
+      // carries the real lifecycle — members are derived from the
+      // coordinator's own progress stream, so they cannot outlive it, and
+      // every liveness consumer (sidebar pill, thread wait --drain, the
+      // session reaper's keepalive) is fully represented by the coordinator
+      // row. This guard is first, so member rows never enter the registry.
+      if (WORKFLOW_MEMBER_TASK_ID.test(input.taskId)) {
+        return;
+      }
       const taskType = input.taskType;
       if (taskType !== undefined && INERT_TASK_TYPES.has(taskType)) {
         drop(input.threadId, input.taskId);

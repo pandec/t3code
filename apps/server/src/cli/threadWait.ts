@@ -48,6 +48,7 @@ export interface ThreadWaitEvaluation {
   readonly outcome: ThreadWaitOutcome | null;
   readonly adoptionTimedOut: boolean;
   readonly drainUnsupported: boolean;
+  readonly drainStale: boolean;
 }
 
 export interface EvaluateThreadWaitInput {
@@ -57,6 +58,12 @@ export interface EvaluateThreadWaitInput {
   readonly now: string;
   readonly deadlineReached: boolean;
   readonly queuedStartObserved: boolean;
+  /**
+   * Milliseconds this wait has observed `thread.updatedAt` standing still,
+   * measured by the poll loop on its own clock (0 on the first evaluation).
+   * Feeds the stale-drain backstop; see {@link THREAD_WAIT_DRAIN_STALE_MS}.
+   */
+  readonly updatedAtFrozenMs: number;
 }
 
 const pendingOrTimeout = (
@@ -70,6 +77,7 @@ const pendingOrTimeout = (
   outcome: deadlineReached ? "timeout" : null,
   adoptionTimedOut: options?.adoptionTimedOut ?? false,
   drainUnsupported: options?.drainUnsupported ?? false,
+  drainStale: false,
 });
 
 const terminal = (
@@ -77,12 +85,14 @@ const terminal = (
   options?: {
     readonly adoptionTimedOut?: boolean;
     readonly drainUnsupported?: boolean;
+    readonly drainStale?: boolean;
   },
 ): ThreadWaitEvaluation => ({
   status: "terminal",
   outcome,
   adoptionTimedOut: options?.adoptionTimedOut ?? false,
   drainUnsupported: options?.drainUnsupported ?? false,
+  drainStale: options?.drainStale ?? false,
 });
 
 const turnOutcome = (
@@ -97,6 +107,35 @@ const drainPending = (thread: OrchestrationThreadShell, drain: ThreadWaitDrainMo
   if (drain === "all") return thread.backgroundLiveness !== null;
   return thread.backgroundLiveness === "working";
 };
+
+/**
+ * Background liveness is best-effort in-memory server state; a lost terminal
+ * event can pin `"working"` forever and burn the wait to `timeout`. Real
+ * background agent work usually keeps producing activities (tool events,
+ * context updates), which advance `thread.updatedAt` — so when the turn has
+ * settled and only the drain keeps the wait pending, an `updatedAt` this
+ * wait has observed standing still for the threshold marks the liveness as
+ * stale and the wait returns the settled outcome instead. The freeze is
+ * measured across this wait's own polls (never against pre-wait history or
+ * cross-host clocks), so a fresh liveness transition whose activity has not
+ * yet projected cannot trip it. This is a heuristic, not a proof: an agent
+ * silent inside one long tool call has no activity cadence guarantee, hence
+ * the result carries `drainStale: true` and callers who depend on
+ * background-produced artifacts should verify them. Restricted to
+ * `--drain=agents`: `"monitoring"` watch loops can legitimately be quiet
+ * for long stretches, and a `"working"` aggregate can hide a live quiet
+ * monitor, so `--drain=all` keeps its plain timeout semantics.
+ */
+export const THREAD_WAIT_DRAIN_STALE_MS = 3 * 60_000;
+
+const drainLooksStale = (
+  thread: OrchestrationThreadShell,
+  drain: ThreadWaitDrainMode,
+  updatedAtFrozenMs: number,
+): boolean =>
+  drain === "agents" &&
+  thread.backgroundLiveness === "working" &&
+  updatedAtFrozenMs >= THREAD_WAIT_DRAIN_STALE_MS;
 
 const sessionErrorIsFresh = (thread: OrchestrationThreadShell): boolean => {
   if (thread.session?.status !== "error") return false;
@@ -162,6 +201,9 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   if (drainPending(thread, input.options.drain)) {
+    if (drainLooksStale(thread, input.options.drain, input.updatedAtFrozenMs)) {
+      return terminal(settledOutcome, { adoptionTimedOut, drainUnsupported, drainStale: true });
+    }
     return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut, drainUnsupported });
   }
 
@@ -266,6 +308,7 @@ const timeoutResult = (input: {
   readonly options: ThreadWaitOptions;
   readonly queuedStartObserved: boolean;
   readonly now: string;
+  readonly updatedAtFrozenMs: number;
 }): WaitForThreadResult => {
   const evaluated = evaluateThreadWait({
     snapshot: input.snapshot,
@@ -274,12 +317,18 @@ const timeoutResult = (input: {
     now: input.now,
     deadlineReached: true,
     queuedStartObserved: input.queuedStartObserved,
+    updatedAtFrozenMs: input.updatedAtFrozenMs,
   });
+  // The cached snapshot may already evaluate terminal (e.g. a stale drain
+  // returning the settled outcome); honor that instead of overriding it
+  // with "timeout" and emitting a contradictory drainStale record.
+  const outcome =
+    evaluated.status === "terminal" && evaluated.outcome !== null ? evaluated.outcome : "timeout";
   return {
     evaluation: {
       ...evaluated,
       status: "terminal",
-      outcome: "timeout",
+      outcome,
     },
     thread: input.thread,
     snapshot: input.snapshot,
@@ -300,12 +349,23 @@ const waitForThreadImpl = Effect.fn("waitForThread")(function* <R>(
   let queuedStartObserved = false;
   let consecutiveFailures = 0;
   let failureStartedAt: number | null = null;
+  // Stale-drain anchor: the `updatedAt` value this wait last saw change and
+  // when (on this process's clock). updatedAtFrozenMs is therefore freeze
+  // observed by THIS wait — 0 on the first evaluation regardless of how old
+  // the pre-wait snapshot is.
+  let frozenUpdatedAt = input.thread.updatedAt;
+  let frozenSinceMs = startedAt;
 
   while (true) {
     const nowMs = yield* Clock.currentTimeMillis;
     const now = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const waitedMs = Math.max(0, nowMs - startedAt);
     queuedStartObserved ||= hasQueuedTurnStart(lastThread, { now });
+    if (lastThread.updatedAt !== frozenUpdatedAt) {
+      frozenUpdatedAt = lastThread.updatedAt;
+      frozenSinceMs = nowMs;
+    }
+    const updatedAtFrozenMs = Math.max(0, nowMs - frozenSinceMs);
     const evaluated = evaluateThreadWait({
       snapshot,
       threadId: input.thread.id,
@@ -313,6 +373,7 @@ const waitForThreadImpl = Effect.fn("waitForThread")(function* <R>(
       now,
       deadlineReached: waitedMs >= input.options.timeoutMs,
       queuedStartObserved,
+      updatedAtFrozenMs,
     });
     if (evaluated.status === "terminal" && evaluated.outcome !== null) {
       return {
@@ -371,6 +432,7 @@ const waitForThreadImpl = Effect.fn("waitForThread")(function* <R>(
         options: input.options,
         queuedStartObserved,
         now: DateTime.formatIso(DateTime.makeUnsafe(failedAt)),
+        updatedAtFrozenMs: Math.max(0, failedAt - frozenSinceMs),
       });
     }
     return yield* attempted.failure;

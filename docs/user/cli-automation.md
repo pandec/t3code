@@ -158,6 +158,15 @@ bounded and honest:
 
 - Background liveness is in-memory server state and resets when the server restarts.
 - A lost native `task.completed` event can leave liveness at `"working"`; keep a finite `--timeout`.
+  As a self-healing backstop for `--drain=agents`, when the turn has settled and only the drain
+  keeps the wait pending, a `thread.updatedAt` the wait itself has observed standing still for
+  3 minutes marks the liveness as stale: the wait returns the settled outcome with
+  `drainStale: true`. The freeze is measured across this wait's own polls, so it never fires on the
+  first poll and a `--timeout` under 3 minutes still times out first. Treat `drainStale` as
+  "probably stale, not proven": an agent silent inside one long tool call has no activity cadence
+  guarantee, so verify background-produced artifacts if later automation depends on them.
+  `--drain=all` is exempt — a `"working"` aggregate can hide a legitimately quiet watch loop, so it
+  keeps plain timeout semantics.
 - Detached external processes are invisible to the server and cannot be drained.
 - Older servers omit the field; the wait completes and JSON reports `drainUnsupported: true`.
 
@@ -180,7 +189,8 @@ Terminal outcomes use these exit codes:
 
 `--exit-zero` collapses observed terminal outcomes 2–6 to exit code 0; it does not hide transport,
 authentication, or parsing failures. JSON extends the normal thread summary with `outcome`, `waited`,
-`waitedMs`, `observedSequence`, `adoptionTimedOut`, `drainUnsupported`, `backgroundLiveness`, and the
+`waitedMs`, `observedSequence`, `adoptionTimedOut`, `drainUnsupported`, `drainStale`,
+`backgroundLiveness`, and the
 latest turn timestamps when available. A timeout retains the last observed thread state and background
 liveness so callers can distinguish active work from stale or wedged state.
 
