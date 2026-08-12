@@ -158,11 +158,15 @@ bounded and honest:
 
 - Background liveness is in-memory server state and resets when the server restarts.
 - A lost native `task.completed` event can leave liveness at `"working"`; keep a finite `--timeout`.
-  As a self-healing backstop, when the turn has settled and only the drain keeps the wait pending,
-  a thread whose `updatedAt` has been frozen for about three minutes is treated as stale: the wait
-  returns the settled outcome with `drainStale: true` (real background work keeps producing
-  activities, which advance `updatedAt`). Quiet `"monitoring"` liveness is exempt — watch loops can
-  legitimately be silent for long stretches, so `--drain=all` keeps waiting on them.
+  As a self-healing backstop for `--drain=agents`, when the turn has settled and only the drain
+  keeps the wait pending, a `thread.updatedAt` the wait itself has observed standing still for
+  3 minutes marks the liveness as stale: the wait returns the settled outcome with
+  `drainStale: true`. The freeze is measured across this wait's own polls, so it never fires on the
+  first poll and a `--timeout` under 3 minutes still times out first. Treat `drainStale` as
+  "probably stale, not proven": an agent silent inside one long tool call has no activity cadence
+  guarantee, so verify background-produced artifacts if later automation depends on them.
+  `--drain=all` is exempt — a `"working"` aggregate can hide a legitimately quiet watch loop, so it
+  keeps plain timeout semantics.
 - Detached external processes are invisible to the server and cannot be drained.
 - Older servers omit the field; the wait completes and JSON reports `drainUnsupported: true`.
 
