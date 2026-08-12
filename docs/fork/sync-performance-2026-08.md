@@ -125,6 +125,29 @@ fork's pagination state machine, not the old schema fields.
 - **Removing fork features to reduce conflict surface**: no candidate passed the
   value-vs-cost test.
 
+## Post-cutover datapoints
+
+### 2026-08-12 — `5eaf57f6b`
+
+First sync under the adjusted process: 9 upstream commits, 35 upstream-touched files,
+and 4 predicted/actual conflict paths. Measured sync time was **27m27s**; invocation to
+completion report was **28m43s**. Merge resolution took 3m21s. There was no shared Git-state
+collision, `CLAUDE_CONFIG_DIR` contamination, nested-worktree test discovery, user decision,
+or post-sync scope creep. Verification remained comprehensive and ended with 3,009 passing
+and 7 skipped tests.
+
+Two process leaks remained: the semantic audit was still live when the first full suite
+started, so the audit's 3 low-severity fixes required a second full-suite run (~1.5 min
+avoidable); and nested review descendants outlived their coordinator, leaving stale
+`backgroundLiveness` after the report. The assertion block also needed 3 attempts before
+using the tracked `.agents` path and NUL-delimited filenames. The skill was tightened after
+this run to make descendant quiescence and the audit→single-suite barrier explicit and to
+embed the tested assertion command.
+
+This is promising but not a clean estimate of process-only savings: the workload was much
+smaller than the 2026-08-11 broad sync. Its strongest evidence is elimination of the known
+failure classes, not the headline wall-time difference.
+
 ## Expected effect and how to verify at rerun
 
 Conservative estimate: ~5–8 min saved on routine syncs, ~15–25 min on broad ones

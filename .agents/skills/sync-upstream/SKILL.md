@@ -46,7 +46,7 @@ Verify these facts from live Git state before changing anything. Stop if the rem
 
 Read `LEDGER.md` next to this skill first. Apply its standing decisions instead of re-deliberating them. For each ledger watchpoint whose path is touched by the incoming upstream range, spawn one targeted sub-agent to answer that entry's question (whether the fork change there is still needed and compatible); untouched watchpoints need no check.
 
-Review agents are read-only: they inspect committed Git objects (`git show`, `git diff`, `git log`) and report; they never edit files or run any Git command that changes refs, the index, or a worktree. Launch the touched-watchpoint reviews as one batch and block until every one has returned — the merge starts only after the whole batch is back.
+Review agents are read-only: they inspect committed Git objects (`git show`, `git diff`, `git log`) and report; they never edit files or run any Git command that changes refs, the index, or a worktree. Each targeted reviewer answers its ledger question directly without spawning sub-agents or workflows. Launch the touched-watchpoint reviews as one batch and block until every reviewer has returned. If a coordinator must spawn descendants, it owns their lifecycle and returns only after every descendant has completed or been stopped; its report includes the spawned count and confirms zero live descendants. The merge starts only after the whole review tree is quiescent.
 
 Before changing `dev`, compare:
 
@@ -75,7 +75,12 @@ One agent owns the merge state from here through the push: only the owner runs G
    - leave the merge in a recoverable in-progress state
    - report each file, upstream intent, fork intent, incompatibility, and realistic options
    - apply the behavioral-overlap gate above and ask the user which option to take
-5. After resolution, assert merge-state sanity before spending time on validation: the `awk` conflict-marker scan is clean, `.git/MERGE_HEAD` still names the merged `main` tip, the root `package.json` carries no unrelated modification, and migration numeric prefixes are unique. Exact commands and failure modes are in the ledger's verification gotchas.
+5. After resolution, assert merge-state sanity before spending time on validation. Stage tracked files through their real `.agents/...` paths, never the `.claude/...` symlinks. Scan staged files safely with:
+   ```sh
+   git diff --cached --name-only --diff-filter=ACMR -z |
+     xargs -0 awk '/^(<<<<<<<|=======|>>>>>>>)/{print FILENAME ":" FNR}'
+   ```
+   Require no output, `.git/MERGE_HEAD` to name the merged `main` tip, no unrelated root `package.json` modification, and unique migration numeric prefixes. The ledger's verification gotchas explain the failure modes.
 
 ## 5. Validate and publish
 
@@ -87,8 +92,8 @@ Complete the applicable local verification before pushing `dev`.
    - `vp check`
    - `vp run typecheck`
    - focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap: `vp test run --root <package-dir> <test-files>` so nested worktrees are not discovered by the root test runner. Use a package's own test script only when it specifically requires one.
-4. With the cheap gates green, audit the complete staged merge — including cleanly merged behavioral overlap — for integration defects. Stop if it exposes an unresolved product or architecture choice. Fix confirmed defects and rerun the cheap checks they touch. Completion criterion: every finding is fixed or reported as a concrete unresolved decision.
-5. Run the full suite once, after the audit's fixes are in: `env -u CLAUDE_CONFIG_DIR vp run test` (the ledger's verification gotchas explain the cleared variable).
+4. With the cheap gates green, audit the complete staged merge — including cleanly merged behavioral overlap — for integration defects. This is a hard barrier: do not start the full suite while the audit or any descendant reviewer is still live. Stop if the audit exposes an unresolved product or architecture choice. Fix confirmed defects and rerun the cheap checks they touch. Completion criterion: every finding is fixed or reported as a concrete unresolved decision, and the audit review tree has zero live descendants.
+5. Only after step 4 is complete, run the full suite exactly once: `env -u CLAUDE_CONFIG_DIR vp run test` (the ledger's verification gotchas explain the cleared variable). If later convergence changes code, its required rerun is separate from this initial validation pass.
 6. Add conditional static, generated-output, or build checks when the merged changes make them relevant:
    - run `vp run lint:mobile` when native mobile code, native configuration, mobile dependencies, or patches changed
    - run the affected build, smoke, or generated-asset check when packaging, preload code, build configuration, release/update behavior, or generated assets changed
