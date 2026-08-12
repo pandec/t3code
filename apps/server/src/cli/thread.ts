@@ -475,6 +475,7 @@ export const threadWaitSummary = (result: WaitForThreadResult) => ({
   observedSequence: result.snapshot.snapshotSequence,
   adoptionTimedOut: result.evaluation.adoptionTimedOut,
   drainUnsupported: result.evaluation.drainUnsupported,
+  drainStale: result.evaluation.drainStale,
   ...(result.thread.latestTurn === null
     ? {}
     : {
@@ -1122,7 +1123,11 @@ const threadWaitCommand = Command.make("wait", {
         yield* Console.log(
           flags.json
             ? jsonOutput(summary)
-            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).`,
+            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).${
+                summary.drainStale
+                  ? " Background liveness looked stale (no thread activity while drain-pending); returned the settled outcome."
+                  : ""
+              }`,
         );
         yield* Effect.sync(() => {
           process.exitCode = threadWaitExitCode(summary.outcome, flags.exitZero);

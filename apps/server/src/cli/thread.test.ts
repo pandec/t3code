@@ -390,6 +390,7 @@ it("builds the wait JSON result with diagnostics and turn timestamps", () => {
       outcome: "timeout",
       adoptionTimedOut: false,
       drainUnsupported: false,
+      drainStale: false,
     },
     thread,
     snapshot: { snapshotSequence: 42 } as OrchestrationShellSnapshot,

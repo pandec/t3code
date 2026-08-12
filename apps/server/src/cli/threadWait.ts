@@ -48,6 +48,7 @@ export interface ThreadWaitEvaluation {
   readonly outcome: ThreadWaitOutcome | null;
   readonly adoptionTimedOut: boolean;
   readonly drainUnsupported: boolean;
+  readonly drainStale: boolean;
 }
 
 export interface EvaluateThreadWaitInput {
@@ -70,6 +71,7 @@ const pendingOrTimeout = (
   outcome: deadlineReached ? "timeout" : null,
   adoptionTimedOut: options?.adoptionTimedOut ?? false,
   drainUnsupported: options?.drainUnsupported ?? false,
+  drainStale: false,
 });
 
 const terminal = (
@@ -77,12 +79,14 @@ const terminal = (
   options?: {
     readonly adoptionTimedOut?: boolean;
     readonly drainUnsupported?: boolean;
+    readonly drainStale?: boolean;
   },
 ): ThreadWaitEvaluation => ({
   status: "terminal",
   outcome,
   adoptionTimedOut: options?.adoptionTimedOut ?? false,
   drainUnsupported: options?.drainUnsupported ?? false,
+  drainStale: options?.drainStale ?? false,
 });
 
 const turnOutcome = (
@@ -96,6 +100,26 @@ const drainPending = (thread: OrchestrationThreadShell, drain: ThreadWaitDrainMo
   if (drain === null || thread.backgroundLiveness === undefined) return false;
   if (drain === "all") return thread.backgroundLiveness !== null;
   return thread.backgroundLiveness === "working";
+};
+
+/**
+ * Background liveness is best-effort in-memory server state; a lost terminal
+ * event can pin `"working"` forever and burn the wait to `timeout`. Real
+ * background agent work keeps producing activities (tool events, context
+ * updates), which advance `thread.updatedAt` — so when the turn has settled
+ * and only the drain keeps the wait pending, a frozen `updatedAt` marks the
+ * liveness as stale and the wait returns the settled outcome instead.
+ * Restricted to `"working"`: monitoring watch loops can legitimately be
+ * quiet for long stretches.
+ */
+export const THREAD_WAIT_DRAIN_STALE_MS = 3 * 60_000;
+
+const drainLooksStale = (thread: OrchestrationThreadShell, now: string): boolean => {
+  if (thread.backgroundLiveness !== "working") return false;
+  const updatedAt = Date.parse(thread.updatedAt);
+  const nowMs = Date.parse(now);
+  if (Number.isNaN(updatedAt) || Number.isNaN(nowMs)) return false;
+  return nowMs - updatedAt >= THREAD_WAIT_DRAIN_STALE_MS;
 };
 
 const sessionErrorIsFresh = (thread: OrchestrationThreadShell): boolean => {
@@ -162,6 +186,9 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   }
 
   if (drainPending(thread, input.options.drain)) {
+    if (drainLooksStale(thread, input.now)) {
+      return terminal(settledOutcome, { adoptionTimedOut, drainUnsupported, drainStale: true });
+    }
     return pendingOrTimeout(input.deadlineReached, { adoptionTimedOut, drainUnsupported });
   }
 

@@ -90,6 +90,7 @@ it("waits for the requested projection watermark even when the shell looks idle"
     outcome: null,
     adoptionTimedOut: false,
     drainUnsupported: false,
+    drainStale: false,
   });
 });
 
@@ -276,6 +277,45 @@ it("treats monitoring as drained for agents but not for all", () => {
     "completed",
   );
   assert.strictEqual(evaluate({ thread: monitoring, options: { drain: "all" } }).status, "pending");
+});
+
+it("returns the settled outcome with drainStale when working liveness is frozen", () => {
+  // updatedAt frozen well past the staleness threshold: nothing is actually
+  // running, the registry entry is stale (e.g. leaked workflow member rows).
+  const stale = threadWith({
+    backgroundLiveness: "working",
+    updatedAt: "2026-08-08T11:56:00.000Z",
+  });
+
+  const result = evaluate({ thread: stale, options: { drain: "agents" } });
+  assert.strictEqual(result.outcome, "completed");
+  assert.isTrue(result.drainStale);
+
+  const drainAll = evaluate({ thread: stale, options: { drain: "all" } });
+  assert.strictEqual(drainAll.outcome, "completed");
+  assert.isTrue(drainAll.drainStale);
+});
+
+it("keeps draining while thread activity advances updatedAt", () => {
+  const active = threadWith({
+    backgroundLiveness: "working",
+    updatedAt: "2026-08-08T11:59:55.000Z",
+  });
+
+  const result = evaluate({ thread: active, options: { drain: "agents" } });
+  assert.strictEqual(result.status, "pending");
+  assert.isFalse(result.drainStale);
+});
+
+it("never treats quiet monitoring liveness as stale", () => {
+  const monitoring = threadWith({
+    backgroundLiveness: "monitoring",
+    updatedAt: "2026-08-08T10:00:00.000Z",
+  });
+
+  const result = evaluate({ thread: monitoring, options: { drain: "all" } });
+  assert.strictEqual(result.status, "pending");
+  assert.isFalse(result.drainStale);
 });
 
 it("reports drain as unsupported when an old server omits liveness", () => {
