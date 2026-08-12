@@ -158,6 +158,11 @@ bounded and honest:
 
 - Background liveness is in-memory server state and resets when the server restarts.
 - A lost native `task.completed` event can leave liveness at `"working"`; keep a finite `--timeout`.
+  As a self-healing backstop, when the turn has settled and only the drain keeps the wait pending,
+  a thread whose `updatedAt` has been frozen for about three minutes is treated as stale: the wait
+  returns the settled outcome with `drainStale: true` (real background work keeps producing
+  activities, which advance `updatedAt`). Quiet `"monitoring"` liveness is exempt — watch loops can
+  legitimately be silent for long stretches, so `--drain=all` keeps waiting on them.
 - Detached external processes are invisible to the server and cannot be drained.
 - Older servers omit the field; the wait completes and JSON reports `drainUnsupported: true`.
 
@@ -180,7 +185,8 @@ Terminal outcomes use these exit codes:
 
 `--exit-zero` collapses observed terminal outcomes 2–6 to exit code 0; it does not hide transport,
 authentication, or parsing failures. JSON extends the normal thread summary with `outcome`, `waited`,
-`waitedMs`, `observedSequence`, `adoptionTimedOut`, `drainUnsupported`, `backgroundLiveness`, and the
+`waitedMs`, `observedSequence`, `adoptionTimedOut`, `drainUnsupported`, `drainStale`,
+`backgroundLiveness`, and the
 latest turn timestamps when available. A timeout retains the last observed thread state and background
 liveness so callers can distinguish active work from stale or wedged state.
 
