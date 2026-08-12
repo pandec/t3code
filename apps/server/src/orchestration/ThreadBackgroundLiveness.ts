@@ -46,8 +46,9 @@ export class ThreadBackgroundLivenessService extends Context.Service<
   {
     /**
      * Feed one task lifecycle transition. taskType may be absent on
-     * synthesized rows (workflow members, Codex children) — those count as
-     * agents. agentId marks a task launched from inside a subagent: its
+     * synthesized rows (workflow members, Codex children); untyped rows
+     * count as agents, except workflow member slots (`:wf:` taskIds), which
+     * are excluded entirely. agentId marks a task launched from inside a subagent: its
      * internal shells are covered by the owning agent's liveness, but a
      * NESTED AGENT (agentId + agent-flavored taskType) still counts — it
      * can outlive its parent and must keep the thread Working.
@@ -103,6 +104,18 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
 
   return {
     recordTaskLiveness: (input) => {
+      // Workflow member slots (`<coordinatorTaskId>:wf:<index>`) are
+      // synthesized from the coordinator's workflow_progress array: no
+      // taskType, no reliable terminal transition (errored or vanished
+      // members never get one, and a trailing status-less progress row can
+      // land after a completed row and re-add the slot). The coordinator's
+      // own local_workflow task carries the real lifecycle, so member rows
+      // must never enter the registry — mirrors the client-runtime `:wf:`
+      // guard in subagentRuntime's kindFromPayload.
+      if (input.taskId.includes(":wf:")) {
+        drop(input.threadId, input.taskId);
+        return;
+      }
       const taskType = input.taskType;
       if (taskType !== undefined && INERT_TASK_TYPES.has(taskType)) {
         drop(input.threadId, input.taskId);

@@ -147,6 +147,64 @@ describe("ThreadBackgroundLiveness", () => {
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
   });
 
+  it("workflow member slots never pin liveness; the coordinator lifecycle rules", () => {
+    const liveness = ThreadBackgroundLiveness.make();
+    const threadId = "t-live-wf-members";
+    const coordinator = "task-coord";
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: coordinator,
+      taskType: "local_workflow",
+      status: undefined,
+      kind: "started",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+    // Member rows as emitted on the wire: taskId `<coordinator>:wf:<index>`,
+    // no taskType, no agentId, parentAgentId only in the payload.
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: `${coordinator}:wf:0`,
+      taskType: undefined,
+      status: "running",
+      kind: "progress",
+    });
+    // A member that errors or vanishes from workflow_progress never gets a
+    // terminal row at all.
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: `${coordinator}:wf:1`,
+      taskType: undefined,
+      status: "running",
+      kind: "progress",
+    });
+    // The production pattern: a completed row followed by a status-less
+    // progress row for the same member (fingerprint filter emits separate
+    // rows per changed field), which used to re-add the slot as live.
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: `${coordinator}:wf:0`,
+      taskType: undefined,
+      status: "completed",
+      kind: "progress",
+    });
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: `${coordinator}:wf:0`,
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: coordinator,
+      taskType: "local_workflow",
+      status: "completed",
+      kind: "completed",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
+  });
+
   it("plan tasks are inert; clear removes everything; instances are isolated", () => {
     const a = ThreadBackgroundLiveness.make();
     const b = ThreadBackgroundLiveness.make();
