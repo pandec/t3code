@@ -88,7 +88,7 @@ describe("ThreadBackgroundLiveness", () => {
     const threadId = "t-live-3";
     liveness.recordTaskLiveness({
       threadId,
-      taskId: "wf:1",
+      taskId: "codex-child-1",
       taskType: undefined,
       status: "running",
       kind: "progress",
@@ -96,7 +96,7 @@ describe("ThreadBackgroundLiveness", () => {
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
     liveness.recordTaskLiveness({
       threadId,
-      taskId: "wf:1",
+      taskId: "codex-child-1",
       taskType: undefined,
       status: "idle",
       kind: "updated",
@@ -143,6 +143,40 @@ describe("ThreadBackgroundLiveness", () => {
       status: "running",
       kind: "progress",
       agentId: "owner",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
+  });
+
+  it("a workflow member row alone never creates liveness state", () => {
+    const liveness = ThreadBackgroundLiveness.make();
+    liveness.recordTaskLiveness({
+      threadId: "t-wf-orphan",
+      taskId: "coord:wf:0",
+      taskType: undefined,
+      status: "running",
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness("t-wf-orphan")).toBeNull();
+  });
+
+  it("only the `:wf:<index>` suffix shape is excluded, not any `:wf:` substring", () => {
+    const liveness = ThreadBackgroundLiveness.make();
+    const threadId = "t-wf-shape";
+    // A provider taskId that merely contains the literal is a real task.
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: "deploy:wf:cleanup",
+      taskType: undefined,
+      status: "running",
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+    liveness.recordTaskLiveness({
+      threadId,
+      taskId: "deploy:wf:cleanup",
+      taskType: undefined,
+      status: "completed",
+      kind: "completed",
     });
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
   });

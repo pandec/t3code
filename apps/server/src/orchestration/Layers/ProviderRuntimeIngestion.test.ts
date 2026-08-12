@@ -207,7 +207,8 @@ describe("ProviderRuntimeIngestion", () => {
     | OrchestrationEngineService
     | ProviderRuntimeIngestionService
     | ProjectionSnapshotQuery
-    | ProviderInstanceHealth,
+    | ProviderInstanceHealth
+    | ThreadBackgroundLiveness.ThreadBackgroundLivenessService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -363,6 +364,12 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    const backgroundLiveness = await runtime.runPromise(
+      Effect.service(ThreadBackgroundLiveness.ThreadBackgroundLivenessService),
+    );
+    const getThreadBackgroundLiveness = (targetThreadId: ThreadId) =>
+      backgroundLiveness.getThreadBackgroundLiveness(targetThreadId);
+
     const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
     const getRateLimitState = (targetInstanceId: ProviderInstanceId) =>
       Effect.runPromise(providerInstanceHealth.getRateLimitState(targetInstanceId));
@@ -378,6 +385,7 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
       getRateLimitState,
       listUsageSnapshots,
+      getThreadBackgroundLiveness,
     };
   }
 
@@ -3659,6 +3667,73 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(activity?.summary).toBe("Context compacted");
     expect(activity?.tone).toBe("info");
+  });
+
+  it("excludes synthesized workflow member rows from background liveness", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = asThreadId("thread-1");
+
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-wf-coord-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId,
+      turnId: asTurnId("turn-wf-1"),
+      payload: {
+        taskId: "wf-coord-1",
+        taskType: "local_workflow",
+        description: "Workflow run",
+      },
+    });
+    // Member rows as synthesized on the wire: `<coordinator>:wf:<index>`
+    // taskId, parentAgentId, no taskType — including the production shape
+    // where a status-less row trails the member's completed row.
+    harness.emit({
+      type: "task.progress",
+      eventId: asEventId("evt-wf-member-running"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId,
+      turnId: asTurnId("turn-wf-1"),
+      payload: {
+        taskId: "wf-coord-1:wf:0",
+        description: "member 0",
+        status: "running",
+        parentAgentId: "wf-coord-1",
+      },
+    });
+    harness.emit({
+      type: "task.progress",
+      eventId: asEventId("evt-wf-member-trailing"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId,
+      turnId: asTurnId("turn-wf-1"),
+      payload: {
+        taskId: "wf-coord-1:wf:0",
+        description: "member 0",
+        parentAgentId: "wf-coord-1",
+      },
+    });
+    await harness.drain();
+    expect(harness.getThreadBackgroundLiveness(threadId)).toBe("working");
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-wf-coord-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId,
+      turnId: asTurnId("turn-wf-1"),
+      payload: {
+        taskId: "wf-coord-1",
+        status: "completed",
+      },
+    });
+    await harness.drain();
+    expect(harness.getThreadBackgroundLiveness(threadId)).toBeNull();
   });
 
   it("projects Codex task lifecycle chunks into thread activities", async () => {
