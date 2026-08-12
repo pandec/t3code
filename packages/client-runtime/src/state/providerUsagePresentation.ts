@@ -105,13 +105,26 @@ export function oldestProviderUsageObservedAt(
 
 /**
  * Whether opening a usage surface should re-read. Keyed on the oldest account
- * for the same reason: a fresh sibling must not keep a lagging account stale.
- * With nothing listed there is nothing to compare, so the read goes ahead.
+ * for the same reason freshness is: a fresh sibling must not keep a lagging
+ * account stale. With nothing listed there is nothing to compare, so the read
+ * goes ahead.
+ *
+ * `lastRefreshStartedAtMs` (0 = never asked here) caps the cadence at one probe
+ * per window whatever the accounts say. An account that never reports — expired
+ * auth, a probe that always fails — stays `null` forever, and without this the
+ * gate would spawn a probe per account on every single open.
  */
 export function shouldRefreshProviderUsageOnOpen(
   accounts: ReadonlyArray<{ readonly observedAt: number | null }>,
   nowMs: number,
+  lastRefreshStartedAtMs = 0,
 ): boolean {
+  if (
+    lastRefreshStartedAtMs !== 0 &&
+    nowMs - lastRefreshStartedAtMs < PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS
+  ) {
+    return false;
+  }
   if (accounts.length === 0) return true;
   const oldest = oldestProviderUsageObservedAt(accounts);
   return oldest === null || nowMs - oldest > PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS;

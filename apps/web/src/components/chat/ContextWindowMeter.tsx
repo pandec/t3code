@@ -19,7 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { RefreshCwIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -202,6 +202,9 @@ export function ContextWindowMeter(props: {
   );
   const nowMs = Date.now();
   const panelObservedAt = oldestProviderUsageObservedAt(providerUsageAccounts);
+  // When this popover last asked for a read, so an account that never reports
+  // can't turn every open into another probe of the whole pool.
+  const lastRefreshAskedAtRef = useRef(0);
 
   const usedPercentage = usage ? formatProviderUsagePercent(usage.usedPercentage) : null;
   const normalizedPercentage = Math.max(0, Math.min(100, usage?.usedPercentage ?? 0));
@@ -259,8 +262,13 @@ export function ContextWindowMeter(props: {
         if (
           open &&
           props.onRefreshProviderUsage !== undefined &&
-          shouldRefreshProviderUsageOnOpen(providerUsageAccounts, nowMs)
+          shouldRefreshProviderUsageOnOpen(
+            providerUsageAccounts,
+            nowMs,
+            lastRefreshAskedAtRef.current,
+          )
         ) {
+          lastRefreshAskedAtRef.current = nowMs;
           void props.onRefreshProviderUsage();
         }
       }}
@@ -345,7 +353,10 @@ export function ContextWindowMeter(props: {
                     <button
                       type="button"
                       className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void props.onRefreshProviderUsage?.()}
+                      onClick={() => {
+                        lastRefreshAskedAtRef.current = Date.now();
+                        void props.onRefreshProviderUsage?.();
+                      }}
                       disabled={props.providerUsageRefreshing}
                       aria-label="Refresh provider usage"
                     >

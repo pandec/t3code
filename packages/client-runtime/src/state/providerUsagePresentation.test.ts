@@ -158,4 +158,14 @@ describe("shouldRefreshProviderUsageOnOpen", () => {
   it("reads when there is nothing listed to compare against", () => {
     expect(shouldRefreshProviderUsageOnOpen([], NOW_MS)).toBe(true);
   });
+
+  it("caps the cadence for an account that never reports at all", () => {
+    // Expired auth or a probe that always fails leaves observedAt null forever.
+    // Without the last-attempt cap, every open would probe the whole pool again.
+    const never = [{ observedAt: null }];
+    expect(shouldRefreshProviderUsageOnOpen(never, NOW_MS, NOW_MS - 10_000)).toBe(false);
+    expect(shouldRefreshProviderUsageOnOpen(never, NOW_MS, NOW_MS - 90_000)).toBe(true);
+    // 0 means this surface has never asked, so the first open always reads.
+    expect(shouldRefreshProviderUsageOnOpen(never, NOW_MS, 0)).toBe(true);
+  });
 });

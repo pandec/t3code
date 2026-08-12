@@ -655,8 +655,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (settingsSheetPresentation.isActiveRef.current) return;
     usageSheetPresentation.open();
     // Opening the sheet is the read: refresh a snapshot older than a minute so
-    // it can't show yesterday's quota, exactly as the web popover does.
-    if (shouldRefreshProviderUsageOnOpen(providerUsageAccounts, Date.now())) {
+    // it can't show yesterday's quota, exactly as the web popover does. The
+    // last attempt caps the cadence — an account that never reports would
+    // otherwise re-probe the whole pool on every open.
+    if (
+      shouldRefreshProviderUsageOnOpen(
+        providerUsageAccounts,
+        Date.now(),
+        lastProviderUsageRefreshAtRef.current,
+      )
+    ) {
       handleRefreshProviderUsage();
     }
   }, [
