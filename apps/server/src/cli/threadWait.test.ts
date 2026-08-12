@@ -14,6 +14,7 @@ import {
 import {
   classifyWaitReadFailure,
   evaluateThreadWait,
+  THREAD_WAIT_DRAIN_STALE_MS,
   type ThreadWaitDependencies,
   type ThreadWaitOptions,
   type ThreadWaitOutcome,
@@ -37,6 +38,7 @@ const threadWith = (input: Partial<OrchestrationThreadShell> = {}): Orchestratio
   ({
     id: "thread-1",
     archivedAt: null,
+    updatedAt: NOW,
     latestTurn: completedTurn,
     latestUserMessageAt: completedTurn?.requestedAt ?? null,
     session: null,
@@ -71,6 +73,7 @@ const evaluate = (input?: {
   readonly options?: Partial<ThreadWaitOptions>;
   readonly deadlineReached?: boolean;
   readonly queuedStartObserved?: boolean;
+  readonly updatedAtFrozenMs?: number;
 }) =>
   evaluateThreadWait({
     snapshot: snapshotWith(
@@ -82,6 +85,7 @@ const evaluate = (input?: {
     now: NOW,
     deadlineReached: input?.deadlineReached ?? false,
     queuedStartObserved: input?.queuedStartObserved ?? false,
+    updatedAtFrozenMs: input?.updatedAtFrozenMs ?? 0,
   });
 
 it("waits for the requested projection watermark even when the shell looks idle", () => {
@@ -279,43 +283,46 @@ it("treats monitoring as drained for agents but not for all", () => {
   assert.strictEqual(evaluate({ thread: monitoring, options: { drain: "all" } }).status, "pending");
 });
 
-it("returns the settled outcome with drainStale when working liveness is frozen", () => {
-  // updatedAt frozen well past the staleness threshold: nothing is actually
-  // running, the registry entry is stale (e.g. leaked workflow member rows).
-  const stale = threadWith({
-    backgroundLiveness: "working",
-    updatedAt: "2026-08-08T11:56:00.000Z",
+it("returns the settled outcome with drainStale after observing the freeze threshold", () => {
+  const working = threadWith({ backgroundLiveness: "working" });
+
+  // Exactly at the threshold is stale (pins >= semantics); 1ms short is not.
+  const stale = evaluate({
+    thread: working,
+    options: { drain: "agents" },
+    updatedAtFrozenMs: THREAD_WAIT_DRAIN_STALE_MS,
   });
+  assert.strictEqual(stale.outcome, "completed");
+  assert.isTrue(stale.drainStale);
 
-  const result = evaluate({ thread: stale, options: { drain: "agents" } });
-  assert.strictEqual(result.outcome, "completed");
-  assert.isTrue(result.drainStale);
-
-  const drainAll = evaluate({ thread: stale, options: { drain: "all" } });
-  assert.strictEqual(drainAll.outcome, "completed");
-  assert.isTrue(drainAll.drainStale);
+  const almost = evaluate({
+    thread: working,
+    options: { drain: "agents" },
+    updatedAtFrozenMs: THREAD_WAIT_DRAIN_STALE_MS - 1,
+  });
+  assert.strictEqual(almost.status, "pending");
+  assert.isFalse(almost.drainStale);
 });
 
-it("keeps draining while thread activity advances updatedAt", () => {
-  const active = threadWith({
-    backgroundLiveness: "working",
-    updatedAt: "2026-08-08T11:59:55.000Z",
+it("never declares staleness under --drain=all: working may hide a quiet monitor", () => {
+  const working = threadWith({ backgroundLiveness: "working" });
+  const monitoring = threadWith({ backgroundLiveness: "monitoring" });
+
+  const all = evaluate({
+    thread: working,
+    options: { drain: "all" },
+    updatedAtFrozenMs: THREAD_WAIT_DRAIN_STALE_MS * 10,
   });
+  assert.strictEqual(all.status, "pending");
+  assert.isFalse(all.drainStale);
 
-  const result = evaluate({ thread: active, options: { drain: "agents" } });
-  assert.strictEqual(result.status, "pending");
-  assert.isFalse(result.drainStale);
-});
-
-it("never treats quiet monitoring liveness as stale", () => {
-  const monitoring = threadWith({
-    backgroundLiveness: "monitoring",
-    updatedAt: "2026-08-08T10:00:00.000Z",
+  const quietMonitor = evaluate({
+    thread: monitoring,
+    options: { drain: "all" },
+    updatedAtFrozenMs: THREAD_WAIT_DRAIN_STALE_MS * 10,
   });
-
-  const result = evaluate({ thread: monitoring, options: { drain: "all" } });
-  assert.strictEqual(result.status, "pending");
-  assert.isFalse(result.drainStale);
+  assert.strictEqual(quietMonitor.status, "pending");
+  assert.isFalse(quietMonitor.drainStale);
 });
 
 it("reports drain as unsupported when an old server omits liveness", () => {
@@ -568,6 +575,52 @@ it.effect("probes the process after three failures and reports an unknown outcom
 
     assert.instanceOf(error, CliOrchestrationWaitOutcomeUnknownError);
     assert.strictEqual(probes, 1);
+  }),
+);
+
+it.effect("declares drainStale only after observing the freeze across polls", () =>
+  Effect.gen(function* () {
+    // Same snapshot (same updatedAt) on every read: the wait itself must
+    // observe the 3-minute freeze before self-healing — never at t=0.
+    const thread = threadWith({ backgroundLiveness: "working" });
+    const fiber = yield* waitForThread(
+      waitInput(thread, { drain: "agents" }),
+      dependencies(() => Effect.succeed(snapshotWith(thread))),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+
+    for (let index = 0; index < 100; index += 1) {
+      yield* TestClock.adjust(Duration.seconds(2));
+    }
+    const result = yield* Fiber.join(fiber);
+
+    assert.strictEqual(result.evaluation.outcome, "completed");
+    assert.isTrue(result.evaluation.drainStale);
+    assert.isAtLeast(result.waitedMs, THREAD_WAIT_DRAIN_STALE_MS);
+  }),
+);
+
+it.effect("advancing updatedAt resets the freeze anchor and defers to timeout", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const withUpdatedAt = (iso: string) =>
+      threadWith({ backgroundLiveness: "working", updatedAt: iso });
+    const fiber = yield* waitForThread(
+      waitInput(withUpdatedAt(NOW), { drain: "agents", timeoutMs: 240_000 }),
+      dependencies(() => {
+        reads += 1;
+        // Every read reports fresh thread activity, so the observed freeze
+        // never reaches the threshold and the deadline wins.
+        return Effect.succeed(snapshotWith(withUpdatedAt(`${NOW}-${reads}`)));
+      }),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+
+    for (let index = 0; index < 125; index += 1) {
+      yield* TestClock.adjust(Duration.seconds(2));
+    }
+    const result = yield* Fiber.join(fiber);
+
+    assert.strictEqual(result.evaluation.outcome, "timeout");
+    assert.isFalse(result.evaluation.drainStale);
   }),
 );
 

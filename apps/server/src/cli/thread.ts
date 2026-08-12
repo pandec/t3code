@@ -70,6 +70,7 @@ import {
 } from "./session.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
 import {
+  THREAD_WAIT_DRAIN_STALE_MS,
   type ThreadWaitDrainMode,
   type WaitForThreadResult,
   threadWaitExitCode,
@@ -1125,7 +1126,7 @@ const threadWaitCommand = Command.make("wait", {
             ? jsonOutput(summary)
             : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).${
                 summary.drainStale
-                  ? " Background liveness looked stale (no thread activity while drain-pending); returned the settled outcome."
+                  ? ` Drain gave up: no thread activity for ${Math.round(THREAD_WAIT_DRAIN_STALE_MS / 60_000)} minutes, so the "working" status looks stale. Verify background results if you depend on them.`
                   : ""
               }`,
         );
