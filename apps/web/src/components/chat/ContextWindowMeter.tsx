@@ -7,6 +7,14 @@ import {
   type ProviderUsageStatus,
   type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
+import {
+  describeProviderUsageWindowValue,
+  formatProviderUsageAge,
+  formatProviderUsagePercent,
+  formatProviderUsageResetTime,
+  isProviderUsageSnapshotStale,
+  providerUsageBarPercent,
+} from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
@@ -42,34 +50,6 @@ const QUOTA_TEXT_CLASS: Record<ProviderUsageStatus, string> = {
   warning: "text-warning-foreground",
   critical: "text-destructive",
 };
-
-function formatPercentage(value: number | null): string | null {
-  if (value === null || !Number.isFinite(value)) {
-    return null;
-  }
-  if (value < 10) {
-    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-  }
-  return `${Math.round(value)}%`;
-}
-
-function meterPercentage(window: ProviderUsageWindow | null): number {
-  if (window === null) return 0;
-  if (window.usedPercent === null) return window.status === "ok" ? 0 : 100;
-  return Math.max(0, Math.min(100, window.usedPercent));
-}
-
-function formatResetTime(resetsAt: number | null, nowMs: number): string | null {
-  if (resetsAt === null) return null;
-  const resetMs = resetsAt * 1_000;
-  if (!Number.isFinite(resetMs) || resetMs <= nowMs) return null;
-  const withinDay = resetMs - nowMs < 24 * 60 * 60 * 1_000;
-  return new Intl.DateTimeFormat(undefined, {
-    ...(withinDay ? {} : { weekday: "short" }),
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(resetMs));
-}
 
 function MeterRing(props: {
   readonly radius: number;
@@ -120,16 +100,22 @@ function MeterPie(props: { readonly percentage: number; readonly color: string }
 
 function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
   const { window, nowMs } = props;
-  const percent = formatPercentage(window.usedPercent);
-  const resetTime = formatResetTime(window.resetsAt, nowMs);
+  const resetTime = formatProviderUsageResetTime(window.resetsAt, nowMs);
   const barColor = QUOTA_RING_COLOR[window.status];
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] text-muted-foreground/80">{window.label}</span>
-        <span className={cn("text-[11px] tabular-nums", QUOTA_TEXT_CLASS[window.status])}>
-          {percent ?? (window.status === "critical" ? "limit reached" : "limit warning")}
+      {/* Label and reset share a line so an account costs two lines per window
+          rather than three — the popover has to hold every pooled account. */}
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="min-w-0 truncate text-[11px] text-muted-foreground/80">
+          {window.label}
+          {resetTime ? (
+            <span className="text-muted-foreground/55"> · resets {resetTime}</span>
+          ) : null}
+        </span>
+        <span className={cn("shrink-0 text-[11px] tabular-nums", QUOTA_TEXT_CLASS[window.status])}>
+          {describeProviderUsageWindowValue(window)}
         </span>
       </div>
       <div
@@ -149,11 +135,6 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
           />
         ) : null}
       </div>
-      {resetTime ? (
-        <div className="text-right text-[11px] tabular-nums text-muted-foreground/60">
-          resets {resetTime}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -173,16 +154,6 @@ export interface ProviderUsageAccountRow {
   readonly observedAt: number | null;
   /** Secondary metadata line, e.g. a gateway account's tier and cooldown. */
   readonly detail?: string | null;
-}
-
-function formatRelativeAge(observedAt: number | null, nowMs: number): string {
-  if (observedAt === null) return "not updated yet";
-  const ageMs = Math.max(0, nowMs - observedAt);
-  if (ageMs < 60_000) return "updated just now";
-  const minutes = Math.floor(ageMs / 60_000);
-  if (minutes < 60) return `updated ${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `updated ${hours}h ago`;
 }
 
 export function ContextWindowMeter(props: {
@@ -236,7 +207,7 @@ export function ContextWindowMeter(props: {
     null,
   );
 
-  const usedPercentage = usage ? formatPercentage(usage.usedPercentage) : null;
+  const usedPercentage = usage ? formatProviderUsagePercent(usage.usedPercentage) : null;
   const normalizedPercentage = Math.max(0, Math.min(100, usage?.usedPercentage ?? 0));
   const totalProcessedTokens = usage?.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
@@ -252,11 +223,13 @@ export function ContextWindowMeter(props: {
   // Fable is excluded: its own sub-ring carries that signal.
   const quotaStatus = providerUsageRingStatus(providerUsage, fableUsage?.id ?? null);
   const quotaColor = QUOTA_RING_COLOR[quotaStatus];
-  const quotaPercentage = meterPercentage(quotaWindow);
-  const quotaPercentLabel = quotaWindow ? formatPercentage(quotaWindow.usedPercent) : null;
-  const fablePercentage = meterPercentage(fableUsage);
+  const quotaPercentage = providerUsageBarPercent(quotaWindow);
+  const quotaPercentLabel = quotaWindow
+    ? formatProviderUsagePercent(quotaWindow.usedPercent)
+    : null;
+  const fablePercentage = providerUsageBarPercent(fableUsage);
   const fableAriaLabel = fableUsage
-    ? `Weekly Fable${props.fableAccountName ? ` on ${props.fableAccountName}` : ""} at ${formatPercentage(fableUsage.usedPercent) ?? (fableUsage.status === "critical" ? "limit reached" : "limit warning")}`
+    ? `Weekly Fable${props.fableAccountName ? ` on ${props.fableAccountName}` : ""} at ${describeProviderUsageWindowValue(fableUsage)}`
     : null;
   const quotaAriaLabel = quotaWindow
     ? quotaPercentLabel
@@ -342,26 +315,27 @@ export function ContextWindowMeter(props: {
         side="top"
         align="end"
         viewportClassName="p-0"
-        className="w-64 max-w-none text-left whitespace-normal"
+        className="w-80 max-w-none text-left whitespace-normal"
       >
-        <div className="flex flex-col gap-3 p-[var(--floating-content-inset)]">
-          {providerUsage && providerUsageAccounts.length === 0 ? (
-            <div className="flex flex-col gap-2">
-              <div className="font-medium text-muted-foreground text-xs">
-                {providerUsage.providerLabel} Usage
-              </div>
-              {providerUsage.windows.map((window) => (
-                <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
-              ))}
-            </div>
-          ) : null}
-
+        {/* The popover viewport clips instead of scrolling, so the column bounds
+            itself against the room the positioner reports and scrolls the usage
+            list internally. A pooled gateway lists every account it can serve,
+            which easily outgrows the screen — the header and the context window
+            below have to stay reachable regardless. */}
+        <div className="flex max-h-[min(70vh,var(--available-height,70vh))] flex-col gap-3 p-[var(--floating-content-inset)]">
           {providerUsageAccounts.length > 0 ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="font-medium text-muted-foreground text-xs">
-                  {props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} accounts
-                </div>
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <div className="font-medium text-muted-foreground text-xs">
+                {props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} accounts
+              </div>
+              <div className="flex items-center gap-2">
+                {/* One freshness line for the whole read replaces the identical
+                    per-account timestamps; a lagging account keeps its own. */}
+                <span className="text-[10px] tabular-nums text-muted-foreground/60">
+                  {props.providerUsageRefreshing
+                    ? "updating…"
+                    : formatProviderUsageAge(newestObservedAt, nowMs)}
+                </span>
                 {props.onRefreshProviderUsage ? (
                   <button
                     type="button"
@@ -376,17 +350,33 @@ export function ContextWindowMeter(props: {
                   </button>
                 ) : null}
               </div>
-              {fableUsage && props.fableAccountName ? (
-                <div className="flex items-center justify-between gap-3 text-[11px]">
-                  <span className="text-muted-foreground/70">Fable next</span>
-                  <span className="truncate font-medium text-muted-foreground/90">
-                    {props.fableAccountName}
-                  </span>
+            </div>
+          ) : null}
+
+          {providerUsageAccounts.length > 0 && fableUsage && props.fableAccountName ? (
+            <div className="flex shrink-0 items-center justify-between gap-3 text-[11px]">
+              <span className="text-muted-foreground/70">Fable next</span>
+              <span className="truncate font-medium text-muted-foreground/90">
+                {props.fableAccountName}
+              </span>
+            </div>
+          ) : null}
+
+          {providerUsage || providerUsageAccounts.length > 0 ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain">
+              {providerUsage && providerUsageAccounts.length === 0 ? (
+                <div className="flex flex-col gap-2">
+                  <div className="font-medium text-muted-foreground text-xs">
+                    {providerUsage.providerLabel} Usage
+                  </div>
+                  {providerUsage.windows.map((window) => (
+                    <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
+                  ))}
                 </div>
               ) : null}
+
               {providerUsageAccounts.map((account) => {
-                const stale =
-                  account.observedAt === null || nowMs - account.observedAt > 5 * 60_000;
+                const stale = isProviderUsageSnapshotStale(account.observedAt, nowMs);
                 return (
                   <div
                     key={account.accountKey ?? account.instanceId}
@@ -405,21 +395,21 @@ export function ContextWindowMeter(props: {
                           ) : null}
                         </span>
                         {account.email ? (
-                          <span className="max-w-44 truncate text-left text-[11px] text-muted-foreground/60">
+                          <span className="max-w-52 truncate text-left text-[11px] text-muted-foreground/60">
                             {formatProviderUsageEmail(account.email, props.maskProviderUsageEmails)}
                           </span>
                         ) : null}
                         {account.detail ? (
-                          <span className="max-w-44 truncate text-left text-[11px] text-muted-foreground/60">
+                          <span className="max-w-52 truncate text-left text-[11px] text-muted-foreground/60">
                             {account.detail}
                           </span>
                         ) : null}
                       </div>
-                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
-                        {props.providerUsageRefreshing
-                          ? "updating…"
-                          : formatRelativeAge(account.observedAt, nowMs)}
-                      </span>
+                      {stale && !props.providerUsageRefreshing ? (
+                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                          {formatProviderUsageAge(account.observedAt, nowMs)}
+                        </span>
+                      ) : null}
                     </div>
                     {account.usage ? (
                       account.usage.windows.map((window) => (
@@ -439,11 +429,11 @@ export function ContextWindowMeter(props: {
           ) : null}
 
           {(providerUsage || providerUsageAccounts.length > 0) && usage ? (
-            <div className="h-px w-full bg-border/60" />
+            <div className="h-px w-full shrink-0 bg-border/60" />
           ) : null}
 
           {usage ? (
-            <div className="flex flex-col gap-2">
+            <div className="flex shrink-0 flex-col gap-2">
               <div className="flex items-center justify-between gap-3">
                 <div className="font-medium text-muted-foreground text-xs">Context Window</div>
                 {usage.maxTokens !== null && usedPercentage !== null ? (

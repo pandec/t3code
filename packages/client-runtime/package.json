@@ -95,6 +95,10 @@
       "types": "./src/state/providerUsage.ts",
       "default": "./src/state/providerUsage.ts"
     },
+    "./state/provider-usage-presentation": {
+      "types": "./src/state/providerUsagePresentation.ts",
+      "default": "./src/state/providerUsagePresentation.ts"
+    },
     "./state/project-accent-colors": {
       "types": "./src/state/projectAccentColors.ts",
       "default": "./src/state/projectAccentColors.ts"

@@ -86,10 +86,8 @@ import { cn } from "../../lib/cn";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import {
   canStartProviderUsageRefresh,
-  PROVIDER_USAGE_REFRESH_ACTION_ID,
-  providerUsageAccountMenuActions,
   providerUsageTriggerLabel,
-} from "../../lib/providerUsageMenu";
+} from "../../lib/providerUsagePill";
 import { flushComposerDrafts } from "../../state/use-composer-drafts";
 import type { SendMessageOptions } from "../../state/use-thread-composer-state";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
@@ -111,6 +109,7 @@ import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { threadComposerSendLabel } from "./threadComposerSendLabel";
 import { buildThreadSettingsMenu } from "./thread-settings-menu";
+import { ProviderUsageSheet } from "./ProviderUsageSheet";
 import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 import { VoiceRecorderControl } from "./VoiceRecorderControl";
@@ -342,6 +341,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     editorRef: inputRef,
     isEditorFocused: isFocused,
   });
+  // The same keyboard/focus choreography every composer sheet needs: the iOS
+  // keyboard window would otherwise cover the lower half of a bottom sheet.
+  const usageSheetPresentation = useThreadSettingsSheetPresentation({
+    editorRef: inputRef,
+    isEditorFocused: isFocused,
+  });
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -350,7 +355,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   // Opening and closing count as active so the composer stays expanded while
   // focus moves between its native editor and the settings modal.
-  const isExpanded = isFocused || settingsSheetPresentation.isActive;
+  const isExpanded =
+    isFocused || settingsSheetPresentation.isActive || usageSheetPresentation.isActive;
   const canSend = hasContent;
 
   // Notify the parent from the derived value, not focus events: the parent
@@ -577,7 +583,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
   ]);
-  const fableMenuUsage = useMemo(
+  const fableUsageSelection = useMemo(
     () =>
       resolveProviderUsageFableRing({
         upstreamProvider: activeUpstreamProvider,
@@ -587,14 +593,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [activeGatewayPool, activeUpstreamProvider, providerUsage],
   );
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
-  const providerUsageActions = useMemo(
-    () =>
-      providerUsageAccountMenuActions(providerUsageAccounts, providerUsageNowMs, {
-        refreshing: isRefreshingProviderUsage,
-        fableUsage: fableMenuUsage,
-      }),
-    [fableMenuUsage, isRefreshingProviderUsage, providerUsageAccounts, providerUsageNowMs],
-  );
   const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
     reportFailure: false,
   });
@@ -615,38 +613,56 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
     [],
   );
-  const handleProviderUsageMenuAction = useCallback(
-    (actionId: string) => {
-      if (actionId !== PROVIDER_USAGE_REFRESH_ACTION_ID) return;
-      const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
-      if (instanceIds.length === 0) return;
-      // Same 5s debounce the web meter uses: each refresh can spawn a CLI
-      // probe per account, so a double-tap must not double-spawn.
-      if (!canStartProviderUsageRefresh(lastProviderUsageRefreshAtRef.current, Date.now())) {
-        return;
-      }
-      lastProviderUsageRefreshAtRef.current = Date.now();
-      providerUsageRefreshTokenRef.current += 1;
-      const token = providerUsageRefreshTokenRef.current;
-      setIsRefreshingProviderUsage(true);
-      void (async () => {
-        try {
-          await refreshProviderUsageCommand({
-            environmentId: props.environmentId,
-            input: { instanceIds },
-          });
-          if (providerUsageRefreshTokenRef.current !== token) return;
-          providerUsageQuery.refresh();
-        } finally {
-          if (providerUsageRefreshTokenRef.current === token) {
-            setIsRefreshingProviderUsage(false);
-          }
+  const handleRefreshProviderUsage = useCallback(() => {
+    const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
+    if (instanceIds.length === 0) return;
+    // Same 5s debounce the web meter uses: each refresh can spawn a CLI
+    // probe per account, so a double-tap must not double-spawn.
+    if (!canStartProviderUsageRefresh(lastProviderUsageRefreshAtRef.current, Date.now())) {
+      return;
+    }
+    lastProviderUsageRefreshAtRef.current = Date.now();
+    providerUsageRefreshTokenRef.current += 1;
+    const token = providerUsageRefreshTokenRef.current;
+    setIsRefreshingProviderUsage(true);
+    void (async () => {
+      try {
+        await refreshProviderUsageCommand({
+          environmentId: props.environmentId,
+          input: { instanceIds },
+        });
+        if (providerUsageRefreshTokenRef.current !== token) return;
+        providerUsageQuery.refresh();
+      } finally {
+        if (providerUsageRefreshTokenRef.current === token) {
+          setIsRefreshingProviderUsage(false);
         }
-      })();
-    },
-    [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand],
+      }
+    })();
+  }, [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand]);
+  const newestProviderUsageObservedAt = useMemo(
+    () =>
+      providerUsageAccounts.reduce<number | null>(
+        (newest, account) =>
+          account.observedAt !== null && (newest === null || account.observedAt > newest)
+            ? account.observedAt
+            : newest,
+        null,
+      ),
+    [providerUsageAccounts],
   );
-  const providerUsageMenuLabel =
+  const openProviderUsageSheet = useCallback(() => {
+    usageSheetPresentation.open();
+    // Opening the sheet is the read: refresh a snapshot older than a minute so
+    // it can't show yesterday's quota, exactly as the web popover does.
+    if (
+      newestProviderUsageObservedAt === null ||
+      Date.now() - newestProviderUsageObservedAt > 60_000
+    ) {
+      handleRefreshProviderUsage();
+    }
+  }, [handleRefreshProviderUsage, newestProviderUsageObservedAt, usageSheetPresentation]);
+  const providerUsageLabel =
     providerUsage?.providerLabel ??
     providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
     "Provider";
@@ -656,7 +672,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // Fable has its own row, so it must not repaint the primary dot.
   const providerUsageStatus = providerUsageRingStatus(
     providerUsage,
-    fableMenuUsage?.window.id ?? null,
+    fableUsageSelection?.window.id ?? null,
   );
   const providerSkills = props.providerSkills;
 
@@ -1277,31 +1293,23 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   />
                 )}
                 {providerUsageAccounts.length > 0 ? (
-                  <ControlPillMenu
-                    accessibilityLabel={`${providerUsageMenuLabel} usage`}
-                    actions={providerUsageActions}
-                    title={`${providerUsageMenuLabel} usage`}
-                    onPressAction={({ nativeEvent }) =>
-                      handleProviderUsageMenuAction(nativeEvent.event)
+                  <ComposerToolbarTrigger
+                    accessibilityLabel={`${providerUsageLabel} usage`}
+                    iconNode={
+                      <View
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          providerUsageStatus === "critical"
+                            ? "bg-rose-500"
+                            : providerUsageStatus === "warning"
+                              ? "bg-amber-500"
+                              : "bg-neutral-400 dark:bg-neutral-500",
+                        )}
+                      />
                     }
-                  >
-                    <ComposerToolbarTrigger
-                      accessibilityLabel={`${providerUsageMenuLabel} usage`}
-                      iconNode={
-                        <View
-                          className={cn(
-                            "h-2 w-2 rounded-full",
-                            providerUsageStatus === "critical"
-                              ? "bg-rose-500"
-                              : providerUsageStatus === "warning"
-                                ? "bg-amber-500"
-                                : "bg-neutral-400 dark:bg-neutral-500",
-                          )}
-                        />
-                      }
-                      label={providerUsageTriggerLabel(providerUsagePrimaryWindow)}
-                    />
-                  </ControlPillMenu>
+                    label={providerUsageTriggerLabel(providerUsagePrimaryWindow)}
+                    onPress={openProviderUsageSheet}
+                  />
                 ) : null}
                 {showStopAction ? (
                   <ComposerToolbarButton
@@ -1349,6 +1357,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         onUpdateRuntimeMode={props.onUpdateRuntimeMode}
         interactionMode={currentInteractionMode}
         onUpdateInteractionMode={props.onUpdateInteractionMode}
+      />
+
+      <ProviderUsageSheet
+        visible={usageSheetPresentation.isVisible}
+        onClose={usageSheetPresentation.close}
+        onDismissed={usageSheetPresentation.onDismissed}
+        providerLabel={providerUsageLabel}
+        accounts={providerUsageAccounts}
+        fableUsage={fableUsageSelection}
+        nowMs={providerUsageNowMs}
+        refreshing={isRefreshingProviderUsage}
+        onRefresh={handleRefreshProviderUsage}
       />
 
       <ImageViewing
