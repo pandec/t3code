@@ -9,6 +9,7 @@ import {
   isProviderUsageSnapshotStale,
   providerUsageBarPercent,
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
+
 import { useCallback, useEffect, useRef } from "react";
 import { Modal, Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,7 +19,6 @@ import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import type { ProviderUsageSheetAccount } from "../../lib/providerUsagePill";
 import { useThemeColor } from "../../lib/useThemeColor";
-import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
 
 /**
  * Full provider quota for every configured account, as a bottom sheet.
@@ -140,7 +140,12 @@ function AccountCard(props: {
 
 export function ProviderUsageSheet(props: {
   readonly visible: boolean;
-  readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
+  /**
+   * Nothing here is configured, so every exit is "done": the host restores
+   * whatever typing session the pill interrupted rather than treating a
+   * backdrop tap as a reason to leave the keyboard down.
+   */
+  readonly onClose: () => void;
   readonly onDismissed: () => void;
   /** Driver-derived label ("Claude", "Codex") for the sheet title. */
   readonly providerLabel: string;
@@ -150,6 +155,8 @@ export function ProviderUsageSheet(props: {
     readonly window: ProviderUsageWindow;
   } | null;
   readonly nowMs: number;
+  /** Age of the panel as a whole — its oldest account read. */
+  readonly panelObservedAt: number | null;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
   /** The read itself failed, as opposed to succeeding with nothing to show. */
@@ -158,14 +165,6 @@ export function ProviderUsageSheet(props: {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const iconMuted = useThemeColor("--color-icon-muted");
-  const newestObservedAt = props.accounts.reduce<number | null>(
-    (newest, account) =>
-      account.observedAt !== null && (newest === null || account.observedAt > newest)
-        ? account.observedAt
-        : newest,
-    null,
-  );
-
   // Dismissal bookkeeping mirrors ThreadSettingsSheet: RN only emits
   // Modal.onDismiss on iOS, and a host can unmount a presented sheet outright.
   // The presentation hook's transition table makes duplicate reports no-ops.
@@ -197,6 +196,9 @@ export function ProviderUsageSheet(props: {
 
   const title = `${props.providerLabel} usage`;
   const showCurrentBadge = props.accounts.length > 1;
+  const fableResetTime = props.fableUsage
+    ? formatProviderUsageResetTime(props.fableUsage.window.resetsAt, props.nowMs)
+    : null;
 
   return (
     <Modal
@@ -206,13 +208,13 @@ export function ProviderUsageSheet(props: {
       animationType={Platform.OS === "ios" ? "fade" : "none"}
       visible={props.visible}
       onDismiss={notifyDismissed}
-      onRequestClose={() => props.onClose("dismiss")}
+      onRequestClose={() => props.onClose()}
     >
       <View className="flex-1 justify-end">
         <Pressable
           accessibilityLabel={`Close ${title}`}
           className="absolute inset-0 bg-backdrop"
-          onPress={() => props.onClose("dismiss")}
+          onPress={() => props.onClose()}
         />
         <View
           className="overflow-hidden rounded-t-[24px] border border-b-0 border-border bg-sheet"
@@ -223,7 +225,7 @@ export function ProviderUsageSheet(props: {
           <Pressable
             accessibilityLabel={`Close ${title}`}
             accessibilityRole="button"
-            onPress={() => props.onClose("dismiss")}
+            onPress={() => props.onClose()}
             className="items-center pb-1 pt-2.5"
           >
             <View className="h-1 w-9 rounded-full bg-subtle-strong" />
@@ -235,7 +237,7 @@ export function ProviderUsageSheet(props: {
             <Text className="text-2xs text-foreground-tertiary tabular-nums">
               {props.refreshing
                 ? "updating…"
-                : formatProviderUsageAge(newestObservedAt, props.nowMs)}
+                : formatProviderUsageAge(props.panelObservedAt, props.nowMs)}
             </Text>
             <Pressable
               accessibilityLabel="Refresh usage"
@@ -268,6 +270,9 @@ export function ProviderUsageSheet(props: {
                 )}
               >
                 {describeProviderUsageWindowValue(props.fableUsage.window)}
+                {fableResetTime ? (
+                  <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
+                ) : null}
               </Text>
             </View>
           ) : null}

@@ -10,6 +10,22 @@ import type { ProviderUsageWindow } from "./providerUsage.js";
 /** A snapshot older than this is dimmed as stale rather than trusted. */
 export const PROVIDER_USAGE_STALE_AFTER_MS = 5 * 60_000;
 
+/** Opening a usage surface re-reads anything older than this. */
+export const PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS = 60_000;
+
+// Constructing an Intl formatter is expensive and these run once per window
+// per account per render, so both shapes are built once at module scope.
+const RESET_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+const RESET_TIME_WITH_WEEKDAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 /**
  * Percentages read as whole numbers except near zero, where "0%" would hide the
  * difference between untouched and barely-touched quota.
@@ -39,22 +55,19 @@ export function formatProviderUsageResetTime(
   const withinDay = resetMs - nowMs < 24 * 60 * 60 * 1_000;
   // Formatted straight from the epoch value: this package keeps global date
   // construction out of its shared state helpers.
-  return new Intl.DateTimeFormat(undefined, {
-    ...(withinDay ? {} : { weekday: "short" }),
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(resetMs);
+  return (withinDay ? RESET_TIME_FORMATTER : RESET_TIME_WITH_WEEKDAY_FORMATTER).format(resetMs);
 }
 
 /**
  * The window's headline value: its percentage when the provider reports one,
- * otherwise the state its threshold status implies.
+ * otherwise the state its threshold status implies. A window with neither a
+ * number nor a raised status has nothing to report but its own existence.
  */
 export function describeProviderUsageWindowValue(window: ProviderUsageWindow): string {
-  return (
-    formatProviderUsagePercent(window.usedPercent) ??
-    (window.status === "critical" ? "limit reached" : "limit warning")
-  );
+  const percent = formatProviderUsagePercent(window.usedPercent);
+  if (percent !== null) return percent;
+  if (window.status === "critical") return "limit reached";
+  return window.status === "warning" ? "limit warning" : "usage";
 }
 
 /** How long ago the account's snapshot was read. */
@@ -69,6 +82,39 @@ export function formatProviderUsageAge(observedAt: number | null, nowMs: number)
 
 export function isProviderUsageSnapshotStale(observedAt: number | null, nowMs: number): boolean {
   return observedAt === null || nowMs - observedAt > PROVIDER_USAGE_STALE_AFTER_MS;
+}
+
+/**
+ * The age of the whole panel, which is its *oldest* account: one freshness
+ * line stands in for every row, so it must not claim the panel is current on
+ * the strength of the one account that happens to have been read last.
+ * `null` — never read — is older than any timestamp.
+ */
+export function oldestProviderUsageObservedAt(
+  accounts: ReadonlyArray<{ readonly observedAt: number | null }>,
+): number | null {
+  let oldest: number | null = null;
+  for (const account of accounts) {
+    if (account.observedAt === null) return null;
+    if (oldest === null || account.observedAt < oldest) {
+      oldest = account.observedAt;
+    }
+  }
+  return oldest;
+}
+
+/**
+ * Whether opening a usage surface should re-read. Keyed on the oldest account
+ * for the same reason: a fresh sibling must not keep a lagging account stale.
+ * With nothing listed there is nothing to compare, so the read goes ahead.
+ */
+export function shouldRefreshProviderUsageOnOpen(
+  accounts: ReadonlyArray<{ readonly observedAt: number | null }>,
+  nowMs: number,
+): boolean {
+  if (accounts.length === 0) return true;
+  const oldest = oldestProviderUsageObservedAt(accounts);
+  return oldest === null || nowMs - oldest > PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS;
 }
 
 /** Bar fill for a window, including the "no number but not ok" case. */

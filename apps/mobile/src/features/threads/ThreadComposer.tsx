@@ -88,6 +88,10 @@ import {
   canStartProviderUsageRefresh,
   providerUsageTriggerLabel,
 } from "../../lib/providerUsagePill";
+import {
+  oldestProviderUsageObservedAt,
+  shouldRefreshProviderUsageOnOpen,
+} from "@t3tools/client-runtime/state/provider-usage-presentation";
 import { flushComposerDrafts } from "../../state/use-composer-drafts";
 import type { SendMessageOptions } from "../../state/use-thread-composer-state";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
@@ -640,28 +644,34 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }
     })();
   }, [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand]);
-  const newestProviderUsageObservedAt = useMemo(
-    () =>
-      providerUsageAccounts.reduce<number | null>(
-        (newest, account) =>
-          account.observedAt !== null && (newest === null || account.observedAt > newest)
-            ? account.observedAt
-            : newest,
-        null,
-      ),
+  const providerUsagePanelObservedAt = useMemo(
+    () => oldestProviderUsageObservedAt(providerUsageAccounts),
     [providerUsageAccounts],
   );
   const openProviderUsageSheet = useCallback(() => {
+    // Two sibling modals over one composer: a second presentation started while
+    // the first is still settling its keyboard dismissal can strand a sheet
+    // visible with no dismissal callback, leaving its trigger dead.
+    if (settingsSheetPresentation.isActiveRef.current) return;
     usageSheetPresentation.open();
     // Opening the sheet is the read: refresh a snapshot older than a minute so
     // it can't show yesterday's quota, exactly as the web popover does.
-    if (
-      newestProviderUsageObservedAt === null ||
-      Date.now() - newestProviderUsageObservedAt > 60_000
-    ) {
+    if (shouldRefreshProviderUsageOnOpen(providerUsageAccounts, Date.now())) {
       handleRefreshProviderUsage();
     }
-  }, [handleRefreshProviderUsage, newestProviderUsageObservedAt, usageSheetPresentation]);
+  }, [
+    handleRefreshProviderUsage,
+    providerUsageAccounts,
+    settingsSheetPresentation.isActiveRef,
+    usageSheetPresentation,
+  ]);
+  const closeProviderUsageSheet = useCallback(() => {
+    usageSheetPresentation.close("save");
+  }, [usageSheetPresentation]);
+  const openThreadSettingsSheet = useCallback(() => {
+    if (usageSheetPresentation.isActiveRef.current) return;
+    settingsSheetPresentation.open();
+  }, [settingsSheetPresentation, usageSheetPresentation.isActiveRef]);
   const providerUsageLabel =
     providerUsage?.providerLabel ??
     providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
@@ -1289,7 +1299,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     }
                     label={settingsSummaryLabel}
                     maxWidth={320}
-                    onPress={settingsSheetPresentation.open}
+                    onPress={openThreadSettingsSheet}
                   />
                 )}
                 {providerUsageAccounts.length > 0 ? (
@@ -1361,14 +1371,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
       <ProviderUsageSheet
         visible={usageSheetPresentation.isVisible}
-        onClose={usageSheetPresentation.close}
+        // Reading quota is never a reason to end the typing session, so every
+        // close restores focus the way the settings sheet's Save does.
+        onClose={closeProviderUsageSheet}
         onDismissed={usageSheetPresentation.onDismissed}
         providerLabel={providerUsageLabel}
         accounts={providerUsageAccounts}
         fableUsage={fableUsageSelection}
         nowMs={providerUsageNowMs}
+        panelObservedAt={providerUsagePanelObservedAt}
         refreshing={isRefreshingProviderUsage}
         onRefresh={handleRefreshProviderUsage}
+        unavailable={providerUsageQuery.error !== null}
       />
 
       <ImageViewing

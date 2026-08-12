@@ -7,7 +7,9 @@ import {
   formatProviderUsagePercent,
   formatProviderUsageResetTime,
   isProviderUsageSnapshotStale,
+  oldestProviderUsageObservedAt,
   providerUsageBarPercent,
+  shouldRefreshProviderUsageOnOpen,
 } from "./providerUsagePresentation.js";
 
 const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
@@ -49,17 +51,18 @@ describe("formatProviderUsageResetTime", () => {
   });
 
   it("names the weekday once the reset is more than a day out", () => {
+    const farResetMs = NOW_MS + 3 * 24 * 60 * 60 * 1_000;
     const withinDay = formatProviderUsageResetTime(
       Math.floor((NOW_MS + 2 * 60 * 60 * 1_000) / 1_000),
       NOW_MS,
     );
-    const nextWeek = formatProviderUsageResetTime(
-      Math.floor((NOW_MS + 3 * 24 * 60 * 60 * 1_000) / 1_000),
-      NOW_MS,
-    );
-    // Only the far reset leads with a weekday; a same-day reset is clock-only.
-    expect(nextWeek).toMatch(/^[A-Za-z]{3}/);
-    expect(withinDay).not.toMatch(/^[A-Za-z]{3}/);
+    const nextWeek = formatProviderUsageResetTime(Math.floor(farResetMs / 1_000), NOW_MS);
+    // Derived, not hard-coded: the formatter follows the host locale, so an
+    // English weekday assertion would fail everywhere else.
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(farResetMs);
+    // Only the far reset carries a weekday; a same-day reset is clock-only.
+    expect(nextWeek).toContain(weekday);
+    expect(withinDay).not.toContain(weekday);
   });
 });
 
@@ -75,6 +78,14 @@ describe("describeProviderUsageWindowValue", () => {
     expect(
       describeProviderUsageWindowValue(makeWindow({ usedPercent: null, status: "warning" })),
     ).toBe("limit warning");
+  });
+
+  it("does not cry wolf over a numberless window that is doing fine", () => {
+    // Neither a number nor a raised status: the row must not read as a warning
+    // just because the provider withheld a percentage.
+    expect(describeProviderUsageWindowValue(makeWindow({ usedPercent: null, status: "ok" }))).toBe(
+      "usage",
+    );
   });
 });
 
@@ -104,5 +115,47 @@ describe("snapshot freshness", () => {
     expect(isProviderUsageSnapshotStale(null, NOW_MS)).toBe(true);
     expect(isProviderUsageSnapshotStale(NOW_MS - 60_000, NOW_MS)).toBe(false);
     expect(isProviderUsageSnapshotStale(NOW_MS - 6 * 60_000, NOW_MS)).toBe(true);
+  });
+
+  it("ages the panel by its oldest account, not its newest", () => {
+    // One freshness line covers every row, so a just-read sibling must not
+    // vouch for an account that hasn't been read in minutes.
+    const accounts = [{ observedAt: NOW_MS - 10_000 }, { observedAt: NOW_MS - 4 * 60_000 }];
+    expect(oldestProviderUsageObservedAt(accounts)).toBe(NOW_MS - 4 * 60_000);
+    expect(formatProviderUsageAge(oldestProviderUsageObservedAt(accounts), NOW_MS)).toBe(
+      "updated 4m ago",
+    );
+    // A never-read account is older than any timestamp.
+    expect(
+      oldestProviderUsageObservedAt([{ observedAt: NOW_MS }, { observedAt: null }]),
+    ).toBeNull();
+    expect(oldestProviderUsageObservedAt([])).toBeNull();
+  });
+});
+
+describe("shouldRefreshProviderUsageOnOpen", () => {
+  it("re-reads when any listed account has gone a minute without one", () => {
+    // Keyed on the oldest account: opening the panel must refresh the lagging
+    // account even while a sibling was read seconds ago.
+    expect(
+      shouldRefreshProviderUsageOnOpen(
+        [{ observedAt: NOW_MS - 10_000 }, { observedAt: NOW_MS - 4 * 60_000 }],
+        NOW_MS,
+      ),
+    ).toBe(true);
+    expect(shouldRefreshProviderUsageOnOpen([{ observedAt: null }], NOW_MS)).toBe(true);
+  });
+
+  it("leaves a wholly fresh panel alone", () => {
+    expect(
+      shouldRefreshProviderUsageOnOpen(
+        [{ observedAt: NOW_MS - 10_000 }, { observedAt: NOW_MS - 20_000 }],
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+
+  it("reads when there is nothing listed to compare against", () => {
+    expect(shouldRefreshProviderUsageOnOpen([], NOW_MS)).toBe(true);
   });
 });
