@@ -610,7 +610,9 @@ it.effect("advancing updatedAt resets the freeze anchor and defers to timeout", 
         reads += 1;
         // Every read reports fresh thread activity, so the observed freeze
         // never reaches the threshold and the deadline wins.
-        return Effect.succeed(snapshotWith(withUpdatedAt(`${NOW}-${reads}`)));
+        return Effect.succeed(
+          snapshotWith(withUpdatedAt(new Date(Date.parse(NOW) + reads * 1_000).toISOString())),
+        );
       }),
     ).pipe(Effect.forkChild({ startImmediately: true }));
 
