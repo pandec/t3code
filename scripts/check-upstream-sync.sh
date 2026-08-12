@@ -121,6 +121,33 @@ if [ "$upstream_missing_from_dev" -gt 0 ]; then
     sort -rn |
     head -10 |
     awk '{ printf "    %6s  %s\n", $1, $2 }'
+
+  merge_base=$(git merge-base "$ORIGIN_DEV" "$UPSTREAM_REF")
+  overlap_count=$(comm -12 \
+    <(git diff --name-only "$merge_base" "$UPSTREAM_REF" | sort -u) \
+    <(git diff --name-only "$merge_base" "$ORIGIN_DEV" | sort -u) |
+    { grep -c . || true; })
+  echo
+  echo "  ${bold}Fork overlap${reset}: ${overlap_count} file(s) touched by both fork and upstream since the merge base"
+
+  echo
+  echo "  ${bold}Predicted conflicts${reset} ${dim}(git merge-tree; the worktree is untouched)${reset}"
+  merge_status=0
+  merge_output=$(git merge-tree --write-tree --no-messages --name-only "$ORIGIN_DEV" "$UPSTREAM_REF" 2>/dev/null) || merge_status=$?
+  if [ "$merge_status" -eq 0 ]; then
+    echo "    ${green}None — the merge is predicted to apply cleanly.${reset}"
+  elif [ "$merge_status" -eq 1 ]; then
+    conflict_paths=$(printf '%s\n' "$merge_output" | tail -n +2 | sort -u)
+    conflict_count=$(printf '%s\n' "$conflict_paths" | { grep -c . || true; })
+    echo "    ${yellow}${conflict_count}${reset} path(s) predicted to conflict:"
+    printf '%s\n' "$conflict_paths" | sed 's/^/      /'
+    if [ "$conflict_count" -ge 15 ]; then
+      echo
+      echo "    ${yellow}Broad merge${reset} ${dim}— expect a long resolution phase; plan the sync accordingly.${reset}"
+    fi
+  else
+    echo "    ${dim}merge-tree failed (exit ${merge_status}); no prediction available.${reset}"
+  fi
 fi
 
 echo
