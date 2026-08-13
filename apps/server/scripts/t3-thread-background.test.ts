@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics nodeBuiltinImport:off - the probe test needs a real OS process.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeProcess from "node:process";
 import { assert, describe, it } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,7 @@ import {
   foldLiveness,
   formatReports,
   type LiveTask,
+  type ProcessInfo,
   probeSession,
   redactCommand,
   runThreadBackground,
@@ -301,17 +303,18 @@ const createFixtureDatabase = Effect.fn("createThreadBackgroundFixtureDatabase")
     yield* sql`CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, title TEXT NOT NULL)`;
     yield* sql`CREATE TABLE provider_session_runtime (
       thread_id TEXT PRIMARY KEY,
-      resume_cursor_json TEXT
+      resume_cursor_json TEXT,
+      provider_name TEXT
     )`;
 
     yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-live', 'Stuck thread')`;
     yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-quiet', 'Quiet thread')`;
     yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-codex', 'Codex thread')`;
     // A Codex cursor carries no `resume` key, so the session cannot be probed.
-    yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json)
-      VALUES ('t-codex', '{"threadId":"c-1"}')`;
-    yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json)
-      VALUES ('t-live', '{"resume":"session-gone"}')`;
+    yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json, provider_name)
+      VALUES ('t-codex', '{"threadId":"c-1"}', 'codex')`;
+    yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json, provider_name)
+      VALUES ('t-live', '{"resume":"session-gone"}', 'claudeAgent')`;
 
     const activities = [
       [
@@ -495,6 +498,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
 
       assert.equal(reports[0]?.verdict, "unknown");
       assert.equal(reports[0]?.session?.outcome, "unsupported");
+      assert.include(reports[0]?.session?.unsupportedReason ?? "", "codex");
     }).pipe(Effect.scoped),
   );
 
@@ -544,12 +548,16 @@ const MARKER = "t3-thread-background-probe-marker";
  */
 function withMarkerProcess<A>(
   run: (child: NodeChildProcess.ChildProcess) => A | Promise<A>,
+  // The adapter spawns a fresh session as `--session-id` and a resumed one as
+  // `--resume`, with either separator; the probe has to find all four.
+  argv: ReadonlyArray<string> = [`--resume=${MARKER}`],
 ): Promise<A> {
-  const child = NodeChildProcess.spawn(
-    process.execPath,
-    ["-e", "console.log('ready'); setInterval(() => {}, 1000)", `resume=${MARKER}`],
-    { stdio: ["ignore", "pipe", "ignore"] },
-  );
+  // `sh -c <script> <args...>` keeps the extra arguments in its own argv
+  // without interpreting them, which `node -e` will not do — it rejects
+  // `--resume` as an unknown option of its own.
+  const child = NodeChildProcess.spawn("/bin/sh", ["-c", "echo ready; sleep 30", ...argv], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   return new Promise<void>((resolve, reject) => {
     child.stdout?.once("data", () => resolve());
     child.once("error", reject);
@@ -562,51 +570,74 @@ function withMarkerProcess<A>(
 }
 
 it.layer(NodeServices.layer)("probeSession", (it) => {
-  it.effect("finds the provider process by its resume argument", () =>
+  const ARGV_FORMS: ReadonlyArray<ReadonlyArray<string>> = [
+    [`--resume=${MARKER}`],
+    ["--resume", MARKER],
+    [`--session-id=${MARKER}`],
+    ["--session-id", MARKER],
+  ];
+
+  for (const argv of ARGV_FORMS) {
+    it.effect(`finds the provider process spawned as \`${argv.join(" ")}\``, () =>
+      Effect.gen(function* () {
+        const platform = yield* HostProcessPlatform;
+        if (platform === "win32") return;
+
+        yield* Effect.promise(() =>
+          withMarkerProcess((child) => {
+            const found = probeSession(MARKER, { platform });
+            assert.equal(found.outcome, "found");
+            assert.equal(found.providerPid, child.pid);
+          }, argv),
+        );
+      }),
+    );
+  }
+
+  it.effect("ignores the id when it is not the value of a session flag", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcessPlatform;
       if (platform === "win32") return;
 
       yield* Effect.promise(() =>
-        withMarkerProcess((child) => {
-          const found = probeSession(MARKER, { platform });
-          assert.equal(found.outcome, "found");
-          assert.equal(found.providerPid, child.pid);
-        }),
-      );
-    }),
-  );
-
-  it.effect("declines to probe on Windows rather than calling the session dead", () =>
-    Effect.gen(function* () {
-      if ((yield* HostProcessPlatform) === "win32") return;
-
-      // The marker process is live, so a "not-running" answer here could only
-      // come from guessing: the guard must report that it could not look.
-      yield* Effect.promise(() =>
         withMarkerProcess(() => {
-          const probe = probeSession(MARKER, { platform: "win32" });
-          assert.equal(probe.outcome, "unsupported");
-          assert.equal(probe.providerPid, null);
-          assert.isNotNull(probe.unsupportedReason);
-        }),
+          assert.equal(probeSession(MARKER, { platform }).outcome, "not-running");
+        }, [`--note=resume=${MARKER}`]),
       );
     }),
   );
 
-  it.effect("does not accept a process that merely contains the id as a substring", () =>
+  it.effect("hides its own subtree, so the ps it just ran is not a live child", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcessPlatform;
-      if (platform === "win32") return;
 
-      // The live marker process contains `resume=<marker>`; a prefix of that id
-      // must not match it, or orphaned work would be reported as live.
-      yield* Effect.promise(() =>
-        withMarkerProcess(() => {
-          const prefix = MARKER.slice(0, MARKER.length - 4);
-          assert.equal(probeSession(prefix, { platform }).outcome, "not-running");
-        }),
+      // The real shape this guards: run from a T3 terminal, this script is a
+      // descendant of the very provider being probed, and `ps` lists itself in
+      // the snapshot it produces. Injected rather than spawned because the
+      // relationship cannot be reproduced from a test runner.
+      const selfPid = NodeProcess.pid;
+      const row = (pid: number, ppid: number, command: string): ProcessInfo => ({
+        pid,
+        ppid,
+        elapsed: "01:00",
+        cpuTime: "0:00.10",
+        command,
+      });
+      const processes = [
+        row(4242, 1, `claude --resume=${MARKER}`),
+        row(selfPid, 4242, "node t3-thread-background.ts"),
+        row(4244, selfPid, "ps -Awwo pid=,ppid=,etime=,time=,command="),
+        row(4245, 4242, "python3 runaway.py"),
+      ];
+
+      const probe = probeSession(MARKER, { platform, processes });
+
+      assert.equal(probe.providerPid, 4242);
+      assert.deepEqual(
+        probe.children.map((child) => child.pid),
+        [4245],
       );
+      assert.equal(probe.hiddenChildren, 1);
     }),
   );
 
@@ -624,9 +655,14 @@ it.layer(NodeServices.layer)("probeSession", (it) => {
   it.effect("treats an unaddressable session as unsupported, not as orphaned", () =>
     Effect.gen(function* () {
       // A Codex cursor has no `resume` key, so `resumeIdFromCursor` yields null.
-      const probe = probeSession(null, { platform: yield* HostProcessPlatform });
+      const probe = probeSession(null, {
+        platform: yield* HostProcessPlatform,
+        providerName: "codex",
+      });
       assert.equal(probe.outcome, "unsupported");
-      assert.match(probe.unsupportedReason ?? "", /Codex/);
+      // States what was read, rather than asserting a provider it did not read.
+      assert.match(probe.unsupportedReason ?? "", /no command-line session id/);
+      assert.include(probe.unsupportedReason ?? "", "codex");
     }),
   );
 });
@@ -646,6 +682,19 @@ describe("redactCommand", () => {
       "psql postgres://user:<redacted>@db/x",
     );
     assert.equal(redactCommand("deploy --api-key=abcdef"), "deploy --api-key=<redacted>");
+    assert.equal(redactCommand("deploy --api-key sk-live-secret"), "deploy --api-key <redacted>");
+    assert.equal(
+      redactCommand("curl -H 'Authorization: Basic dXNlcjpwYXNz'"),
+      "curl -H 'Authorization: Basic <redacted>",
+    );
+    assert.notInclude(redactCommand("tool --password='two words'"), "words");
+    assert.notInclude(redactCommand(`tool --config '{"token":"secret"}'`), "secret");
+    // Redacting the config blob must not swallow the flags that follow it,
+    // which are usually why the process is being looked at.
+    assert.equal(
+      redactCommand('claude --mcp-config {"a":1} --permission-mode bypass --add-dir /repo'),
+      "claude --mcp-config <redacted> --permission-mode bypass --add-dir /repo",
+    );
     assert.equal(redactCommand("rg -n resume src"), "rg -n resume src");
   });
 });

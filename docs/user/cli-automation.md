@@ -99,16 +99,17 @@ human and JSON output.
 Every T3 terminal — opened by an action or by hand — knows which thread and which T3 installation it
 belongs to:
 
-| Variable           | Value                                        |
-| ------------------ | -------------------------------------------- |
-| `T3CODE_THREAD_ID` | The thread that owns the terminal.           |
-| `T3CODE_HOME`      | The data directory of the server running it. |
+| Variable           | Value                                                                        |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `T3CODE_THREAD_ID` | The thread that owns the terminal.                                           |
+| `T3CODE_HOME`      | The data directory of the server running it.                                 |
+| `T3CODE_STATE_DIR` | Where that server keeps its state, which is not a fixed path under the home. |
 
 T3 sets these itself and ignores any value supplied for them, so a command can trust them to describe
 its own thread and its own installation rather than whichever one happened to run last.
 
 Threads started with a project also receive `T3CODE_PROJECT_ROOT`, and threads running in a worktree
-receive `T3CODE_WORKTREE_PATH`. Unlike the two above, these describe the workspace rather than the
+receive `T3CODE_WORKTREE_PATH`. Unlike the three above, these describe the workspace rather than the
 session, and are absent when a terminal is opened without a project.
 
 ## Threads

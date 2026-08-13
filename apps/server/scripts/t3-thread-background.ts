@@ -350,14 +350,35 @@ const MCP_CHILD_PATTERN = /\bmcp\b/i;
  * blanked on the way out rather than trusted to a truncation limit.
  */
 export function redactCommand(command: string): string {
-  return command
-    .replace(/(--mcp-config[= ]).*/gi, "$1<redacted>")
-    .replace(/((?:authorization|bearer)\s+)\S+/gi, "$1<redacted>")
-    .replace(
-      /(\b(?:token|api[-_]?key|secret|password|passwd|pwd)\b\s*[=:]\s*)\S+/gi,
-      "$1<redacted>",
-    )
-    .replace(/([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@]+(@)/gi, "$1<redacted>$2");
+  // A quoted-or-bare argument value: enough to blank one value without eating
+  // the flags that follow it, which are often why the process is interesting.
+  const value = String.raw`(?:'[^']*'|"[^"]*"|\S+)`;
+  return (
+    command
+      // Structured config blobs carry embedded credentials wholesale. Consumes
+      // up to the next ` --flag` (or end of line) rather than a brace-balanced
+      // blob: the value is nested JSON, which a lazy `\{.*?\}` truncates and a
+      // greedy one swallows the following flags with.
+      .replace(new RegExp(String.raw`(--mcp-config[=\s])(?:(?! --)[\s\S])*`, "g"), "$1<redacted>")
+      // `Authorization: Bearer x`, `Authorization: Basic x`, and a bare
+      // `Bearer x`. One rule, so redacting the value cannot then match again
+      // and swallow the scheme that was deliberately kept.
+      .replace(
+        new RegExp(String.raw`(authorization\s*[:=]\s*(?:(?:bearer|basic)\s+)?)${value}`, "gi"),
+        "$1<redacted>",
+      )
+      .replace(new RegExp(String.raw`(\b(?:bearer|basic)\s+)${value}`, "gi"), "$1<redacted>")
+      // token/key/secret/password as `--flag=value`, `--flag value`, or `k: v`.
+      .replace(
+        new RegExp(
+          String.raw`(\b[\w-]*(?:token|api[-_]?key|secret|password|passwd|pwd)[\w-]*\b["']?\s*(?:[=:]\s*|\s+))${value}`,
+          "gi",
+        ),
+        "$1<redacted>",
+      )
+      // Credentials embedded in a URL.
+      .replace(/([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@]+(@)/gi, "$1<redacted>$2")
+  );
 }
 
 export function listProcesses(platform: NodeJS.Platform): ReadonlyArray<ProcessInfo> | null {
@@ -389,6 +410,8 @@ export function listProcesses(platform: NodeJS.Platform): ReadonlyArray<ProcessI
 
 export interface ProbeOptions {
   readonly platform: NodeJS.Platform;
+  /** Named in the "cannot probe" message when known. */
+  readonly providerName?: string;
   /** Hoisted by the caller so one `ps` covers every thread in a sweep. */
   readonly processes?: ReadonlyArray<ProcessInfo> | null;
   readonly showAllChildren?: boolean;
@@ -405,9 +428,15 @@ const unsupportedProbe = (resumeId: string | null, reason: string): SessionProbe
 
 export function probeSession(resumeId: string | null, options: ProbeOptions): SessionProbe {
   if (resumeId === null) {
+    // Reported as what was actually observed. Codex is the common case — its
+    // cursor is a threadId resumed over stdio — but a missing runtime row or
+    // any other provider reaches here too, and naming Codex would assert more
+    // than was read.
     return unsupportedProbe(
       resumeId,
-      "the provider session is not addressable by process (Codex sessions carry no command-line id)",
+      `no command-line session id is recorded for this thread${
+        options.providerName === undefined ? "" : ` (provider: ${options.providerName})`
+      }`,
     );
   }
   const processes =
@@ -416,10 +445,10 @@ export function probeSession(resumeId: string | null, options: ProbeOptions): Se
     return unsupportedProbe(resumeId, "`ps` is unavailable on this host");
   }
 
-  // Anchored on both sides: a bare substring match lets `resume=abc` accept an
-  // unrelated `note=resume=abcdef`, which would report orphaned work as live.
-  const resumeArgument = new RegExp(`(?:^|[\\s=])resume=${escapeRegExp(resumeId)}(?=$|\\s)`);
-  const provider = processes.find((candidate) => resumeArgument.test(candidate.command));
+  const sessionArgument = new RegExp(
+    `(?:^|\\s)--(?:resume|session-id)[=\\s]${escapeRegExp(resumeId)}(?=$|\\s)`,
+  );
+  const provider = processes.find((candidate) => sessionArgument.test(candidate.command));
   if (!provider) {
     return {
       outcome: "not-running",
@@ -452,9 +481,14 @@ export function probeSession(resumeId: string | null, options: ProbeOptions): Se
   let hiddenChildren = 0;
   const walk = (pid: number) => {
     for (const child of byParent.get(pid) ?? []) {
+      // Skip our own subtree entirely rather than just our own node: `ps`
+      // lists itself in the snapshot it produces, so descending through us
+      // would report an already-exited `ps` as a live child.
       if (self.has(child.pid)) {
         hiddenChildren += 1;
-      } else if (!options.showAllChildren && MCP_CHILD_PATTERN.test(child.command)) {
+        continue;
+      }
+      if (!options.showAllChildren && MCP_CHILD_PATTERN.test(child.command)) {
         hiddenChildren += 1;
       } else {
         children.push({ ...child, command: redactCommand(child.command) });
@@ -536,7 +570,12 @@ export function formatReports(reports: ReadonlyArray<ThreadReport>): string {
           ? ""
           : ` (${session.hiddenChildren} hidden: MCP servers and this script; --show-all-children to include)`;
       if (session.children.length === 0) {
-        lines.push(`  provider pid ${session.providerPid} · no other child processes${hidden}`);
+        // The provider stays open between turns, so its being alive says the
+        // session exists, not that these tasks are running. With no child
+        // process to point at, say so rather than implying confirmation.
+        lines.push(
+          `  provider pid ${session.providerPid} is running, but no child process for this work is visible${hidden}`,
+        );
       } else {
         lines.push(`  provider pid ${session.providerPid} · live child processes${hidden}:`);
         for (const child of session.children) {
@@ -631,12 +670,17 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
     const titleRows = yield* sql<{ thread_id: string; title: string }>`
       select thread_id, title from projection_threads
       where ${sql.in("thread_id", threadIds)}`;
-    const cursorRows = yield* sql<{ thread_id: string; resume_cursor_json: string | null }>`
-      select thread_id, resume_cursor_json from provider_session_runtime
+    const cursorRows = yield* sql<{
+      thread_id: string;
+      resume_cursor_json: string | null;
+      provider_name: string | null;
+    }>`
+      select thread_id, resume_cursor_json, provider_name from provider_session_runtime
       where ${sql.in("thread_id", threadIds)}`;
 
     const titles = new Map(titleRows.map((row) => [row.thread_id, row.title]));
     const cursors = new Map(cursorRows.map((row) => [row.thread_id, row.resume_cursor_json]));
+    const providers = new Map(cursorRows.map((row) => [row.thread_id, row.provider_name]));
 
     // One `ps` for the whole sweep: forking it per thread would be slow and
     // would compare threads against different snapshots of the process table.
@@ -652,6 +696,7 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
           : probeSession(resumeIdFromCursor(cursors.get(id) ?? null), {
               platform,
               processes,
+              ...(providers.get(id) ? { providerName: providers.get(id) as string } : {}),
               ...(input.showAllChildren === undefined
                 ? {}
                 : { showAllChildren: input.showAllChildren }),
