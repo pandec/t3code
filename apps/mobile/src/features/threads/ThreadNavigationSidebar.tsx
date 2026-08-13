@@ -1619,9 +1619,7 @@ function ThreadNavigationSidebarPane(
                 disabled={!attentionFilter.ready && !attentionFilter.enabled}
                 grouped
                 icon={
-                  attentionFilter.enabled
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle"
+                  attentionFilter.enabled ? "exclamationmark.circle.fill" : "exclamationmark.circle"
                 }
                 onPress={attentionFilter.toggle}
               />

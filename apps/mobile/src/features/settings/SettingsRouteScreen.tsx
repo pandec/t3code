@@ -586,7 +586,7 @@ function GeneralSettingsSection() {
           <SettingsSwitchRow
             disabled={!hydrated}
             icon="pin"
-            label="Keep pinned threads in Attention"
+            label="Always show pinned when filtering by attention"
             value={alwaysShowPinnedInAttention}
             onValueChange={(value) =>
               savePreferences({ sidebarAlwaysShowPinnedInAttention: value })

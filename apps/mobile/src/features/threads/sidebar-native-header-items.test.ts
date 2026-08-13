@@ -29,7 +29,7 @@ describe("createSidebarHeaderItems", () => {
     expect(items[1]).toMatchObject({
       type: "button",
       accessibilityLabel: "Clear attention filter",
-      icon: { type: "sfSymbol", name: "line.3.horizontal.decrease.circle.fill" },
+      icon: { type: "sfSymbol", name: "exclamationmark.circle.fill" },
       tintColor: "#007aff",
     });
     expect(items[2]).toMatchObject({

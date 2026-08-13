@@ -140,6 +140,8 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "doc.text": IconFileText,
   ellipsis: IconDots,
   "ellipsis.circle": IconDotsCircleHorizontal,
+  "exclamationmark.circle": IconAlertCircle,
+  "exclamationmark.circle.fill": IconAlertCircle,
   "exclamationmark.triangle": IconAlertTriangle,
   eye: IconEye,
   folder: IconFolder,
