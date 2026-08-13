@@ -1,4 +1,10 @@
 import * as React from "react";
+import {
+  admitNewAttentionKeys,
+  createAttentionFilter,
+  isThreadAttention,
+  type AttentionFilterState,
+} from "@t3tools/client-runtime/state/thread-attention";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
@@ -594,30 +600,18 @@ function hasPlanReadyPrompt(thread: ThreadStatusInput): boolean {
   );
 }
 
-export function hasUnseenWake(input: {
-  wokeAt: string | null;
-  lastVisitedAt?: string | undefined;
-}): boolean {
-  if (input.wokeAt === null) return false;
-  const wokeAt = Date.parse(input.wokeAt);
-  if (Number.isNaN(wokeAt)) return false;
-  if (input.lastVisitedAt === undefined) return true;
-
-  const lastVisitedAt = Date.parse(input.lastVisitedAt);
-  return Number.isNaN(lastVisitedAt) || wokeAt > lastVisitedAt;
-}
+export { hasUnseenWake } from "@t3tools/client-runtime/state/thread-attention";
 
 export function isSidebarV2AttentionThread(
   thread: ThreadStatusInput & { wokeAt?: string | null | undefined },
 ): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  const isWoke = hasUnseenWake({
+  return isThreadAttention({
+    isReady: status === "ready",
+    readyAttentionSignal: hasPlanReadyPrompt(thread) || hasUnseenCompletion(thread),
     wokeAt: thread.wokeAt ?? null,
     ...(thread.lastVisitedAt === undefined ? {} : { lastVisitedAt: thread.lastVisitedAt }),
   });
-  if (isWoke && status === "ready") return false;
-
-  return status !== "ready" || hasPlanReadyPrompt(thread) || hasUnseenCompletion(thread);
 }
 
 export interface SidebarV2AttentionFilterThread {
@@ -629,41 +623,34 @@ export interface SidebarV2AttentionFilterState {
   readonly knownThreadKeys: ReadonlySet<string>;
 }
 
+function toSidebarAttentionFilterState(state: AttentionFilterState): SidebarV2AttentionFilterState {
+  return { memberThreadKeys: state.memberKeys, knownThreadKeys: state.knownKeys };
+}
+
 export function createSidebarV2AttentionFilter(input: {
-  initialMemberThreadKeys: readonly string[];
-  threads: readonly SidebarV2AttentionFilterThread[];
+  readonly initialMemberThreadKeys: readonly string[];
+  readonly threads: readonly SidebarV2AttentionFilterThread[];
 }): SidebarV2AttentionFilterState {
-  return {
-    memberThreadKeys: new Set(input.initialMemberThreadKeys),
-    knownThreadKeys: new Set(input.threads.map((thread) => thread.threadKey)),
-  };
+  return toSidebarAttentionFilterState(
+    createAttentionFilter({
+      initialMemberKeys: input.initialMemberThreadKeys,
+      keys: input.threads.map((thread) => thread.threadKey),
+    }),
+  );
 }
 
 export function admitNewSidebarV2AttentionThreads(
   state: SidebarV2AttentionFilterState,
   threads: readonly SidebarV2AttentionFilterThread[],
 ): SidebarV2AttentionFilterState {
-  let knownThreadKeys: Set<string> | null = null;
-  let memberThreadKeys: Set<string> | null = null;
-
-  for (const thread of threads) {
-    if (state.knownThreadKeys.has(thread.threadKey)) continue;
-
-    knownThreadKeys ??= new Set(state.knownThreadKeys);
-    memberThreadKeys ??= new Set(state.memberThreadKeys);
-    knownThreadKeys.add(thread.threadKey);
-    // Admission is based on first appearance after the captured baseline, not
-    // createdAt: connected environments have independent clocks, so comparing
-    // their timestamps with the browser clock can reject a genuine new thread.
-    memberThreadKeys.add(thread.threadKey);
+  const next = admitNewAttentionKeys(
+    { memberKeys: state.memberThreadKeys, knownKeys: state.knownThreadKeys },
+    threads.map((thread) => thread.threadKey),
+  );
+  if (next.memberKeys === state.memberThreadKeys && next.knownKeys === state.knownThreadKeys) {
+    return state;
   }
-
-  if (knownThreadKeys === null || memberThreadKeys === null) return state;
-  return {
-    ...state,
-    knownThreadKeys,
-    memberThreadKeys,
-  };
+  return toSidebarAttentionFilterState(next);
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
