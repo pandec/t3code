@@ -63,6 +63,28 @@ authenticated.
 - `vp run lint:mobile`: Mobile native static analysis (`scripts/mobile-native-static-check.ts`).
 - `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated T3 SQLite database; writes create a private backup first.
+- `node apps/server/scripts/t3-thread-background.ts [--thread <id>] [--all] [--json]`: Names the
+  background tasks keeping a thread marked Working or Monitoring, and the processes behind them.
+  Defaults to `$T3CODE_THREAD_ID` and `$T3CODE_STATE_DIR`, which every T3 terminal sets, so it works
+  as a project action with no arguments — including from a dev server, whose state lives in
+  `<home>/dev` rather than `<home>/userdata`; `--all` sweeps every thread and `--show-all-children` disables
+  the MCP-server filter on the process list. Read-only.
+
+  It replays the persisted `task.*` activity rows through the real
+  `ThreadBackgroundLivenessService`, so it shares the sidebar pill's classifier rather than
+  reimplementing it. The feed into that classifier is its own, though: the activity-kind mapping and
+  the payload extraction have to stay in step with `ProviderRuntimeIngestion`.
+
+  Replay is not the in-memory registry, and the gap runs one way. Activity rows are never pruned,
+  while the registry is emptied by a server restart and cleared when a provider session dies — so a
+  task whose terminal row never arrived (SIGKILLed server, crashed provider, lost `task.completed`)
+  replays as live indefinitely. Replay deliberately mirrors the registry even where the registry
+  looks wrong — a trailing usage tick revives a task the terminal row retired, in both — because the
+  question being answered is why the pill is lit, not what ought to have happened. The process probe owns the headline for that reason: `LIVE` only when
+  the provider process is actually found, `ORPHANED` when it is gone, and `UNKNOWN` when the probe
+  cannot run at all — a Codex session, which carries no command-line identifier, or a host without
+  `ps`. Reverting a thread rewrites its activity rows without touching the registry, so a report
+  taken across a revert can disagree with the pill in either direction.
 
 ## Desktop artifacts
 
