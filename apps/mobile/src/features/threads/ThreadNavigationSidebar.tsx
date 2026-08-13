@@ -34,6 +34,7 @@ import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useSortActiveByLatestUserMessage,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { useThreadAttentionFilter } from "./use-thread-attention-filter";
@@ -230,6 +231,7 @@ function ThreadNavigationSidebarPane(
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
+  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const pendingTasks = usePendingNewTasks();
   const pendingTaskKeys = useMemo(
     () =>
@@ -645,6 +647,7 @@ function ThreadNavigationSidebarPane(
       threads: threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
       alwaysShowPinnedInAttention,
+      sortActiveByLatestUserMessage,
       environmentId: options.selectedEnvironmentId,
       model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -662,6 +665,7 @@ function ThreadNavigationSidebarPane(
     });
   }, [
     alwaysShowPinnedInAttention,
+    sortActiveByLatestUserMessage,
     changeRequestStateByKey,
     attentionFilter.memberThreadKeys,
     nowMinute,

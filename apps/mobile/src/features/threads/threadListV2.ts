@@ -202,20 +202,37 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
   return 0;
 }
 
+export interface ThreadListV2ActiveSortOptions {
+  /** Opt-in device preference mirroring the web fork's Extras toggle. */
+  readonly sortByLatestUserMessage?: boolean;
+}
+
 /**
- * Active-thread sort: creation recency plus an explicit server-backed move timestamp.
- * Organic activity never reorders the list. Mirrors the web active-thread
- * ordering without its optional latest-user-message preference.
+ * Active-thread sort: creation recency plus an explicit server-backed move
+ * timestamp. Organic activity (agent replies, turn completion) never reorders
+ * the list.
+ *
+ * `sortByLatestUserMessage` swaps the base key for the newest user message,
+ * matching `sortActiveThreadsForSidebar` on web — including its fallback
+ * chain rather than a max, so a thread with no user message sorts by
+ * creation. Both keys are server-projected, so the two surfaces agree on the
+ * order regardless of which client sent the message.
  */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null | undefined;
     readonly movedToTopAt?: string | null | undefined;
   },
->(threads: readonly T[]): T[] {
-  const sortTimestamp = (thread: T) =>
-    Math.max(parseTimestampMs(thread.createdAt), firstValidTimestampMs(thread.movedToTopAt));
+>(threads: readonly T[], options: ThreadListV2ActiveSortOptions = {}): T[] {
+  const sortTimestamp = (thread: T) => {
+    const base =
+      options.sortByLatestUserMessage === true
+        ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
+        : parseTimestampMs(thread.createdAt);
+    return Math.max(base, firstValidTimestampMs(thread.movedToTopAt));
+  };
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.
   return [...threads].sort(
@@ -353,7 +370,8 @@ export function buildThreadListV2ListItems(input: {
 
 /**
  * Partitions visible threads into the active card block (manual/creation
- * recency) and the settled recency tail, matching the web v2 list.
+ * recency, or newest user message when `sortActiveByLatestUserMessage` is on)
+ * and the settled recency tail, matching the web v2 list.
  * `autoSettleAfterDays` mirrors the web default of 3, and automatic settling
  * is always on — mobile has no client-settings sync yet, so both mirror the
  * web defaults here rather than being user-configurable.
@@ -364,6 +382,8 @@ export function buildThreadListV2Items(input: {
       Null/absent leaves the list unfiltered. */
   readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
   readonly alwaysShowPinnedInAttention?: boolean;
+  /** Sorts the active block by newest user message. Off = creation order. */
+  readonly sortActiveByLatestUserMessage?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
   readonly model?: string | null;
@@ -483,7 +503,9 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = sortThreadsForListV2(active);
+  const orderedActive = sortThreadsForListV2(active, {
+    sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
+  });
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

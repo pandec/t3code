@@ -258,6 +258,73 @@ describe("sortThreadsForListV2", () => {
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
+
+  it("ignores the latest user message unless the preference is on", () => {
+    const threads = [
+      { id: "older", createdAt: "2026-06-01T08:00:00.000Z", latestUserMessageAt: NOW },
+      { id: "newer", createdAt: "2026-06-01T12:00:00.000Z", latestUserMessageAt: null },
+    ];
+    expect(sortThreadsForListV2(threads).map((thread) => thread.id)).toEqual(["newer", "older"]);
+    expect(
+      sortThreadsForListV2(threads, { sortByLatestUserMessage: false }).map((thread) => thread.id),
+    ).toEqual(["newer", "older"]);
+  });
+
+  it("orders by the latest user message when the preference is on", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        {
+          id: "created-newest",
+          createdAt: "2026-06-01T12:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T12:30:00.000Z",
+        },
+        {
+          id: "messaged-newest",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T14:00:00.000Z",
+        },
+      ],
+      { sortByLatestUserMessage: true },
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["messaged-newest", "created-newest"]);
+  });
+
+  // Web uses a fallback chain, not a max, so a thread that has never been
+  // messaged sorts by creation rather than sinking to the epoch.
+  it("falls back to creation time for threads with no user message", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        {
+          id: "messaged",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T10:00:00.000Z",
+        },
+        { id: "never-messaged", createdAt: "2026-06-01T12:00:00.000Z", latestUserMessageAt: null },
+      ],
+      { sortByLatestUserMessage: true },
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["never-messaged", "messaged"]);
+  });
+
+  it("keeps an explicit move-to-top above a newer user message", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        {
+          id: "messaged",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T14:00:00.000Z",
+        },
+        {
+          id: "bumped",
+          createdAt: "2026-06-01T07:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T09:00:00.000Z",
+          movedToTopAt: "2026-06-01T15:00:00.000Z",
+        },
+      ],
+      { sortByLatestUserMessage: true },
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["bumped", "messaged"]);
+  });
 });
 
 describe("buildThreadListV2Items", () => {
@@ -401,6 +468,55 @@ describe("buildThreadListV2Items", () => {
     expect(layout.items.map((item) => item.thread.id)).toEqual(["pinned-settled", "active"]);
     expect(layout.items.map((item) => item.pinned)).toEqual([true, false]);
     expect(layout.settledCount).toBe(0);
+  });
+
+  it("sorts only the active block by latest user message when enabled", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("active-created-newest"),
+        title: "Active created newest",
+        createdAt: "2026-06-01T12:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("active-messaged-newest"),
+        title: "Active messaged newest",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T14:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("pinned-messaged-oldest"),
+        title: "Pinned messaged oldest",
+        createdAt: "2026-06-01T09:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T09:30:00.000Z",
+        pinnedAt: "2026-06-01T10:00:00.000Z",
+      }),
+    ];
+
+    const off = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(off.items.map((item) => item.thread.id)).toEqual([
+      "pinned-messaged-oldest",
+      "active-created-newest",
+      "active-messaged-newest",
+    ]);
+
+    const on = buildThreadListV2Items({
+      threads,
+      sortActiveByLatestUserMessage: true,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    // The pin still leads: only the active block re-orders.
+    expect(on.items.map((item) => item.thread.id)).toEqual([
+      "pinned-messaged-oldest",
+      "active-messaged-newest",
+      "active-created-newest",
+    ]);
   });
 
   it("orders pinned threads by creation time and ignores movedToTopAt", () => {

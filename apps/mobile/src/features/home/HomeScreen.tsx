@@ -38,6 +38,7 @@ import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useSortActiveByLatestUserMessage,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
@@ -231,6 +232,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
+  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -759,6 +761,7 @@ export function HomeScreen(props: HomeScreenProps) {
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: props.attentionMemberThreadKeys,
       alwaysShowPinnedInAttention,
+      sortActiveByLatestUserMessage,
       environmentId: props.selectedEnvironmentId,
       model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -776,6 +779,7 @@ export function HomeScreen(props: HomeScreenProps) {
     });
   }, [
     alwaysShowPinnedInAttention,
+    sortActiveByLatestUserMessage,
     changeRequestStateByKey,
     nowMinute,
     snoozeWakeTick,
