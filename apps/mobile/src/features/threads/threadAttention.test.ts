@@ -83,6 +83,12 @@ describe("mobile thread attention filter", () => {
     expect(
       isThreadAttentionShell({ ...ready, session: runningSession("error") }, { now: NOW }),
     ).toBe(true);
+    expect(isThreadAttentionShell({ ...ready, backgroundLiveness: "working" }, { now: NOW })).toBe(
+      true,
+    );
+    expect(
+      isThreadAttentionShell({ ...ready, backgroundLiveness: "monitoring" }, { now: NOW }),
+    ).toBe(true);
     expect(
       isThreadAttentionShell(
         {
@@ -109,7 +115,27 @@ describe("mobile thread attention filter", () => {
         },
         { now: NOW },
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("excludes an unseen wake only while the thread is otherwise ready", () => {
+    const lastVisitedAt = "2026-06-01T09:04:00.000Z";
+    const completed = makeThread({
+      id: ThreadId.make("woke"),
+      latestTurn: completedTurn(),
+    });
+    const woke = {
+      ...completed,
+      snoozedAt: "2026-06-01T08:00:00.000Z",
+      snoozedUntil: "2026-06-01T09:06:00.000Z",
+    };
+    const options = { now: NOW, lastVisitedAt };
+
+    expect(isThreadAttentionShell(completed, options)).toBe(true);
+    expect(isThreadAttentionShell(woke, options)).toBe(false);
+    expect(isThreadAttentionShell({ ...woke, backgroundLiveness: "monitoring" }, options)).toBe(
+      true,
+    );
   });
 
   it("keeps a fully visited ready thread out", () => {

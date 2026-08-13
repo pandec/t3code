@@ -1,3 +1,4 @@
+import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   archiveSelectedThreadEntries,
@@ -1042,6 +1043,32 @@ describe("resolveSidebarThreadStatus", () => {
   it("defaults to ready with no session", () => {
     expect(resolveSidebarThreadStatus({ ...idle, session: null })).toBe("ready");
   });
+
+  it("reports native background liveness after the foreground settles", () => {
+    expect(
+      resolveSidebarThreadStatus({ ...idle, session: null, backgroundLiveness: "working" }),
+    ).toBe("working");
+    expect(
+      resolveSidebarThreadStatus({ ...idle, session: null, backgroundLiveness: "monitoring" }),
+    ).toBe("monitoring");
+  });
+
+  it("keeps foreground errors above stale background liveness", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: { ...session, status: "error", lastError: "boom" },
+        backgroundLiveness: "working",
+      }),
+    ).toBe("failed");
+  });
+
+  it.each(THREAD_STATUS_PARITY_CASES)(
+    "matches the canonical ladder: $name",
+    ({ thread, expected }) => {
+      expect(resolveSidebarThreadStatus(thread)).toBe(expected);
+    },
+  );
 });
 
 describe("searchSidebarThreadsByTitle", () => {
@@ -1520,6 +1547,45 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+
+  it("shows plan ready ahead of lingering background work", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          latestTurn: makeLatestTurn(),
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            activeTurnId: null,
+          },
+          backgroundLiveness: "working",
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
+  it("shows working and calm monitoring for native background liveness", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: null,
+          backgroundLiveness: "working",
+        },
+      }),
+    ).toMatchObject({ label: "Working", pulse: true });
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: null,
+          backgroundLiveness: "monitoring",
+        },
+      }),
+    ).toMatchObject({ label: "Monitoring", pulse: false });
   });
 });
 
