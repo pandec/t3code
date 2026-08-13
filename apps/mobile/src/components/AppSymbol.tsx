@@ -1,6 +1,7 @@
 import {
   IconAdjustmentsHorizontal,
   IconAlertCircle,
+  IconAlertCircleFilled,
   IconAlertTriangle,
   IconArchive,
   IconArrowBackUp,
@@ -141,7 +142,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   ellipsis: IconDots,
   "ellipsis.circle": IconDotsCircleHorizontal,
   "exclamationmark.circle": IconAlertCircle,
-  "exclamationmark.circle.fill": IconAlertCircle,
+  "exclamationmark.circle.fill": IconAlertCircleFilled,
   "exclamationmark.triangle": IconAlertTriangle,
   eye: IconEye,
   folder: IconFolder,
