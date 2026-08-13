@@ -6,7 +6,9 @@ import { useThemeColor } from "../../lib/useThemeColor";
 export type SidebarFilterButtonIcon =
   | "line.3.horizontal.decrease"
   | "line.3.horizontal.decrease.circle"
-  | "line.3.horizontal.decrease.circle.fill";
+  | "line.3.horizontal.decrease.circle.fill"
+  | "exclamationmark.circle"
+  | "exclamationmark.circle.fill";
 
 export function SidebarFilterButton(props: {
   readonly accessibilityLabel: string;

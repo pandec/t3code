@@ -33,10 +33,9 @@ export function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): Nat
 }
 
 /**
- * UINavigationBar toggle for the sticky attention filter. Same semantic icon
- * as desktop's ListFilterIcon (SF line.3.horizontal.decrease); toggle state is
- * carried by the varying label and the tint, since bar-button items have no
- * native pressed state. Shared by the compact Home header and the split-view
+ * UINavigationBar toggle for the sticky attention filter. The outlined/filled
+ * attention symbol, varying label, and tint communicate state because bar-button
+ * items have no native pressed state. Shared by compact Home and split-view
  * sidebar. Disabled (with a loading label) until thread shells are loaded so
  * the snapshot cannot miss late shells.
  */
@@ -57,7 +56,7 @@ export function createNativeAttentionFilterHeaderItem(input: {
         ? "Clear attention filter"
         : "Show only threads needing attention",
     disabled: input.gated,
-    icon: sfSymbolIcon("line.3.horizontal.decrease"),
+    icon: sfSymbolIcon(input.enabled ? "exclamationmark.circle.fill" : "exclamationmark.circle"),
     onPress: input.onToggle,
     ...(input.enabled ? { tintColor: input.activeTintColor } : {}),
   });

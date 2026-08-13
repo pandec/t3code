@@ -547,6 +547,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
         ? ["Compact thread cards"]
         : []),
+      ...(settings.sidebarAlwaysShowPinnedInAttention !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention
+        ? ["Pinned threads in Attention"]
+        : []),
       ...(settings.sidebarV2SortActiveByLatestUserMessage !==
       DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage
         ? ["Message-based thread ordering"]
@@ -668,6 +672,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadPreviewCount,
       settings.threadAutoSettleEnabled,
       settings.sidebarV2CompactCards,
+      settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2SortActiveByLatestUserMessage,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.timestampFormat,
@@ -757,6 +762,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+      sidebarAlwaysShowPinnedInAttention:
+        DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
       sidebarV2SortActiveByLatestUserMessage:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage,
       sidebarV2NewThreadButtonInProjectRow:

@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
+import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import {
   canSnooze,
   effectiveSettled,
@@ -1842,6 +1843,9 @@ export default function Sidebar() {
   const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
+  const alwaysShowPinnedInAttention = useClientSettings(
+    (s) => s.sidebarAlwaysShowPinnedInAttention,
+  );
   const sortActiveByLatestUserMessage = useClientSettings(
     (s) => s.sidebarV2SortActiveByLatestUserMessage,
   );
@@ -2439,11 +2443,12 @@ export default function Sidebar() {
       const passesProjects =
         !hiddenPhysicalProjectKeys.has(projectKey) &&
         (scopedProjectKeys === null || scopedProjectKeys.has(projectKey));
-      const passesAttention =
-        effectiveAttentionFilterState === null ||
-        effectiveAttentionFilterState.memberThreadKeys.has(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
+      const passesAttention = passesAttentionFilter({
+        memberKeys: effectiveAttentionFilterState?.memberThreadKeys ?? null,
+        threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        pinned: thread.pinnedAt != null,
+        alwaysShowPinned: alwaysShowPinnedInAttention,
+      });
       if (passesProjects && passesAttention) admittedWithoutEnvironment += 1;
       if (passesEnvironment && passesAttention) admittedWithoutProjects += 1;
       if (passesEnvironment && passesProjects) admittedWithoutAttention += 1;
@@ -2530,6 +2535,7 @@ export default function Sidebar() {
       }),
     };
   }, [
+    alwaysShowPinnedInAttention,
     autoSettleAfterDays,
     autoSettleEnabled,
     changeRequestStateByKey,

@@ -339,7 +339,11 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 style={attentionFilterGated ? { opacity: 0.4 } : undefined}
               >
                 <SymbolView
-                  name="line.3.horizontal.decrease"
+                  name={
+                    props.attentionFilterEnabled
+                      ? "exclamationmark.circle.fill"
+                      : "exclamationmark.circle"
+                  }
                   size={18}
                   tintColor={props.attentionFilterEnabled ? primaryColor : iconColor}
                   type="monochrome"
@@ -632,7 +636,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     : "Loading threads"
               }
               disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
-              icon="line.3.horizontal.decrease"
+              icon={
+                props.attentionFilterEnabled
+                  ? "exclamationmark.circle.fill"
+                  : "exclamationmark.circle"
+              }
               onPress={props.onToggleAttentionFilter}
               tintColor={props.attentionFilterEnabled ? primaryColor : undefined}
             />

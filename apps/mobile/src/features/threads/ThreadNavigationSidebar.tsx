@@ -31,7 +31,10 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
-import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import {
+  useAlwaysShowPinnedInAttention,
+  useArchivedSectionVisibleCount,
+} from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { useThreadAttentionFilter } from "./use-thread-attention-filter";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -226,6 +229,7 @@ function ThreadNavigationSidebarPane(
     useArchivedThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const pendingTasks = usePendingNewTasks();
   const pendingTaskKeys = useMemo(
     () =>
@@ -640,6 +644,7 @@ function ThreadNavigationSidebarPane(
     return buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
+      alwaysShowPinnedInAttention,
       environmentId: options.selectedEnvironmentId,
       model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -656,6 +661,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
+    alwaysShowPinnedInAttention,
     changeRequestStateByKey,
     attentionFilter.memberThreadKeys,
     nowMinute,
@@ -1612,7 +1618,9 @@ function ThreadNavigationSidebarPane(
                 }
                 disabled={!attentionFilter.ready && !attentionFilter.enabled}
                 grouped
-                icon="line.3.horizontal.decrease"
+                icon={
+                  attentionFilter.enabled ? "exclamationmark.circle.fill" : "exclamationmark.circle"
+                }
                 onPress={attentionFilter.toggle}
               />
             ) : null}

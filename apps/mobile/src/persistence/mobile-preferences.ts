@@ -44,6 +44,7 @@ export interface Preferences {
   readonly steerGraceWindowMs?: number;
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
+  readonly sidebarAlwaysShowPinnedInAttention?: boolean;
   /** Device-local visit markers used by the sticky attention filter. */
   readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }
@@ -102,6 +103,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
+    sidebarAlwaysShowPinnedInAttention?: boolean;
     threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
@@ -153,6 +155,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.accentTintIntensityPercent === "number") {
     preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
+  }
+  if (typeof parsed.sidebarAlwaysShowPinnedInAttention === "boolean") {
+    preferences.sidebarAlwaysShowPinnedInAttention = parsed.sidebarAlwaysShowPinnedInAttention;
   }
   if (
     typeof parsed.threadLastVisitedAtById === "object" &&

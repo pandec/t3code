@@ -57,6 +57,7 @@ import {
 } from "../../state/prewarm";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
+  useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
@@ -559,6 +560,7 @@ function GeneralSettingsSection() {
   const hydrated = AsyncResult.isSuccess(preferencesResult);
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const threadListV2Enabled = useThreadListV2Enabled();
 
   return (
@@ -580,22 +582,33 @@ function GeneralSettingsSection() {
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
       />
       {threadListV2Enabled ? (
-        <SettingsSliderRow
-          description="How many recently archived threads appear at the end of the thread list."
-          disabled={!hydrated}
-          icon="archivebox"
-          label="Recent archived threads"
-          max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
-          min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
-          onChange={(value) =>
-            savePreferences({
-              archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
-            })
-          }
-          step={1}
-          value={archivedSectionVisibleCount}
-          valueLabel={`${archivedSectionVisibleCount}`}
-        />
+        <>
+          <SettingsSwitchRow
+            disabled={!hydrated}
+            icon="pin"
+            label="Always show pinned when filtering by attention"
+            value={alwaysShowPinnedInAttention}
+            onValueChange={(value) =>
+              savePreferences({ sidebarAlwaysShowPinnedInAttention: value })
+            }
+          />
+          <SettingsSliderRow
+            description="How many recently archived threads appear at the end of the thread list."
+            disabled={!hydrated}
+            icon="archivebox"
+            label="Recent archived threads"
+            max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+            min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+            onChange={(value) =>
+              savePreferences({
+                archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
+              })
+            }
+            step={1}
+            value={archivedSectionVisibleCount}
+            valueLabel={`${archivedSectionVisibleCount}`}
+          />
+        </>
       ) : null}
       <ThreadSyncRow />
     </SettingsSection>

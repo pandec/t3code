@@ -278,6 +278,7 @@ describe("ClientSettings extras", () => {
     expect(settings.maskProviderUsageEmails).toBe(false);
     expect(settings.accentTintsEnabled).toBe(true);
     expect(settings.accentTintIntensityPercent).toBe(12);
+    expect(settings.sidebarAlwaysShowPinnedInAttention).toBe(false);
     expect(settings.turnCompletionMinDurationSeconds).toBe(0);
   });
 
@@ -290,6 +291,7 @@ describe("ClientSettings extras", () => {
         maskProviderUsageEmails: true,
         accentTintsEnabled: false,
         accentTintIntensityPercent: 30,
+        sidebarAlwaysShowPinnedInAttention: true,
         turnCompletionMinDurationSeconds: 3_600,
       }),
     ).toEqual({
@@ -299,6 +301,7 @@ describe("ClientSettings extras", () => {
       maskProviderUsageEmails: true,
       accentTintsEnabled: false,
       accentTintIntensityPercent: 30,
+      sidebarAlwaysShowPinnedInAttention: true,
       turnCompletionMinDurationSeconds: 3_600,
     });
   });
