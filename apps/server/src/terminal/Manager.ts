@@ -1149,10 +1149,43 @@ function stripAppImageRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return scrubbed;
 }
 
+/**
+ * Identity the server owns and a terminal may not contradict: which thread it
+ * belongs to, and where that thread's state lives. Both are needed together —
+ * a thread id is meaningless against the wrong database.
+ *
+ * `T3CODE_STATE_DIR` is the resolved state directory rather than a path to be
+ * reconstructed from the home: a dev server keeps state in `<base>/dev` while
+ * an installed one uses `<base>/userdata`, so appending `userdata` to the home
+ * would point a dev terminal at the production database.
+ *
+ * Reserved unconditionally, not just when the server has a value to write. The
+ * host copy is already dropped by `shouldExcludeTerminalEnvKey`, but the client
+ * `runtimeEnv` merge runs after it, so without this a client could point a
+ * terminal at a different T3 home.
+ */
+const SERVER_OWNED_TERMINAL_ENV_KEYS = [
+  "T3CODE_THREAD_ID",
+  "T3CODE_HOME",
+  "T3CODE_STATE_DIR",
+] as const;
+
+function serverOwnedTerminalEnv(
+  threadId: string,
+  paths: { readonly baseDir?: string; readonly stateDir?: string },
+): Record<string, string> {
+  return {
+    T3CODE_THREAD_ID: threadId,
+    ...(paths.baseDir === undefined ? {} : { T3CODE_HOME: paths.baseDir }),
+    ...(paths.stateDir === undefined ? {} : { T3CODE_STATE_DIR: paths.stateDir }),
+  };
+}
+
 function createTerminalSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   runtimeEnv: Record<string, string> | null | undefined,
   threadId: string,
+  paths: { readonly baseDir?: string; readonly stateDir?: string },
 ): NodeJS.ProcessEnv {
   const spawnEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -1165,11 +1198,17 @@ function createTerminalSpawnEnv(
       spawnEnv[key] = value;
     }
   }
-  // Written last: the owning thread is the session's identity, so neither the
-  // host environment nor a stale client-supplied runtimeEnv may shadow it.
-  // Every terminal gets it, not just script-launched ones, so a command typed
-  // by hand can address its own thread too.
-  spawnEnv.T3CODE_THREAD_ID = threadId;
+
+  // Server-owned identity wins over anything the host or a client supplied.
+  // Deleting case-insensitive aliases first is load-bearing on Windows, whose
+  // environment block is case-insensitive while this object is not: leaving a
+  // client's `t3code_thread_id` in place would emit two entries for one
+  // variable, and which of them a child reads is undefined.
+  const reserved = new Set<string>(SERVER_OWNED_TERMINAL_ENV_KEYS);
+  for (const key of Object.keys(spawnEnv)) {
+    if (reserved.has(key.toUpperCase())) delete spawnEnv[key];
+  }
+  Object.assign(spawnEnv, serverOwnedTerminalEnv(threadId, paths));
   return stripAppImageRuntimeEnv(spawnEnv);
 }
 
@@ -1192,6 +1231,10 @@ interface TerminalManagerOptions {
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+  /** The server's T3 home, exported so a terminal can address its own server. */
+  baseDir?: string;
+  /** The server's resolved state directory (`userdata` or dev's `dev`). */
+  stateDir?: string;
   registerTerminalProcesses?: (input: {
     readonly threadId: string;
     readonly terminalId: string;
@@ -1204,11 +1247,13 @@ interface TerminalManagerOptions {
 }
 
 export const make = Effect.fn("TerminalManager.make")(function* () {
-  const { terminalLogsDir } = yield* ServerConfig.ServerConfig;
+  const { terminalLogsDir, baseDir, stateDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
+    baseDir,
+    stateDir,
     ptyAdapter,
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
@@ -1931,6 +1976,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               baseEnv,
               session.runtimeEnv,
               session.threadId,
+              {
+                ...(options.baseDir === undefined ? {} : { baseDir: options.baseDir }),
+                ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }),
+              },
             );
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;

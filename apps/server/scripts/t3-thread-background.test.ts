@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics nodeBuiltinImport:off - the probe test needs a real OS process.
 import * as NodeChildProcess from "node:child_process";
 import { assert, describe, it } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -11,8 +12,14 @@ import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
 import {
   collectLiveTasks,
   foldLiveness,
+  formatReports,
+  type LiveTask,
   probeSession,
+  redactCommand,
   runThreadBackground,
+  type SessionProbe,
+  type ThreadReport,
+  verdictFor,
 } from "./t3-thread-background.ts";
 
 const THREAD = "thread-1";
@@ -203,6 +210,54 @@ describe("collectLiveTasks", () => {
     assert.deepEqual(live, []);
   });
 
+  it("replays a usage tick like the registry does, rather than hiding it", () => {
+    // A usage row carries no `status`, so the registry's drop-then-re-add makes
+    // a trailing one revive a task a terminal row had retired — and when
+    // `typedUsage` is the only state, the usage row is the only row persisted.
+    // Filtering it out here would report "nothing running" for a thread whose
+    // pill is still lit, which is the exact question this tool answers.
+    const live = collectLiveTasks(
+      rows(
+        started({ taskId: "b1", taskType: "local_bash" }),
+        {
+          kind: "task.progress",
+          at: "2026-08-13T12:10:00.000Z",
+          payload: { taskId: "b1", taskType: "local_bash", status: "completed" },
+        },
+        {
+          kind: "task.progress",
+          at: "2026-08-13T12:10:01.000Z",
+          payload: { taskId: "b1", taskType: "local_bash", usageSnapshot: true },
+        },
+      ),
+    );
+
+    assert.deepEqual(
+      live.map((task) => [task.taskId, task.liveness]),
+      [["b1", "monitoring"]],
+    );
+  });
+
+  it("lets a task stop being backgrounded", () => {
+    const live = collectLiveTasks(
+      rows(
+        started({ taskId: "b1", taskType: "local_bash" }),
+        {
+          kind: "task.updated",
+          at: "2026-08-13T12:01:00.000Z",
+          payload: { taskId: "b1", taskType: "local_bash", isBackgrounded: true },
+        },
+        {
+          kind: "task.updated",
+          at: "2026-08-13T12:02:00.000Z",
+          payload: { taskId: "b1", taskType: "local_bash", isBackgrounded: false },
+        },
+      ),
+    );
+
+    assert.isFalse(live[0]?.backgrounded);
+  });
+
   it("keeps identically named tasks in different threads apart", () => {
     const live = collectLiveTasks(
       rows(
@@ -240,7 +295,8 @@ const createFixtureDatabase = Effect.fn("createThreadBackgroundFixtureDatabase")
       kind TEXT NOT NULL,
       summary TEXT NOT NULL,
       payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      sequence INTEGER
     )`;
     yield* sql`CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, title TEXT NOT NULL)`;
     yield* sql`CREATE TABLE provider_session_runtime (
@@ -250,6 +306,10 @@ const createFixtureDatabase = Effect.fn("createThreadBackgroundFixtureDatabase")
 
     yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-live', 'Stuck thread')`;
     yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-quiet', 'Quiet thread')`;
+    yield* sql`INSERT INTO projection_threads (thread_id, title) VALUES ('t-codex', 'Codex thread')`;
+    // A Codex cursor carries no `resume` key, so the session cannot be probed.
+    yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json)
+      VALUES ('t-codex', '{"threadId":"c-1"}')`;
     yield* sql`INSERT INTO provider_session_runtime (thread_id, resume_cursor_json)
       VALUES ('t-live', '{"resume":"session-gone"}')`;
 
@@ -281,6 +341,13 @@ const createFixtureDatabase = Effect.fn("createThreadBackgroundFixtureDatabase")
         "task.completed",
         '{"taskId":"shell-2","taskType":"local_bash","status":"stopped"}',
         "2026-08-13T12:01:00.000Z",
+      ],
+      [
+        "a5",
+        "t-codex",
+        "task.started",
+        '{"taskId":"shell-3","taskType":"local_bash","title":"Codex watch"}',
+        "2026-08-13T12:00:00.000Z",
       ],
     ] as const;
     for (const [id, threadId, kind, payload, at] of activities) {
@@ -339,9 +406,14 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
 
       const reports = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
 
+      // t-quiet's only task ended, so it is absent entirely; the two threads
+      // with surviving tasks are reported with different verdicts.
       assert.deepEqual(
-        reports.map((report) => report.threadId),
-        ["t-live"],
+        reports.map((report) => [report.threadId, report.verdict]).toSorted(),
+        [
+          ["t-codex", "unknown"],
+          ["t-live", "orphaned"],
+        ].toSorted(),
       );
     }).pipe(Effect.scoped),
   );
@@ -362,6 +434,67 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
         reports.map((report) => report.threadId),
         ["t-live"],
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("prefers the exact state directory its terminal was given", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+
+      // A dev server's state lives in `<home>/dev`, not `<home>/userdata`, so
+      // T3CODE_STATE_DIR must win over any path rebuilt from T3CODE_HOME.
+      const reports = yield* runThreadBackground({
+        baseDir: undefined,
+        threadId: "t-live",
+        all: false,
+      }).pipe(
+        Effect.provideService(HostProcessEnvironment, {
+          T3CODE_STATE_DIR: path.join(baseDir, "userdata"),
+          T3CODE_HOME: "/nonexistent/home",
+        }),
+      );
+
+      assert.deepEqual(
+        reports.map((report) => report.threadId),
+        ["t-live"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("falls back to the T3CODE_HOME its terminal belongs to", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+
+      // No --base-dir: without honouring T3CODE_HOME this would open ~/.t3 and
+      // report on the wrong server entirely.
+      const reports = yield* runThreadBackground({
+        baseDir: undefined,
+        threadId: "t-live",
+        all: false,
+      }).pipe(Effect.provideService(HostProcessEnvironment, { T3CODE_HOME: baseDir }));
+
+      assert.deepEqual(
+        reports.map((report) => report.threadId),
+        ["t-live"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("calls an unaddressable session unknown, never orphaned", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+
+      const reports = yield* runThreadBackground({ baseDir, threadId: "t-codex", all: false });
+
+      assert.equal(reports[0]?.verdict, "unknown");
+      assert.equal(reports[0]?.session?.outcome, "unsupported");
     }).pipe(Effect.scoped),
   );
 
@@ -399,32 +532,208 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
 // The `ps` parsing and the resume-id match are the only parts of the probe that
 // cannot be checked against fixture data, so they are exercised against a real
 // process carrying a marker argument.
-describe.skipIf(process.platform === "win32")("probeSession", () => {
-  const marker = "t3-thread-background-probe-marker";
+// The `ps` parsing and the resume-id match are the only parts of the probe that
+// cannot be checked against fixture data, so they are exercised against a real
+// process carrying a marker argument.
+const MARKER = "t3-thread-background-probe-marker";
 
-  it("finds the provider process by its resume argument, and skips the probe on Windows", async () => {
-    const child = NodeChildProcess.spawn(
-      process.execPath,
-      ["-e", "setTimeout(() => {}, 5000)", `resume=${marker}`],
-      { stdio: "ignore" },
-    );
-    try {
-      // `ps` only sees the process once it is actually running.
-      await new Promise((resolve) => setTimeout(resolve, 250));
-
-      const found = probeSession(marker, process.platform);
-      assert.equal(found.providerPid, child.pid);
-
-      // Same call, same live process, but Windows has no usable `ps` — the
-      // guard must short-circuit rather than report a wrong answer.
-      const onWindows = probeSession(marker, "win32");
-      assert.equal(onWindows.providerPid, null);
-    } finally {
+/**
+ * Spawns a process whose argv carries `resume=<marker>` and resolves once it
+ * has announced itself on stdout — a readiness signal, so the test never races
+ * `ps` on a timer.
+ */
+function withMarkerProcess<A>(
+  run: (child: NodeChildProcess.ChildProcess) => A | Promise<A>,
+): Promise<A> {
+  const child = NodeChildProcess.spawn(
+    process.execPath,
+    ["-e", "console.log('ready'); setInterval(() => {}, 1000)", `resume=${MARKER}`],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  return new Promise<void>((resolve, reject) => {
+    child.stdout?.once("data", () => resolve());
+    child.once("error", reject);
+    child.once("exit", () => reject(new Error("marker process exited before signalling")));
+  })
+    .then(() => run(child))
+    .finally(() => {
       child.kill("SIGKILL");
-    }
+    });
+}
+
+it.layer(NodeServices.layer)("probeSession", (it) => {
+  it.effect("finds the provider process by its resume argument", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+      if (platform === "win32") return;
+
+      yield* Effect.promise(() =>
+        withMarkerProcess((child) => {
+          const found = probeSession(MARKER, { platform });
+          assert.equal(found.outcome, "found");
+          assert.equal(found.providerPid, child.pid);
+        }),
+      );
+    }),
+  );
+
+  it.effect("declines to probe on Windows rather than calling the session dead", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+
+      // The marker process is live, so a "not-running" answer here could only
+      // come from guessing: the guard must report that it could not look.
+      yield* Effect.promise(() =>
+        withMarkerProcess(() => {
+          const probe = probeSession(MARKER, { platform: "win32" });
+          assert.equal(probe.outcome, "unsupported");
+          assert.equal(probe.providerPid, null);
+          assert.isNotNull(probe.unsupportedReason);
+        }),
+      );
+    }),
+  );
+
+  it.effect("does not accept a process that merely contains the id as a substring", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+      if (platform === "win32") return;
+
+      // The live marker process contains `resume=<marker>`; a prefix of that id
+      // must not match it, or orphaned work would be reported as live.
+      yield* Effect.promise(() =>
+        withMarkerProcess(() => {
+          const prefix = MARKER.slice(0, MARKER.length - 4);
+          assert.equal(probeSession(prefix, { platform }).outcome, "not-running");
+        }),
+      );
+    }),
+  );
+
+  it.effect("reports a missing session as not-running, distinct from unsupported", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+      if (platform === "win32") return;
+
+      const probe = probeSession("session-that-never-existed", { platform });
+      assert.equal(probe.outcome, "not-running");
+      assert.equal(probe.providerPid, null);
+    }),
+  );
+
+  it.effect("treats an unaddressable session as unsupported, not as orphaned", () =>
+    Effect.gen(function* () {
+      // A Codex cursor has no `resume` key, so `resumeIdFromCursor` yields null.
+      const probe = probeSession(null, { platform: yield* HostProcessPlatform });
+      assert.equal(probe.outcome, "unsupported");
+      assert.match(probe.unsupportedReason ?? "", /Codex/);
+    }),
+  );
+});
+
+describe("redactCommand", () => {
+  it("blanks credentials that agent-run commands carry", () => {
+    assert.equal(
+      redactCommand('claude --mcp-config {"headers":{"Authorization":"Bearer sk-abc123"}}'),
+      "claude --mcp-config <redacted>",
+    );
+    assert.equal(
+      redactCommand("curl -H 'Authorization: Bearer sk-live-9'"),
+      "curl -H 'Authorization: Bearer <redacted>",
+    );
+    assert.equal(
+      redactCommand("psql postgres://user:hunter2@db/x"),
+      "psql postgres://user:<redacted>@db/x",
+    );
+    assert.equal(redactCommand("deploy --api-key=abcdef"), "deploy --api-key=<redacted>");
+    assert.equal(redactCommand("rg -n resume src"), "rg -n resume src");
+  });
+});
+
+describe("verdictFor and formatReports", () => {
+  const task: LiveTask = {
+    threadId: "t1",
+    taskId: "shell-1",
+    taskType: "local_bash",
+    title: "Tail CI",
+    liveness: "monitoring",
+    startedAt: "2026-08-13T12:00:00.000Z",
+    lastEventAt: "2026-08-13T12:02:00.000Z",
+    backgrounded: true,
+  };
+  const report = (
+    verdict: ThreadReport["verdict"],
+    session: SessionProbe | null,
+  ): ThreadReport => ({
+    threadId: "t1",
+    title: "Demo",
+    liveness: "monitoring",
+    verdict,
+    tasks: [task],
+    session,
+  });
+  const probe = (over: Partial<SessionProbe>): SessionProbe => ({
+    outcome: "found",
+    unsupportedReason: null,
+    resumeId: "s1",
+    providerPid: 42,
+    children: [],
+    hiddenChildren: 0,
+    ...over,
   });
 
-  it("reports no pid when the recorded session is gone", () => {
-    assert.equal(probeSession("session-that-never-existed", process.platform).providerPid, null);
+  it("lets the probe decide the verdict", () => {
+    assert.equal(verdictFor("monitoring", probe({ outcome: "found" })), "live");
+    assert.equal(
+      verdictFor("monitoring", probe({ outcome: "not-running", providerPid: null })),
+      "orphaned",
+    );
+    assert.equal(
+      verdictFor("monitoring", probe({ outcome: "unsupported", unsupportedReason: "no ps" })),
+      "unknown",
+    );
+    assert.equal(verdictFor(null, null), "idle");
+  });
+
+  it("headlines an orphan as ORPHANED rather than as live work", () => {
+    const text = formatReports([
+      report("orphaned", probe({ outcome: "not-running", providerPid: null })),
+    ]);
+    assert.match(text, /^ORPHANED \(monitoring\)/);
+    assert.include(text, "stale bookkeeping, not live work");
+    assert.notMatch(text, /^MONITORING/m);
+  });
+
+  it("says it could not tell when the probe cannot run", () => {
+    const text = formatReports([
+      report(
+        "unknown",
+        probe({ outcome: "unsupported", unsupportedReason: "`ps` is unavailable" }),
+      ),
+    ]);
+    assert.match(text, /^UNKNOWN \(monitoring\)/);
+    assert.include(text, "cannot tell whether this is still running");
+    assert.notInclude(text, "orphaned");
+  });
+
+  it("headlines confirmed work as LIVE and redacts nothing it was not given", () => {
+    const text = formatReports([
+      report(
+        "live",
+        probe({
+          children: [
+            { pid: 7, ppid: 42, elapsed: "31:00", cpuTime: "30:00", command: "python3 -" },
+          ],
+          hiddenChildren: 3,
+        }),
+      ),
+    ]);
+    assert.match(text, /^LIVE \(monitoring\)/);
+    assert.include(text, "pid 7 · up 31:00 · cpu 30:00 · python3 -");
+    assert.include(text, "3 hidden");
+  });
+
+  it("says nothing at all when no thread has live work", () => {
+    assert.equal(formatReports([report("idle", null)]), "No live background work.");
   });
 });

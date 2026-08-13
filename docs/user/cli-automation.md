@@ -80,21 +80,6 @@ boolean update flags also accept the `--no-...` form, and `--clear-preview-url` 
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
 
-#### Terminal environment
-
-Every T3 terminal — whether it was opened by an action or by hand — is spawned with:
-
-| Variable               | Value                                       |
-| ---------------------- | ------------------------------------------- |
-| `T3CODE_THREAD_ID`     | The thread that owns the terminal.          |
-| `T3CODE_PROJECT_ROOT`  | The project's workspace root.               |
-| `T3CODE_WORKTREE_PATH` | The thread's worktree, when it runs in one. |
-
-`T3CODE_THREAD_ID` is written after the rest of the environment, so neither the host environment nor
-a stale client-supplied value can shadow it. An action command can therefore address its own thread
-without being told which one it is — see
-[`t3-thread-background.ts`](../internals/scripts.md) for an example.
-
 Action listing, adding, updating, and removing require the running server so concurrent UI and CLI
 edits can be serialized safely. If another client
 changed the actions after the CLI read them, the mutation fails with a conflict; list the actions
@@ -108,6 +93,23 @@ reconcile their current state before retrying; do not blindly repeat the mutatio
 Only one action can run automatically when a worktree is created. Adding or updating an action with
 `--run-on-worktree-create` disables that setting on the previous setup action and reports its id in
 human and JSON output.
+
+### Terminal environment
+
+Every T3 terminal — opened by an action or by hand — knows which thread and which T3 installation it
+belongs to:
+
+| Variable           | Value                                        |
+| ------------------ | -------------------------------------------- |
+| `T3CODE_THREAD_ID` | The thread that owns the terminal.           |
+| `T3CODE_HOME`      | The data directory of the server running it. |
+
+T3 sets these itself and ignores any value supplied for them, so a command can trust them to describe
+its own thread and its own installation rather than whichever one happened to run last.
+
+Threads started with a project also receive `T3CODE_PROJECT_ROOT`, and threads running in a worktree
+receive `T3CODE_WORKTREE_PATH`. Unlike the two above, these describe the workspace rather than the
+session, and are absent when a terminal is opened without a project.
 
 ## Threads
 

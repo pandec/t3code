@@ -204,6 +204,7 @@ const multiTerminalHistoryLogPath = (
 interface CreateManagerOptions {
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
+  baseDir?: string;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
     readonly hasRunningSubprocess: boolean;
     readonly childCommand: string | null;
@@ -244,6 +245,7 @@ const createManager = (
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
+        ...(options.baseDir !== undefined ? { baseDir: options.baseDir } : {}),
         ...(options.subprocessInspector !== undefined
           ? { subprocessInspector: options.subprocessInspector }
           : {}),
@@ -1500,6 +1502,46 @@ it.layer(
       if (!spawnInput) return;
 
       assert.equal(spawnInput.env.T3CODE_THREAD_ID, "thread-real");
+    }),
+  );
+
+  it.effect("leaves no differently cased alias of the server-owned identity", () =>
+    Effect.gen(function* () {
+      // A Windows environment block is case-insensitive while this object is
+      // not, so a surviving lowercase alias would emit a second entry for the
+      // same variable and the child's lookup would be undefined.
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: { t3code_home: "/host/leftover" },
+        baseDir: "/srv/t3-home",
+      });
+      yield* manager.open(
+        openInput({
+          threadId: "thread-real",
+          env: { t3code_thread_id: "client-supplied", T3code_Home: "/client/supplied" },
+        }),
+      );
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      const aliases = Object.keys(spawnInput.env).filter((key) =>
+        ["T3CODE_THREAD_ID", "T3CODE_HOME"].includes(key.toUpperCase()),
+      );
+      assert.deepEqual(aliases.toSorted(), ["T3CODE_HOME", "T3CODE_THREAD_ID"]);
+      assert.equal(spawnInput.env.T3CODE_THREAD_ID, "thread-real");
+      assert.equal(spawnInput.env.T3CODE_HOME, "/srv/t3-home");
+    }),
+  );
+
+  it.effect("exposes the owning server's T3 home so a terminal can address it", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, { baseDir: "/srv/t3-home" });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      assert.equal(spawnInput.env.T3CODE_HOME, "/srv/t3-home");
     }),
   );
 
