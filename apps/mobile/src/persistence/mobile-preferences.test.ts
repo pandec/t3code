@@ -36,6 +36,18 @@ describe("mobile preferences persistence", () => {
     ).toBeUndefined();
   });
 
+  it("keeps valid active-sort preferences", () => {
+    expect(
+      sanitizePreferences({ sidebarV2SortActiveByLatestUserMessage: true })
+        .sidebarV2SortActiveByLatestUserMessage,
+    ).toBe(true);
+    expect(
+      sanitizePreferences({
+        sidebarV2SortActiveByLatestUserMessage: "yes" as unknown as boolean,
+      }).sidebarV2SortActiveByLatestUserMessage,
+    ).toBeUndefined();
+  });
+
   it("keeps only valid persisted thread visit timestamps", () => {
     expect(
       sanitizePreferences({

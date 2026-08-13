@@ -59,6 +59,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useSortActiveByLatestUserMessage,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
@@ -561,6 +562,7 @@ function GeneralSettingsSection() {
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
+  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const threadListV2Enabled = useThreadListV2Enabled();
 
   return (
@@ -590,6 +592,15 @@ function GeneralSettingsSection() {
             value={alwaysShowPinnedInAttention}
             onValueChange={(value) =>
               savePreferences({ sidebarAlwaysShowPinnedInAttention: value })
+            }
+          />
+          <SettingsSwitchRow
+            disabled={!hydrated}
+            icon="arrow.up.to.line"
+            label="Move messaged threads to top"
+            value={sortActiveByLatestUserMessage}
+            onValueChange={(value) =>
+              savePreferences({ sidebarV2SortActiveByLatestUserMessage: value })
             }
           />
           <SettingsSliderRow

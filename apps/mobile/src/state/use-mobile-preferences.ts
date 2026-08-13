@@ -55,6 +55,12 @@ export function useAlwaysShowPinnedInAttention(): boolean {
   return preferences.sidebarAlwaysShowPinnedInAttention ?? false;
 }
 
+/** Whether the active block sorts by newest user message instead of creation. */
+export function useSortActiveByLatestUserMessage(): boolean {
+  const { preferences } = useMobilePreferences();
+  return preferences.sidebarV2SortActiveByLatestUserMessage ?? false;
+}
+
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {
   const { preferences } = useMobilePreferences();
   const value = preferences.archivedSectionVisibleCount;
