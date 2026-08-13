@@ -402,7 +402,9 @@ export function listProcesses(platform: NodeJS.Platform): ReadonlyArray<ProcessI
       if (!pid || !ppid || !elapsed || !cpuTime || command === undefined) continue;
       processes.push({ pid: Number(pid), ppid: Number(ppid), elapsed, cpuTime, command });
     }
-    return processes;
+    // A live host always has processes, so an empty parse means the output
+    // format was not understood — "could not look", not "nothing is running".
+    return processes.length === 0 ? null : processes;
   } catch {
     return null;
   }

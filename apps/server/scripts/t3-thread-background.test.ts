@@ -641,6 +641,19 @@ it.layer(NodeServices.layer)("probeSession", (it) => {
     }),
   );
 
+  it.effect("treats an unreadable process table as unknown, not as an empty one", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+
+      // An empty list can only mean the `ps` output was not understood; a live
+      // host always has processes. Calling that "not-running" would headline
+      // ORPHANED off a parse failure.
+      const probe = probeSession("some-session", { platform, processes: null });
+      assert.equal(probe.outcome, "unsupported");
+      assert.match(probe.unsupportedReason ?? "", /ps/);
+    }),
+  );
+
   it.effect("reports a missing session as not-running, distinct from unsupported", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcessPlatform;
