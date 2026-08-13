@@ -1475,6 +1475,34 @@ it.layer(
     }),
   );
 
+  it.effect("exposes the owning thread id to every spawned terminal", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput({ threadId: "thread-diagnostics" }));
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      assert.equal(spawnInput.env.T3CODE_THREAD_ID, "thread-diagnostics");
+    }),
+  );
+
+  it.effect("keeps the thread id authoritative against a conflicting runtime env", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: { T3CODE_THREAD_ID: "host-leftover" },
+      });
+      yield* manager.open(
+        openInput({ threadId: "thread-real", env: { T3CODE_THREAD_ID: "client-supplied" } }),
+      );
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      assert.equal(spawnInput.env.T3CODE_THREAD_ID, "thread-real");
+    }),
+  );
+
   it.effect("starts zsh with prompt spacer disabled to avoid `%` end markers", () =>
     Effect.gen(function* () {
       if ((yield* HostProcessPlatform) === "win32") return;

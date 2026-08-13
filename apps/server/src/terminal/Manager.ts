@@ -1151,7 +1151,8 @@ function stripAppImageRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function createTerminalSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
-  runtimeEnv?: Record<string, string> | null,
+  runtimeEnv: Record<string, string> | null | undefined,
+  threadId: string,
 ): NodeJS.ProcessEnv {
   const spawnEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -1164,6 +1165,11 @@ function createTerminalSpawnEnv(
       spawnEnv[key] = value;
     }
   }
+  // Written last: the owning thread is the session's identity, so neither the
+  // host environment nor a stale client-supplied runtimeEnv may shadow it.
+  // Every terminal gets it, not just script-launched ones, so a command typed
+  // by hand can address its own thread too.
+  spawnEnv.T3CODE_THREAD_ID = threadId;
   return stripAppImageRuntimeEnv(spawnEnv);
 }
 
@@ -1921,7 +1927,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.andThen(
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
+            const terminalEnv = createTerminalSpawnEnv(
+              baseEnv,
+              session.runtimeEnv,
+              session.threadId,
+            );
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;

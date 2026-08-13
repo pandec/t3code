@@ -80,6 +80,21 @@ boolean update flags also accept the `--no-...` form, and `--clear-preview-url` 
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
 
+#### Terminal environment
+
+Every T3 terminal — whether it was opened by an action or by hand — is spawned with:
+
+| Variable               | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| `T3CODE_THREAD_ID`     | The thread that owns the terminal.          |
+| `T3CODE_PROJECT_ROOT`  | The project's workspace root.               |
+| `T3CODE_WORKTREE_PATH` | The thread's worktree, when it runs in one. |
+
+`T3CODE_THREAD_ID` is written after the rest of the environment, so neither the host environment nor
+a stale client-supplied value can shadow it. An action command can therefore address its own thread
+without being told which one it is — see
+[`t3-thread-background.ts`](../internals/scripts.md) for an example.
+
 Action listing, adding, updating, and removing require the running server so concurrent UI and CLI
 edits can be serialized safely. If another client
 changed the actions after the CLI read them, the mutation fails with a conflict; list the actions

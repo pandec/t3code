@@ -63,6 +63,18 @@ authenticated.
 - `vp run lint:mobile`: Mobile native static analysis (`scripts/mobile-native-static-check.ts`).
 - `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated T3 SQLite database; writes create a private backup first.
+- `node apps/server/scripts/t3-thread-background.ts [--thread <id>] [--all] [--json]`: Names the
+  background tasks keeping a thread marked Working or Monitoring, and the processes behind them.
+  Defaults to `$T3CODE_THREAD_ID`, which every T3 terminal sets, so it works as a project action with
+  no arguments; `--all` sweeps every thread. Read-only, and `--base-dir` defaults to `~/.t3`.
+
+  It replays the persisted `task.*` activity rows through the real
+  `ThreadBackgroundLivenessService`, so classification cannot drift from the sidebar pill — but
+  replay diverges from that in-memory registry in two reported directions. The registry is emptied by
+  a server restart and cleared when a provider session dies, so the script can list a task the pill
+  has already forgotten; the process probe is what settles it, reporting work with no live process as
+  orphaned. Activity rows also age out under retention, so a task whose start row is gone and whose
+  terminal row never arrived is invisible.
 
 ## Desktop artifacts
 
