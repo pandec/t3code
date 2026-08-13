@@ -183,6 +183,7 @@ import {
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
+  isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   resolveProjectStatusIndicator,
   resolveThreadRowClassName,
@@ -648,7 +649,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     [clearSelection, handleMultiSelectContextMenu, handleThreadContextMenu, isSelected, threadRef],
   );
   const handlePrClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!prStatus) return;
       const openedInRightPanel = openPrLink(
         event,
@@ -775,14 +776,17 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
-                    type="button"
+                  <a
+                    href={prStatus.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     aria-label={prStatus.tooltip}
                     className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={handlePrClick}
                   >
                     <ChangeRequestStatusIcon className="size-3" />
-                  </button>
+                  </a>
                 }
               />
               <TooltipPopup side="top">
@@ -1875,6 +1879,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       threadRef: ScopedThreadRef,
       orderedProjectThreadKeys: readonly string[],
     ) => {
+      if (isSidebarNestedLinkClick(event.target)) return;
       const isMac = isMacPlatform(navigator.platform);
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
