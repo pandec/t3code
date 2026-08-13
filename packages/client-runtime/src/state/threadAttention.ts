@@ -37,6 +37,19 @@ export function isThreadAttention(input: ThreadAttentionInput): boolean {
   return input.readyAttentionSignal;
 }
 
+export function passesAttentionFilter(input: {
+  readonly memberKeys: ReadonlySet<string> | null;
+  readonly threadKey: string;
+  readonly pinned: boolean;
+  readonly alwaysShowPinned: boolean;
+}): boolean {
+  return (
+    input.memberKeys === null ||
+    input.memberKeys.has(input.threadKey) ||
+    (input.alwaysShowPinned && input.pinned)
+  );
+}
+
 export interface AttentionFilterState {
   readonly memberKeys: ReadonlySet<string>;
   readonly knownKeys: ReadonlySet<string>;

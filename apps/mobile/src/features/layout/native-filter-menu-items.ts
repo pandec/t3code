@@ -57,7 +57,11 @@ export function createNativeAttentionFilterHeaderItem(input: {
         ? "Clear attention filter"
         : "Show only threads needing attention",
     disabled: input.gated,
-    icon: sfSymbolIcon("line.3.horizontal.decrease"),
+    icon: sfSymbolIcon(
+      input.enabled
+        ? "line.3.horizontal.decrease.circle.fill"
+        : "line.3.horizontal.decrease.circle",
+    ),
     onPress: input.onToggle,
     ...(input.enabled ? { tintColor: input.activeTintColor } : {}),
   });

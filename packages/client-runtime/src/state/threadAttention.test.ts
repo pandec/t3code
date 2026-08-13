@@ -5,6 +5,7 @@ import {
   createAttentionFilter,
   hasUnseenWake,
   isThreadAttention,
+  passesAttentionFilter,
 } from "./threadAttention.ts";
 
 describe("thread attention", () => {
@@ -84,6 +85,34 @@ describe("thread attention", () => {
       hasUnseenWake({
         wokeAt: "2026-03-09T10:05:00.000Z",
         lastVisitedAt: "2026-03-09T10:06:00.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("optionally keeps pinned non-members visible", () => {
+    const memberKeys = new Set(["environment-a:member"]);
+    expect(
+      passesAttentionFilter({
+        memberKeys,
+        threadKey: "environment-a:other",
+        pinned: true,
+        alwaysShowPinned: true,
+      }),
+    ).toBe(true);
+    expect(
+      passesAttentionFilter({
+        memberKeys,
+        threadKey: "environment-a:other",
+        pinned: true,
+        alwaysShowPinned: false,
+      }),
+    ).toBe(false);
+    expect(
+      passesAttentionFilter({
+        memberKeys,
+        threadKey: "environment-a:other",
+        pinned: false,
+        alwaysShowPinned: true,
       }),
     ).toBe(false);
   });

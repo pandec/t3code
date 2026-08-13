@@ -35,7 +35,10 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
-import { useArchivedSectionVisibleCount } from "../../state/use-mobile-preferences";
+import {
+  useAlwaysShowPinnedInAttention,
+  useArchivedSectionVisibleCount,
+} from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -227,6 +230,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -754,6 +758,7 @@ export function HomeScreen(props: HomeScreenProps) {
     return buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: props.attentionMemberThreadKeys,
+      alwaysShowPinnedInAttention,
       environmentId: props.selectedEnvironmentId,
       model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -770,6 +775,7 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
+    alwaysShowPinnedInAttention,
     changeRequestStateByKey,
     nowMinute,
     snoozeWakeTick,

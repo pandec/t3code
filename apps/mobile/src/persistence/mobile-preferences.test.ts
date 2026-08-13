@@ -25,6 +25,17 @@ import {
 import * as MobileSecureStorage from "./mobile-secure-storage";
 
 describe("mobile preferences persistence", () => {
+  it("keeps valid pinned visibility preferences", () => {
+    expect(
+      sanitizePreferences({ sidebarAlwaysShowPinnedInAttention: true })
+        .sidebarAlwaysShowPinnedInAttention,
+    ).toBe(true);
+    expect(
+      sanitizePreferences({ sidebarAlwaysShowPinnedInAttention: "yes" as unknown as boolean })
+        .sidebarAlwaysShowPinnedInAttention,
+    ).toBeUndefined();
+  });
+
   it("keeps only valid persisted thread visit timestamps", () => {
     expect(
       sanitizePreferences({

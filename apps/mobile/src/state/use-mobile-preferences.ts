@@ -50,6 +50,11 @@ export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   return useMemo(() => clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS), [value]);
 }
 
+export function useAlwaysShowPinnedInAttention(): boolean {
+  const { preferences } = useMobilePreferences();
+  return preferences.sidebarAlwaysShowPinnedInAttention ?? false;
+}
+
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {
   const { preferences } = useMobilePreferences();
   const value = preferences.archivedSectionVisibleCount;

@@ -1,3 +1,4 @@
+import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import {
   effectiveSettled,
   effectiveSnoozed,
@@ -362,6 +363,7 @@ export function buildThreadListV2Items(input: {
   /** Sticky "needs attention" membership ("environmentId:threadId" keys).
       Null/absent leaves the list unfiltered. */
   readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
+  readonly alwaysShowPinnedInAttention?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
   readonly model?: string | null;
@@ -415,8 +417,12 @@ export function buildThreadListV2Items(input: {
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
     if (
-      input.attentionMemberThreadKeys != null &&
-      !input.attentionMemberThreadKeys.has(`${thread.environmentId}:${thread.id}`)
+      !passesAttentionFilter({
+        memberKeys: input.attentionMemberThreadKeys ?? null,
+        threadKey: `${thread.environmentId}:${thread.id}`,
+        pinned: thread.pinnedAt != null,
+        alwaysShowPinned: input.alwaysShowPinnedInAttention === true,
+      })
     ) {
       continue;
     }

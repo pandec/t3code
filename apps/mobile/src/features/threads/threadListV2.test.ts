@@ -280,6 +280,34 @@ describe("buildThreadListV2Items", () => {
     expect(layout.items.map((item) => item.thread.id)).toEqual(["included"]);
   });
 
+  it("optionally keeps pinned non-members in the attention-filtered list", () => {
+    const pinned = makeThread({
+      id: ThreadId.make("pinned"),
+      title: "Pinned",
+      pinnedAt: NOW,
+    });
+    const regular = makeThread({ id: ThreadId.make("regular"), title: "Regular" });
+
+    const hidden = buildThreadListV2Items({
+      threads: [pinned, regular],
+      attentionMemberThreadKeys: new Set(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(hidden.items).toEqual([]);
+
+    const visible = buildThreadListV2Items({
+      threads: [pinned, regular],
+      attentionMemberThreadKeys: new Set(),
+      alwaysShowPinnedInAttention: true,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(visible.items.map((item) => item.thread.id)).toEqual(["pinned"]);
+  });
+
   it("moves a bumped active thread first without changing shelf placement", () => {
     const layout = buildThreadListV2Items({
       threads: [
