@@ -1,19 +1,15 @@
-import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  admitNewAttentionKeys,
+  createAttentionFilter,
+  hasUnseenWake,
+  isThreadAttention,
+} from "@t3tools/client-runtime/state/thread-attention";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { isLatestTurnSettled } from "./threadPresentation";
 import { resolveThreadListV2Status } from "./threadListV2";
-
-/**
- * Sticky "needs attention" filter, ported from the web sidebar v2
- * (apps/web/src/components/Sidebar.logic.ts: isSidebarV2AttentionThread and
- * the SidebarV2AttentionFilterState helpers), same as the rest of the Thread
- * List v2 model in threadListV2.ts.
- *
- * Like web, mobile persists device-local per-thread visit markers and compares
- * them with completion and wake timestamps.
- */
 
 export type ThreadAttentionShell = Pick<
   EnvironmentThreadShell,
@@ -24,10 +20,11 @@ export type ThreadAttentionShell = Pick<
   | "interactionMode"
   | "latestTurn"
   | "session"
-  | "snoozedUntil"
-  | "snoozedAt"
 >;
 
+// This fork-added helper stays local because upstream's resolveThreadStatusPill
+// now consumes its web copy; with hasUnseenCompletion it remains a known drift
+// surface rather than deepening fork edits in upstream-owned status logic.
 function hasPlanReadyPrompt(thread: ThreadAttentionShell): boolean {
   return (
     !thread.hasPendingUserInput &&
@@ -50,35 +47,20 @@ export function hasUnseenCompletion(
   return Number.isNaN(lastVisitedAtMs) || completedAt > lastVisitedAtMs;
 }
 
-export function hasUnseenWake(input: {
-  wokeAt: string | null;
-  lastVisitedAt?: string | undefined;
-}): boolean {
-  if (input.wokeAt === null) return false;
-  const wokeAt = Date.parse(input.wokeAt);
-  if (Number.isNaN(wokeAt)) return false;
-  if (input.lastVisitedAt === undefined) return true;
-
-  const lastVisitedAt = Date.parse(input.lastVisitedAt);
-  return Number.isNaN(lastVisitedAt) || wokeAt > lastVisitedAt;
-}
+export { hasUnseenWake };
 
 export function isThreadAttentionShell(
-  thread: ThreadAttentionShell,
+  thread: ThreadAttentionShell & Pick<EnvironmentThreadShell, "snoozedUntil" | "snoozedAt">,
   options: { readonly now: string; readonly lastVisitedAt?: string | undefined },
 ): boolean {
   const status = resolveThreadListV2Status(thread);
-  const isWoke = hasUnseenWake({
+  return isThreadAttention({
+    isReady: status === "ready",
+    readyAttentionSignal:
+      hasPlanReadyPrompt(thread) || hasUnseenCompletion(thread, options.lastVisitedAt),
     wokeAt: threadWokeAt(thread, { now: options.now }),
     ...(options.lastVisitedAt === undefined ? {} : { lastVisitedAt: options.lastVisitedAt }),
   });
-  if (isWoke && status === "ready") return false;
-
-  return (
-    status !== "ready" ||
-    hasPlanReadyPrompt(thread) ||
-    hasUnseenCompletion(thread, options.lastVisitedAt)
-  );
 }
 
 export interface ThreadAttentionFilterState {
@@ -97,40 +79,37 @@ export function pendingTaskAttentionKey(input: {
   return `${input.environmentId}:${input.messageId}`;
 }
 
-/**
- * Snapshots current attention membership. Membership is sticky: a member
- * stays visible while the filter is on even after its status clears, so the
- * list never yanks a row out from under the user; toggling off and back on
- * takes a fresh snapshot.
- */
 export function createThreadAttentionFilter(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTaskKeys?: ReadonlyArray<string>;
   readonly now: string;
   readonly lastVisitedAtByThreadKey?: ReadonlyMap<string, string>;
 }): ThreadAttentionFilterState {
-  const memberThreadKeys = new Set<string>();
-  const knownThreadKeys = new Set<string>();
-  const knownPendingTaskKeys = new Set(input.pendingTaskKeys ?? []);
-  const memberPendingTaskKeys = new Set(knownPendingTaskKeys);
+  const initialMemberThreadKeys: string[] = [];
+  const threadKeys: string[] = [];
   for (const thread of input.threads) {
     const threadKey = scopedThreadKey(thread.environmentId, thread.id);
-    knownThreadKeys.add(threadKey);
-    if (thread.archivedAt !== null) continue;
+    threadKeys.push(threadKey);
     const lastVisitedAt = input.lastVisitedAtByThreadKey?.get(threadKey);
     if (
+      thread.archivedAt === null &&
       isThreadAttentionShell(thread, {
         now: input.now,
         ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
       })
     ) {
-      memberThreadKeys.add(threadKey);
+      initialMemberThreadKeys.push(threadKey);
     }
   }
+  const state = createAttentionFilter({
+    initialMemberKeys: initialMemberThreadKeys,
+    keys: threadKeys,
+  });
+  const knownPendingTaskKeys = new Set(input.pendingTaskKeys ?? []);
   return {
-    memberThreadKeys,
-    knownThreadKeys,
-    memberPendingTaskKeys,
+    memberThreadKeys: state.memberKeys,
+    knownThreadKeys: state.knownKeys,
+    memberPendingTaskKeys: new Set(knownPendingTaskKeys),
     knownPendingTaskKeys,
   };
 }
@@ -140,44 +119,27 @@ export function admitNewThreadAttentionThreads(
   threads: ReadonlyArray<ThreadAttentionKeyInput>,
   pendingTaskKeys: ReadonlyArray<string> = [],
 ): ThreadAttentionFilterState {
-  let knownThreadKeys: Set<string> | null = null;
-  let memberThreadKeys: Set<string> | null = null;
-  let knownPendingTaskKeys: Set<string> | null = null;
-  let memberPendingTaskKeys: Set<string> | null = null;
-
-  for (const thread of threads) {
-    const threadKey = scopedThreadKey(thread.environmentId, thread.id);
-    if (state.knownThreadKeys.has(threadKey)) continue;
-
-    knownThreadKeys ??= new Set(state.knownThreadKeys);
-    memberThreadKeys ??= new Set(state.memberThreadKeys);
-    knownThreadKeys.add(threadKey);
-    // Admission is based on first appearance after the captured baseline, not
-    // createdAt: connected environments have independent clocks, so comparing
-    // their timestamps with the device clock can reject a genuine new thread.
-    memberThreadKeys.add(threadKey);
-  }
-
-  for (const pendingTaskKey of pendingTaskKeys) {
-    if (state.knownPendingTaskKeys.has(pendingTaskKey)) continue;
-    knownPendingTaskKeys ??= new Set(state.knownPendingTaskKeys);
-    memberPendingTaskKeys ??= new Set(state.memberPendingTaskKeys);
-    knownPendingTaskKeys.add(pendingTaskKey);
-    memberPendingTaskKeys.add(pendingTaskKey);
-  }
+  const threadState = admitNewAttentionKeys(
+    { memberKeys: state.memberThreadKeys, knownKeys: state.knownThreadKeys },
+    threads.map((thread) => scopedThreadKey(thread.environmentId, thread.id)),
+  );
+  const pendingTaskState = admitNewAttentionKeys(
+    { memberKeys: state.memberPendingTaskKeys, knownKeys: state.knownPendingTaskKeys },
+    pendingTaskKeys,
+  );
 
   if (
-    knownThreadKeys === null &&
-    memberThreadKeys === null &&
-    knownPendingTaskKeys === null &&
-    memberPendingTaskKeys === null
+    threadState.memberKeys === state.memberThreadKeys &&
+    threadState.knownKeys === state.knownThreadKeys &&
+    pendingTaskState.memberKeys === state.memberPendingTaskKeys &&
+    pendingTaskState.knownKeys === state.knownPendingTaskKeys
   ) {
     return state;
   }
   return {
-    knownThreadKeys: knownThreadKeys ?? state.knownThreadKeys,
-    memberThreadKeys: memberThreadKeys ?? state.memberThreadKeys,
-    knownPendingTaskKeys: knownPendingTaskKeys ?? state.knownPendingTaskKeys,
-    memberPendingTaskKeys: memberPendingTaskKeys ?? state.memberPendingTaskKeys,
+    memberThreadKeys: threadState.memberKeys,
+    knownThreadKeys: threadState.knownKeys,
+    memberPendingTaskKeys: pendingTaskState.memberKeys,
+    knownPendingTaskKeys: pendingTaskState.knownKeys,
   };
 }
