@@ -64,11 +64,29 @@ const STATUS_LABEL_BY_STATUS: Partial<
   approval: { label: "Approval", className: "text-amber-700 dark:text-amber-300" },
   input: { label: "Input", className: "text-indigo-600 dark:text-indigo-300" },
   working: { label: "Working", className: "text-sky-600 dark:text-sky-400" },
+  monitoring: { label: "Monitoring", className: "text-sky-600 dark:text-sky-400" },
   failed: { label: "Failed", className: "text-red-700 dark:text-red-300" },
 };
 
 function threadTimeLabel(thread: EnvironmentThreadShell): string {
   return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
+}
+
+export function resolveThreadListV2WorkingTimeLabel(
+  thread: Pick<EnvironmentThreadShell, "latestTurn" | "session">,
+  status: ThreadListV2Status,
+): string | null {
+  if (status !== "working") return null;
+  const turn = thread.latestTurn;
+  const candidates =
+    turn?.completedAt === null
+      ? [turn.startedAt, turn.requestedAt, thread.session?.updatedAt]
+      : [thread.session?.updatedAt];
+  const startedAt = candidates.find(
+    (candidate): candidate is string => candidate != null && !Number.isNaN(Date.parse(candidate)),
+  );
+  // Coarse relative time stays truthful without a per-row ticker; seconds would quickly go stale.
+  return startedAt === undefined ? null : relativeTime(startedAt);
 }
 
 const MENU_ACTION_BY_ID: Readonly<Record<ThreadListV2MenuActionId, MenuAction>> = {
@@ -482,6 +500,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const status = resolveThreadListV2Status(thread);
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
+  const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRegenerateTitle = useCallback(
@@ -782,6 +801,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         >
           {statusLabel?.label ?? timeLabel}
+          {workingLabel === null ? null : ` ${workingLabel}`}
         </Text>
       </View>
       <Text

@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -141,30 +142,12 @@ describe("resolveThreadListV2Enabled", () => {
 });
 
 describe("resolveThreadListV2Status", () => {
-  it("prioritizes approval over a running session", () => {
-    const thread = makeThread({
-      id: ThreadId.make("t"),
-      title: "t",
-      hasPendingApprovals: true,
-      session: {
-        threadId: ThreadId.make("t"),
-        status: "running",
-        providerName: "Codex",
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        runtimeMode: "full-access",
-        activeTurnId: null,
-        lastError: null,
-        updatedAt: NOW,
-      },
-    });
-    expect(resolveThreadListV2Status(thread)).toBe("approval");
-  });
-
-  it("resolves ready for quiescent threads", () => {
-    expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
-      "ready",
-    );
-  });
+  it.each(THREAD_STATUS_PARITY_CASES)(
+    "matches the canonical ladder: $name",
+    ({ thread, expected }) => {
+      expect(resolveThreadListV2Status(thread)).toBe(expected);
+    },
+  );
 });
 
 describe("resolveThreadListV2SwipeActions", () => {

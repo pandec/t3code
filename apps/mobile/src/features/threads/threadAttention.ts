@@ -17,6 +17,7 @@ import { resolveThreadListV2Status } from "./threadListV2";
 
 export type ThreadAttentionShell = Pick<
   EnvironmentThreadShell,
+  | "backgroundLiveness"
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
@@ -66,14 +67,17 @@ export function isThreadAttentionShell(
   thread: ThreadAttentionShell,
   options: { readonly now: string; readonly lastVisitedAt?: string | undefined },
 ): boolean {
+  const status = resolveThreadListV2Status(thread);
+  const isWoke = hasUnseenWake({
+    wokeAt: threadWokeAt(thread, { now: options.now }),
+    ...(options.lastVisitedAt === undefined ? {} : { lastVisitedAt: options.lastVisitedAt }),
+  });
+  if (isWoke && status === "ready") return false;
+
   return (
-    resolveThreadListV2Status(thread) !== "ready" ||
+    status !== "ready" ||
     hasPlanReadyPrompt(thread) ||
-    hasUnseenCompletion(thread, options.lastVisitedAt) ||
-    hasUnseenWake({
-      wokeAt: threadWokeAt(thread, { now: options.now }),
-      ...(options.lastVisitedAt === undefined ? {} : { lastVisitedAt: options.lastVisitedAt }),
-    })
+    hasUnseenCompletion(thread, options.lastVisitedAt)
   );
 }
 
