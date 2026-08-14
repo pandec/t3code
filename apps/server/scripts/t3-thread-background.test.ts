@@ -370,7 +370,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
       yield* createFixtureDatabase(baseDir);
 
-      const reports = yield* runThreadBackground({ baseDir, threadId: "t-live", all: false });
+      const { reports } = yield* runThreadBackground({ baseDir, threadId: "t-live", all: false });
 
       assert.equal(reports.length, 1);
       assert.equal(reports[0]?.liveness, "monitoring");
@@ -392,7 +392,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
       yield* createFixtureDatabase(baseDir);
 
-      const reports = yield* runThreadBackground({ baseDir, threadId: "t-quiet", all: false });
+      const { reports } = yield* runThreadBackground({ baseDir, threadId: "t-quiet", all: false });
 
       assert.equal(reports.length, 1);
       assert.equal(reports[0]?.liveness, null);
@@ -407,7 +407,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
       yield* createFixtureDatabase(baseDir);
 
-      const reports = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
+      const { reports } = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
 
       // t-quiet's only task ended, so it is absent entirely; the two threads
       // with surviving tasks are reported with different verdicts.
@@ -427,7 +427,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
       yield* createFixtureDatabase(baseDir);
 
-      const reports = yield* runThreadBackground({
+      const { reports } = yield* runThreadBackground({
         baseDir,
         threadId: undefined,
         all: false,
@@ -449,7 +449,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
 
       // A dev server's state lives in `<home>/dev`, not `<home>/userdata`, so
       // T3CODE_STATE_DIR must win over any path rebuilt from T3CODE_HOME.
-      const reports = yield* runThreadBackground({
+      const { reports } = yield* runThreadBackground({
         baseDir: undefined,
         threadId: "t-live",
         all: false,
@@ -475,7 +475,7 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
 
       // No --base-dir: without honouring T3CODE_HOME this would open ~/.t3 and
       // report on the wrong server entirely.
-      const reports = yield* runThreadBackground({
+      const { reports } = yield* runThreadBackground({
         baseDir: undefined,
         threadId: "t-live",
         all: false,
@@ -494,11 +494,71 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
       yield* createFixtureDatabase(baseDir);
 
-      const reports = yield* runThreadBackground({ baseDir, threadId: "t-codex", all: false });
+      const { reports } = yield* runThreadBackground({ baseDir, threadId: "t-codex", all: false });
 
       assert.equal(reports[0]?.verdict, "unknown");
       assert.equal(reports[0]?.session?.outcome, "unsupported");
       assert.include(reports[0]?.session?.unsupportedReason ?? "", "codex");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("dismisses orphans permanently, without touching the database", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+      const databasePath = path.join(baseDir, "userdata", "state.sqlite");
+      const before = (yield* fs.stat(databasePath)).size;
+
+      const first = yield* runThreadBackground({
+        baseDir,
+        threadId: undefined,
+        all: true,
+        dismissOrphans: true,
+      });
+      // t-live's orphan is recorded; t-codex is UNKNOWN and must never be
+      // dismissed — an unprobeable session could still be doing the work.
+      assert.equal(first.newlyDismissed, 1);
+      assert.deepEqual(
+        first.reports.map((report) => report.threadId),
+        ["t-codex"],
+      );
+
+      const second = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
+      assert.equal(second.hiddenOrphans, 1);
+      assert.equal(second.newlyDismissed, 0);
+      assert.deepEqual(
+        second.reports.map((report) => report.threadId),
+        ["t-codex"],
+      );
+
+      // The ledger itself is untouched; only the caches sidecar was written.
+      assert.equal((yield* fs.stat(databasePath)).size, before);
+      const sidecar = path.join(baseDir, "caches", "t3-thread-background-dismissed.json");
+      assert.isTrue(yield* fs.exists(sidecar));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("resurfaces dismissed orphans when everything is requested", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+
+      yield* runThreadBackground({ baseDir, threadId: undefined, all: true, dismissOrphans: true });
+      const result = yield* runThreadBackground({
+        baseDir,
+        threadId: undefined,
+        all: true,
+        includeDismissed: true,
+      });
+
+      assert.include(
+        result.reports.map((report) => report.threadId),
+        "t-live",
+      );
+      assert.equal(result.hiddenOrphans, 0);
     }).pipe(Effect.scoped),
   );
 

@@ -69,8 +69,11 @@ authenticated.
   as a project action with no arguments — including from a dev server, whose state lives in
   `<home>/dev` rather than `<home>/userdata`; `--all` sweeps every thread and `--show-all-children` disables
   the MCP-server filter on the process list. Orphaned threads compact to one `id — title` line each
-  (their rows are permanent, so a sweep accumulates them forever); `--show-orphaned` prints their
-  full blocks. Read-only.
+  (their rows are permanent, so a sweep accumulates them forever); `--dismiss-orphans` records the
+  current ones in `<base>/caches/t3-thread-background-dismissed.json` and silences them for good —
+  safe because an orphan verdict is permanent, and undone by deleting that file — while
+  `--show-orphaned` prints full blocks including dismissed ones. The database itself is only ever
+  read.
 
   It replays the persisted `task.*` activity rows through the real
   `ThreadBackgroundLivenessService`, so it shares the sidebar pill's classifier rather than

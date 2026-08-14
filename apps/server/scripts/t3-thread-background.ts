@@ -41,6 +41,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeProcess from "node:process";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -625,7 +626,33 @@ export interface RunThreadBackgroundInput {
   readonly threadId: string | undefined;
   readonly all: boolean;
   readonly showAllChildren?: boolean;
+  /** Record every currently-orphaned task as dismissed, then hide it. */
+  readonly dismissOrphans?: boolean;
+  /** Resurface dismissed orphans (the `--show-orphaned` view wants everything). */
+  readonly includeDismissed?: boolean;
 }
+
+export interface ThreadBackgroundResult {
+  readonly reports: ReadonlyArray<ThreadReport>;
+  /** Threads hidden entirely because every orphaned task was dismissed earlier. */
+  readonly hiddenOrphans: number;
+  /** Tasks recorded as dismissed by this run (`--dismiss-orphans`). */
+  readonly newlyDismissed: number;
+}
+
+/**
+ * Dismissals live in a sidecar under `<base>/caches`, never in state.sqlite —
+ * the ledger stays untouched. Safe to persist because an ORPHANED verdict is
+ * permanent: the dead process tree cannot come back, and resuming the thread
+ * creates new task ids. Deleting the file undoes every dismissal.
+ */
+const DISMISSED_FILE = "t3-thread-background-dismissed.json";
+
+const DismissedTasksFile = Schema.Struct({ dismissedTasks: Schema.Array(Schema.String) });
+const decodeDismissedTasks = Schema.decodeUnknownEffect(fromJsonStringPretty(DismissedTasksFile));
+const encodeDismissedTasks = Schema.encodeEffect(fromJsonStringPretty(DismissedTasksFile));
+
+const dismissedTaskKey = (task: LiveTask): string => `${task.threadId} ${task.taskId}`;
 
 export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
   input: RunThreadBackgroundInput,
@@ -752,10 +779,70 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
     return yield* sql.withTransaction(readReports);
   });
 
-  return yield* program.pipe(
+  const reports = yield* program.pipe(
     Effect.provide(NodeSqliteClient.layer({ filename: databasePath, readonly: true })),
     Effect.mapError((cause) => new ThreadBackgroundDatabaseError({ databasePath, cause })),
   );
+
+  // `<state>/..` is the T3 base for every layout (userdata, dev, worktree
+  // .t3/dev), and `caches` already exists there for other server sidecars.
+  const cachesDir = path.join(path.dirname(path.resolve(stateDir)), "caches");
+  const dismissedPath = path.join(cachesDir, DISMISSED_FILE);
+  // A missing or unreadable file is an empty dismissal list, not an error.
+  const dismissed = new Set(
+    (yield* fs.readFileString(dismissedPath).pipe(
+      Effect.flatMap(decodeDismissedTasks),
+      Effect.orElseSucceed(() => ({ dismissedTasks: [] as ReadonlyArray<string> })),
+    )).dismissedTasks,
+  );
+
+  let newlyDismissed = 0;
+  if (input.dismissOrphans === true) {
+    for (const report of reports) {
+      if (report.verdict !== "orphaned") continue;
+      for (const task of report.tasks) {
+        const key = dismissedTaskKey(task);
+        if (!dismissed.has(key)) {
+          dismissed.add(key);
+          newlyDismissed += 1;
+        }
+      }
+    }
+    if (newlyDismissed > 0) {
+      yield* fs.makeDirectory(cachesDir, { recursive: true }).pipe(Effect.ignore);
+      const serialized = yield* encodeDismissedTasks({
+        dismissedTasks: [...dismissed].toSorted(),
+      }).pipe(Effect.orDie);
+      yield* fs
+        .writeFileString(dismissedPath, serialized)
+        .pipe(
+          Effect.mapError(
+            (cause) => new ThreadBackgroundDatabaseError({ databasePath: dismissedPath, cause }),
+          ),
+        );
+    }
+  }
+
+  // Only an orphaned thread can be muted: LIVE and UNKNOWN must always
+  // surface, even if a stale dismissal somehow names one of their tasks.
+  let hiddenOrphans = 0;
+  const visible: ThreadReport[] = [];
+  for (const report of reports) {
+    if (input.includeDismissed === true || report.verdict !== "orphaned") {
+      visible.push(report);
+      continue;
+    }
+    const remaining = report.tasks.filter((task) => !dismissed.has(dismissedTaskKey(task)));
+    if (remaining.length === 0) {
+      hiddenOrphans += 1;
+    } else if (remaining.length === report.tasks.length) {
+      visible.push(report);
+    } else {
+      visible.push({ ...report, tasks: remaining });
+    }
+  }
+
+  return { reports: visible, hiddenOrphans, newlyDismissed } satisfies ThreadBackgroundResult;
 });
 
 export const t3ThreadBackgroundCommand = Command.make(
@@ -782,7 +869,13 @@ export const t3ThreadBackgroundCommand = Command.make(
     showOrphaned: Flag.boolean("show-orphaned").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
-        "Print full blocks for orphaned threads instead of the one-line summary.",
+        "Print full blocks for orphaned threads instead of the one-line summary, including dismissed ones.",
+      ),
+    ),
+    dismissOrphans: Flag.boolean("dismiss-orphans").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        "Record the currently orphaned tasks as reviewed; future runs stop reporting them.",
       ),
     ),
     json: Flag.boolean("json").pipe(
@@ -790,20 +883,37 @@ export const t3ThreadBackgroundCommand = Command.make(
       Flag.withDescription("Emit the report as JSON."),
     ),
   },
-  ({ thread, baseDir, all, json, showAllChildren, showOrphaned }) =>
+  ({ thread, baseDir, all, json, showAllChildren, showOrphaned, dismissOrphans }) =>
     runThreadBackground({
       baseDir: Option.getOrUndefined(baseDir),
       threadId: Option.getOrUndefined(thread),
       all,
       showAllChildren,
+      dismissOrphans,
+      includeDismissed: showOrphaned,
     }).pipe(
-      Effect.flatMap((reports) =>
-        Console.log(
-          json
-            ? JSON.stringify({ threads: reports }, null, 2)
-            : formatReports(reports, { showOrphaned }),
-        ),
-      ),
+      Effect.flatMap((result) => {
+        if (json) {
+          return Console.log(
+            JSON.stringify(
+              {
+                threads: result.reports,
+                hiddenOrphans: result.hiddenOrphans,
+                newlyDismissed: result.newlyDismissed,
+              },
+              null,
+              2,
+            ),
+          );
+        }
+        const lines = [formatReports(result.reports, { showOrphaned })];
+        if (result.newlyDismissed > 0) {
+          lines.push(
+            `Dismissed ${result.newlyDismissed} orphaned task${result.newlyDismissed === 1 ? "" : "s"}; future runs will not report them (delete caches/${DISMISSED_FILE} to undo).`,
+          );
+        }
+        return Console.log(lines.join("\n"));
+      }),
     ),
 ).pipe(
   Command.withDescription(
