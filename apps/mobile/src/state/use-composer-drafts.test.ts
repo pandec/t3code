@@ -141,6 +141,7 @@ import {
   type ComposerDraft,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
+  mergeHydratedComposerDrafts,
   removeComposerDraftAttachment,
   removeComposerDraftsForEnvironment,
   replaceComposerDraftAttachments,
@@ -300,6 +301,51 @@ describe("mobile composer drafts", () => {
     });
   });
 
+  it("strips legacy setting fields from hydrated existing-thread drafts", () => {
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    };
+
+    expect(
+      mergeHydratedComposerDrafts(
+        {
+          "environment-1:thread-with-content": {
+            text: "legacy content",
+            attachments: [],
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          },
+          "environment-1:thread-settings-only": {
+            text: "",
+            attachments: [],
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          },
+          "new-task:environment-1:project-1": {
+            text: "",
+            attachments: [],
+            modelSelection,
+          },
+        },
+        {},
+        new Set(),
+      ),
+    ).toEqual({
+      "environment-1:thread-with-content": {
+        text: "legacy content",
+        attachments: [],
+      },
+      "new-task:environment-1:project-1": {
+        text: "",
+        attachments: [],
+        modelSelection,
+      },
+    });
+  });
+
   it("keeps legacy content-only drafts and rejects invalid selector state", () => {
     expect(
       decodePersistedComposerDrafts({
@@ -325,7 +371,7 @@ describe("mobile composer drafts", () => {
     ).toThrow();
   });
 
-  it("clears sent content without clearing the selected model or workspace", () => {
+  it("clears sent content and staged setting fields for an existing thread", () => {
     const draftKey = "environment-1:thread-1";
     const draft: ComposerDraft = {
       text: "send this",
@@ -336,6 +382,8 @@ describe("mobile composer drafts", () => {
         model: "gpt-5.4",
         options: [{ id: "reasoningEffort", value: "xhigh" }],
       },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
       workspaceSelection: {
         mode: "worktree",
         branch: "main",
@@ -345,12 +393,43 @@ describe("mobile composer drafts", () => {
 
     expect(clearComposerDraftContentState({ [draftKey]: draft }, draftKey)).toEqual({
       [draftKey]: {
-        modelSelection: draft.modelSelection,
         workspaceSelection: draft.workspaceSelection,
         text: "",
         attachments: [],
       },
     });
+  });
+
+  it("retains setting fields for new-task and pending-task drafts", () => {
+    const settings = {
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+      },
+      runtimeMode: "approval-required" as const,
+      interactionMode: "plan" as const,
+    };
+
+    for (const draftKey of ["new-task:environment-1:project-1", "pending-task:message-1"]) {
+      expect(
+        clearComposerDraftContentState(
+          {
+            [draftKey]: {
+              text: "send this",
+              attachments: [],
+              ...settings,
+            },
+          },
+          draftKey,
+        ),
+      ).toEqual({
+        [draftKey]: {
+          ...settings,
+          text: "",
+          attachments: [],
+        },
+      });
+    }
   });
 
   it("clears content only while it still matches the submitted snapshot", () => {

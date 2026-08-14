@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
+import { ProviderInstanceId } from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 
 const persistedFiles = new Map<string, string>();
@@ -130,6 +131,7 @@ vi.mock("expo-crypto", () => ({
 import {
   ComposerDraftBatchPersistenceError,
   composerDraftAttachmentReferenceCounts,
+  decodePersistedComposerDrafts,
   hydratePersistedComposerDraftKey,
   loadPersistedComposerDrafts,
   orphanComposerDraftAttachmentFileNames,
@@ -221,6 +223,63 @@ describe("composer draft record split", () => {
         contentHash: "shared-content-hash",
       },
     ]);
+  });
+
+  it("keeps legacy setting fields decodable", () => {
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    };
+    expect(
+      decodePersistedComposerDrafts({
+        schemaVersion: 1,
+        drafts: {
+          "environment-1:thread-1": {
+            text: "legacy draft",
+            attachments: [],
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          },
+        },
+      }),
+    ).toEqual({
+      "environment-1:thread-1": {
+        text: "legacy draft",
+        attachments: [],
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+    });
+  });
+
+  it("omits setting fields from existing-thread records but retains new-task settings", async () => {
+    const settings = {
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+      },
+      runtimeMode: "approval-required" as const,
+      interactionMode: "plan" as const,
+    };
+    const serverSplit = await splitComposerDraftForPersistence(
+      "environment-1:thread-1",
+      { text: "draft", attachments: [], ...settings },
+      async () => "unused",
+    );
+    const newTaskSplit = await splitComposerDraftForPersistence(
+      "new-task:environment-1:project-1",
+      { text: "draft", attachments: [], ...settings },
+      async () => "unused",
+    );
+
+    expect(serverSplit.record.draft).toEqual({ text: "draft", attachments: [] });
+    expect(newTaskSplit.record.draft).toEqual({
+      text: "draft",
+      attachments: [],
+      ...settings,
+    });
   });
 
   it("keeps record and attachment destinations after temporary file handles move", async () => {
@@ -354,7 +413,10 @@ describe("composer draft record split", () => {
       ),
     ).toHaveLength(1);
     await expect(loadPersistedComposerDrafts()).resolves.toEqual({
-      "environment-1:thread-legacy": draft,
+      "environment-1:thread-legacy": {
+        text: draft.text,
+        attachments: draft.attachments,
+      },
     });
   });
 

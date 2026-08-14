@@ -11,6 +11,7 @@ import { useEffect } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 import {
@@ -21,6 +22,7 @@ import {
   loadPersistedComposerDraftState,
   persistComposerDraftKeys,
 } from "./composer-draft-persistence";
+import { removeStagedThreadSettingsForEnvironment } from "./use-thread-staged-settings";
 
 export { ComposerDraftPersistenceError, decodePersistedComposerDrafts };
 
@@ -113,6 +115,24 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.interactionMode === undefined &&
     draft.workspaceSelection === undefined
   );
+}
+
+function stripThreadDraftSettings(draft: ComposerDraft): ComposerDraft {
+  const {
+    modelSelection: _modelSelection,
+    runtimeMode: _runtimeMode,
+    interactionMode: _interactionMode,
+    ...stripped
+  } = draft;
+  return stripped;
+}
+
+function sanitizeHydratedComposerDraft(
+  draftKey: string,
+  draft: ComposerDraft,
+): ComposerDraft | null {
+  const sanitized = isServerThreadDraftKey(draftKey) ? stripThreadDraftSettings(draft) : draft;
+  return isEmptyDraft(sanitized) ? null : sanitized;
 }
 
 const pendingDraftKeys = new Set<string>();
@@ -426,7 +446,13 @@ export function mergeHydratedComposerDrafts(
   mutatedDraftKeys: ReadonlySet<string>,
 ): Record<string, ComposerDraft> {
   const retainedPersistedDrafts = Object.fromEntries(
-    Object.entries(persistedDrafts).filter(([draftKey]) => !mutatedDraftKeys.has(draftKey)),
+    Object.entries(persistedDrafts).flatMap(([draftKey, draft]) => {
+      if (mutatedDraftKeys.has(draftKey)) {
+        return [];
+      }
+      const sanitized = sanitizeHydratedComposerDraft(draftKey, draft);
+      return sanitized ? [[draftKey, sanitized]] : [];
+    }),
   );
   return {
     ...retainedPersistedDrafts,
@@ -802,8 +828,11 @@ export function clearComposerDraftContentState(
     workspaceSelection,
     ...retained
   } = existing;
+  const retainedSettings = isServerThreadDraftKey(draftKey)
+    ? stripThreadDraftSettings(retained)
+    : retained;
   const draft = {
-    ...retained,
+    ...retainedSettings,
     ...(options?.clearWorkspaceSelection || workspaceSelection === undefined
       ? {}
       : { workspaceSelection }),
@@ -1083,6 +1112,7 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     await loadPromise;
   }
 
+  removeStagedThreadSettingsForEnvironment(environmentId);
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = removeComposerDraftsForEnvironment(current, environmentId);
   const removedDraftKeys = Object.keys(current).filter((draftKey) => !(draftKey in next));

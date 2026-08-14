@@ -9,6 +9,7 @@ import type { Directory as ExpoDirectory } from "expo-file-system";
 
 import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import type { ComposerDraft } from "./use-composer-drafts";
 
 const LEGACY_SCHEMA_VERSION = 1;
@@ -140,6 +141,19 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
   );
 }
 
+function composerDraftForPersistence(draftKey: string, draft: ComposerDraft): ComposerDraft {
+  if (!isServerThreadDraftKey(draftKey)) {
+    return draft;
+  }
+  const {
+    modelSelection: _modelSelection,
+    runtimeMode: _runtimeMode,
+    interactionMode: _interactionMode,
+    ...stripped
+  } = draft;
+  return stripped;
+}
+
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodeLegacyComposerDraftsDocument(value);
   return Object.fromEntries(
@@ -178,12 +192,13 @@ export async function splitComposerDraftForPersistence(
     attachments.push(attachmentReference(attachment, contentHash));
   }
 
+  const persistedDraft = composerDraftForPersistence(draftKey, draft);
   return {
     record: {
       schemaVersion: RECORD_SCHEMA_VERSION,
       draftKey,
       draft: {
-        ...draft,
+        ...persistedDraft,
         attachments,
       },
     },
@@ -721,6 +736,10 @@ export async function persistComposerDraftKeys(
         draft,
         cachedAttachmentContentHash,
       );
+      if (isEmptyPersistedDraft(split.record.draft)) {
+        await removeDraftRecord(draftKey);
+        continue;
+      }
       await writeAttachmentContents(split.attachmentContents, options?.verify === true);
       await writeDraftRecord(split.record, options?.verify === true);
     } catch (error) {

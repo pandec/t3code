@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Alert } from "react-native";
 
 import {
@@ -47,7 +47,6 @@ import {
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
   setComposerDraftText,
-  updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
@@ -60,6 +59,13 @@ import { threadEnvironment, useLoadOlderMessages, useThreadMessageWindow } from 
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
+import {
+  getStagedThreadSettings,
+  pruneExpiredStagedThreadSettings,
+  resolveStagedThreadSettings,
+  stageThreadSettings,
+  useStagedThreadSettings,
+} from "./use-thread-staged-settings";
 
 const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const EMPTY_THREAD_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -121,6 +127,7 @@ export function useThreadComposerState() {
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
     : null;
+  const stagedThreadSettings = useStagedThreadSettings(selectedThreadKey);
   const selectedThreadQueuedMessages = useMemo(
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
@@ -167,9 +174,23 @@ export function useThreadComposerState() {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-  const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
-  const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+  // Latch staged-override expiry: once the thread moves off a field's
+  // baseline the entry is deleted, so a later return to the baseline value
+  // (another client's pick, a plan follow-up flipping modes back) cannot
+  // revive a pick the user is no longer looking at.
+  useEffect(() => {
+    if (selectedThreadKey && selectedThread) {
+      pruneExpiredStagedThreadSettings(selectedThreadKey, selectedThread);
+    }
+  }, [selectedThread, selectedThreadKey]);
+  const latestThreadRef = useRef(selectedThread);
+  latestThreadRef.current = selectedThread;
+  const resolvedThreadSettings = selectedThread
+    ? resolveStagedThreadSettings(stagedThreadSettings, selectedThread)
+    : null;
+  const modelSelection = resolvedThreadSettings?.modelSelection ?? null;
+  const runtimeMode = resolvedThreadSettings?.runtimeMode ?? null;
+  const interactionMode = resolvedThreadSettings?.interactionMode ?? null;
 
   const selectedThreadSessionActivity = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -227,6 +248,11 @@ export function useThreadComposerState() {
       }
       const draft = getComposerDraftSnapshot(threadKey);
       const thread = selectedThreadDetail ?? selectedThreadShell;
+      pruneExpiredStagedThreadSettings(threadKey, thread);
+      const stagedSettings = resolveStagedThreadSettings(
+        getStagedThreadSettings(threadKey),
+        thread,
+      );
       const text = draft.text.trim();
       const attachments = draft.attachments;
       if (text.length === 0 && attachments.length === 0) {
@@ -292,9 +318,9 @@ export function useThreadComposerState() {
         text,
         ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
         attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
+        modelSelection: stagedSettings.modelSelection,
+        runtimeMode: stagedSettings.runtimeMode,
+        interactionMode: stagedSettings.interactionMode,
         threadSettings: {
           archivedAt: thread.archivedAt,
           modelSelection: thread.modelSelection,
@@ -425,30 +451,33 @@ export function useThreadComposerState() {
 
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { modelSelection: value });
+      stageThreadSettings(selectedThreadKey, { modelSelection: value }, baseline);
     },
     [selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      stageThreadSettings(selectedThreadKey, { runtimeMode: value }, baseline);
     },
     [selectedThreadKey],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { interactionMode: value });
+      stageThreadSettings(selectedThreadKey, { interactionMode: value }, baseline);
     },
     [selectedThreadKey],
   );
