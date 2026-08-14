@@ -69,7 +69,11 @@ authenticated.
   as a project action with no arguments — including from a dev server, whose state lives in
   `<home>/dev` rather than `<home>/userdata`; `--all` sweeps every thread and `--show-all-children` disables
   the MCP-server filter on the process list. Orphaned threads compact to one `id — title` line each
-  (their rows are permanent, so a sweep accumulates them forever); `--dismiss-orphans` records the
+  (their rows are permanent, so a sweep accumulates them forever). Anything last seen before the
+  current server start (read from `server-runtime.json`) is hidden outright — a restart wipes the
+  in-memory registry the pill reads, so nothing older can be backing one; the cutoff is per-task, so
+  new work on such a thread reports normally while the old rows stay retired. For orphans detected
+  while the server is still running, `--dismiss-orphans` records the
   current ones in `<base>/caches/t3-thread-background-dismissed.json` and silences them for good —
   safe because an orphan verdict is permanent, and undone by deleting that file — while
   `--show-orphaned` prints full blocks including dismissed ones. The database itself is only ever

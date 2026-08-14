@@ -124,6 +124,8 @@ export interface ThreadReport {
    * behind by a dead session; `unknown` means the probe could not run.
    */
   readonly verdict: "live" | "orphaned" | "unknown" | "idle";
+  /** Set when every surviving task predates the current server start. */
+  readonly preRestart?: boolean;
   readonly tasks: ReadonlyArray<LiveTask>;
   readonly session: SessionProbe | null;
 }
@@ -636,6 +638,12 @@ export interface ThreadBackgroundResult {
   readonly reports: ReadonlyArray<ThreadReport>;
   /** Threads hidden entirely because every orphaned task was dismissed earlier. */
   readonly hiddenOrphans: number;
+  /**
+   * Threads hidden because all their surviving task rows predate the current
+   * server start. A restart wipes the in-memory registry, so nothing older
+   * than it can be backing a pill — no probe or dismissal needed.
+   */
+  readonly hiddenPreRestart: number;
   /** Tasks recorded as dismissed by this run (`--dismiss-orphans`). */
   readonly newlyDismissed: number;
 }
@@ -649,6 +657,10 @@ export interface ThreadBackgroundResult {
 const DISMISSED_FILE = "t3-thread-background-dismissed.json";
 
 const DismissedTasksFile = Schema.Struct({ dismissedTasks: Schema.Array(Schema.String) });
+const ServerRuntimeStateFile = Schema.Struct({ startedAt: Schema.String });
+const decodeServerRuntimeState = Schema.decodeUnknownEffect(
+  fromJsonStringPretty(ServerRuntimeStateFile),
+);
 const decodeDismissedTasks = Schema.decodeUnknownEffect(fromJsonStringPretty(DismissedTasksFile));
 const encodeDismissedTasks = Schema.encodeEffect(fromJsonStringPretty(DismissedTasksFile));
 
@@ -686,6 +698,22 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
   if (!(yield* fs.exists(databasePath))) {
     return yield* new ThreadBackgroundDatabaseMissingError({ databasePath });
   }
+
+  // The server's own record of when it started, written next to the database.
+  // Anything last seen before this instant is provably not backing a pill: the
+  // registry the pill reads is in-memory and died with the previous process.
+  // Missing or malformed (crashed server, older build) just disables the
+  // cutoff — the probe-based verdicts still apply.
+  const runtimeStateRaw = yield* fs
+    .readFileString(path.join(path.resolve(stateDir), "server-runtime.json"))
+    .pipe(
+      Effect.flatMap(decodeServerRuntimeState),
+      Effect.orElseSucceed(() => undefined),
+    );
+  const serverStartedAt =
+    runtimeStateRaw !== undefined && /^\d{4}-\d{2}-\d{2}T/.test(runtimeStateRaw.startedAt)
+      ? runtimeStateRaw.startedAt
+      : undefined;
 
   const readReports = Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -745,7 +773,17 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
     const processes = anyLive ? listProcesses(platform) : [];
 
     return threadIds.map((id): ThreadReport => {
-      const threadTasks = tasks.filter((task) => task.threadId === id);
+      const allThreadTasks = tasks.filter((task) => task.threadId === id);
+      // ISO-Z strings compare correctly as strings. Per-task, not per-thread:
+      // new work after a restart mints new task ids with fresh events, so it
+      // reports normally while the pre-restart rows stay retired — and a task
+      // that somehow receives a new event stops predating the start and
+      // resurfaces, which is the honest outcome in both directions.
+      const threadTasks =
+        serverStartedAt === undefined
+          ? allThreadTasks
+          : allThreadTasks.filter((task) => task.lastEventAt >= serverStartedAt);
+      const preRestartTasks = allThreadTasks.filter((task) => !threadTasks.includes(task));
       const liveness = foldLiveness(threadTasks);
       const session =
         liveness === null
@@ -758,12 +796,26 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
                 ? {}
                 : { showAllChildren: input.showAllChildren }),
             });
+      // A thread whose surviving rows all predate the start is orphaned by
+      // stronger evidence than any probe; its report is hidden downstream
+      // unless everything was asked for.
+      if (threadTasks.length === 0 && preRestartTasks.length > 0) {
+        return {
+          threadId: id,
+          title: titles.get(id) ?? "(unknown thread)",
+          liveness: foldLiveness(preRestartTasks),
+          verdict: "orphaned",
+          preRestart: true,
+          tasks: preRestartTasks,
+          session: null,
+        };
+      }
       return {
         threadId: id,
         title: titles.get(id) ?? "(unknown thread)",
         liveness,
         verdict: verdictFor(liveness, session),
-        tasks: threadTasks,
+        tasks: input.includeDismissed === true ? allThreadTasks : threadTasks,
         session,
       };
     });
@@ -799,7 +851,7 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
   let newlyDismissed = 0;
   if (input.dismissOrphans === true) {
     for (const report of reports) {
-      if (report.verdict !== "orphaned") continue;
+      if (report.verdict !== "orphaned" || report.preRestart === true) continue;
       for (const task of report.tasks) {
         const key = dismissedTaskKey(task);
         if (!dismissed.has(key)) {
@@ -826,10 +878,15 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
   // Only an orphaned thread can be muted: LIVE and UNKNOWN must always
   // surface, even if a stale dismissal somehow names one of their tasks.
   let hiddenOrphans = 0;
+  let hiddenPreRestart = 0;
   const visible: ThreadReport[] = [];
   for (const report of reports) {
     if (input.includeDismissed === true || report.verdict !== "orphaned") {
       visible.push(report);
+      continue;
+    }
+    if (report.preRestart === true) {
+      hiddenPreRestart += 1;
       continue;
     }
     const remaining = report.tasks.filter((task) => !dismissed.has(dismissedTaskKey(task)));
@@ -842,7 +899,12 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
     }
   }
 
-  return { reports: visible, hiddenOrphans, newlyDismissed } satisfies ThreadBackgroundResult;
+  return {
+    reports: visible,
+    hiddenOrphans,
+    hiddenPreRestart,
+    newlyDismissed,
+  } satisfies ThreadBackgroundResult;
 });
 
 export const t3ThreadBackgroundCommand = Command.make(
@@ -899,6 +961,7 @@ export const t3ThreadBackgroundCommand = Command.make(
               {
                 threads: result.reports,
                 hiddenOrphans: result.hiddenOrphans,
+                hiddenPreRestart: result.hiddenPreRestart,
                 newlyDismissed: result.newlyDismissed,
               },
               null,

@@ -502,6 +502,116 @@ it.layer(NodeServices.layer)("runThreadBackground", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  const writeServerRuntimeState = Effect.fn("writeServerRuntimeState")(function* (
+    baseDir: string,
+    startedAt: string,
+  ) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.writeFileString(
+      path.join(baseDir, "userdata", "server-runtime.json"),
+      `{"version":1,"pid":4242,"host":"0.0.0.0","port":3773,"startedAt":"${startedAt}"}`,
+    );
+  });
+
+  it.effect("hides all bookkeeping that predates the current server start", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+      // Fixture events are all on 2026-08-13; the server started after them,
+      // so its in-memory registry provably never saw these tasks.
+      yield* writeServerRuntimeState(baseDir, "2026-08-14T00:00:00.000Z");
+
+      const result = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
+
+      // Even the unprobeable Codex thread is retired: the restart is stronger
+      // evidence than any process probe.
+      assert.deepEqual(result.reports, []);
+      assert.equal(result.hiddenPreRestart, 2);
+      assert.equal(result.newlyDismissed, 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("new work on a restart-retired thread reports normally; old rows stay quiet", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+      yield* writeServerRuntimeState(baseDir, "2026-08-14T00:00:00.000Z");
+      // A new task starts on t-live after the restart: new task id, new events.
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, kind, summary, payload_json, created_at)
+          VALUES ('a9', 't-live', 'task.started', 'task.started',
+            '{"taskId":"shell-new","taskType":"local_bash","title":"Fresh watch"}',
+            '2026-08-14T01:00:00.000Z')`;
+      }).pipe(
+        Effect.provide(
+          NodeSqliteClient.layer({ filename: path.join(baseDir, "userdata", "state.sqlite") }),
+        ),
+      );
+
+      const result = yield* runThreadBackground({ baseDir, threadId: "t-live", all: false });
+
+      // The fresh task surfaces with the normal probe verdict; the pre-restart
+      // shell-1 does not ride along with it.
+      assert.equal(result.reports.length, 1);
+      assert.deepEqual(
+        result.reports[0]?.tasks.map((task) => task.taskId),
+        ["shell-new"],
+      );
+      assert.notEqual(result.reports[0]?.verdict, "idle");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reveals restart-retired bookkeeping when everything is requested", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+      yield* writeServerRuntimeState(baseDir, "2026-08-14T00:00:00.000Z");
+
+      const result = yield* runThreadBackground({
+        baseDir,
+        threadId: undefined,
+        all: true,
+        includeDismissed: true,
+      });
+
+      assert.deepEqual(
+        result.reports
+          .map((report) => [report.threadId, report.verdict, report.preRestart])
+          .toSorted(),
+        [
+          ["t-codex", "orphaned", true],
+          ["t-live", "orphaned", true],
+        ].toSorted(),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("ignores a malformed server-runtime file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-background-" });
+      yield* createFixtureDatabase(baseDir);
+      yield* fs.writeFileString(path.join(baseDir, "userdata", "server-runtime.json"), "not json");
+
+      const result = yield* runThreadBackground({ baseDir, threadId: undefined, all: true });
+
+      // Cutoff disabled; probe-based verdicts as before.
+      assert.equal(result.hiddenPreRestart, 0);
+      assert.include(
+        result.reports.map((report) => report.threadId),
+        "t-live",
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("dismisses orphans permanently, without touching the database", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
