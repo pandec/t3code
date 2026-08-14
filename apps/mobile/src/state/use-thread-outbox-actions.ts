@@ -84,7 +84,10 @@ async function deleteHeldQueuedMessage(message: QueuedThreadMessage): Promise<vo
   } catch (error) {
     console.warn("[thread-outbox] failed to delete queued message", error);
     await cancelQueuedMessageDeletion(message);
-    Alert.alert("Could not delete this message", "It is still queued — try again.");
+    Alert.alert(
+      "Could not delete this message",
+      "It may still be queued — check the queued messages before sending again.",
+    );
   }
 }
 
