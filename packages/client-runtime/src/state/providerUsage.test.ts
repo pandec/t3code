@@ -15,6 +15,7 @@ import {
   deriveProviderUsageSnapshotFromServerSnapshot,
   featuredProviderUsageAccount,
   normalizeProviderUsageThresholds,
+  presentProviderUsageAccount,
   primaryProviderUsageWindow,
   providerUsageAlertKey,
   providerUsageFableWindow,
@@ -1274,7 +1275,7 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
         accounts: pool?.accounts ?? [],
         snapshot: null,
       }),
-    ).toMatchObject({ accountName: "full-headroom.json", window: { usedPercent: 0 } });
+    ).toMatchObject({ accountName: "full-headroom@example.com", window: { usedPercent: 0 } });
   });
 
   it("falls back to the featured account's exhausted Fable window", () => {
@@ -1672,5 +1673,57 @@ describe("provider usage thresholds", () => {
     expect(
       applyProviderUsageThresholds(rejected, { warningPercent: 99, criticalPercent: 100 })?.status,
     ).toBe("critical");
+  });
+});
+
+describe("presentProviderUsageAccount", () => {
+  const account = {
+    id: "codex-6c16ddf1-bbdecyk@gmail.com-pro.json",
+    label: "bbdecyk@gmail.com",
+    provider: "codex",
+    priority: 50,
+    state: "available",
+    planType: "pro",
+    error: null,
+    usage: null,
+  } as const;
+
+  it("names the account by its upstream provider, not its auth file", () => {
+    expect(presentProviderUsageAccount(account)).toMatchObject({
+      displayName: "Codex",
+      email: "bbdecyk@gmail.com",
+      detail: "tier 50 · pro",
+      provider: "codex",
+    });
+  });
+
+  it("keeps a non-email label, which is the only thing identifying the account", () => {
+    expect(presentProviderUsageAccount({ ...account, label: "work pool" })).toMatchObject({
+      displayName: "Codex",
+      email: undefined,
+      detail: "work pool · tier 50 · pro",
+    });
+  });
+
+  it("reports a failed read separately from the metadata line", () => {
+    expect(
+      presentProviderUsageAccount({ ...account, state: "cooldown", error: "quota exceeded" }),
+    ).toMatchObject({ detail: "tier 50 · cooldown · pro", error: "quota exceeded" });
+  });
+
+  it("drops a stale error once the account reports usage again", () => {
+    expect(
+      presentProviderUsageAccount({
+        ...account,
+        error: "quota exceeded",
+        usage: {
+          providerLabel: "Codex",
+          providerInstanceId: null,
+          windows: [],
+          status: "ok",
+          updatedAt: "2026-08-14T00:00:00.000Z",
+        },
+      }).error,
+    ).toBeNull();
   });
 });

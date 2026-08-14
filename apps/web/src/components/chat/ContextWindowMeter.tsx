@@ -19,7 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { RefreshCwIcon } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { Fragment, useMemo, useRef } from "react";
 
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -154,8 +154,10 @@ export interface ProviderUsageAccountRow {
   readonly isCurrent: boolean;
   readonly usage: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
-  /** Secondary metadata line, e.g. a gateway account's tier and cooldown. */
+  /** Secondary metadata, e.g. a gateway account's tier and cooldown. */
   readonly detail?: string | null;
+  /** Why this account has no usage; rendered on its own line when present. */
+  readonly error?: string | null;
 }
 
 export function ContextWindowMeter(props: {
@@ -227,8 +229,14 @@ export function ContextWindowMeter(props: {
     ? formatProviderUsagePercent(quotaWindow.usedPercent)
     : null;
   const fablePercentage = providerUsageBarPercent(fableUsage);
+  // The Fable account is named by its email, so it obeys the masking preference
+  // exactly like the account rows do — including in the accessible label.
+  const fableAccountName =
+    props.fableAccountName && props.fableAccountName.includes("@")
+      ? formatProviderUsageEmail(props.fableAccountName, props.maskProviderUsageEmails)
+      : (props.fableAccountName ?? null);
   const fableAriaLabel = fableUsage
-    ? `Weekly Fable${props.fableAccountName ? ` on ${props.fableAccountName}` : ""} at ${describeProviderUsageWindowValue(fableUsage)}`
+    ? `Weekly Fable${fableAccountName ? ` on ${fableAccountName}` : ""} at ${describeProviderUsageWindowValue(fableUsage)}`
     : null;
   const quotaAriaLabel = quotaWindow
     ? quotaPercentLabel
@@ -369,11 +377,11 @@ export function ContextWindowMeter(props: {
               </div>
             ) : null}
 
-            {providerUsageAccounts.length > 0 && fableUsage && props.fableAccountName ? (
+            {providerUsageAccounts.length > 0 && fableUsage && fableAccountName ? (
               <div className="flex shrink-0 items-center justify-between gap-3 text-[11px]">
                 <span className="text-muted-foreground/70">Fable next</span>
                 <span className="truncate font-medium text-muted-foreground/90">
-                  {props.fableAccountName}
+                  {fableAccountName}
                 </span>
               </div>
             ) : null}
@@ -398,57 +406,67 @@ export function ContextWindowMeter(props: {
                   </div>
                 ) : null}
 
-                {providerUsageAccounts.map((account) => {
+                {providerUsageAccounts.map((account, index) => {
                   const stale = isProviderUsageSnapshotStale(account.observedAt, nowMs);
                   return (
-                    <div
-                      key={account.accountKey ?? account.instanceId}
-                      className={cn("flex flex-col gap-2", stale && "opacity-55")}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 flex-col gap-1">
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-[11px] font-medium text-muted-foreground/90">
+                    <Fragment key={account.accountKey ?? account.instanceId}>
+                      {/* Every account is fenced off from the one above it: the
+                          rows are dense enough that a gap alone reads as one
+                          account's windows continuing. */}
+                      {index > 0 ? <div className="h-px w-full shrink-0 bg-border/60" /> : null}
+                      <div className={cn("flex flex-col gap-2", stale && "opacity-55")}>
+                        <div className="flex items-start justify-between gap-3">
+                          {/* Name, email, and metadata share one line: the pool
+                              easily reaches six accounts, and three lines each
+                              pushed the context window off screen. */}
+                          <span className="flex min-w-0 items-baseline gap-1.5 text-[11px]">
+                            {/* A pooled account's name is short ("Claude"), but
+                                a direct instance's is a user-chosen string that
+                                would otherwise squeeze out everything after it. */}
+                            <span className="min-w-0 truncate font-semibold text-muted-foreground/90">
                               {account.displayName}
                             </span>
+                            {account.email ? (
+                              <span className="truncate text-muted-foreground/70">
+                                {formatProviderUsageEmail(
+                                  account.email,
+                                  props.maskProviderUsageEmails,
+                                )}
+                              </span>
+                            ) : null}
+                            {account.detail ? (
+                              <span className="shrink-0 text-muted-foreground/60">
+                                · {account.detail}
+                              </span>
+                            ) : null}
                             {account.isCurrent && providerUsageAccounts.length > 1 ? (
-                              <span className="shrink-0 rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                              <span className="shrink-0 self-center rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
                                 current
                               </span>
                             ) : null}
                           </span>
-                          {account.email ? (
-                            <span className="max-w-52 truncate text-left text-[11px] text-muted-foreground/60">
-                              {formatProviderUsageEmail(
-                                account.email,
-                                props.maskProviderUsageEmails,
-                              )}
-                            </span>
-                          ) : null}
-                          {account.detail ? (
-                            <span className="max-w-52 truncate text-left text-[11px] text-muted-foreground/60">
-                              {account.detail}
+                          {stale && !props.providerUsageRefreshing ? (
+                            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                              {formatProviderUsageAge(account.observedAt, nowMs)}
                             </span>
                           ) : null}
                         </div>
-                        {stale && !props.providerUsageRefreshing ? (
-                          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
-                            {formatProviderUsageAge(account.observedAt, nowMs)}
-                          </span>
+                        {account.error ? (
+                          <div className="text-[11px] text-destructive/90">{account.error}</div>
                         ) : null}
+                        {account.usage && account.usage.windows.length > 0 ? (
+                          account.usage.windows.map((window) => (
+                            <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
+                          ))
+                        ) : (
+                          <div className="text-[11px] text-muted-foreground/60">
+                            {props.providerUsageUnavailable
+                              ? "Couldn't load usage"
+                              : "No usage data available"}
+                          </div>
+                        )}
                       </div>
-                      {account.usage && account.usage.windows.length > 0 ? (
-                        account.usage.windows.map((window) => (
-                          <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-muted-foreground/60">
-                          {props.providerUsageUnavailable
-                            ? "Couldn't load usage"
-                            : "No usage data available"}
-                        </div>
-                      )}
-                    </div>
+                    </Fragment>
                   );
                 })}
               </div>
