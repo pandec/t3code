@@ -47,7 +47,6 @@ import {
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
   setComposerDraftText,
-  updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
@@ -60,6 +59,12 @@ import { threadEnvironment, useLoadOlderMessages, useThreadMessageWindow } from 
 import { useAtomCommand } from "./use-atom-command";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
+import {
+  getStagedThreadSettings,
+  resolveStagedThreadSettings,
+  stageThreadSettings,
+  useStagedThreadSettings,
+} from "./use-thread-staged-settings";
 
 const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const EMPTY_THREAD_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -121,6 +126,7 @@ export function useThreadComposerState() {
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
     : null;
+  const stagedThreadSettings = useStagedThreadSettings(selectedThreadKey);
   const selectedThreadQueuedMessages = useMemo(
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
@@ -167,9 +173,12 @@ export function useThreadComposerState() {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-  const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
-  const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+  const resolvedThreadSettings = selectedThread
+    ? resolveStagedThreadSettings(stagedThreadSettings, selectedThread)
+    : null;
+  const modelSelection = resolvedThreadSettings?.modelSelection ?? null;
+  const runtimeMode = resolvedThreadSettings?.runtimeMode ?? null;
+  const interactionMode = resolvedThreadSettings?.interactionMode ?? null;
 
   const selectedThreadSessionActivity = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -227,6 +236,10 @@ export function useThreadComposerState() {
       }
       const draft = getComposerDraftSnapshot(threadKey);
       const thread = selectedThreadDetail ?? selectedThreadShell;
+      const stagedSettings = resolveStagedThreadSettings(
+        getStagedThreadSettings(threadKey),
+        thread,
+      );
       const text = draft.text.trim();
       const attachments = draft.attachments;
       if (text.length === 0 && attachments.length === 0) {
@@ -292,9 +305,9 @@ export function useThreadComposerState() {
         text,
         ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
         attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
+        modelSelection: stagedSettings.modelSelection,
+        runtimeMode: stagedSettings.runtimeMode,
+        interactionMode: stagedSettings.interactionMode,
         threadSettings: {
           archivedAt: thread.archivedAt,
           modelSelection: thread.modelSelection,
@@ -425,32 +438,32 @@ export function useThreadComposerState() {
 
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadKey || !selectedThread) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { modelSelection: value });
+      stageThreadSettings(selectedThreadKey, { modelSelection: value }, selectedThread);
     },
-    [selectedThreadKey],
+    [selectedThread, selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadKey || !selectedThread) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      stageThreadSettings(selectedThreadKey, { runtimeMode: value }, selectedThread);
     },
-    [selectedThreadKey],
+    [selectedThread, selectedThreadKey],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadKey || !selectedThread) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { interactionMode: value });
+      stageThreadSettings(selectedThreadKey, { interactionMode: value }, selectedThread);
     },
-    [selectedThreadKey],
+    [selectedThread, selectedThreadKey],
   );
 
   return {

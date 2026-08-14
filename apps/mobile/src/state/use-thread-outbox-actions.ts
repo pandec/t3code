@@ -11,7 +11,6 @@ import {
   composerDraftStillContainsAppend,
   getComposerDraftSnapshot,
   revertComposerDraftAppend,
-  updateComposerDraftSettings,
 } from "./use-composer-drafts";
 import {
   editingQueuedMessageIdsAtom,
@@ -21,6 +20,7 @@ import {
   unexpediteQueuedMessage,
 } from "./use-thread-outbox";
 import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
+import { stageThreadSettings } from "./use-thread-staged-settings";
 
 const editingComposerThreadKeys = new Set<string>();
 
@@ -198,13 +198,21 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
       return;
     }
 
-    updateComposerDraftSettings(threadKey, {
-      ...(message.modelSelection !== undefined ? { modelSelection: message.modelSelection } : {}),
-      ...(message.runtimeMode !== undefined ? { runtimeMode: message.runtimeMode } : {}),
-      ...(message.interactionMode !== undefined
-        ? { interactionMode: message.interactionMode }
-        : {}),
-    });
+    if (message.threadSettings) {
+      stageThreadSettings(
+        threadKey,
+        {
+          ...(message.modelSelection !== undefined
+            ? { modelSelection: message.modelSelection }
+            : {}),
+          ...(message.runtimeMode !== undefined ? { runtimeMode: message.runtimeMode } : {}),
+          ...(message.interactionMode !== undefined
+            ? { interactionMode: message.interactionMode }
+            : {}),
+        },
+        message.threadSettings,
+      );
+    }
   } catch (error) {
     if (removed) {
       // The queued row is already gone, so the draft holds the only copy of the

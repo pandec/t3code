@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 
 import {
@@ -16,6 +22,11 @@ vi.hoisted(() => {
 const calls: string[] = [];
 const alertTitles: string[] = [];
 const updatedMessages: QueuedThreadMessage[] = [];
+const stagedSettingsCalls: Array<{
+  readonly threadKey: string;
+  readonly patch: Pick<QueuedThreadMessage, "modelSelection" | "runtimeMode" | "interactionMode">;
+  readonly baselines: NonNullable<QueuedThreadMessage["threadSettings"]>;
+}> = [];
 let alertButtons: ReadonlyArray<{ readonly text?: string; readonly onPress?: () => void }> = [];
 let alertOnDismiss: (() => void) | undefined;
 let appendStatus: "committed" | "failed" = "committed";
@@ -79,7 +90,16 @@ vi.mock("./use-composer-drafts", () => ({
     calls.push("revert");
     return Promise.resolve({ fullyReverted: true, persisted: true });
   },
-  updateComposerDraftSettings: () => {},
+}));
+
+vi.mock("./use-thread-staged-settings", () => ({
+  stageThreadSettings: (
+    threadKey: string,
+    patch: (typeof stagedSettingsCalls)[number]["patch"],
+    baselines: (typeof stagedSettingsCalls)[number]["baselines"],
+  ) => {
+    stagedSettingsCalls.push({ threadKey, patch, baselines });
+  },
 }));
 
 import { appAtomRegistry } from "./atom-registry";
@@ -105,6 +125,7 @@ afterEach(() => {
   calls.length = 0;
   alertTitles.length = 0;
   updatedMessages.length = 0;
+  stagedSettingsCalls.length = 0;
   alertButtons = [];
   alertOnDismiss = undefined;
   appendStatus = "committed";
@@ -191,6 +212,42 @@ describe("editQueuedMessage ordering", () => {
     // Removing first would destroy the message whenever the append fails, which
     // is the bug this ordering exists to prevent.
     expect(calls).toEqual(["append", "remove"]);
+  });
+
+  it("restores queued settings into the session-only staged store", async () => {
+    const baselines = {
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+      },
+      branch: "main",
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+    };
+    const configuredMessage: QueuedThreadMessage = {
+      ...message,
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claude"),
+        model: "claude-opus-4-1",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+      threadSettings: baselines,
+    };
+
+    await editQueuedMessage(configuredMessage);
+
+    expect(stagedSettingsCalls).toEqual([
+      {
+        threadKey: `${message.environmentId}:${message.threadId}`,
+        patch: {
+          modelSelection: configuredMessage.modelSelection,
+          runtimeMode: configuredMessage.runtimeMode,
+          interactionMode: configuredMessage.interactionMode,
+        },
+        baselines,
+      },
+    ]);
   });
 
   it("keeps the row queued when the append does not commit", async () => {
