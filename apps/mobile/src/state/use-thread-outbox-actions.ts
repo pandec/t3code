@@ -65,18 +65,58 @@ export async function queueSteeredMessageForLater(message: QueuedThreadMessage):
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "queue" });
 }
 
-export async function deleteQueuedMessage(message: QueuedThreadMessage): Promise<void> {
-  if (!isActionableQueuedMessage(message)) {
-    return;
-  }
-  if (!holdEditingQueuedMessage(message.messageId)) {
-    return;
-  }
+async function deleteHeldQueuedMessage(message: QueuedThreadMessage): Promise<void> {
   try {
     await removeThreadOutboxMessage(message);
   } finally {
     releaseEditingQueuedMessage(message.messageId);
   }
+}
+
+async function cancelQueuedMessageDeletion(message: QueuedThreadMessage): Promise<void> {
+  try {
+    await updateThreadOutboxMessage({ ...message, createdAt: new Date().toISOString() });
+  } catch (error) {
+    console.warn("[thread-outbox] failed to restart queued message grace window", error);
+  } finally {
+    releaseEditingQueuedMessage(message.messageId);
+  }
+}
+
+export function confirmDeleteQueuedMessage(message: QueuedThreadMessage): void {
+  if (!isActionableQueuedMessage(message) || !holdEditingQueuedMessage(message.messageId)) {
+    return;
+  }
+
+  let settled = false;
+  const settle = (action: () => Promise<void>) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    void action();
+  };
+
+  Alert.alert(
+    "Delete queued message?",
+    "It has not been sent yet and will be removed from the queue.",
+    [
+      {
+        text: "Cancel",
+        style: "cancel",
+        onPress: () => settle(() => cancelQueuedMessageDeletion(message)),
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => settle(() => deleteHeldQueuedMessage(message)),
+      },
+    ],
+    {
+      cancelable: true,
+      onDismiss: () => settle(() => cancelQueuedMessageDeletion(message)),
+    },
+  );
 }
 
 /**

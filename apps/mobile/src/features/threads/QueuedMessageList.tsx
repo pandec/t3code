@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -16,27 +16,12 @@ import {
 } from "../../state/thread-outbox-model";
 import { useThreadOutboxMessages } from "../../state/use-thread-outbox";
 import {
-  deleteQueuedMessage,
+  confirmDeleteQueuedMessage,
   editQueuedMessage,
   queueSteeredMessageForLater,
   steerQueuedMessageNow,
 } from "../../state/use-thread-outbox-actions";
 import { dispatchingQueuedMessageIdAtom } from "../../state/use-thread-outbox-drain";
-
-function confirmDeleteQueuedMessage(message: QueuedThreadMessage): void {
-  Alert.alert(
-    "Delete queued message?",
-    "It has not been sent yet and will be removed from the queue.",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => void deleteQueuedMessage(message),
-      },
-    ],
-  );
-}
 
 const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly message: QueuedThreadMessage;

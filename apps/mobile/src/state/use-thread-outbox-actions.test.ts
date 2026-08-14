@@ -10,6 +10,9 @@ vi.hoisted(() => {
 });
 
 const calls: string[] = [];
+const updatedMessages: QueuedThreadMessage[] = [];
+let alertButtons: ReadonlyArray<{ readonly text?: string; readonly onPress?: () => void }> = [];
+let alertOnDismiss: (() => void) | undefined;
 let appendStatus: "committed" | "failed" = "committed";
 let removeResult = true;
 
@@ -21,7 +24,19 @@ vi.mock("./shell", () => ({
   },
 }));
 
-vi.mock("react-native", () => ({ Alert: { alert: () => {} } }));
+vi.mock("react-native", () => ({
+  Alert: {
+    alert: (
+      _title: string,
+      _message: string,
+      buttons: ReadonlyArray<{ readonly text?: string; readonly onPress?: () => void }>,
+      options?: { readonly onDismiss?: () => void },
+    ) => {
+      alertButtons = buttons;
+      alertOnDismiss = options?.onDismiss;
+    },
+  },
+}));
 
 // The drain pulls in React Native surface this test does not exercise; only its
 // dispatch atom matters here.
@@ -35,7 +50,10 @@ vi.mock("./thread-outbox", () => ({
     calls.push("remove");
     return Promise.resolve(removeResult);
   },
-  updateThreadOutboxMessage: () => Promise.resolve(true),
+  updateThreadOutboxMessage: (updatedMessage: QueuedThreadMessage) => {
+    updatedMessages.push(updatedMessage);
+    return Promise.resolve(true);
+  },
 }));
 
 vi.mock("./use-composer-drafts", () => ({
@@ -58,7 +76,9 @@ vi.mock("./use-composer-drafts", () => ({
   updateComposerDraftSettings: () => {},
 }));
 
-import { editQueuedMessage } from "./use-thread-outbox-actions";
+import { appAtomRegistry } from "./atom-registry";
+import { confirmDeleteQueuedMessage, editQueuedMessage } from "./use-thread-outbox-actions";
+import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 
 const message: QueuedThreadMessage = {
   environmentId: EnvironmentId.make("environment-local"),
@@ -72,8 +92,52 @@ const message: QueuedThreadMessage = {
 
 afterEach(() => {
   calls.length = 0;
+  updatedMessages.length = 0;
+  alertButtons = [];
+  alertOnDismiss = undefined;
   appendStatus = "committed";
   removeResult = true;
+  appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
+  vi.useRealTimers();
+});
+
+describe("confirmDeleteQueuedMessage", () => {
+  it("holds the queued message while the confirmation is open", () => {
+    confirmDeleteQueuedMessage(message);
+
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({
+      [message.messageId]: true,
+    });
+    expect(alertButtons.map(({ text }) => text)).toEqual(["Cancel", "Delete"]);
+  });
+
+  it("restarts the grace window when deletion is canceled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T00:00:05.000Z"));
+    confirmDeleteQueuedMessage(message);
+
+    alertButtons.find(({ text }) => text === "Cancel")?.onPress?.();
+    alertOnDismiss?.();
+    await Promise.resolve();
+
+    expect(updatedMessages).toEqual([{ ...message, createdAt: "2026-07-27T00:00:05.000Z" }]);
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({});
+    expect(calls).not.toContain("remove");
+  });
+
+  it("keeps the hold through confirmed deletion", async () => {
+    confirmDeleteQueuedMessage(message);
+
+    alertButtons.find(({ text }) => text === "Delete")?.onPress?.();
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({
+      [message.messageId]: true,
+    });
+    await Promise.resolve();
+
+    expect(calls).toContain("remove");
+    expect(updatedMessages).toEqual([]);
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({});
+  });
 });
 
 describe("editQueuedMessage ordering", () => {
