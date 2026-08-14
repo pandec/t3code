@@ -54,6 +54,16 @@ describe("steerGraceRemainingMs", () => {
     );
   });
 
+  it("uses a restart anchor without changing the original creation timestamp", () => {
+    const graceStartedAt = "2026-07-27T10:00:10.000Z";
+    expect(
+      steerGraceRemainingMs(
+        { deliveryIntent: "steer", createdAt, graceStartedAt },
+        Date.parse(graceStartedAt),
+      ),
+    ).toBe(STEER_GRACE_WINDOW_MS);
+  });
+
   it("releases the steer once the window elapses", () => {
     expect(
       steerGraceRemainingMs(

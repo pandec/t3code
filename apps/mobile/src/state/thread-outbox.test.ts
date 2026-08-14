@@ -741,7 +741,11 @@ describe("thread outbox", () => {
       messageId: "message-1",
       createdAt: "2026-06-08T10:00:01.000Z",
     });
-    const steered = { ...base, deliveryIntent: "steer" } satisfies QueuedThreadMessage;
+    const steered = {
+      ...base,
+      deliveryIntent: "steer",
+      graceStartedAt: "2026-06-08T10:00:05.000Z",
+    } satisfies QueuedThreadMessage;
 
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(steered))).toEqual(steered);
     // Payloads persisted before schema version 5 carry no intent.

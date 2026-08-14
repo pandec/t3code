@@ -18,6 +18,7 @@ import {
   expediteQueuedMessage,
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
+  unexpediteQueuedMessage,
 } from "./use-thread-outbox";
 import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
 
@@ -65,21 +66,25 @@ export async function queueSteeredMessageForLater(message: QueuedThreadMessage):
   await updateThreadOutboxMessage({ ...message, deliveryIntent: "queue" });
 }
 
-async function deleteHeldQueuedMessage(message: QueuedThreadMessage): Promise<void> {
+async function cancelQueuedMessageDeletion(message: QueuedThreadMessage): Promise<void> {
+  unexpediteQueuedMessage(message.messageId);
   try {
-    await removeThreadOutboxMessage(message);
+    await updateThreadOutboxMessage({ ...message, graceStartedAt: new Date().toISOString() });
+  } catch (error) {
+    console.warn("[thread-outbox] failed to restart queued message grace window", error);
   } finally {
     releaseEditingQueuedMessage(message.messageId);
   }
 }
 
-async function cancelQueuedMessageDeletion(message: QueuedThreadMessage): Promise<void> {
+async function deleteHeldQueuedMessage(message: QueuedThreadMessage): Promise<void> {
   try {
-    await updateThreadOutboxMessage({ ...message, createdAt: new Date().toISOString() });
-  } catch (error) {
-    console.warn("[thread-outbox] failed to restart queued message grace window", error);
-  } finally {
+    await removeThreadOutboxMessage(message);
     releaseEditingQueuedMessage(message.messageId);
+  } catch (error) {
+    console.warn("[thread-outbox] failed to delete queued message", error);
+    await cancelQueuedMessageDeletion(message);
+    Alert.alert("Could not delete this message", "It is still queued — try again.");
   }
 }
 
