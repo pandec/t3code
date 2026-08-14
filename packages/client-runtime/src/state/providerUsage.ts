@@ -945,12 +945,13 @@ export function resolveProviderUsageFableRing(input: {
   if (input.upstreamProvider !== "claude") return null;
   if (input.accounts !== null) {
     const selection = selectProviderUsageFableAccount(input.accounts);
-    return selection === null
-      ? null
-      : {
-          accountName: presentProviderUsageAccount(selection.account).displayName,
-          window: selection.window,
-        };
+    if (selection === null) return null;
+    const presented = presentProviderUsageAccount(selection.account);
+    // The email identifies the account; the display name is just "Claude" here.
+    return {
+      accountName: presented.email ?? selection.account.label,
+      window: selection.window,
+    };
   }
   const window = providerUsageFableWindow(input.snapshot);
   return window === null
@@ -958,30 +959,57 @@ export function resolveProviderUsageFableRing(input: {
     : { accountName: input.snapshot?.providerLabel ?? "Claude", window };
 }
 
+/** "claude" → "Claude"; an unknown slug is shown capitalized rather than hidden. */
+export function providerUsageUpstreamProviderLabel(provider: string): string {
+  switch (provider) {
+    case "claude":
+      return "Claude";
+    case "codex":
+      return "Codex";
+    default:
+      return provider.charAt(0).toUpperCase() + provider.slice(1);
+  }
+}
+
 /**
  * Presentation fields shared by every surface that renders a pooled gateway
  * account, so the two composers cannot drift apart on labelling.
+ *
+ * The account is named by its upstream provider, not its auth-file name: the
+ * file name repeats the email and plan anyway, and the email is what a human
+ * recognizes. A label that is not an email (nothing to recognize it by) moves
+ * to the detail slot instead so the account stays identifiable.
  */
 export function presentProviderUsageAccount(account: ProviderUsageAccount): {
   readonly displayName: string;
   readonly email: string | undefined;
   readonly detail: string | null;
+  /**
+   * Why this account has no usage, when the gateway said so. Kept out of
+   * `detail` so a failure reads as a failure instead of trailing the tier like
+   * more metadata.
+   */
+  readonly error: string | null;
+  /** Upstream provider slug, so lists can group by provider. */
+  readonly provider: string;
 } {
   // Gateway account labels are often the upstream login email; route those
   // through the email slot so the masking preference applies.
   const emailLikeLabel = account.label.includes("@");
   return {
-    displayName: emailLikeLabel ? account.id : account.label,
+    displayName: providerUsageUpstreamProviderLabel(account.provider),
     email: emailLikeLabel ? account.label : undefined,
     detail:
       [
+        emailLikeLabel ? null : account.label,
         account.priority !== null ? `tier ${account.priority}` : null,
         account.state !== "available" ? account.state : null,
         account.planType,
-        account.usage === null ? account.error : null,
       ]
         .filter(Boolean)
         .join(" · ") || null,
+    error: account.usage === null ? account.error : null,
+    provider: account.provider,
   };
 }
 

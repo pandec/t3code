@@ -108,25 +108,33 @@ function AccountCard(props: {
       )}
     >
       <View className="gap-0.5">
-        <View className="flex-row items-center gap-2">
-          <Text className="shrink text-sm font-t3-medium text-foreground" numberOfLines={1}>
+        {/* Name, email, and metadata share one line: a pooled gateway lists
+            many accounts, and three header lines each outgrew the sheet. */}
+        <View className="flex-row items-center gap-1.5">
+          {/* A pooled account's name is short ("Claude"), but a direct
+              instance's is a user-chosen string that would otherwise squeeze
+              out everything after it. */}
+          <Text className="shrink text-sm font-t3-bold text-foreground" numberOfLines={1}>
             {account.displayName}
           </Text>
+          {account.email ? (
+            <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
+              {account.email}
+            </Text>
+          ) : null}
+          {account.detail ? (
+            <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
+              · {account.detail}
+            </Text>
+          ) : null}
           {props.showCurrentBadge && account.isCurrent ? (
             <View className="rounded-md bg-subtle-strong px-1.5 py-0.5">
               <Text className="text-3xs font-t3-bold uppercase text-foreground-muted">Current</Text>
             </View>
           ) : null}
         </View>
-        {account.email ? (
-          <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
-            {account.email}
-          </Text>
-        ) : null}
-        {account.detail ? (
-          <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
-            {account.detail}
-          </Text>
+        {account.error ? (
+          <Text className="text-2xs text-rose-600 dark:text-rose-400">{account.error}</Text>
         ) : null}
         {/* A lagging account states its own age; the header covers the rest. */}
         {stale ? (

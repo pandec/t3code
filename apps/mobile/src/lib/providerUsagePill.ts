@@ -33,6 +33,8 @@ export interface ProviderUsageSheetAccount {
   readonly observedAt: number | null;
   /** Secondary metadata, e.g. a gateway account's tier and cooldown. */
   readonly detail?: string | null;
+  /** Why this account has no usage; rendered on its own line when present. */
+  readonly error?: string | null;
 }
 
 /** Minimum gap between refreshes; mirrors the web meter. */
