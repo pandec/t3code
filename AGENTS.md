@@ -69,6 +69,15 @@ Personal shell helpers from `~/.dotfiles` operate on this checkout at
 `~/SynologyDrive/AIMac/repos/t3code`. Run them from a shell with the dotfiles loaded; `qh` shows the current
 platform-specific list.
 
+- `t3-update-machines`: use one arrow/Space selector to opt into remote desktops, the local desktop,
+  and (on macOS) local iOS. Every selected checkout is inspected concurrently before mutation; dirty or
+  uninspectable targets fail, while clean non-`dev` targets require a second unchecked batch approval and
+  are skipped in non-TTY use. Local targets share checkout/dependency preparation; remote targets and the
+  local lane run concurrently while local desktop/iOS installs stay serialized. Explicit `--host`,
+  `--include-local-desktop`, and `--include-local-ios` flags define the complete non-interactive plan.
+  Real subprocess output is captured in compact progress rows; failed-job logs are retained under the T3
+  development log directory. Use `--show-failure-logs` to display them or `--dry-run` for fully synthetic
+  preflight, command, and failure verification without spawning update processes.
 - `t3-build`: build the packaged Dev desktop artifact (DMG on macOS, AppImage on Ubuntu).
 - `t3-install-desktop`: stop the installed T3 Code Dev app if needed, rebuild and replace it while
   preserving its application data, then launch it.
