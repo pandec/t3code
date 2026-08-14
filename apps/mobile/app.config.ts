@@ -39,7 +39,7 @@ const forkEasOwner = repoEnv.T3CODE_EAS_OWNER?.trim();
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 // Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
 // Settings screen distinguishes them from an upstream build; otherwise use upstream's version.
-const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "1.0.3";
+const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "1.0.4";
 // CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.

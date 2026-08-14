@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Platform, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
-import { ComposerToolbarButton } from "../../components/ComposerToolbarTrigger";
+import { ComposerToolbarButton } from "../../components/ComposerToolbar";
 import { transcribeVoiceRecording } from "../../state/voice";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { setListeningRecordingActive } from "../../state/listeningPlayback";

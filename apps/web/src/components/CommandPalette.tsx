@@ -1653,6 +1653,7 @@ function OpenCommandPaletteDialog(props: {
           now: quantizedNow,
           autoSettleEnabled: clientSettings.threadAutoSettleEnabled,
           autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
+          autoSettleOnMerge: clientSettings.sidebarAutoSettleOnMerge,
           changeRequestState:
             resolveThreadPr({
               threadBranch: openUnarchivedThread.branch ?? null,

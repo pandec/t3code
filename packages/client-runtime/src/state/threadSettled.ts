@@ -3,6 +3,14 @@ import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
+/** Returns whether the change request state settles the thread immediately. */
+export function changeRequestAutoSettles(
+  state: ChangeRequestStateLike | null | undefined,
+  autoSettleOnMerge = true,
+): boolean {
+  return state === "closed" || (state === "merged" && autoSettleOnMerge);
+}
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
@@ -237,7 +245,8 @@ export function threadWokeAt(
  * override. Past the blockers, the explicit user override (thread.settle /
  * thread.unsettle commands, projected into settledOverride + settledAt)
  * wins in both directions. When automatic settling is enabled, a thread
- * settles on a merged/closed PR immediately or on inactivity past the window —
+ * always settles on a closed PR, settles on a merged PR unless merge
+ * auto-settling is turned off, or settles on inactivity past the window —
  * except that an open PR blocks the inactivity path entirely. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
@@ -248,6 +257,7 @@ export function effectiveSettled(
     readonly now: string;
     readonly autoSettleEnabled: boolean;
     readonly autoSettleAfterDays: number | null;
+    readonly autoSettleOnMerge?: boolean;
     readonly changeRequestState?: ChangeRequestStateLike | null;
   },
 ): boolean {
@@ -274,14 +284,17 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  // The fork's global master gate outranks every per-reason toggle: with
+  // automatic settling off, nothing settles on its own, though explicit
+  // settle/unsettle still works.
   if (options.autoSettleEnabled === false) return false;
-  if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
+  if (changeRequestAutoSettles(options.changeRequestState, options.autoSettleOnMerge !== false)) {
     return true;
   }
   // An open PR is unfinished business regardless of how long the thread has
   // been quiet: review can take days, and hiding the thread would bury the
-  // work waiting on it. Only merge/close (above) or an explicit user settle
-  // resolves it.
+  // work waiting on it. A configured merge, a close, or an explicit user
+  // settle resolves it.
   if (options.changeRequestState === "open") return false;
   if (options.autoSettleAfterDays === null) return false;
 

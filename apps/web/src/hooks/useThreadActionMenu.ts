@@ -88,6 +88,7 @@ export function useThreadActionMenu(input: {
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
+  const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const legacySidebarEnabled = useLegacySidebarEnabled();
@@ -145,6 +146,7 @@ export function useThreadActionMenu(input: {
               now: `${now.toISOString().slice(0, 16)}:00.000Z`,
               autoSettleEnabled,
               autoSettleAfterDays,
+              autoSettleOnMerge,
               changeRequestState,
             }),
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
@@ -320,6 +322,7 @@ export function useThreadActionMenu(input: {
       attemptMoveThreadToTop,
       autoSettleAfterDays,
       autoSettleEnabled,
+      autoSettleOnMerge,
       changeRequestState,
       confirmThreadDelete,
       copyBranchToClipboard,

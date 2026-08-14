@@ -10,8 +10,18 @@ import {
   providerUsageBarPercent,
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 
-import { useCallback, useEffect, useRef } from "react";
-import { Modal, Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import {
+  createContext,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -21,7 +31,7 @@ import type { ProviderUsageSheetAccount } from "../../lib/providerUsagePill";
 import { useThemeColor } from "../../lib/useThemeColor";
 
 /**
- * Full provider quota for every configured account, as a bottom sheet.
+ * Full provider quota for every configured account, as a native form sheet.
  *
  * This used to be a native context menu, which could only offer one truncated
  * subtitle per account: everything after the first window was cut off and a
@@ -138,15 +148,7 @@ function AccountCard(props: {
   );
 }
 
-export function ProviderUsageSheet(props: {
-  readonly visible: boolean;
-  /**
-   * Nothing here is configured, so every exit is "done": the host restores
-   * whatever typing session the pill interrupted rather than treating a
-   * backdrop tap as a reason to leave the keyboard down.
-   */
-  readonly onClose: () => void;
-  readonly onDismissed: () => void;
+type ProviderUsageSheetProps = {
   /** Driver-derived label ("Claude", "Codex") for the sheet title. */
   readonly providerLabel: string;
   readonly accounts: ReadonlyArray<ProviderUsageSheetAccount>;
@@ -161,38 +163,53 @@ export function ProviderUsageSheet(props: {
   readonly onRefresh: () => void;
   /** The read itself failed, as opposed to succeeding with nothing to show. */
   readonly unavailable?: boolean;
-}) {
-  const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const iconMuted = useThemeColor("--color-icon-muted");
-  // Dismissal bookkeeping mirrors ThreadSettingsSheet: RN only emits
-  // Modal.onDismiss on iOS, and a host can unmount a presented sheet outright.
-  // The presentation hook's transition table makes duplicate reports no-ops.
-  const wasPresentedRef = useRef(false);
-  const notifyDismissed = useCallback(() => {
-    if (!wasPresentedRef.current) {
-      return;
-    }
-    wasPresentedRef.current = false;
-    props.onDismissed();
-  }, [props.onDismissed]);
-  useEffect(() => {
-    if (props.visible) {
-      wasPresentedRef.current = true;
-    } else if (Platform.OS === "android" && wasPresentedRef.current) {
-      notifyDismissed();
-    }
-  }, [notifyDismissed, props.visible]);
-  const onDismissedRef = useRef(props.onDismissed);
-  useEffect(() => {
-    onDismissedRef.current = props.onDismissed;
-  }, [props.onDismissed]);
-  useEffect(
-    () => () => {
-      onDismissedRef.current();
-    },
-    [],
+};
+
+export type ProviderUsageRouteSession = ProviderUsageSheetProps & {
+  readonly ownerId: string;
+};
+
+type ProviderUsageRouteContextValue = {
+  readonly session: ProviderUsageRouteSession | null;
+  readonly present: (session: ProviderUsageRouteSession) => void;
+  readonly clear: (ownerId: string) => void;
+};
+
+const ProviderUsageRouteContext = createContext<ProviderUsageRouteContextValue | null>(null);
+
+/** Bridges the active thread's quota state into the root native sheet route. */
+export function ProviderUsageRouteProvider(props: { readonly children: ReactNode }) {
+  const [session, setSession] = useState<ProviderUsageRouteSession | null>(null);
+  const present = useCallback((nextSession: ProviderUsageRouteSession) => {
+    setSession(nextSession);
+  }, []);
+  const clear = useCallback((ownerId: string) => {
+    setSession((current) => (current?.ownerId === ownerId ? null : current));
+  }, []);
+  const value = useMemo(() => ({ session, present, clear }), [clear, present, session]);
+
+  return (
+    <ProviderUsageRouteContext.Provider value={value}>
+      {props.children}
+    </ProviderUsageRouteContext.Provider>
   );
+}
+
+export function useProviderUsageRoutePresentation() {
+  const value = use(ProviderUsageRouteContext);
+  if (!value) {
+    throw new Error(
+      "useProviderUsageRoutePresentation must be used inside ProviderUsageRouteProvider.",
+    );
+  }
+  return value;
+}
+
+export function ProviderUsageSheet(
+  props: ProviderUsageSheetProps & { readonly onClose: () => void },
+) {
+  const insets = useSafeAreaInsets();
+  const iconMuted = useThemeColor("--color-icon-muted");
 
   const title = `${props.providerLabel} usage`;
   const showCurrentBadge = props.accounts.length > 1;
@@ -201,103 +218,102 @@ export function ProviderUsageSheet(props: {
     : null;
 
   return (
-    <Modal
-      transparent
-      statusBarTranslucent
-      navigationBarTranslucent
-      animationType={Platform.OS === "ios" ? "fade" : "none"}
-      visible={props.visible}
-      onDismiss={notifyDismissed}
-      onRequestClose={() => props.onClose()}
-    >
-      <View className="flex-1 justify-end">
+    <View className="flex-1 bg-sheet">
+      <View className="flex-row items-center gap-2 px-4 pb-2 pt-3">
         <Pressable
           accessibilityLabel={`Close ${title}`}
-          className="absolute inset-0 bg-backdrop"
-          onPress={() => props.onClose()}
-        />
-        <View
-          className="overflow-hidden rounded-t-[24px] border border-b-0 border-border bg-sheet"
-          style={{ maxHeight: windowHeight * 0.85 }}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={props.onClose}
+          className="p-1 active:opacity-70"
         >
-          {/* The grabber doubles as the accessible close control: the backdrop
-              above a tall sheet is a sliver VoiceOver can't reach. */}
-          <Pressable
-            accessibilityLabel={`Close ${title}`}
-            accessibilityRole="button"
-            onPress={() => props.onClose()}
-            className="items-center pb-1 pt-2.5"
-          >
-            <View className="h-1 w-9 rounded-full bg-subtle-strong" />
-          </Pressable>
-          <View className="flex-row items-center gap-2 px-5 pb-2 pt-1.5">
-            <Text className="text-base font-t3-bold text-foreground">{title}</Text>
-            <View className="flex-1" />
-            {/* One freshness line for the whole read; stale accounts add theirs. */}
-            <Text className="text-2xs text-foreground-tertiary tabular-nums">
-              {props.refreshing
-                ? "updating…"
-                : formatProviderUsageAge(props.panelObservedAt, props.nowMs)}
-            </Text>
-            <Pressable
-              accessibilityLabel="Refresh usage"
-              accessibilityRole="button"
-              accessibilityState={{ disabled: props.refreshing }}
-              disabled={props.refreshing}
-              hitSlop={8}
-              onPress={props.onRefresh}
-              className={cn("p-1 active:opacity-70", props.refreshing && "opacity-40")}
-            >
-              <SymbolView
-                name="arrow.clockwise"
-                size={15}
-                tintColor={iconMuted}
-                type="monochrome"
-              />
-            </Pressable>
-          </View>
-          {props.fableUsage ? (
-            <View className="flex-row items-center gap-2 px-5 pb-2">
-              <Text className="text-2xs font-t3-medium text-foreground-muted">Fable next</Text>
-              <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
-                {props.fableUsage.accountName}
-              </Text>
-              <View className="flex-1" />
-              <Text
-                className={cn(
-                  "text-2xs font-t3-medium tabular-nums",
-                  STATUS_TEXT_CLASS[props.fableUsage.window.status],
-                )}
-              >
-                {describeProviderUsageWindowValue(props.fableUsage.window)}
-                {fableResetTime ? (
-                  <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
-                ) : null}
-              </Text>
-            </View>
-          ) : null}
-          <ScrollView
-            style={{ flexShrink: 1 }}
-            contentContainerStyle={{
-              gap: 10,
-              paddingBottom: insets.bottom + 16,
-              paddingHorizontal: 16,
-              paddingTop: 4,
-            }}
-            showsVerticalScrollIndicator={false}
-          >
-            {props.accounts.map((account) => (
-              <AccountCard
-                key={account.accountKey ?? account.instanceId}
-                account={account}
-                showCurrentBadge={showCurrentBadge}
-                nowMs={props.nowMs}
-                unavailable={props.unavailable === true}
-              />
-            ))}
-          </ScrollView>
-        </View>
+          <SymbolView
+            name={Platform.OS === "android" ? "chevron.left" : "xmark"}
+            size={16}
+            tintColor={iconMuted}
+            type="monochrome"
+          />
+        </Pressable>
+        <Text className="text-base font-t3-bold text-foreground">{title}</Text>
+        <View className="flex-1" />
+        {/* One freshness line for the whole read; stale accounts add theirs. */}
+        <Text className="text-2xs text-foreground-tertiary tabular-nums">
+          {props.refreshing
+            ? "updating…"
+            : formatProviderUsageAge(props.panelObservedAt, props.nowMs)}
+        </Text>
+        <Pressable
+          accessibilityLabel="Refresh usage"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: props.refreshing }}
+          disabled={props.refreshing}
+          hitSlop={8}
+          onPress={props.onRefresh}
+          className={cn("p-1 active:opacity-70", props.refreshing && "opacity-40")}
+        >
+          <SymbolView name="arrow.clockwise" size={15} tintColor={iconMuted} type="monochrome" />
+        </Pressable>
       </View>
-    </Modal>
+      {props.fableUsage ? (
+        <View className="flex-row items-center gap-2 px-5 pb-2">
+          <Text className="text-2xs font-t3-medium text-foreground-muted">Fable next</Text>
+          <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
+            {props.fableUsage.accountName}
+          </Text>
+          <View className="flex-1" />
+          <Text
+            className={cn(
+              "text-2xs font-t3-medium tabular-nums",
+              STATUS_TEXT_CLASS[props.fableUsage.window.status],
+            )}
+          >
+            {describeProviderUsageWindowValue(props.fableUsage.window)}
+            {fableResetTime ? (
+              <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
+            ) : null}
+          </Text>
+        </View>
+      ) : null}
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{
+          gap: 10,
+          paddingBottom: insets.bottom + 16,
+          paddingHorizontal: 16,
+          paddingTop: 4,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        {props.accounts.map((account) => (
+          <AccountCard
+            key={account.accountKey ?? account.instanceId}
+            account={account}
+            showCurrentBadge={showCurrentBadge}
+            nowMs={props.nowMs}
+            unavailable={props.unavailable === true}
+          />
+        ))}
+      </ScrollView>
+    </View>
   );
+}
+
+/** Provider quota hosted by the root native form-sheet route. */
+export function ProviderUsageRouteScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const presentation = useProviderUsageRoutePresentation();
+  const session = presentation.session;
+
+  useEffect(() => {
+    if (!session) {
+      navigation.goBack();
+    }
+  }, [navigation, session]);
+
+  if (!session) {
+    return <View className="flex-1 bg-sheet" />;
+  }
+
+  const { ownerId: _ownerId, ...usage } = session;
+  return <ProviderUsageSheet {...usage} onClose={() => navigation.goBack()} />;
 }

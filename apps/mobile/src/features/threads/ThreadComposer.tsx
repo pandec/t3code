@@ -1,4 +1,3 @@
-import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   EnvironmentId,
@@ -17,17 +16,9 @@ import {
   serializeComposerFileLink,
   type ComposerTrigger,
 } from "@t3tools/shared/composerTrigger";
-import * as Haptics from "expo-haptics";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import type { ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -53,6 +44,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 
 import { AppText as Text } from "../../components/AppText";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import { GlassSurface } from "../../components/GlassSurface";
 import {
   ComposerEditor,
   type ComposerEditorHandle,
@@ -62,8 +54,7 @@ import {
   ComposerToolbarButton,
   ComposerToolbarRow,
   ComposerToolbarScroller,
-  ComposerToolbarTrigger,
-} from "../../components/ComposerToolbarTrigger";
+} from "../../components/ComposerToolbar";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
@@ -106,16 +97,25 @@ import {
   scoreQueryMatch,
 } from "@t3tools/shared/searchRanking";
 import {
-  applyProviderOptionSelection,
+  providerOptionValueLabels,
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { RUNTIME_MODE_CHOICES } from "./thread-settings-options";
 import { threadComposerSendLabel } from "./threadComposerSendLabel";
-import { buildThreadSettingsMenu } from "./thread-settings-menu";
-import { ProviderUsageSheet } from "./ProviderUsageSheet";
-import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
-import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
+import {
+  type ProviderUsageRouteSession,
+  useProviderUsageRoutePresentation,
+} from "./ProviderUsageSheet";
+import {
+  type ExistingThreadSettingsRouteSession,
+  useExistingThreadSettingsRoutePresentation,
+} from "./ThreadSettingsSheet";
+import {
+  useThreadSettingsSheetPresentation,
+  type NavigationWithFinishTransitioning,
+} from "./use-thread-settings-sheet-presentation";
 import { VoiceRecorderControl } from "./VoiceRecorderControl";
 
 /**
@@ -128,7 +128,7 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  * Height of the expanded composer (card + toolbar + vertical padding, excluding safe-area inset).
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
-export const COMPOSER_EXPANDED_CHROME = 174;
+export const COMPOSER_EXPANDED_CHROME = 156;
 
 /** Long-press menu on the send button while a turn is running. */
 const SEND_MENU_ACTIONS: MenuAction[] = [{ id: "queue", title: "Queue for later", image: "clock" }];
@@ -187,8 +187,8 @@ export interface ThreadComposerProps {
 }
 
 /**
- * The pill / card container — renders as LiquidGlassView on supported
- * iOS 26+ devices (progressive blur, native morph), opaque View otherwise.
+ * The pill / card container — renders with Expo's native GlassView on supported
+ * iOS 26+ devices and keeps the existing opaque fallback elsewhere.
  * Exported so NewTaskDraftScreen can render the same composer chrome.
  */
 // One timing for every piece of the expanded↔compact morph so the surface,
@@ -204,6 +204,8 @@ export function ComposerSurface(props: {
   readonly children: ReactNode;
   readonly style: ViewStyle;
   readonly isDarkMode: boolean;
+  /** Existing thread composers morph between pill and card layouts. */
+  readonly animateLayout?: boolean;
 }) {
   // Drop shadow lives on a wrapper: `overflow: "hidden"` on the surface itself
   // (needed to clip content to the pill shape) would clip the shadow on iOS.
@@ -216,35 +218,26 @@ export function ComposerSurface(props: {
     elevation: 10,
   };
 
-  if (isLiquidGlassSupported) {
-    return (
-      <Animated.View layout={COMPOSER_LAYOUT_TRANSITION} style={shadowStyle}>
-        <LiquidGlassView
-          effect="regular"
-          interactive
-          colorScheme={props.isDarkMode ? "dark" : "light"}
-          style={props.style}
-        >
-          {props.children}
-        </LiquidGlassView>
-      </Animated.View>
-    );
-  }
-
   return (
-    <Animated.View layout={COMPOSER_LAYOUT_TRANSITION} style={shadowStyle}>
-      <View
-        style={[
-          props.style,
-          {
-            backgroundColor: props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)",
-            borderWidth: 1,
-            borderColor: props.isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
-          },
-        ]}
+    <Animated.View
+      layout={props.animateLayout === false ? undefined : COMPOSER_LAYOUT_TRANSITION}
+      style={shadowStyle}
+    >
+      <GlassSurface
+        chrome="none"
+        fallbackStyle={{
+          backgroundColor: props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)",
+          borderWidth: 1,
+          borderColor: props.isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+        }}
+        glassEffectStyle="regular"
+        // The composer is a passive material containing interactive controls.
+        // Expo GlassView defaults to non-interactive and both layouts share it.
+        tintColor="transparent"
+        style={props.style}
       >
         {props.children}
-      </View>
+      </GlassSurface>
     </Animated.View>
   );
 }
@@ -335,6 +328,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
 });
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+  const navigation = useNavigation();
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const bodyText = useScaledTextRole("body");
@@ -345,20 +339,31 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     editorRef: inputRef,
     isEditorFocused: isFocused,
   });
-  // The same keyboard/focus choreography every composer sheet needs: the iOS
-  // keyboard window would otherwise cover the lower half of a bottom sheet.
+  const settingsRoutePresentation = useExistingThreadSettingsRoutePresentation();
+  const settingsRoutePresentedRef = useRef(false);
   const usageSheetPresentation = useThreadSettingsSheetPresentation({
     editorRef: inputRef,
     isEditorFocused: isFocused,
   });
+  const usageRoutePresentation = useProviderUsageRoutePresentation();
+  const usageRoutePresentedRef = useRef(false);
+  /**
+   * One composer overlay at a time. Settings and provider usage are separate
+   * native routes now, and each pushes its own; the navigator does not
+   * arbitrate between them, so two opens landing in the same frame would stack
+   * two form sheets in a single transition and leave the second one revealed
+   * when the first is dismissed. A ref, not state: both taps can arrive before
+   * React re-renders, so `isActive` would still read false for both.
+   */
+  const overlaySheetOwnerRef = useRef<"settings" | "usage" | null>(null);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
-  // Opening and closing count as active so the composer stays expanded while
-  // focus moves between its native editor and the settings modal.
+  // Opening and presentation count as active so the composer stays expanded
+  // while focus moves between its native editor and either native sheet.
   const isExpanded =
     isFocused || settingsSheetPresentation.isActive || usageSheetPresentation.isActive;
   const canSend = hasContent;
@@ -411,7 +416,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
-  const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
   const connectionStatus = composerConnectionStatus({
     connectionError: props.connectionError,
     connectionState: props.connectionState,
@@ -648,11 +652,47 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => oldestProviderUsageObservedAt(providerUsageAccounts),
     [providerUsageAccounts],
   );
+  const providerUsageLabel =
+    providerUsage?.providerLabel ??
+    providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
+    "Provider";
+  const providerUsagePrimaryWindow = providerUsage
+    ? primaryProviderUsageWindow(providerUsage)
+    : null;
+  // Fable has its own row, so it must not repaint the primary dot.
+  const providerUsageStatus = providerUsageRingStatus(
+    providerUsage,
+    fableUsageSelection?.window.id ?? null,
+  );
+  const composerOwnerId = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const usageRouteSession = useMemo<ProviderUsageRouteSession>(
+    () => ({
+      ownerId: composerOwnerId,
+      providerLabel: providerUsageLabel,
+      accounts: providerUsageAccounts,
+      fableUsage: fableUsageSelection,
+      nowMs: providerUsageNowMs,
+      panelObservedAt: providerUsagePanelObservedAt,
+      refreshing: isRefreshingProviderUsage,
+      onRefresh: handleRefreshProviderUsage,
+      unavailable: providerUsageQuery.error !== null,
+    }),
+    [
+      composerOwnerId,
+      fableUsageSelection,
+      handleRefreshProviderUsage,
+      isRefreshingProviderUsage,
+      providerUsageAccounts,
+      providerUsageLabel,
+      providerUsageNowMs,
+      providerUsagePanelObservedAt,
+      providerUsageQuery.error,
+    ],
+  );
   const openProviderUsageSheet = useCallback(() => {
-    // Two sibling modals over one composer: a second presentation started while
-    // the first is still settling its keyboard dismissal can strand a sheet
-    // visible with no dismissal callback, leaving its trigger dead.
-    if (settingsSheetPresentation.isActiveRef.current) return;
+    if (overlaySheetOwnerRef.current !== null) return;
+    overlaySheetOwnerRef.current = "usage";
+    usageRoutePresentation.present(usageRouteSession);
     usageSheetPresentation.open();
     // Opening the sheet is the read: refresh a snapshot older than a minute so
     // it can't show yesterday's quota, exactly as the web popover does. The
@@ -670,28 +710,23 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   }, [
     handleRefreshProviderUsage,
     providerUsageAccounts,
-    settingsSheetPresentation.isActiveRef,
-    usageSheetPresentation,
+    usageRoutePresentation.present,
+    usageRouteSession,
+    usageSheetPresentation.open,
   ]);
-  const closeProviderUsageSheet = useCallback(() => {
-    usageSheetPresentation.close("save");
-  }, [usageSheetPresentation]);
-  const openThreadSettingsSheet = useCallback(() => {
-    if (usageSheetPresentation.isActiveRef.current) return;
-    settingsSheetPresentation.open();
-  }, [settingsSheetPresentation, usageSheetPresentation.isActiveRef]);
-  const providerUsageLabel =
-    providerUsage?.providerLabel ??
-    providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
-    "Provider";
-  const providerUsagePrimaryWindow = providerUsage
-    ? primaryProviderUsageWindow(providerUsage)
-    : null;
-  // Fable has its own row, so it must not repaint the primary dot.
-  const providerUsageStatus = providerUsageRingStatus(
-    providerUsage,
-    fableUsageSelection?.window.id ?? null,
-  );
+  useEffect(() => {
+    if (usageSheetPresentation.isActive) {
+      usageRoutePresentation.present(usageRouteSession);
+    }
+  }, [usageRoutePresentation.present, usageRouteSession, usageSheetPresentation.isActive]);
+  useEffect(() => {
+    if (!usageSheetPresentation.isVisible || usageRoutePresentedRef.current) {
+      return;
+    }
+
+    usageRoutePresentedRef.current = true;
+    navigation.dispatch(StackActions.push("ProviderUsageSheet"));
+  }, [navigation, usageSheetPresentation.isVisible]);
   const providerSkills = props.providerSkills;
 
   // ── Trigger detection ────────────────────────────────────
@@ -1012,74 +1047,106 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }),
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
-  const settingsSummaryLabel = threadSettingsSummaryLabel({
-    modelLabel: currentModelOption?.label ?? currentModelSelection.model,
-    optionDescriptors: providerOptionDescriptors,
-    runtimeMode: currentRuntimeMode,
-    interactionMode: currentInteractionMode,
-  });
-
-  // iOS gets a native menu on the trigger pill: everyday adjustments apply
-  // without resigning the keyboard. Android still routes through the sheet.
-  const settingsMenu = useMemo(
+  const settingsAccessibilityValue = useMemo(
     () =>
-      Platform.OS === "ios"
-        ? buildThreadSettingsMenu({
-            providerGroups: threadProviderGroups,
-            selectedModel: currentModelSelection,
-            optionDescriptors: providerOptionDescriptors,
-            runtimeMode: currentRuntimeMode,
-            interactionMode: currentInteractionMode,
-          })
-        : null,
+      [
+        currentModelOption?.label ?? currentModelSelection.model,
+        ...providerOptionValueLabels(providerOptionDescriptors),
+        RUNTIME_MODE_CHOICES.find((choice) => choice.mode === currentRuntimeMode)?.label,
+      ]
+        .filter((value): value is string => value !== undefined)
+        .join(" · "),
     [
-      currentInteractionMode,
+      currentModelOption?.label,
+      currentModelSelection.model,
+      currentRuntimeMode,
+      providerOptionDescriptors,
+    ],
+  );
+  const settingsRouteSession = useMemo<ExistingThreadSettingsRouteSession>(
+    () => ({
+      ownerId: composerOwnerId,
+      providerGroups: threadProviderGroups,
+      selectedModel: currentModelSelection,
+      onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
+      optionDescriptors: providerOptionDescriptors,
+      onUpdateOptionSelections: (options) =>
+        props.onUpdateModelSelection({ ...currentModelSelection, options }),
+      runtimeMode: currentRuntimeMode,
+      onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+    }),
+    [
+      composerOwnerId,
       currentModelSelection,
       currentRuntimeMode,
+      props.onUpdateModelSelection,
+      props.onUpdateRuntimeMode,
       providerOptionDescriptors,
       threadProviderGroups,
     ],
   );
+  const openSettings = useCallback(() => {
+    if (overlaySheetOwnerRef.current !== null) return;
+    overlaySheetOwnerRef.current = "settings";
+    settingsRoutePresentation.present(settingsRouteSession);
+    settingsSheetPresentation.open();
+  }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.open]);
 
-  const onUpdateModelSelection = props.onUpdateModelSelection;
-  const onUpdateRuntimeMode = props.onUpdateRuntimeMode;
-  const handleSettingsMenuAction = useCallback(
-    (eventId: string) => {
-      const event = settingsMenu?.events.get(eventId);
-      if (!event) return;
-      switch (event.type) {
-        case "select-model":
-          void Haptics.selectionAsync();
-          onUpdateModelSelection(event.option.selection);
-          return;
-        case "set-option": {
-          const options = applyProviderOptionSelection(providerOptionDescriptors, {
-            id: event.optionId,
-            value: event.value,
-          });
-          if (options) {
-            void Haptics.selectionAsync();
-            onUpdateModelSelection({ ...currentModelSelection, options });
-          }
-          return;
-        }
-        case "set-runtime":
-          void Haptics.selectionAsync();
-          onUpdateRuntimeMode(event.mode);
-          return;
-        case "set-interaction":
-          void Haptics.selectionAsync();
-          onUpdateInteractionMode(event.mode);
-          return;
+  useEffect(() => {
+    if (settingsSheetPresentation.isActive) {
+      settingsRoutePresentation.present(settingsRouteSession);
+    }
+  }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.isActive]);
+
+  useEffect(() => {
+    if (!settingsSheetPresentation.isVisible || settingsRoutePresentedRef.current) {
+      return;
+    }
+
+    settingsRoutePresentedRef.current = true;
+    navigation.dispatch(StackActions.push("ThreadSettingsSheet"));
+  }, [navigation, settingsSheetPresentation.isVisible]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (settingsRoutePresentedRef.current) {
+        settingsRoutePresentedRef.current = false;
+        settingsSheetPresentation.onDismissed();
+        settingsRoutePresentation.clear(composerOwnerId);
       }
-    },
+      if (usageRoutePresentedRef.current) {
+        usageRoutePresentedRef.current = false;
+        usageSheetPresentation.onDismissed();
+        usageRoutePresentation.clear(composerOwnerId);
+      }
+      // The composer regaining focus means no overlay route is above it, so
+      // release the owner even if an open never reached its presented ref
+      // (a tap that blurred the editor but was dismissed before presenting).
+      overlaySheetOwnerRef.current = null;
+    }, [
+      composerOwnerId,
+      settingsRoutePresentation.clear,
+      settingsSheetPresentation.onDismissed,
+      usageRoutePresentation.clear,
+      usageSheetPresentation.onDismissed,
+    ]),
+  );
+
+  useEffect(
+    () =>
+      // UIKit's completion callback for sheet dismissal, surfaced by the
+      // native-stack patch. This is when any queued keyboard restore runs.
+      (navigation as unknown as NavigationWithFinishTransitioning).addListener(
+        "finishTransitioning",
+        () => {
+          settingsSheetPresentation.onStackTransitionsFinished();
+          usageSheetPresentation.onStackTransitionsFinished();
+        },
+      ),
     [
-      currentModelSelection,
-      onUpdateInteractionMode,
-      onUpdateModelSelection,
-      onUpdateRuntimeMode,
-      providerOptionDescriptors,
-      settingsMenu,
+      navigation,
+      settingsSheetPresentation.onStackTransitionsFinished,
+      usageSheetPresentation.onStackTransitionsFinished,
     ],
   );
 
@@ -1157,10 +1224,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           style={
             isExpanded
               ? {
-                  borderRadius: 20,
+                  borderRadius: 26,
+                  minHeight: 140,
                   overflow: "hidden" as const,
+                  paddingBottom: 6,
                   paddingHorizontal: 14,
-                  paddingVertical: 12,
+                  paddingTop: 14,
                 }
               : {
                   borderRadius: 999,
@@ -1210,7 +1279,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               style={
                 isExpanded
                   ? {
-                      minHeight: 80,
+                      minHeight: 72,
                       maxHeight: 160,
                       paddingHorizontal: 4,
                       paddingVertical: 4,
@@ -1259,15 +1328,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               )}
             </Animated.View>
           ) : null}
-        </ComposerSurface>
-
-        {isExpanded ? (
-          // Toolbar row — matches draft page layout (expanded only)
-          <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)}>
-            <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
+          {isExpanded ? (
+            <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={4}>
               <ComposerToolbarScroller
                 fadeOpaque={toolbarFadeOpaque}
                 fadeTransparent={toolbarFadeTransparent}
+                contentPaddingRight={8}
               >
                 <ComposerToolbarButton
                   accessibilityLabel="Add attachment"
@@ -1283,35 +1349,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onTranscript={props.onVoiceTranscript}
                   />
                 ) : null}
-                {settingsMenu ? (
-                  <ControlPillMenu
-                    actions={settingsMenu.actions}
-                    onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
-                  >
-                    <ComposerToolbarTrigger
-                      accessibilityLabel="Thread settings"
-                      accessibilityValue={{ text: settingsSummaryLabel }}
-                      iconNode={
-                        <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                      }
-                      label={settingsSummaryLabel}
-                      maxWidth={320}
-                    />
-                  </ControlPillMenu>
-                ) : (
-                  <ComposerToolbarTrigger
-                    accessibilityLabel="Thread settings"
-                    accessibilityValue={{ text: settingsSummaryLabel }}
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
-                    label={settingsSummaryLabel}
-                    maxWidth={320}
-                    onPress={openThreadSettingsSheet}
-                  />
-                )}
+                <ComposerToolbarButton
+                  accessibilityLabel="Model and reasoning settings"
+                  accessibilityValue={{ text: settingsAccessibilityValue }}
+                  iconNode={
+                    <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
+                  }
+                  label={currentModelOption?.label ?? currentModelSelection.model}
+                  maxWidth={152}
+                  onPress={openSettings}
+                />
                 {providerUsageAccounts.length > 0 ? (
-                  <ComposerToolbarTrigger
+                  <ComposerToolbarButton
                     accessibilityLabel={`${providerUsageLabel} usage`}
                     iconNode={
                       <View
@@ -1356,43 +1405,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 sendToolbarButton
               )}
             </ComposerToolbarRow>
+          ) : null}
+        </ComposerSurface>
+
+        {/* Queue count */}
+        {props.queueCount > 0 ? (
+          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
+            <Text className="pt-2 text-xs text-foreground-muted">
+              {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
+              automatically.
+            </Text>
           </Animated.View>
         ) : null}
       </Animated.View>
-
-      <ThreadSettingsSheet
-        visible={settingsSheetPresentation.isVisible}
-        onClose={settingsSheetPresentation.close}
-        onDismissed={settingsSheetPresentation.onDismissed}
-        providerGroups={threadProviderGroups}
-        selectedModel={currentModelSelection}
-        onSelectModel={(option) => props.onUpdateModelSelection(option.selection)}
-        optionDescriptors={providerOptionDescriptors}
-        onUpdateOptionSelections={(options) =>
-          props.onUpdateModelSelection({ ...currentModelSelection, options })
-        }
-        runtimeMode={currentRuntimeMode}
-        onUpdateRuntimeMode={props.onUpdateRuntimeMode}
-        interactionMode={currentInteractionMode}
-        onUpdateInteractionMode={props.onUpdateInteractionMode}
-      />
-
-      <ProviderUsageSheet
-        visible={usageSheetPresentation.isVisible}
-        // Reading quota is never a reason to end the typing session, so every
-        // close restores focus the way the settings sheet's Save does.
-        onClose={closeProviderUsageSheet}
-        onDismissed={usageSheetPresentation.onDismissed}
-        providerLabel={providerUsageLabel}
-        accounts={providerUsageAccounts}
-        fableUsage={fableUsageSelection}
-        nowMs={providerUsageNowMs}
-        panelObservedAt={providerUsagePanelObservedAt}
-        refreshing={isRefreshingProviderUsage}
-        onRefresh={handleRefreshProviderUsage}
-        unavailable={providerUsageQuery.error !== null}
-      />
-
       <ImageViewing
         images={previewImageUri ? [{ uri: previewImageUri }] : []}
         imageIndex={0}

@@ -486,16 +486,21 @@ function updateComposerDrafts(
 ): void {
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = update(current);
+  if (next === current) {
+    if (!hydrationComplete) {
+      draftKeysMutatedBeforeHydration.add(draftKey);
+      schedulePersistComposerDraft(draftKey, {
+        ...options,
+        discardPartial: options?.discardPartial === true && !options.discardPartialOnlyWhenChanged,
+      });
+    }
+    return;
+  }
   appAtomRegistry.set(composerDraftsAtom, next);
   if (!hydrationComplete) {
     draftKeysMutatedBeforeHydration.add(draftKey);
   }
-  schedulePersistComposerDraft(draftKey, {
-    ...options,
-    discardPartial:
-      options?.discardPartial === true &&
-      (!options.discardPartialOnlyWhenChanged || next !== current),
-  });
+  schedulePersistComposerDraft(draftKey, options);
 }
 
 export function setComposerDraftText(
@@ -844,6 +849,51 @@ export function restoreComposerDraftSnapshotState(
     next[draftKey] = snapshot;
   }
   return next;
+}
+
+export function copyComposerDraftContentState(
+  current: Record<string, ComposerDraft>,
+  sourceDraftKey: string,
+  targetDraftKey: string,
+): Record<string, ComposerDraft> {
+  if (sourceDraftKey === targetDraftKey) {
+    return current;
+  }
+  const source = normalizeDraft(current[sourceDraftKey]);
+  const target = normalizeDraft(current[targetDraftKey]);
+  const sourceHasContent =
+    source.text.length > 0 ||
+    source.attachments.length > 0 ||
+    (source.importedShareIds?.length ?? 0) > 0;
+  const targetHasContent =
+    target.text.length > 0 ||
+    target.attachments.length > 0 ||
+    (target.importedShareIds?.length ?? 0) > 0;
+  if (!sourceHasContent || targetHasContent) {
+    return current;
+  }
+  return {
+    ...current,
+    [targetDraftKey]: {
+      ...target,
+      text: source.text,
+      attachments: source.attachments,
+      ...(source.importedShareIds ? { importedShareIds: source.importedShareIds } : {}),
+    },
+  };
+}
+
+export async function copyComposerDraftContentIfEmpty(
+  sourceDraftKey: string,
+  targetDraftKey: string,
+): Promise<void> {
+  ensureComposerDraftsLoaded();
+  if (loadPromise !== null) {
+    await loadPromise;
+  }
+  updateComposerDrafts(targetDraftKey, (current) =>
+    copyComposerDraftContentState(current, sourceDraftKey, targetDraftKey),
+  );
 }
 
 function mergeComposerDraftText(existing: string, incoming: string): string {

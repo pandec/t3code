@@ -89,6 +89,7 @@ export function PolicyTooltip({ children }: { readonly children: string }) {
   return (
     <Tooltip>
       <TooltipTrigger
+        delay={200}
         render={
           <button
             type="button"

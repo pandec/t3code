@@ -133,6 +133,8 @@ import {
   clearComposerDraftContentState,
   composerDraftStillContainsAppend,
   composerDraftsAtom,
+  copyComposerDraftContentIfEmpty,
+  copyComposerDraftContentState,
   decodePersistedComposerDrafts,
   ensureComposerDraftsLoaded,
   flushComposerDrafts,
@@ -416,6 +418,53 @@ describe("mobile composer drafts", () => {
     appAtomRegistry.set(composerDraftsAtom, { [draftKey]: selectedDraft });
 
     expect(getComposerDraftSnapshot(draftKey)).toEqual(selectedDraft);
+  });
+
+  it("carries unfinished content to a newly selected project without overwriting its settings", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const source: ComposerDraft = {
+      text: "Keep this task",
+      attachments: [],
+      importedShareIds: ["share-1"],
+      workspaceSelection: {
+        mode: "worktree",
+        branch: "feature/source",
+        worktreePath: null,
+      },
+    };
+    const target: ComposerDraft = {
+      text: "",
+      attachments: [],
+      runtimeMode: "approval-required",
+    };
+
+    expect(
+      copyComposerDraftContentState(
+        { [sourceKey]: source, [targetKey]: target },
+        sourceKey,
+        targetKey,
+      ),
+    ).toEqual({
+      [sourceKey]: source,
+      [targetKey]: {
+        ...target,
+        text: source.text,
+        attachments: source.attachments,
+        importedShareIds: source.importedShareIds,
+      },
+    });
+  });
+
+  it("does not overwrite unfinished content already stored for the selected project", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const drafts: Record<string, ComposerDraft> = {
+      [sourceKey]: { text: "Source task", attachments: [] },
+      [targetKey]: { text: "Target task", attachments: [] },
+    };
+
+    expect(copyComposerDraftContentState(drafts, sourceKey, targetKey)).toBe(drafts);
   });
 
   it("merges shared content into a project draft without duplicating retries", () => {
@@ -766,6 +815,48 @@ describe("mobile composer drafts", () => {
         `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`,
       ),
     ).toBe(false);
+  });
+
+  it("waits for persisted drafts before copying content between projects", async () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const unrelatedKey = "environment-1:thread-1";
+    const source = { text: "Current task", attachments: [] } satisfies ComposerDraft;
+    const target = { text: "Persisted target", attachments: [] } satisfies ComposerDraft;
+    const unrelated = { text: "Keep me", attachments: [] } satisfies ComposerDraft;
+    const legacyPath = "file:///document/composer-drafts/drafts.json";
+    persistedFiles.set(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        drafts: {
+          [targetKey]: target,
+          [unrelatedKey]: unrelated,
+        },
+      }),
+    );
+    let releaseRead: () => void = () => undefined;
+    readGate.uri = legacyPath;
+    readGate.promise = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      readGate.notifyStarted = resolve;
+    });
+    appAtomRegistry.set(composerDraftsAtom, { [sourceKey]: source });
+
+    const copy = copyComposerDraftContentIfEmpty(sourceKey, targetKey);
+    await readStarted;
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({ [sourceKey]: source });
+
+    releaseRead();
+    await copy;
+
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
+      [sourceKey]: source,
+      [targetKey]: target,
+      [unrelatedKey]: unrelated,
+    });
   });
 });
 

@@ -533,6 +533,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
+      ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
+        ? ["Auto-settle merged threads"]
+        : []),
       ...(projectAccentColors.hasAnyServerAccentColors ||
       Object.keys(settings.sidebarProjectAccentColors).length > 0
         ? ["Project accent colors"]
@@ -667,6 +670,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectAccentColors,
       settings.archivedSectionVisibleCount,
       settings.sidebarAutoSettleAfterDays,
+      settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
       settings.sidebarThreadPreviewCount,
@@ -757,6 +761,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       sidebarProjectAccentColors: {},
       threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
       sidebarThreadProviderIconVisibility:
@@ -1984,11 +1989,45 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("auto-settle-inactive-threads")}
+          {...searchableSetting("auto-settle-merged-threads")}
           description={
             settings.threadAutoSettleEnabled
-              ? "Sidebar threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."
+              ? "Settle a thread when its pull request merges. Closed pull requests still settle automatically."
               : "Automatic thread settling is disabled in Extras."
+          }
+          resetAction={
+            settings.sidebarAutoSettleOnMerge !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
+              <SettingResetButton
+                label="auto-settle on merge"
+                onClick={() =>
+                  updateSettings({
+                    sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.threadAutoSettleEnabled && settings.sidebarAutoSettleOnMerge}
+              disabled={!settings.threadAutoSettleEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
+              }
+              aria-label="Auto-settle merged threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("auto-settle-inactive-threads")}
+          description={
+            !settings.threadAutoSettleEnabled
+              ? "Automatic thread settling is disabled in Extras."
+              : settings.sidebarAutoSettleOnMerge
+                ? "Sidebar threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."
+                : "Sidebar threads with no activity for this long settle automatically. Threads on closed PRs always settle."
           }
           resetAction={
             settings.sidebarAutoSettleAfterDays !==
