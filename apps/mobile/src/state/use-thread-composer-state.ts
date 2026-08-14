@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Alert } from "react-native";
 
 import {
@@ -61,6 +61,7 @@ import { useThreadOutboxMessages } from "./use-thread-outbox";
 import { isQueuedMessageEditTransferring } from "./use-thread-outbox-actions";
 import {
   getStagedThreadSettings,
+  pruneExpiredStagedThreadSettings,
   resolveStagedThreadSettings,
   stageThreadSettings,
   useStagedThreadSettings,
@@ -173,6 +174,17 @@ export function useThreadComposerState() {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  // Latch staged-override expiry: once the thread moves off a field's
+  // baseline the entry is deleted, so a later return to the baseline value
+  // (another client's pick, a plan follow-up flipping modes back) cannot
+  // revive a pick the user is no longer looking at.
+  useEffect(() => {
+    if (selectedThreadKey && selectedThread) {
+      pruneExpiredStagedThreadSettings(selectedThreadKey, selectedThread);
+    }
+  }, [selectedThread, selectedThreadKey]);
+  const latestThreadRef = useRef(selectedThread);
+  latestThreadRef.current = selectedThread;
   const resolvedThreadSettings = selectedThread
     ? resolveStagedThreadSettings(stagedThreadSettings, selectedThread)
     : null;
@@ -236,6 +248,7 @@ export function useThreadComposerState() {
       }
       const draft = getComposerDraftSnapshot(threadKey);
       const thread = selectedThreadDetail ?? selectedThreadShell;
+      pruneExpiredStagedThreadSettings(threadKey, thread);
       const stagedSettings = resolveStagedThreadSettings(
         getStagedThreadSettings(threadKey),
         thread,
@@ -438,32 +451,35 @@ export function useThreadComposerState() {
 
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey || !selectedThread) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      stageThreadSettings(selectedThreadKey, { modelSelection: value }, selectedThread);
+      stageThreadSettings(selectedThreadKey, { modelSelection: value }, baseline);
     },
-    [selectedThread, selectedThreadKey],
+    [selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey || !selectedThread) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      stageThreadSettings(selectedThreadKey, { runtimeMode: value }, selectedThread);
+      stageThreadSettings(selectedThreadKey, { runtimeMode: value }, baseline);
     },
-    [selectedThread, selectedThreadKey],
+    [selectedThreadKey],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey || !selectedThread) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      stageThreadSettings(selectedThreadKey, { interactionMode: value }, selectedThread);
+      stageThreadSettings(selectedThreadKey, { interactionMode: value }, baseline);
     },
-    [selectedThread, selectedThreadKey],
+    [selectedThreadKey],
   );
 
   return {

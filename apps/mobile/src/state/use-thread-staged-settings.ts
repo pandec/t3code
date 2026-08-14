@@ -89,6 +89,41 @@ export function removeStagedThreadSettingsForEnvironment(environmentId: Environm
   }
 }
 
+/**
+ * Latches expiry: once a field's baseline no longer matches the thread, the
+ * staged entry is removed so a later return to the baseline value (another
+ * client's pick, a plan follow-up flipping modes back) cannot revive it.
+ */
+export function pruneExpiredStagedThreadSettings(threadKey: string, thread: ThreadSettings): void {
+  const current = appAtomRegistry.get(threadStagedSettingsAtom);
+  const staged = current[threadKey];
+  if (!staged) {
+    return;
+  }
+  const next: StagedThreadSettings = {
+    ...(staged.modelSelection &&
+    modelSelectionsEqual(thread.modelSelection, staged.modelSelection.baseline)
+      ? { modelSelection: staged.modelSelection }
+      : {}),
+    ...(staged.runtimeMode && thread.runtimeMode === staged.runtimeMode.baseline
+      ? { runtimeMode: staged.runtimeMode }
+      : {}),
+    ...(staged.interactionMode && thread.interactionMode === staged.interactionMode.baseline
+      ? { interactionMode: staged.interactionMode }
+      : {}),
+  };
+  if (Object.keys(next).length === Object.keys(staged).length) {
+    return;
+  }
+  const updated = { ...current };
+  if (Object.keys(next).length === 0) {
+    delete updated[threadKey];
+  } else {
+    updated[threadKey] = next;
+  }
+  appAtomRegistry.set(threadStagedSettingsAtom, updated);
+}
+
 export function resolveStagedThreadSettings(
   staged: StagedThreadSettings | undefined,
   thread: ThreadSettings,

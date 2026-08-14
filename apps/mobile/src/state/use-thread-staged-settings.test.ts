@@ -5,6 +5,7 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   clearStagedThreadSettings,
   getStagedThreadSettings,
+  pruneExpiredStagedThreadSettings,
   removeStagedThreadSettingsForEnvironment,
   resolveStagedThreadSettings,
   stageThreadSettings,
@@ -94,6 +95,32 @@ describe("thread staged settings", () => {
       runtimeMode: "full-access",
       interactionMode: "plan",
     });
+  });
+
+  it("never revives an expired override when the thread returns to its baseline", () => {
+    const threadKey = "environment-1:thread-1";
+    stageThreadSettings(
+      threadKey,
+      { modelSelection: stagedModel, interactionMode: "plan" },
+      baseline,
+    );
+
+    // The thread moves off the model baseline (e.g. a pick on another
+    // client); the interaction mode stays on its baseline and survives.
+    pruneExpiredStagedThreadSettings(threadKey, { ...baseline, modelSelection: thirdModel });
+    expect(getStagedThreadSettings(threadKey)).toEqual({
+      interactionMode: { value: "plan", baseline: baseline.interactionMode },
+    });
+
+    // Returning to the original baseline must not resurrect the model pick.
+    expect(resolveStagedThreadSettings(getStagedThreadSettings(threadKey), baseline)).toEqual({
+      ...baseline,
+      interactionMode: "plan",
+    });
+
+    // Once every field expires, the entry is deleted entirely.
+    pruneExpiredStagedThreadSettings(threadKey, { ...baseline, interactionMode: "plan" });
+    expect(getStagedThreadSettings(threadKey)).toBeUndefined();
   });
 
   it("clears one thread and removes only the selected environment", () => {
