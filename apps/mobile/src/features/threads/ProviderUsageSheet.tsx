@@ -101,7 +101,12 @@ function AccountCard(props: {
         {/* Name, email, and metadata share one line: a pooled gateway lists
             many accounts, and three header lines each outgrew the sheet. */}
         <View className="flex-row items-center gap-1.5">
-          <Text className="text-sm font-t3-bold text-foreground">{account.displayName}</Text>
+          {/* A pooled account's name is short ("Claude"), but a direct
+              instance's is a user-chosen string that would otherwise squeeze
+              out everything after it. */}
+          <Text className="shrink text-sm font-t3-bold text-foreground" numberOfLines={1}>
+            {account.displayName}
+          </Text>
           {account.email ? (
             <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
               {account.email}

@@ -229,8 +229,14 @@ export function ContextWindowMeter(props: {
     ? formatProviderUsagePercent(quotaWindow.usedPercent)
     : null;
   const fablePercentage = providerUsageBarPercent(fableUsage);
+  // The Fable account is named by its email, so it obeys the masking preference
+  // exactly like the account rows do — including in the accessible label.
+  const fableAccountName =
+    props.fableAccountName && props.fableAccountName.includes("@")
+      ? formatProviderUsageEmail(props.fableAccountName, props.maskProviderUsageEmails)
+      : (props.fableAccountName ?? null);
   const fableAriaLabel = fableUsage
-    ? `Weekly Fable${props.fableAccountName ? ` on ${props.fableAccountName}` : ""} at ${describeProviderUsageWindowValue(fableUsage)}`
+    ? `Weekly Fable${fableAccountName ? ` on ${fableAccountName}` : ""} at ${describeProviderUsageWindowValue(fableUsage)}`
     : null;
   const quotaAriaLabel = quotaWindow
     ? quotaPercentLabel
@@ -371,11 +377,11 @@ export function ContextWindowMeter(props: {
               </div>
             ) : null}
 
-            {providerUsageAccounts.length > 0 && fableUsage && props.fableAccountName ? (
+            {providerUsageAccounts.length > 0 && fableUsage && fableAccountName ? (
               <div className="flex shrink-0 items-center justify-between gap-3 text-[11px]">
                 <span className="text-muted-foreground/70">Fable next</span>
                 <span className="truncate font-medium text-muted-foreground/90">
-                  {props.fableAccountName}
+                  {fableAccountName}
                 </span>
               </div>
             ) : null}
@@ -414,7 +420,10 @@ export function ContextWindowMeter(props: {
                               easily reaches six accounts, and three lines each
                               pushed the context window off screen. */}
                           <span className="flex min-w-0 items-baseline gap-1.5 text-[11px]">
-                            <span className="shrink-0 font-semibold text-muted-foreground/90">
+                            {/* A pooled account's name is short ("Claude"), but
+                                a direct instance's is a user-chosen string that
+                                would otherwise squeeze out everything after it. */}
+                            <span className="min-w-0 truncate font-semibold text-muted-foreground/90">
                               {account.displayName}
                             </span>
                             {account.email ? (
