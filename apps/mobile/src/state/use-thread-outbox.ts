@@ -48,6 +48,16 @@ export function expediteQueuedMessage(messageId: MessageId): void {
   appAtomRegistry.set(expeditedQueuedMessageIdsAtom, { ...current, [messageId]: true });
 }
 
+export function unexpediteQueuedMessage(messageId: MessageId): void {
+  const current = appAtomRegistry.get(expeditedQueuedMessageIdsAtom);
+  if (!current[messageId]) {
+    return;
+  }
+  const next = { ...current };
+  delete next[messageId];
+  appAtomRegistry.set(expeditedQueuedMessageIdsAtom, next);
+}
+
 /** Acquires the edit hold and reports whether this caller owns it. */
 export function holdEditingQueuedMessage(messageId: MessageId): boolean {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);

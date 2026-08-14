@@ -24,7 +24,7 @@ import {
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 5;
+const THREAD_OUTBOX_SCHEMA_VERSION = 6;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -57,7 +57,7 @@ export const ThreadOutboxDeliveryIntent = Schema.Literals(["queue", "steer"]);
 export type ThreadOutboxDeliveryIntent = typeof ThreadOutboxDeliveryIntent.Type;
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
@@ -79,6 +79,9 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   // before delivery (for example, another client archives it).
   threadSettings: Schema.optional(ThreadSettingsSnapshotSchema),
   createdAt: IsoDateTime,
+  // Optional restart anchor for the grace window. Keeping it separate preserves
+  // the original creation timestamp used for FIFO ordering and delivery.
+  graceStartedAt: Schema.optional(IsoDateTime),
 });
 
 const decodeStoredQueuedThreadMessage = Schema.decodeUnknownSync(QueuedThreadMessageSchema);
@@ -110,6 +113,7 @@ export interface QueuedThreadMessage {
   readonly creation?: QueuedThreadCreation | undefined;
   readonly threadSettings?: ThreadSettingsSnapshot | undefined;
   readonly createdAt: string;
+  readonly graceStartedAt?: string | undefined;
 }
 
 export function queuedThreadMessageIntent(
@@ -140,18 +144,18 @@ function resolveGraceWindowMs(graceWindowMs: number | undefined): number {
  * messages never wait on this: they are already held by the running turn.
  */
 export function steerGraceRemainingMs(
-  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">,
+  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt" | "graceStartedAt">,
   nowMs: number,
   graceWindowMs?: number,
 ): number {
   if (queuedThreadMessageIntent(message) !== "steer") {
     return 0;
   }
-  const createdAtMs = Date.parse(message.createdAt);
-  if (Number.isNaN(createdAtMs) || createdAtMs > nowMs) {
+  const graceStartedAtMs = Date.parse(message.graceStartedAt ?? message.createdAt);
+  if (Number.isNaN(graceStartedAtMs) || graceStartedAtMs > nowMs) {
     return 0;
   }
-  return Math.max(0, createdAtMs + resolveGraceWindowMs(graceWindowMs) - nowMs);
+  return Math.max(0, graceStartedAtMs + resolveGraceWindowMs(graceWindowMs) - nowMs);
 }
 
 /**
@@ -177,7 +181,10 @@ export function latestSteerWaitingOutGraceWindow(
  * they are sure, so it retires the window rather than shortening it.
  */
 export function isSteerWaitingOutGraceWindow(
-  message: Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt" | "messageId">,
+  message: Pick<
+    QueuedThreadMessage,
+    "deliveryIntent" | "createdAt" | "graceStartedAt" | "messageId"
+  >,
   input: {
     readonly nowMs: number;
     readonly expedited: Readonly<Record<MessageId, true>>;
@@ -211,7 +218,9 @@ export function pruneExpeditedQueuedMessageIds(
 
 /** The next steer grace deadline in a collection, if any steer is still waiting. */
 export function soonestSteerGraceRemainingMs(
-  messages: ReadonlyArray<Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt">>,
+  messages: ReadonlyArray<
+    Pick<QueuedThreadMessage, "deliveryIntent" | "createdAt" | "graceStartedAt">
+  >,
   nowMs: number,
   graceWindowMs?: number,
 ): number | null {

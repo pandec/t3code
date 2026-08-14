@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "@effect/vitest";
 import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 
-import type { QueuedThreadMessage } from "./thread-outbox-model";
+import {
+  STEER_GRACE_WINDOW_MS,
+  steerGraceRemainingMs,
+  type QueuedThreadMessage,
+} from "./thread-outbox-model";
 
 // The import chain reaches React Native modules that read this global.
 vi.hoisted(() => {
@@ -10,8 +14,12 @@ vi.hoisted(() => {
 });
 
 const calls: string[] = [];
+const alertTitles: string[] = [];
+const updatedMessages: QueuedThreadMessage[] = [];
+let alertButtons: ReadonlyArray<{ readonly text?: string; readonly onPress?: () => void }> = [];
+let alertOnDismiss: (() => void) | undefined;
 let appendStatus: "committed" | "failed" = "committed";
-let removeResult = true;
+let removeError: Error | null = null;
 
 vi.mock("./shell", () => ({
   environmentShell: {
@@ -21,7 +29,20 @@ vi.mock("./shell", () => ({
   },
 }));
 
-vi.mock("react-native", () => ({ Alert: { alert: () => {} } }));
+vi.mock("react-native", () => ({
+  Alert: {
+    alert: (
+      title: string,
+      _message: string,
+      buttons?: ReadonlyArray<{ readonly text?: string; readonly onPress?: () => void }>,
+      options?: { readonly onDismiss?: () => void },
+    ) => {
+      alertTitles.push(title);
+      alertButtons = buttons ?? [];
+      alertOnDismiss = options?.onDismiss;
+    },
+  },
+}));
 
 // The drain pulls in React Native surface this test does not exercise; only its
 // dispatch atom matters here.
@@ -33,9 +54,12 @@ vi.mock("./use-thread-outbox-drain", async () => {
 vi.mock("./thread-outbox", () => ({
   removeThreadOutboxMessage: () => {
     calls.push("remove");
-    return Promise.resolve(removeResult);
+    return removeError ? Promise.reject(removeError) : Promise.resolve(true);
   },
-  updateThreadOutboxMessage: () => Promise.resolve(true),
+  updateThreadOutboxMessage: (updatedMessage: QueuedThreadMessage) => {
+    updatedMessages.push(updatedMessage);
+    return Promise.resolve(true);
+  },
 }));
 
 vi.mock("./use-composer-drafts", () => ({
@@ -58,7 +82,13 @@ vi.mock("./use-composer-drafts", () => ({
   updateComposerDraftSettings: () => {},
 }));
 
-import { editQueuedMessage } from "./use-thread-outbox-actions";
+import { appAtomRegistry } from "./atom-registry";
+import { confirmDeleteQueuedMessage, editQueuedMessage } from "./use-thread-outbox-actions";
+import {
+  editingQueuedMessageIdsAtom,
+  expeditedQueuedMessageIdsAtom,
+  expediteQueuedMessage,
+} from "./use-thread-outbox";
 
 const message: QueuedThreadMessage = {
   environmentId: EnvironmentId.make("environment-local"),
@@ -69,11 +99,89 @@ const message: QueuedThreadMessage = {
   attachments: [],
   createdAt: "2026-07-27T00:00:00.000Z",
 };
+const steerMessage = { ...message, deliveryIntent: "steer" } satisfies QueuedThreadMessage;
 
 afterEach(() => {
   calls.length = 0;
+  alertTitles.length = 0;
+  updatedMessages.length = 0;
+  alertButtons = [];
+  alertOnDismiss = undefined;
   appendStatus = "committed";
-  removeResult = true;
+  removeError = null;
+  appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
+  appAtomRegistry.set(expeditedQueuedMessageIdsAtom, {});
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe("confirmDeleteQueuedMessage", () => {
+  it("holds the queued message while the confirmation is open", () => {
+    confirmDeleteQueuedMessage(message);
+
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({
+      [message.messageId]: true,
+    });
+    expect(alertButtons.map(({ text }) => text)).toEqual(["Cancel", "Delete"]);
+  });
+
+  it("restarts the grace window when deletion is canceled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T00:00:05.000Z"));
+    expediteQueuedMessage(steerMessage.messageId);
+    confirmDeleteQueuedMessage(steerMessage);
+
+    alertButtons.find(({ text }) => text === "Cancel")?.onPress?.();
+    alertOnDismiss?.();
+    await Promise.resolve();
+
+    expect(updatedMessages).toEqual([
+      { ...steerMessage, graceStartedAt: "2026-07-27T00:00:05.000Z" },
+    ]);
+    expect(updatedMessages[0]?.createdAt).toBe(steerMessage.createdAt);
+    expect(steerGraceRemainingMs(updatedMessages[0]!, Date.now())).toBe(STEER_GRACE_WINDOW_MS);
+    expect(appAtomRegistry.get(expeditedQueuedMessageIdsAtom)).toEqual({});
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({});
+    expect(calls).not.toContain("remove");
+  });
+
+  it("keeps the hold through confirmed deletion", async () => {
+    confirmDeleteQueuedMessage(message);
+
+    alertButtons.find(({ text }) => text === "Delete")?.onPress?.();
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({
+      [message.messageId]: true,
+    });
+    await Promise.resolve();
+
+    expect(calls).toContain("remove");
+    expect(updatedMessages).toEqual([]);
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({});
+  });
+
+  it("restores the grace window when confirmed deletion fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T00:00:05.000Z"));
+    removeError = new Error("storage unavailable");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    confirmDeleteQueuedMessage(steerMessage);
+
+    alertButtons.find(({ text }) => text === "Delete")?.onPress?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(updatedMessages).toEqual([
+      { ...steerMessage, graceStartedAt: "2026-07-27T00:00:05.000Z" },
+    ]);
+    expect(steerGraceRemainingMs(updatedMessages[0]!, Date.now())).toBe(STEER_GRACE_WINDOW_MS);
+    expect(appAtomRegistry.get(editingQueuedMessageIdsAtom)).toEqual({});
+    expect(alertTitles).toEqual(["Delete queued message?", "Could not delete this message"]);
+    expect(warn).toHaveBeenCalledWith(
+      "[thread-outbox] failed to delete queued message",
+      removeError,
+    );
+  });
 });
 
 describe("editQueuedMessage ordering", () => {
