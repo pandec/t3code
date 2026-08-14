@@ -537,17 +537,36 @@ export function verdictFor(
   }
 }
 
-export function formatReports(reports: ReadonlyArray<ThreadReport>): string {
+export interface FormatReportsOptions {
+  /**
+   * Also print full blocks for ORPHANED threads. Off by default: their rows
+   * are permanent (nothing ever finalizes them once the session died), so a
+   * sweep would otherwise open with a wall of stale bookkeeping in front of
+   * the one live answer.
+   */
+  readonly showOrphaned?: boolean;
+}
+
+export function formatReports(
+  reports: ReadonlyArray<ThreadReport>,
+  options: FormatReportsOptions = {},
+): string {
   const interesting = reports.filter((report) => report.verdict !== "idle");
   if (interesting.length === 0) {
     return "No live background work.";
   }
+  const detailed = interesting.filter(
+    (report) => options.showOrphaned === true || report.verdict !== "orphaned",
+  );
+  const compacted = interesting.filter(
+    (report) => options.showOrphaned !== true && report.verdict === "orphaned",
+  );
 
   const lines: string[] = [];
-  for (const report of interesting) {
+  for (const report of detailed) {
     const liveness = report.liveness ?? "none";
     lines.push(`${VERDICT_HEADLINE[report.verdict]} (${liveness})  ${report.title}`);
-    lines.push(`  thread ${report.threadId}`);
+    lines.push(`  thread ${report.threadId} — ${report.title}`);
     for (const task of report.tasks) {
       const type = task.taskType ?? "unknown type";
       lines.push(`  • [${task.liveness}] ${task.title ?? task.taskId} (${type})`);
@@ -588,6 +607,15 @@ export function formatReports(reports: ReadonlyArray<ThreadReport>): string {
       }
     }
     lines.push("");
+  }
+
+  if (compacted.length > 0) {
+    lines.push(
+      `ORPHANED — ${compacted.length} thread${compacted.length === 1 ? "" : "s"} with leftover task rows from dead sessions (stale bookkeeping, no live pill; --show-orphaned for details):`,
+    );
+    for (const report of compacted) {
+      lines.push(`  ${report.threadId} — ${report.title}`);
+    }
   }
   return lines.join("\n").trimEnd();
 }
@@ -751,12 +779,18 @@ export const t3ThreadBackgroundCommand = Command.make(
       Flag.withDefault(false),
       Flag.withDescription("Include child processes hidden by the MCP-server filter."),
     ),
+    showOrphaned: Flag.boolean("show-orphaned").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        "Print full blocks for orphaned threads instead of the one-line summary.",
+      ),
+    ),
     json: Flag.boolean("json").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Emit the report as JSON."),
     ),
   },
-  ({ thread, baseDir, all, json, showAllChildren }) =>
+  ({ thread, baseDir, all, json, showAllChildren, showOrphaned }) =>
     runThreadBackground({
       baseDir: Option.getOrUndefined(baseDir),
       threadId: Option.getOrUndefined(thread),
@@ -764,7 +798,11 @@ export const t3ThreadBackgroundCommand = Command.make(
       showAllChildren,
     }).pipe(
       Effect.flatMap((reports) =>
-        Console.log(json ? JSON.stringify({ threads: reports }, null, 2) : formatReports(reports)),
+        Console.log(
+          json
+            ? JSON.stringify({ threads: reports }, null, 2)
+            : formatReports(reports, { showOrphaned }),
+        ),
       ),
     ),
 ).pipe(

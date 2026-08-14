@@ -68,7 +68,9 @@ authenticated.
   Defaults to `$T3CODE_THREAD_ID` and `$T3CODE_STATE_DIR`, which every T3 terminal sets, so it works
   as a project action with no arguments — including from a dev server, whose state lives in
   `<home>/dev` rather than `<home>/userdata`; `--all` sweeps every thread and `--show-all-children` disables
-  the MCP-server filter on the process list. Read-only.
+  the MCP-server filter on the process list. Orphaned threads compact to one `id — title` line each
+  (their rows are permanent, so a sweep accumulates them forever); `--show-orphaned` prints their
+  full blocks. Read-only.
 
   It replays the persisted `task.*` activity rows through the real
   `ThreadBackgroundLivenessService`, so it shares the sidebar pill's classifier rather than

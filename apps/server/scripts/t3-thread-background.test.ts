@@ -757,13 +757,41 @@ describe("verdictFor and formatReports", () => {
     assert.equal(verdictFor(null, null), "idle");
   });
 
-  it("headlines an orphan as ORPHANED rather than as live work", () => {
+  it("compacts an orphan to one id — title line by default", () => {
+    // Orphan rows are permanent, so a sweep accumulates them forever; a wall
+    // of dead-session blocks in front of the one live answer is exactly the
+    // noise the tool exists to cut through.
     const text = formatReports([
       report("orphaned", probe({ outcome: "not-running", providerPid: null })),
     ]);
-    assert.match(text, /^ORPHANED \(monitoring\)/);
-    assert.include(text, "stale bookkeeping, not live work");
+    assert.match(text, /^ORPHANED — 1 thread/);
+    assert.include(text, "stale bookkeeping");
+    assert.include(text, "t1 — Demo");
+    assert.include(text, "--show-orphaned");
+    assert.notInclude(text, "task shell-1");
     assert.notMatch(text, /^MONITORING/m);
+  });
+
+  it("prints the full orphan block under --show-orphaned", () => {
+    const text = formatReports(
+      [report("orphaned", probe({ outcome: "not-running", providerPid: null }))],
+      { showOrphaned: true },
+    );
+    assert.match(text, /^ORPHANED \(monitoring\)/);
+    assert.include(text, "thread t1 — Demo");
+    assert.include(text, "stale bookkeeping, not live work");
+  });
+
+  it("keeps live work detailed while orphans stay compact", () => {
+    const orphan: ThreadReport = {
+      ...report("orphaned", probe({ outcome: "not-running", providerPid: null })),
+      threadId: "t-dead",
+      title: "Old ghost",
+    };
+    const text = formatReports([report("live", probe({})), orphan]);
+    assert.match(text, /^LIVE \(monitoring\)/);
+    assert.include(text, "t-dead — Old ghost");
+    assert.notInclude(text, "thread t-dead — Old ghost");
   });
 
   it("says it could not tell when the probe cannot run", () => {
