@@ -385,6 +385,40 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
+  it.effect("preserves strict resume when forking an imported Codex session", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockImplementationOnce((options) => {
+        const runtime = new FakeCodexRuntime(options);
+        runtime.startImpl.mockResolvedValue({
+          provider: ProviderDriverKind.make("codex"),
+          status: "ready",
+          runtimeMode: options.runtimeMode,
+          threadId: options.threadId,
+          cwd: options.cwd,
+          resumeCursor: { threadId: "strict-forked-provider-thread" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        });
+        return Effect.succeed(runtime);
+      });
+      const adapter = yield* CodexAdapter;
+
+      const result = yield* adapter.forkSession!({
+        sourceThreadId: asThreadId("strict-fork-source"),
+        destinationThreadId: asThreadId("strict-fork-destination"),
+        sourceResumeCursor: { threadId: "imported-provider-thread", strictResume: true },
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(result.resumeCursor, {
+        threadId: "strict-forked-provider-thread",
+        strictResume: true,
+      });
+      validationRuntimeFactory.factory.mockClear();
+    }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

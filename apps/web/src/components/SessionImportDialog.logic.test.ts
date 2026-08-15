@@ -7,8 +7,8 @@ import {
   getLinkedSessionsGroupLabel,
   getSessionImportCandidateKey,
   getSessionImportEmptyStateLabel,
-  getSessionImportFailureReason,
   getSessionImportProviderLabel,
+  isSessionImportFailureWithReason,
   partitionSessionImportCandidates,
 } from "./SessionImportDialog.logic";
 
@@ -24,6 +24,7 @@ function candidate(input: {
     readonly title: string;
     readonly archivedAt: string | null;
     readonly updatedAt: string;
+    readonly canFork: boolean;
   };
 }): SessionImportCandidate {
   return decodeCandidate({
@@ -36,7 +37,6 @@ function candidate(input: {
     messageCount: 1,
     updatedAt: "2026-08-05T00:00:00.000Z",
     linkedThread: input.linkedThread ?? null,
-    canFork: false,
   });
 }
 
@@ -45,6 +45,7 @@ const linkedThread = {
   title: "Owning thread",
   archivedAt: null,
   updatedAt: "2026-08-04T00:00:00.000Z",
+  canFork: false,
 };
 
 describe("session import provider labels", () => {
@@ -143,8 +144,26 @@ describe("session import candidate groups", () => {
     expect(groups.linked).toEqual([owned]);
   });
 
+  it("treats an absent linkedThread from an older server as importable", () => {
+    const legacyCandidate = decodeCandidate({
+      instanceId: "codex_personal",
+      provider: "codex",
+      providerDisplayName: "Codex",
+      nativeSessionId: "legacy-session",
+      name: null,
+      preview: "Preview",
+      messageCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    });
+
+    expect(partitionSessionImportCandidates([legacyCandidate])).toEqual({
+      importable: [legacyCandidate],
+      linked: [],
+    });
+  });
+
   it("labels the linked group with its count", () => {
-    expect(getLinkedSessionsGroupLabel(4)).toBe("Already in T3 (4)");
+    expect(getLinkedSessionsGroupLabel(4)).toBe("Already in T3 Code (4)");
   });
 
   it("shows no empty state while importable rows exist", () => {
@@ -168,24 +187,30 @@ describe("session import candidate groups", () => {
 });
 
 describe("session import failure reasons", () => {
-  it("reads the reason from a decoded SessionImportError", () => {
+  it("matches the requested reason on decoded and structural failures", () => {
     const error = new SessionImportError({
       reason: "already-imported",
       detail: "Session already imported.",
     });
 
-    expect(getSessionImportFailureReason(error)).toBe("already-imported");
-  });
-
-  it("reads the reason from a structurally equivalent failure", () => {
+    expect(isSessionImportFailureWithReason(error, "already-imported")).toBe(true);
     expect(
-      getSessionImportFailureReason({ _tag: "SessionImportError", reason: "fork-unsupported" }),
-    ).toBe("fork-unsupported");
+      isSessionImportFailureWithReason(
+        { _tag: "SessionImportError", reason: "fork-unsupported" },
+        "fork-unsupported",
+      ),
+    ).toBe(true);
   });
 
-  it("ignores unrelated errors", () => {
-    expect(getSessionImportFailureReason(new Error("boom"))).toBe(null);
-    expect(getSessionImportFailureReason("nope")).toBe(null);
-    expect(getSessionImportFailureReason(null)).toBe(null);
+  it("rejects different reasons and unrelated errors", () => {
+    const error = new SessionImportError({
+      reason: "already-imported",
+      detail: "Session already imported.",
+    });
+
+    expect(isSessionImportFailureWithReason(error, "fork-unsupported")).toBe(false);
+    expect(isSessionImportFailureWithReason(new Error("boom"), "already-imported")).toBe(false);
+    expect(isSessionImportFailureWithReason("nope", "already-imported")).toBe(false);
+    expect(isSessionImportFailureWithReason(null, "already-imported")).toBe(false);
   });
 });

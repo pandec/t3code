@@ -33,8 +33,8 @@ import {
   getLinkedSessionsGroupLabel,
   getSessionImportCandidateKey,
   getSessionImportEmptyStateLabel,
-  getSessionImportFailureReason,
   getSessionImportProviderLabel,
+  isSessionImportFailureWithReason,
   partitionSessionImportCandidates,
 } from "./SessionImportDialog.logic";
 import { toastManager } from "./ui/toast";
@@ -73,7 +73,12 @@ export function SessionImportDialog(props: {
   }, [member, refreshCandidates]);
 
   const handleOpenLinkedThread = async (candidate: SessionImportCandidate) => {
-    if (member === null || candidate.linkedThread === null || importing !== null) {
+    if (
+      member === null ||
+      candidate.linkedThread === null ||
+      candidate.linkedThread === undefined ||
+      importing !== null
+    ) {
       return;
     }
     // Archived threads render fine when navigated to directly: the thread
@@ -130,7 +135,7 @@ export function SessionImportDialog(props: {
       }
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        if (getSessionImportFailureReason(error) === "already-imported") {
+        if (isSessionImportFailureWithReason(error, "already-imported")) {
           // Race: the session was bound to a thread after this list loaded.
           // Refresh so the row flips to its linked state with its actions.
           refreshCandidates();
@@ -252,7 +257,10 @@ export function SessionImportDialog(props: {
                   <CollapsiblePanel>
                     <ul className="space-y-1 pt-1">
                       {groups.linked.map((candidate) => {
-                        if (candidate.linkedThread === null) {
+                        if (
+                          candidate.linkedThread === null ||
+                          candidate.linkedThread === undefined
+                        ) {
                           return null;
                         }
                         const candidateKey = getSessionImportCandidateKey(candidate);
@@ -275,7 +283,8 @@ export function SessionImportDialog(props: {
                                   </Badge>
                                 ) : null}
                                 <span className="shrink-0">
-                                  · {formatRelativeTimeLabel(candidate.linkedThread.updatedAt)}
+                                  · updated{" "}
+                                  {formatRelativeTimeLabel(candidate.linkedThread.updatedAt)}
                                 </span>
                               </span>
                               <span className="mt-2 flex items-center gap-2">
@@ -286,7 +295,7 @@ export function SessionImportDialog(props: {
                                 >
                                   Open thread
                                 </Button>
-                                {candidate.canFork ? (
+                                {candidate.linkedThread.canFork ? (
                                   <Button
                                     size="sm"
                                     variant="outline"

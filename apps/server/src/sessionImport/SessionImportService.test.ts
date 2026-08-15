@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import type { ProviderSessionRuntime } from "../persistence/ProviderSessionRuntime.ts";
@@ -68,11 +69,14 @@ interface HarnessOptions {
     } | null;
   }>;
   readonly workspaceRoot?: string;
+  readonly replaceInstanceDuringFork?: boolean;
   readonly replaceInstanceDuringRead?: boolean;
   readonly releaseBinding?: Deferred.Deferred<void>;
   readonly releaseDispatch?: Deferred.Deferred<void>;
   readonly sessionName?: string | null;
   readonly snapshotDisplayName?: string;
+  readonly sourceSessionStatus?: "connecting" | "ready" | "running" | "error" | "closed";
+  readonly staleBindingHasSession?: boolean;
   readonly threadReadFails?: boolean;
   readonly yieldBeforeRead?: boolean;
 }
@@ -131,6 +135,7 @@ const makeHarness = (options?: HarnessOptions) => {
     listCwds: [],
     readCwds: [],
   };
+  const sourceSessionStatus = options?.sourceSessionStatus;
 
   let currentInstance: ProviderInstance;
   const instance = {
@@ -166,6 +171,9 @@ const makeHarness = (options?: HarnessOptions) => {
                 if (options?.forkFails === true) {
                   return yield* Effect.fail({ _tag: "TestForkError" as const });
                 }
+                if (options?.replaceInstanceDuringFork === true) {
+                  currentInstance = { ...instance, enabled: false } as unknown as ProviderInstance;
+                }
                 return {
                   resumeCursor: {
                     threadId: input.destinationThreadId,
@@ -175,6 +183,21 @@ const makeHarness = (options?: HarnessOptions) => {
                 };
               }),
           }),
+      listSessions: () =>
+        Effect.sync(() =>
+          sourceSessionStatus === undefined
+            ? []
+            : [...state.bindings.keys()].map((threadId) => ({
+                provider: ProviderDriverKind.make("claudeAgent"),
+                providerInstanceId: instanceId,
+                status: sourceSessionStatus,
+                runtimeMode: "full-access" as const,
+                threadId: ThreadId.make(threadId),
+                createdAt: "2026-07-16T10:00:00.000Z",
+                updatedAt: "2026-07-16T10:00:00.000Z",
+              })),
+        ),
+      hasSession: () => Effect.succeed(options?.staleBindingHasSession === true),
       listImportableSessions: (input: { cwd: string }) =>
         Effect.sync(() => {
           state.listCwds.push(input.cwd);
@@ -429,7 +452,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     }),
   );
 
-  it.effect("lists unlinked candidates with provider fork capability", () =>
+  it.effect("lists unlinked candidates without linked-thread metadata", () =>
     Effect.gen(function* () {
       const { layer } = makeHarness();
       const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
@@ -441,9 +464,9 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
           instanceId,
           nativeSessionId: NATIVE_SESSION_ID,
           linkedThread: null,
-          canFork: true,
         },
       ]);
+      expect(candidates[0]).not.toHaveProperty("canFork");
     }),
   );
 
@@ -651,6 +674,31 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     }),
   );
 
+  it.effect("uses slash-command arguments as the imported title", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({
+        sessionName: null,
+        historyMessages: [
+          {
+            role: "user",
+            text: "<command-name>/task</command-name>\n<command-message>task</command-message>\n<command-args>Fix the login bug</command-args>",
+            createdAt: "2026-07-16T10:00:00.000Z",
+          },
+          {
+            role: "assistant",
+            text: "I will investigate.",
+            createdAt: "2026-07-16T10:00:01.000Z",
+          },
+        ],
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      expect(state.dispatched[0]).toMatchObject({ title: "Fix the login bug" });
+    }),
+  );
+
   it.effect("preserves a long Unicode provider-assigned session name exactly", () =>
     Effect.gen(function* () {
       const sessionName = `${"x".repeat(100)}😀\nsecond line`;
@@ -689,12 +737,12 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(candidates).toMatchObject([
         {
           nativeSessionId: NATIVE_SESSION_ID,
-          canFork: true,
           linkedThread: {
             threadId: error.existingThreadId,
             title: "Remember the codeword PINEAPPLE-42.",
             archivedAt: "2026-07-17T00:00:00.000Z",
             updatedAt: "2026-07-18T00:00:00.000Z",
+            canFork: true,
           },
         },
       ]);
@@ -723,8 +771,133 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
         {
           nativeSessionId: NATIVE_SESSION_ID,
           linkedThread: null,
-          canFork: true,
         },
+      ]);
+    }),
+  );
+
+  it.effect("rejects a stale binding while its deleted thread session is still shutting down", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ staleBindingHasSession: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const thread = state.threads.get(existing.threadId);
+      expect(thread).toBeDefined();
+      state.threads.set(existing.threadId, {
+        ...thread!,
+        deletedAt: "2026-07-18T00:00:00.000Z",
+      });
+
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({ reason: "import-failed" });
+      expect(error.detail).toContain("Retry in a moment");
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
+    }),
+  );
+
+  it.effect("plain-imports a stale binding after its deleted thread session stops", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ staleBindingHasSession: false });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const thread = state.threads.get(existing.threadId);
+      expect(thread).toBeDefined();
+      state.threads.set(existing.threadId, {
+        ...thread!,
+        deletedAt: "2026-07-18T00:00:00.000Z",
+      });
+
+      const imported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      expect(imported.threadId).not.toBe(existing.threadId);
+      expect(state.forkInputs).toHaveLength(0);
+      expect(state.dispatched[1]).toMatchObject({
+        title: "Remember the codeword PINEAPPLE-42.",
+        source: { nativeSessionId: NATIVE_SESSION_ID },
+      });
+    }),
+  );
+
+  it.effect("a live re-import binding is not shadowed by the stale binding it replaced", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ staleBindingHasSession: false });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      const original = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const thread = state.threads.get(original.threadId);
+      expect(thread).toBeDefined();
+      state.threads.set(original.threadId, {
+        ...thread!,
+        deletedAt: "2026-07-18T00:00:00.000Z",
+      });
+      const reimported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      // Stale binding rows are never hard-deleted and the repository lists the
+      // older row first; the live re-import binding must still win, so the
+      // session lists as linked and a third unforked import is refused.
+      const candidates = yield* service.listCandidates({ projectId });
+      expect(candidates).toMatchObject([
+        {
+          nativeSessionId: NATIVE_SESSION_ID,
+          linkedThread: { threadId: reimported.threadId },
+        },
+      ]);
+
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "already-imported",
+        existingThreadId: reimported.threadId,
+      });
+    }),
+  );
+
+  it.effect("does not read threads for bindings that do not match a listed session", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ threadReadFails: true });
+      const unrelatedThreadId = ThreadId.make("unrelated-thread");
+      state.bindings.set(unrelatedThreadId, {
+        threadId: unrelatedThreadId,
+        providerName: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: instanceId,
+        adapterKey: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        status: "stopped",
+        lastSeenAt: "2026-07-16T10:00:00.000Z",
+        resumeCursor: { resume: "different-native-session" },
+        runtimePayload: { continuationKey: "claude:home:/tmp/.claude" },
+        revision: 1,
+      });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const candidates = yield* service.listCandidates({ projectId });
+
+      expect(candidates).toMatchObject([
+        { nativeSessionId: NATIVE_SESSION_ID, linkedThread: null },
       ]);
     }),
   );
@@ -787,6 +960,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       ]);
       expect(state.dispatched[1]).toMatchObject({
         type: "thread.import",
+        title: formatForkedThreadTitle("Remember the codeword PINEAPPLE-42."),
         source: {
           nativeSessionId: FORKED_NATIVE_SESSION_ID,
         },
@@ -795,6 +969,29 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
           { role: "assistant", text: "OK" },
         ],
       });
+    }),
+  );
+
+  it.effect("rejects a fork while the source provider session is not ready", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ sourceSessionStatus: "running" });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      const error = yield* service
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          fork: true,
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({ reason: "import-failed" });
+      expect(error.detail).toContain("provider session is running");
+      expect(state.forkInputs).toHaveLength(0);
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
     }),
   );
 
@@ -840,7 +1037,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(state.bindings.size).toBe(1);
       expect(state.dispatched).toHaveLength(1);
       expect(yield* service.listCandidates({ projectId })).toMatchObject([
-        { canFork: false, linkedThread: { threadId: error.existingThreadId } },
+        { linkedThread: { threadId: error.existingThreadId, canFork: false } },
       ]);
     }),
   );
@@ -866,6 +1063,29 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
 
       expect(error).toMatchObject({ reason: "import-failed" });
       expect(error.detail).toContain("fork");
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
+    }),
+  );
+
+  it.effect("rejects persistence when the provider instance changes during a fork", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ replaceInstanceDuringFork: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
+
+      const error = yield* service
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          fork: true,
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({ reason: "import-failed" });
+      expect(error.detail).toContain("changed while the session was being forked");
+      expect(state.forkInputs).toHaveLength(1);
       expect(state.bindings.size).toBe(1);
       expect(state.dispatched).toHaveLength(1);
     }),

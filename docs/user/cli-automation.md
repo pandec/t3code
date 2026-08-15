@@ -272,18 +272,19 @@ t3 session import --file /path/to/transcript.jsonl --project /absolute/path/to/r
 ```
 
 Session commands require a running T3 server. `candidates` lists local Claude and Codex sessions for
-the selected project or validated worktree. Sessions already continued by a non-deleted T3 thread are
-listed rather than hidden: human output appends `linked:<thread-id>` and `(archived)` when applicable.
-In JSON, every candidate includes `instanceId`, `provider`, `providerDisplayName`, `nativeSessionId`,
-`name`, `preview`, `messageCount`, `updatedAt`, `canFork`, and `linkedThread`. `linkedThread` is `null`
-for an unlinked session; otherwise it contains `threadId`, `title`, `archivedAt`, and the owning
-thread's `updatedAt`. A missing or deleted owning thread is treated as a stale binding and therefore
-reported as unlinked.
+the selected project or validated worktree. Sessions already attached to a non-deleted T3 Code thread
+are listed rather than hidden, whether that thread came from an earlier import or was created inside
+T3 Code at the selected workspace root. Human output appends `linked:<thread-id>` and `(archived)` when
+applicable. In JSON, every candidate includes `instanceId`, `provider`, `providerDisplayName`,
+`nativeSessionId`, `name`, `preview`, `messageCount`, and `updatedAt`. `linkedThread` is `null` for an
+unlinked session; otherwise it contains `threadId`, `title`, `archivedAt`, the owning thread's
+`updatedAt`, and `canFork`. Older servers may omit `linkedThread`; clients must treat absence as `null`.
+A missing or deleted owning thread is treated as a stale binding and therefore reported as unlinked.
 
 Importing a linked candidate with fork permission reads the original session's current full history,
 then forks it into a fresh provider continuation before creating the new T3 thread. The original thread
 keeps sole ownership of the original native session; providers without this capability report
-`canFork: false` and reject the fork. Forking a linked candidate is driven from the desktop import
+`linkedThread.canFork: false` and reject the fork. Forking a linked candidate is driven from the desktop import
 dialog — `t3 session import` imports a transcript file rather than a listed candidate, so it has no
 fork flag. `import` detects the provider and native session identity from the
 transcript, places the provider file without overwriting an existing one, and creates a T3 thread that

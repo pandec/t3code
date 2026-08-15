@@ -318,7 +318,7 @@ export function formatProviderInstanceLabel(displayName: string, instanceId: str
 
 export function formatSessionCandidateLine(candidate: SessionImportCandidate): string {
   const linked =
-    candidate.linkedThread === null
+    candidate.linkedThread === null || candidate.linkedThread === undefined
       ? ""
       : `\tlinked:${candidate.linkedThread.threadId}${candidate.linkedThread.archivedAt === null ? "" : " (archived)"}`;
   return `${candidate.nativeSessionId}\t${formatProviderInstanceLabel(candidate.providerDisplayName, candidate.instanceId)}\t${candidate.updatedAt}\t${candidate.preview}${linked}`;

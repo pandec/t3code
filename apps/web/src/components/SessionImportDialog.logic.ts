@@ -1,4 +1,4 @@
-import type { SessionImportCandidate } from "@t3tools/contracts";
+import type { SessionImportCandidate, SessionImportError } from "@t3tools/contracts";
 
 export function getSessionImportCandidateKey(candidate: SessionImportCandidate): string {
   return `${candidate.instanceId}:${candidate.nativeSessionId}`;
@@ -16,13 +16,17 @@ export function partitionSessionImportCandidates(
   candidates: ReadonlyArray<SessionImportCandidate>,
 ): SessionImportCandidateGroups {
   return {
-    importable: candidates.filter((candidate) => candidate.linkedThread === null),
-    linked: candidates.filter((candidate) => candidate.linkedThread !== null),
+    importable: candidates.filter(
+      (candidate) => candidate.linkedThread === null || candidate.linkedThread === undefined,
+    ),
+    linked: candidates.filter(
+      (candidate) => candidate.linkedThread !== null && candidate.linkedThread !== undefined,
+    ),
   };
 }
 
 export function getLinkedSessionsGroupLabel(linkedCount: number): string {
-  return `Already in T3 (${linkedCount})`;
+  return `Already in T3 Code (${linkedCount})`;
 }
 
 /**
@@ -40,19 +44,20 @@ export function getSessionImportEmptyStateLabel(
     : "No sessions found for this project.";
 }
 
-/**
- * Extracts the typed reason from a failed import, whether the failure surfaced
- * as a decoded SessionImportError instance or a structurally equivalent object.
- */
-export function getSessionImportFailureReason(error: unknown): string | null {
+/** Extracts a reason from decoded or structurally equivalent import failures. */
+function getSessionImportFailureReason(error: unknown): unknown {
   if (typeof error !== "object" || error === null) {
     return null;
   }
   const tagged = error as { readonly _tag?: unknown; readonly reason?: unknown };
-  if (tagged._tag !== "SessionImportError" || typeof tagged.reason !== "string") {
-    return null;
-  }
-  return tagged.reason;
+  return tagged._tag === "SessionImportError" ? tagged.reason : null;
+}
+
+export function isSessionImportFailureWithReason(
+  error: unknown,
+  reason: SessionImportError["reason"],
+): boolean {
+  return getSessionImportFailureReason(error) === reason;
 }
 
 export function getSessionImportProviderLabel(

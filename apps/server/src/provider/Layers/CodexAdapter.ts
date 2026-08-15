@@ -1836,6 +1836,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         issue: "Codex fork completed without a resumable thread id.",
       });
     }
+    if (input.sourceResumeCursor.strictResume === true) {
+      if (!isCodexResumeCursorSchema(started.resumeCursor)) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "forkSession",
+          issue: "Codex fork completed without a valid resume cursor.",
+        });
+      }
+      return { resumeCursor: { ...started.resumeCursor, strictResume: true } };
+    }
     return { resumeCursor: started.resumeCursor };
   });
 

@@ -35,6 +35,7 @@ import * as Path from "effect/Path";
 import * as Crypto from "effect/Crypto";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
@@ -48,6 +49,7 @@ import {
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { readPersistedContinuationKey } from "../provider/runtimeBindingContinuation.ts";
+import { extractSubstantiveUserText } from "../provider/Drivers/substantiveUserText.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 
@@ -113,7 +115,16 @@ function titleForImport(
   const nativeTitle = name?.trim();
   if (nativeTitle) return nativeTitle;
   const firstUser = messages.find((message) => message.role === "user")?.text;
-  return normalizedTitle(firstUser ?? messages[0]?.text ?? "") ?? "Imported session";
+  let substantiveUserText: string | null = null;
+  for (const message of messages) {
+    if (message.role !== "user") continue;
+    substantiveUserText = extractSubstantiveUserText(message.text);
+    if (substantiveUserText !== null) break;
+  }
+  return (
+    normalizedTitle(substantiveUserText ?? firstUser ?? messages[0]?.text ?? "") ??
+    "Imported session"
+  );
 }
 
 /** Native session ids already attached to a t3 thread via a resume cursor. */
@@ -185,10 +196,43 @@ export const makeSessionImportService = Effect.gen(function* () {
           `provider-instance:${instance.instanceId}`,
       ]),
     );
+    // Every bound thread id is kept per native id: stale binding rows are
+    // never hard-deleted (thread deletion is a soft `deletedAt`), and the
+    // repository lists oldest first, so a single-winner map would let a stale
+    // row shadow the live binding created by a later re-import.
+    const idsByContinuationKey = new Map<string, Map<string, Array<ThreadId>>>();
+    for (const binding of bindings) {
+      // Legacy rows without an explicit instance id belong to the default
+      // instance, whose id is the provider/driver name.
+      const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
+      const continuationKey =
+        readPersistedContinuationKey(binding.runtimePayload) ??
+        continuationKeyByInstance.get(ownerInstanceId) ??
+        `provider-instance:${ownerInstanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, Array<ThreadId>>();
+      for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
+        const threadIds = ids.get(id) ?? [];
+        if (!threadIds.includes(binding.threadId)) threadIds.push(binding.threadId);
+        ids.set(id, threadIds);
+      }
+      if (ids.size > 0) {
+        idsByContinuationKey.set(continuationKey, ids);
+      }
+    }
+    const idsByInstance = new Map<string, Map<string, Array<ThreadId>>>();
+    for (const instance of instances) {
+      const continuationKey =
+        instance.continuationIdentity?.continuationKey ??
+        `provider-instance:${instance.instanceId}`;
+      const ids = idsByContinuationKey.get(continuationKey);
+      if (ids !== undefined) idsByInstance.set(instance.instanceId, ids);
+    }
+    return idsByInstance;
+  });
+
+  const makeReadThread = () => {
     const threadById = new Map<ThreadId, Option.Option<ProjectionThread>>();
-    const readThread = Effect.fn("SessionImportService.readBoundThread")(function* (
-      threadId: ThreadId,
-    ) {
+    return Effect.fn("SessionImportService.readBoundThread")(function* (threadId: ThreadId) {
       const cached = threadById.get(threadId);
       if (cached !== undefined) return cached;
       const thread = yield* threadRepository.getById({ threadId }).pipe(
@@ -204,34 +248,28 @@ export const makeSessionImportService = Effect.gen(function* () {
       threadById.set(threadId, thread);
       return thread;
     });
-    const idsByContinuationKey = new Map<string, Map<string, ProjectionThread>>();
-    for (const binding of bindings) {
-      const nativeIds = nativeIdsFromCursor(binding.resumeCursor);
-      if (nativeIds.length === 0) continue;
-      const thread = yield* readThread(binding.threadId);
-      if (Option.isNone(thread) || thread.value.deletedAt !== null) continue;
-      // Legacy rows without an explicit instance id belong to the default
-      // instance, whose id is the provider/driver name.
-      const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
-      const continuationKey =
-        readPersistedContinuationKey(binding.runtimePayload) ??
-        continuationKeyByInstance.get(ownerInstanceId) ??
-        `provider-instance:${ownerInstanceId}`;
-      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ProjectionThread>();
-      for (const id of nativeIds) {
-        if (!ids.has(id)) ids.set(id, thread.value);
+  };
+
+  /**
+   * Resolves which bound thread currently owns a native session: the first
+   * whose projection is live. The remaining ids are stale (deleted or missing
+   * threads) but may still hold a shutting-down provider session.
+   */
+  const resolveBoundThreads = Effect.fn("SessionImportService.resolveBoundThreads")(function* (
+    readThread: ReturnType<typeof makeReadThread>,
+    threadIds: ReadonlyArray<ThreadId>,
+  ) {
+    let liveThread: ProjectionThread | undefined;
+    const staleThreadIds: Array<ThreadId> = [];
+    for (const threadId of threadIds) {
+      const thread = Option.getOrUndefined(yield* readThread(threadId));
+      if (liveThread === undefined && thread !== undefined && thread.deletedAt === null) {
+        liveThread = thread;
+      } else {
+        staleThreadIds.push(threadId);
       }
-      idsByContinuationKey.set(continuationKey, ids);
     }
-    const idsByInstance = new Map<string, Map<string, ProjectionThread>>();
-    for (const instance of instances) {
-      const continuationKey =
-        instance.continuationIdentity?.continuationKey ??
-        `provider-instance:${instance.instanceId}`;
-      const ids = idsByContinuationKey.get(continuationKey);
-      if (ids !== undefined) idsByInstance.set(instance.instanceId, ids);
-    }
-    return idsByInstance;
+    return { liveThread, staleThreadIds };
   });
 
   const path = yield* Path.Path;
@@ -352,6 +390,7 @@ export const makeSessionImportService = Effect.gen(function* () {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
     const instances = yield* instanceRegistry.listInstances;
     const boundThreadsByInstance = yield* listBoundThreadsByInstance(instances);
+    const readThread = makeReadThread();
     const effectiveCwd =
       input.cwd === undefined
         ? workspaceRoot
@@ -382,7 +421,8 @@ export const makeSessionImportService = Effect.gen(function* () {
         ),
       );
       for (const session of sessions) {
-        const linkedThread = boundThreads?.get(session.nativeSessionId);
+        const boundThreadIds = boundThreads?.get(session.nativeSessionId) ?? [];
+        const { liveThread: linkedThread } = yield* resolveBoundThreads(readThread, boundThreadIds);
         candidates.push({
           instanceId: instance.instanceId,
           provider: instance.driverKind,
@@ -400,8 +440,8 @@ export const makeSessionImportService = Effect.gen(function* () {
                   title: linkedThread.title,
                   archivedAt: linkedThread.archivedAt,
                   updatedAt: linkedThread.updatedAt,
+                  canFork: instance.adapter.forkSession !== undefined,
                 },
-          canFork: instance.adapter.forkSession !== undefined,
         });
       }
     }
@@ -469,16 +509,9 @@ export const makeSessionImportService = Effect.gen(function* () {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
     const instances = yield* instanceRegistry.listInstances;
     const boundThreadsByInstance = yield* listBoundThreadsByInstance(instances);
-    const existingThreadId = boundThreadsByInstance
-      .get(input.instanceId)
-      ?.get(input.nativeSessionId)?.threadId;
-    if (existingThreadId !== undefined && input.fork !== true) {
-      return yield* new SessionImportError({
-        reason: "already-imported",
-        detail: `Session '${input.nativeSessionId}' is already attached to a t3 thread.`,
-        existingThreadId,
-      });
-    }
+    const readThread = makeReadThread();
+    const boundThreadIds =
+      boundThreadsByInstance.get(input.instanceId)?.get(input.nativeSessionId) ?? [];
 
     const instance = yield* instanceRegistry.getInstance(input.instanceId);
     if (instance === undefined || !instance.enabled) {
@@ -492,6 +525,33 @@ export const makeSessionImportService = Effect.gen(function* () {
       return yield* new SessionImportError({
         reason: "instance-not-found",
         detail: `Provider instance '${input.instanceId}' does not support session import.`,
+      });
+    }
+
+    const { liveThread: linkedThread, staleThreadIds } = yield* resolveBoundThreads(
+      readThread,
+      boundThreadIds,
+    );
+    const existingThreadId = linkedThread?.threadId;
+    if (linkedThread === undefined) {
+      // A stale binding's thread is gone, but its provider session may still
+      // be shutting down (thread deletion cleanup is asynchronous and stop
+      // failures are swallowed); binding a new thread to the same native
+      // session then risks two live processes on one provider session.
+      for (const staleThreadId of staleThreadIds) {
+        if (yield* instance.adapter.hasSession(staleThreadId)) {
+          return yield* new SessionImportError({
+            reason: "import-failed",
+            detail:
+              "The thread previously attached to this session is still shutting down. Retry in a moment.",
+          });
+        }
+      }
+    } else if (input.fork !== true) {
+      return yield* new SessionImportError({
+        reason: "already-imported",
+        detail: `Session '${input.nativeSessionId}' is already attached to a t3 thread.`,
+        existingThreadId: linkedThread.threadId,
       });
     }
     const validatedWorktree =
@@ -572,7 +632,10 @@ export const makeSessionImportService = Effect.gen(function* () {
 
     let resumeCursor = history.resumeCursor;
     let continuedNativeSessionId = input.nativeSessionId;
-    if (existingThreadId !== undefined) {
+    let forkedNativeSessionId: string | undefined;
+    let defaultTitle = titleForImport(history.name, importedMessages);
+    if (linkedThread !== undefined && existingThreadId !== undefined) {
+      const sourceThread = linkedThread;
       const forkSession = instance.adapter.forkSession;
       if (forkSession === undefined) {
         return yield* new SessionImportError({
@@ -581,6 +644,20 @@ export const makeSessionImportService = Effect.gen(function* () {
           existingThreadId,
         });
       }
+      const sessions = yield* instance.adapter.listSessions();
+      const sourceSession = sessions.find((session) => session.threadId === existingThreadId);
+      if (sourceSession !== undefined && sourceSession.status !== "ready") {
+        // Matches ProviderService's fork guard: any non-ready state (running,
+        // connecting, error, closed) means the source session cannot be
+        // snapshotted safely right now.
+        return yield* new SessionImportError({
+          reason: "import-failed",
+          detail: `Cannot import this session as a fork while thread '${sourceThread.title}''s provider session is ${sourceSession.status}.`,
+        });
+      }
+      // ProviderService's thread lock is internal to that layer, so a small
+      // readiness TOCTOU window remains; the fork input cursor is pinned by the
+      // provider history read above.
       const forked = yield* forkSession({
         sourceThreadId: existingThreadId,
         destinationThreadId: threadId,
@@ -602,6 +679,23 @@ export const makeSessionImportService = Effect.gen(function* () {
       continuedNativeSessionId =
         nativeIdsFromCursor(forked.resumeCursor).find((id) => id !== threadId) ??
         input.nativeSessionId;
+      forkedNativeSessionId = continuedNativeSessionId;
+      defaultTitle = formatForkedThreadTitle(sourceThread.title);
+
+      const currentInstanceAfterFork = yield* instanceRegistry.getInstance(input.instanceId);
+      if (currentInstanceAfterFork !== instance || !currentInstanceAfterFork.enabled) {
+        yield* Effect.logWarning(
+          "Provider instance changed after forking an imported session; the native fork may have been left orphaned.",
+          {
+            instanceId: input.instanceId,
+            forkedNativeSessionId,
+          },
+        );
+        return yield* new SessionImportError({
+          reason: "import-failed",
+          detail: `Provider instance '${input.instanceId}' changed while the session was being forked. Retry the import with the current provider configuration.`,
+        });
+      }
     }
 
     const messages: ReadonlyArray<ThreadImportMessage> = importedMessages.map((message, index) => ({
@@ -655,7 +749,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           commandId: CommandId.make(`import:${threadId}`),
           threadId,
           projectId: input.projectId,
-          title: input.title?.trim() || titleForImport(history.name, importedMessages),
+          title: input.title?.trim() || defaultTitle,
           modelSelection,
           runtimeMode: DEFAULT_RUNTIME_MODE,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -671,6 +765,17 @@ export const makeSessionImportService = Effect.gen(function* () {
         .pipe(Effect.exit);
 
       if (Exit.isFailure(dispatchResult)) {
+        if (forkedNativeSessionId !== undefined) {
+          // The adapter contract has no fork cleanup operation, so the native
+          // fork created above stays behind as an inert provider session.
+          yield* Effect.logWarning(
+            "Import dispatch failed after forking; the native fork is orphaned.",
+            {
+              threadId,
+              orphanedForkedNativeSessionId: forkedNativeSessionId,
+            },
+          );
+        }
         // Compensation: remove the binding so the import remains retryable.
         yield* runtimeRepository.deleteByThreadId({ threadId }).pipe(
           Effect.catch((cause) =>

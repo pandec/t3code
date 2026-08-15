@@ -13,6 +13,7 @@ import {
   parseClaudeTranscript,
   readClaudeSessionTranscript,
 } from "./ClaudeSessionImport.ts";
+import { extractSubstantiveUserText } from "./substantiveUserText.ts";
 
 const SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
@@ -343,6 +344,21 @@ describe("claudeProjectDirectoryName", () => {
   });
 });
 
+describe("extractSubstantiveUserText", () => {
+  it("combines visible text with every command-args block after removing command wrappers", () => {
+    expect(
+      extractSubstantiveUserText(
+        "Visible context\n<command-args>first argument</command-args>\n<command-name>/task</command-name>\n<command-args>second argument</command-args>",
+      ),
+    ).toBe("Visible context first argument second argument");
+  });
+
+  it("distinguishes multi-segment paths from single-segment slash-command openers", () => {
+    expect(extractSubstantiveUserText("/Users/dev/app is broken")).toBe("/Users/dev/app is broken");
+    expect(extractSubstantiveUserText("/tmp is full, clean it up")).toBeNull();
+  });
+});
+
 describe("listClaudeSessionTranscripts", () => {
   const listTranscript = Effect.fn("listTranscript")(function* (lines: ReadonlyArray<string>) {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -386,6 +402,22 @@ describe("listClaudeSessionTranscripts", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("previews prose arguments from a slash-command wrapper", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content:
+            "<command-name>/task</command-name>\n<command-message>task</command-message>\n<command-args>Fix the login bug</command-args>",
+        }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Fix the login bug");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("keeps the first-user fallback for all-command sessions", () =>
     Effect.gen(function* () {
       const summaries = yield* listTranscript([
@@ -414,7 +446,23 @@ describe("listClaudeSessionTranscripts", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("reads a message opening with an absolute path as prose", () =>
+  it.effect("skips a single-segment absolute-path opener that matches command syntax", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content: "/tmp is full, clean it up",
+        }),
+        entry({ uuid: "u2", parentUuid: "u1", type: "user", content: "Clean the temp dir." }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Clean the temp dir.");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads a multi-segment absolute path opener as prose", () =>
     Effect.gen(function* () {
       const summaries = yield* listTranscript([
         entry({
