@@ -140,6 +140,7 @@ import {
   flushComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
+  hasUnpersistedComposerDrafts,
   mergeComposerDraftContentState,
   mergeHydratedComposerDrafts,
   removeComposerDraftAttachment,
@@ -980,6 +981,19 @@ describe("appendComposerDraftContentDurably", () => {
     expect(persistedFiles.has(secondPath)).toBe(true);
     expect(moveAttempts.get(firstPath)).toBe(2);
     expect(moveAttempts.get(secondPath)).toBe(1);
+  });
+
+  it("reports unwritten drafts after a failed flush so a restart can hold off", async () => {
+    const draftKey = "environment-1:thread-flush-unwritten";
+    failMovePathFragments.add(encodeURIComponent(draftKey));
+    setComposerDraftText(draftKey, "draft");
+
+    await flushComposerDrafts();
+    expect(hasUnpersistedComposerDrafts()).toBe(true);
+
+    failMovePathFragments.clear();
+    await flushComposerDrafts();
+    expect(hasUnpersistedComposerDrafts()).toBe(false);
   });
 
   it("keeps a failed flush queued after its final immediate attempt", async () => {

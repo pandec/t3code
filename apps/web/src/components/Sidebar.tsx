@@ -420,19 +420,26 @@ function SnoozePopoverButton(props: {
   );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Snooze thread"
-            onClick={(event) => event.stopPropagation()}
-            onDoubleClick={(event) => event.stopPropagation()}
-            className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-          />
-        }
-      >
-        <ClockIcon className="size-3" />
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Snooze thread"
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                />
+              }
+            />
+          }
+        >
+          <ClockIcon className="size-3" />
+        </TooltipTrigger>
+        <TooltipPopup>Snooze thread</TooltipPopup>
+      </Tooltip>
       <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
         {presets.map((preset) => (
           <button
@@ -1042,6 +1049,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const handleRenameKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
       event.stopPropagation();
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
       if (event.key === "Enter") {
         event.preventDefault();
         renameCommittedRef.current = true;
@@ -1490,15 +1498,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               )}
               {props.isPinned ? (
                 props.pinningSupported ? (
-                  <button
-                    type="button"
-                    aria-label="Unpin thread"
-                    title="Unpin thread"
-                    onClick={handleUnpinClick}
-                    className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <PinIcon aria-hidden className="size-3 shrink-0" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Unpin thread"
+                          onClick={handleUnpinClick}
+                          className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      }
+                    >
+                      <PinIcon aria-hidden className="size-3 shrink-0" />
+                    </TooltipTrigger>
+                    <TooltipPopup>Unpin thread</TooltipPopup>
+                  </Tooltip>
                 ) : (
                   <PinIcon
                     aria-label="Pinned"
@@ -1588,15 +1602,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       />
                     ) : null}
                     {props.settlementSupported ? (
-                      <button
-                        type="button"
-                        aria-label="Settle thread"
-                        onClick={handleSettleClick}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        <CheckIcon className="size-3.5" />
-                        Settle
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Settle thread"
+                              onClick={handleSettleClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <CheckIcon className="size-3.5" />
+                          Settle
+                        </TooltipTrigger>
+                        <TooltipPopup>Settle thread</TooltipPopup>
+                      </Tooltip>
                     ) : null}
                     {showArchiveButton ? (
                       <button
@@ -4006,9 +4027,9 @@ export default function Sidebar() {
                 {isSearchingThreads ? (
                   <Button
                     type="button"
-                    size="icon-xs"
+                    size="icon-micro"
                     variant="ghost"
-                    className="size-5 shrink-0 rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
+                    className="shrink-0 text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
                     aria-label="Clear thread search"
                     onClick={() => {
                       clearThreadSearch();
@@ -4130,14 +4151,15 @@ export default function Sidebar() {
                                 <EyeOffIcon className="size-3.5" />
                               )}
                             </button>
-                            <button
-                              type="button"
+                            <Button
+                              size="icon-xs"
+                              variant="ghost-muted"
                               aria-label={`Project settings for ${project.displayName}`}
                               title={`Project settings for ${project.displayName}`}
                               // No `ml-auto` here: the hide/show button ahead of
                               // it already claims the free space, so adding one
                               // would only split the pair apart.
-                              className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              className="size-6 shrink-0 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
                               onPointerDown={(event) => event.stopPropagation()}
                               // Menu items synthesize a click on mouseup once the
                               // trigger's press-drag-release window opens, so a
@@ -4149,7 +4171,7 @@ export default function Sidebar() {
                               }}
                             >
                               <SettingsIcon className="size-3.5" />
-                            </button>
+                            </Button>
                           </MenuCheckboxItem>
                         );
                       })}

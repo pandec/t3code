@@ -7,6 +7,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
+import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 
 export { toUploadChatImageAttachments, type DraftComposerImageAttachment };
@@ -118,6 +119,9 @@ async function pickComposerImagesOnce(input: { readonly existingCount: number })
     };
   }
 
+  // The picker covers the Android activity, which reports the app as
+  // backgrounded; the guard keeps background-triggered restarts away mid-pick.
+  const endHandoff = beginForegroundHandoff();
   let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
   try {
     result = await imagePicker.launchImageLibraryAsync({
@@ -136,6 +140,8 @@ async function pickComposerImagesOnce(input: { readonly existingCount: number })
       images: [],
       error: "Could not open the photo library. Try again.",
     };
+  } finally {
+    endHandoff();
   }
 
   if (result.canceled) {

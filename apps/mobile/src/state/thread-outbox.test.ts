@@ -547,6 +547,29 @@ describe("thread outbox", () => {
     ).toBe("send");
   });
 
+  it("sends existing-thread messages into a running turn so they steer it", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus: "running",
+        deliveryIntent: "steer",
+      }),
+    ).toBe("send");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: false,
+        threadStatus: "running",
+        deliveryIntent: "steer",
+      }),
+    ).toBe("wait");
+  });
+
   it("sends queued creations once connected and live, removing already-created ones", () => {
     expect(
       resolveThreadOutboxDeliveryAction({

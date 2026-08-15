@@ -943,6 +943,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           // commands never arm. Waiting for the optimistic enqueue keeps native
           // activity work off the initiating tap frame.
           armAgentAwarenessLiveActivityForLocalWork({
+            environmentId: props.environmentId,
             threadTitle: props.selectedThread.title,
             projectTitle: props.environmentLabel ?? "T3 Code",
           });

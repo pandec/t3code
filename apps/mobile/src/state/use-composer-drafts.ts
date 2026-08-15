@@ -388,6 +388,16 @@ export async function flushComposerDrafts(): Promise<void> {
   }
 }
 
+/**
+ * Whether a flush left draft state unwritten. Persistence is best-effort and
+ * retries on its own, so ordinary callers ignore this — but the update flow
+ * must not tear the runtime down while it is true, because a restart is the one
+ * moment where a failed write loses the draft for good.
+ */
+export function hasUnpersistedComposerDrafts(): boolean {
+  return pendingDraftKeys.size > 0 || pendingAttachmentSweep;
+}
+
 function schedulePersistComposerDraft(
   draftKey: string,
   options?: {
