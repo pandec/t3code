@@ -81,5 +81,5 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - **Dev app flavor** — a separate Dev flavor of the desktop app with isolated state directories
   (shared provider homes), a Linux Dev AppImage build, personal-team iOS builds, and
   [internal TestFlight uploads](apps/mobile/README.md#testflight) for the fork's production app.
-- **Fleet updater** — `pnpm update:machines` updates the fork's dev machines, local and remote, in one pass: pick targets interactively or name them (`--host`, `--local-machine`), rehearse with `--dry-run`, and reread whatever broke with `--show-failure-logs`.
+- **Fleet updater** — `pnpm update:machines` updates the fork's dev machines, local and remote, in one pass: pick targets interactively or name them (`--host`, `--local-machine`), let Expo prompt when a local iPhone needs unlocking, rehearse with `--dry-run`, and reread captured failures with `--show-failure-logs`.
 - **Upstream sync workflow** — a scripted `sync-upstream` flow that fast-forwards the `main` mirror from upstream, merges it into `dev`, and runs the required checks before pushing. `scripts/check-upstream-sync.sh` reports whether a sync is due; it is also offered as the **Check Upstream Sync** action in `t3.json`.
