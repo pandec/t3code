@@ -192,7 +192,8 @@ const ProviderUsageRouteContext = createContext<ProviderUsageRouteContextValue |
  * provider sits above the whole navigator — so storing an equal-but-new session
  * re-renders the app for nothing, and a caller whose session object is not
  * memoized would drive that render loop indefinitely. Comparing field by field
- * makes such a caller a no-op instead of a hang.
+ * absorbs top-level identity churn; a caller that recreates a *field* (accounts,
+ * onRefresh, …) each render still loops and must memoize it.
  */
 function isSameProviderUsageRouteSession(
   current: ProviderUsageRouteSession | null,
@@ -284,8 +285,13 @@ export function ProviderUsageSheet(
               reads in the same place the action lives — the desktop meter spins
               this same icon in place. */}
           {props.refreshing ? (
-            <View className="p-1">
-              <ActivityIndicator accessibilityLabel="Refreshing usage" size="small" />
+            <View
+              accessible
+              accessibilityLabel="Refreshing usage"
+              accessibilityRole="progressbar"
+              className="p-1"
+            >
+              <ActivityIndicator size="small" />
             </View>
           ) : (
             <Pressable

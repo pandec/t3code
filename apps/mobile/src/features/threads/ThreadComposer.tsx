@@ -621,14 +621,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
     [],
   );
-  // `useEnvironmentQuery` returns a fresh view object on every render, so
-  // depending on it directly would make this callback — and with it the sheet
-  // session built from it — a new identity each time. The session feeds an
-  // effect that re-presents the sheet, and presenting re-renders this tree from
-  // the root, so that identity churn is a render loop that never settles: the
-  // sheet's own presentation frame never arrives and the panel never opens.
-  const providerUsageRefreshRef = useRef(providerUsageQuery.refresh);
-  providerUsageRefreshRef.current = providerUsageQuery.refresh;
   const handleRefreshProviderUsage = useCallback(() => {
     const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
     if (instanceIds.length === 0) return;
@@ -648,14 +640,25 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           input: { instanceIds },
         });
         if (providerUsageRefreshTokenRef.current !== token) return;
-        providerUsageRefreshRef.current();
+        providerUsageQuery.refresh();
       } finally {
         if (providerUsageRefreshTokenRef.current === token) {
           setIsRefreshingProviderUsage(false);
         }
       }
     })();
-  }, [props.environmentId, providerUsageAccounts, refreshProviderUsageCommand]);
+    // `providerUsageQuery` itself is a fresh view object every render — listing
+    // it here would churn this callback's identity, and with it the sheet
+    // session memoized from it. The session feeds an effect that re-presents
+    // the sheet from a provider above the navigator, so that churn is a render
+    // loop that starves the sheet's own presentation frame: the panel never
+    // opens. `refresh` alone is atom-keyed and stable, so it is safe to depend on.
+  }, [
+    props.environmentId,
+    providerUsageAccounts,
+    providerUsageQuery.refresh,
+    refreshProviderUsageCommand,
+  ]);
   const providerUsagePanelObservedAt = useMemo(
     () => oldestProviderUsageObservedAt(providerUsageAccounts),
     [providerUsageAccounts],
