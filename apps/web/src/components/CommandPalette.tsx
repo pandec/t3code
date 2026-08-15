@@ -45,6 +45,7 @@ import {
   GitForkIcon,
   LinkIcon,
   MessageSquareIcon,
+  NotebookPenIcon,
   PaletteIcon,
   PinIcon,
   PinOffIcon,
@@ -68,8 +69,10 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
-import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { useCopyToClipboard, writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useSavedPromptList } from "../hooks/useSavedPrompts";
+import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import {
@@ -121,6 +124,9 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildArchiveCurrentThreadAction,
+  buildSavedPromptsSubmenu,
+  SAVED_PROMPTS_GROUP_VALUE,
+  savedPromptItemValue,
   buildArchivedThreadsActionItems,
   buildCurrentThreadActionItems,
   buildMoveCurrentThreadToTopAction,
@@ -629,6 +635,8 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const composerHandleRef = useComposerHandleContext();
+  const savedPrompts = useSavedPromptList();
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1573,6 +1581,26 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  const savedPromptsSubmenu = buildSavedPromptsSubmenu({
+    prompts: savedPrompts,
+    promptPreview: savedPromptPreview,
+    itemIcon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <NotebookPenIcon className={ADDON_ICON_CLASS} />,
+    copyPrompt: async (prompt) => {
+      const didCopy = await writeTextToClipboard(prompt.content, "prompt");
+      if (didCopy) {
+        toastManager.add({
+          type: "success",
+          title: "Prompt copied",
+          description: prompt.title,
+        });
+      }
+    },
+  });
+  if (savedPromptsSubmenu) {
+    actionItems.push(savedPromptsSubmenu);
+  }
+
   const openUnarchivedThread =
     routeThreadRef === null
       ? null
@@ -2254,6 +2282,10 @@ function OpenCommandPaletteDialog(props: {
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
+  const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
+  // Ref read at render: fine for a footer hint — the composer mounts long
+  // before the palette opens, and re-opening re-renders this component.
+  const canInsertSavedPrompt = isSavedPromptsView && composerHandleRef?.current != null;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&
@@ -2348,6 +2380,28 @@ function OpenCommandPaletteDialog(props: {
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
       event.preventDefault();
       void submitAddProjectCloneFlow();
+      return;
+    }
+
+    // Plain Enter copies the highlighted prompt (its `run`); the primary
+    // modifier turns it into "insert into the composer" instead.
+    if (isSavedPromptsView && event.key === "Enter" && isPrimaryModifierPressed(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const highlightedItem =
+        displayedGroups
+          .flatMap((group) => group.items)
+          .find((item) => item.value === highlightedItemValue) ?? displayedGroups[0]?.items[0];
+      const prompt = savedPrompts.find(
+        (candidate) => savedPromptItemValue(candidate) === highlightedItem?.value,
+      );
+      const composer = composerHandleRef?.current;
+      // Close only on a successful insert — a busy composer (approval,
+      // pending input) refuses it, and silently dismissing the palette would
+      // make that failure look like success.
+      if (prompt && composer?.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true })) {
+        setOpen(false);
+      }
       return;
     }
 
@@ -2583,14 +2637,20 @@ function OpenCommandPaletteDialog(props: {
       </Tooltip>
     ) : null;
 
-  const footerActionLabel =
-    addProjectCloneFlow?.step === "repository"
+  const footerActionLabel = isSavedPromptsView
+    ? "Copy"
+    : addProjectCloneFlow?.step === "repository"
       ? (remoteProjectButtonLabel ?? "Continue")
       : !canSubmitBrowsePath || hasHighlightedBrowseItem
         ? "Select"
         : undefined;
 
-  const footerTrailing = canOpenProjectFromFileManager ? (
+  const footerTrailing = canInsertSavedPrompt ? (
+    <KbdGroup className="items-center gap-1.5">
+      <Kbd>{`${submitModifierLabel} Enter`}</Kbd>
+      <span>Insert into composer</span>
+    </KbdGroup>
+  ) : canOpenProjectFromFileManager ? (
     <Button
       variant="ghost"
       size="xs"

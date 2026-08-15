@@ -132,6 +132,7 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     projectAccentColorsFill,
+    savedPromptLibrary,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -203,6 +204,15 @@ export function applyServerSettingsPatch(
     // a project's accent, which is the removal of its key.
     ...(patch.projectAccentColors !== undefined || projectAccentColorsFill !== undefined
       ? { projectAccentColors: nextProjectAccentColors }
+      : {}),
+    // Replaced wholesale for the same reason: deleting a prompt removes an
+    // array entry, which a deep merge could never express. Last-write-wins on
+    // the library stamp: a delayed or repeated write carrying an older (or
+    // equal — clients stamp strictly above what they observed) revision must
+    // not overwrite a newer one that already landed.
+    ...(savedPromptLibrary !== undefined &&
+    savedPromptLibrary.updatedAt > current.savedPromptLibrary.updatedAt
+      ? { savedPromptLibrary }
       : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }

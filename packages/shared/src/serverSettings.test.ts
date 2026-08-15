@@ -334,6 +334,45 @@ describe("serverSettings helpers", () => {
     );
   });
 
+  it("replaces the saved prompt library wholesale so deletes stick", () => {
+    const prompt = (id: string) => ({ id, title: `Title ${id}`, content: `Content ${id}` });
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      savedPromptLibrary: { updatedAt: 100, prompts: [prompt("a"), prompt("b"), prompt("c")] },
+    };
+
+    // A deep merge would index-merge the arrays and keep prompt "c".
+    expect(
+      applyServerSettingsPatch(current, {
+        savedPromptLibrary: { updatedAt: 200, prompts: [prompt("a"), prompt("b")] },
+      }).savedPromptLibrary,
+    ).toEqual({ updatedAt: 200, prompts: [prompt("a"), prompt("b")] });
+    expect(applyServerSettingsPatch(current, {}).savedPromptLibrary).toEqual(
+      current.savedPromptLibrary,
+    );
+  });
+
+  it("ignores saved prompt library writes that do not win the LWW stamp", () => {
+    const prompt = (id: string) => ({ id, title: `Title ${id}`, content: `Content ${id}` });
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      savedPromptLibrary: { updatedAt: 200, prompts: [prompt("new")] },
+    };
+
+    // A delayed older revision, or a repeat of the current one, must not
+    // overwrite the newer library that already landed.
+    expect(
+      applyServerSettingsPatch(current, {
+        savedPromptLibrary: { updatedAt: 100, prompts: [prompt("stale")] },
+      }).savedPromptLibrary,
+    ).toEqual(current.savedPromptLibrary);
+    expect(
+      applyServerSettingsPatch(current, {
+        savedPromptLibrary: { updatedAt: 200, prompts: [prompt("tied")] },
+      }).savedPromptLibrary,
+    ).toEqual(current.savedPromptLibrary);
+  });
+
   it("atomically fills only absent project accent keys", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,

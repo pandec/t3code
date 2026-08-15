@@ -103,6 +103,10 @@
       "types": "./src/state/projectAccentColors.ts",
       "default": "./src/state/projectAccentColors.ts"
     },
+    "./state/saved-prompts": {
+      "types": "./src/state/savedPrompts.ts",
+      "default": "./src/state/savedPrompts.ts"
+    },
     "./state/pull-requests": {
       "types": "./src/state/pullRequests.ts",
       "default": "./src/state/pullRequests.ts"

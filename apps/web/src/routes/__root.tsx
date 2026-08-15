@@ -30,6 +30,7 @@ import {
 } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { applyAppearanceFontVariables } from "~/appearanceFonts";
+import { useSavedPromptLibrarySync } from "../hooks/useSavedPrompts";
 import { useClientSettings } from "../hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -124,6 +125,9 @@ function RootRouteView() {
             <SlowRpcRequestToastCoordinator />
             <HostedStaticEnvironmentBootstrap />
             {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+            {/* Also under hosted-static: any connected capable environment
+                can go stale and needs the reconnect repair. */}
+            <SavedPromptLibrarySync />
             {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
             <CommandPalette>
               <AppSidebarLayout>
@@ -179,6 +183,11 @@ function FontAppearanceSync() {
     fontSmoothing,
   ]);
 
+  return null;
+}
+
+function SavedPromptLibrarySync() {
+  useSavedPromptLibrarySync();
   return null;
 }
 

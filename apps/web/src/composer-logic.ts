@@ -12,6 +12,7 @@ export type ComposerSlashCommand =
   | "model"
   | "plan"
   | "default"
+  | "prompt"
   | "t3-name"
   | "t3-rename"
   | "t3-status"
