@@ -60,7 +60,7 @@ export interface ProviderForkSessionResult {
 
 export interface ProviderImportableSession {
   readonly nativeSessionId: string;
-  /** User-assigned session name (e.g. `/rename` in the provider CLI). */
+  /** Provider-derived session title, preferring an explicit user-assigned name. */
   readonly name: string | null;
   readonly preview: string;
   readonly messageCount: number | null;
@@ -76,7 +76,7 @@ export interface ProviderImportSessionMessage {
 export interface ProviderImportSessionHistory {
   readonly nativeSessionId: string;
   readonly nativeCwd: string;
-  /** Current user-assigned session name at read time, or null when unnamed. */
+  /** Current provider-derived session title at read time, or null when unnamed. */
   readonly name: string | null;
   readonly messages: ReadonlyArray<ProviderImportSessionMessage>;
   readonly model: string | null;

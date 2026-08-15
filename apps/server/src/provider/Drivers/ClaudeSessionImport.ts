@@ -13,6 +13,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { extractSubstantiveUserText } from "./substantiveUserText.ts";
+
 export class ClaudeTranscriptParseError extends Schema.TaggedErrorClass<ClaudeTranscriptParseError>()(
   "ClaudeTranscriptParseError",
   {
@@ -40,7 +42,6 @@ const BENIGN_RECORD_TYPES = new Set([
   "bridge-session",
   "permission-mode",
   "agent-name",
-  "ai-title",
   "pr-link",
   "worktree-state",
   "relocated",
@@ -62,7 +63,7 @@ export interface ClaudeParsedTranscript {
   readonly messages: ReadonlyArray<ClaudeTranscriptMessage>;
   readonly model: string | null;
   readonly lastTimestamp: string | null;
-  /** User-assigned session title (`/rename` in the CLI), latest record wins. */
+  /** Latest explicit `/rename` title, otherwise Claude's latest generated title. */
   readonly name: string | null;
 }
 
@@ -170,7 +171,8 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
   const parentByUuid = new Map<string, string | null>();
   const messagesByUuid = new Map<string, ChainEntry>();
   let activeLeaf: ChainEntry | undefined;
-  let name: string | null = null;
+  let latestAiTitle: string | null = null;
+  let latestCustomTitle: string | null = null;
 
   for (let index = 0; index < input.lines.length; index += 1) {
     const raw = input.lines[index]?.trim();
@@ -216,10 +218,14 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
       }
       continue;
     }
-    if (type === "custom-title") {
-      const customTitle = objectRecord.customTitle;
-      if (typeof customTitle === "string" && customTitle.trim().length > 0) {
-        name = customTitle.trim();
+    if (type === "custom-title" || type === "ai-title") {
+      const title = type === "custom-title" ? objectRecord.customTitle : objectRecord.aiTitle;
+      if (typeof title === "string" && title.trim().length > 0) {
+        if (type === "custom-title") {
+          latestCustomTitle = title.trim();
+        } else {
+          latestAiTitle = title.trim();
+        }
       }
       continue;
     }
@@ -275,7 +281,7 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
     messages,
     model,
     lastTimestamp: activeLeaf?.timestamp ?? null,
-    name,
+    name: latestCustomTitle ?? latestAiTitle,
   } satisfies ClaudeParsedTranscript;
 });
 
@@ -411,10 +417,22 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
       });
       if (transcript.messages.length === 0) continue;
       const firstUserText = transcript.messages.find((message) => message.role === "user")?.text;
+      let substantiveUserText: string | undefined;
+      for (const message of transcript.messages) {
+        if (message.role !== "user") continue;
+        const extracted = extractSubstantiveUserText(message.text);
+        if (extracted !== null) {
+          substantiveUserText = extracted;
+          break;
+        }
+      }
       summaries.push({
         sessionId,
         name: transcript.name,
-        preview: (firstUserText ?? transcript.messages[0]!.text).slice(0, PREVIEW_MAX_CHARS),
+        preview: (substantiveUserText ?? firstUserText ?? transcript.messages[0]!.text).slice(
+          0,
+          PREVIEW_MAX_CHARS,
+        ),
         messageCount: transcript.messages.length,
         updatedAt: transcript.lastTimestamp ?? transcript.messages.at(-1)!.createdAt,
       });

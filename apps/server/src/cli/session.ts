@@ -8,6 +8,7 @@ import {
   type OrchestrationShellSnapshot,
   type ProviderCatalogInstance,
   type ProviderCatalogResult,
+  type SessionImportCandidate,
   type SessionImportListCandidatesPayload,
   type SessionImportPayload,
 } from "@t3tools/contracts";
@@ -313,6 +314,14 @@ export const sniffSessionTranscript = Effect.fn("sniffSessionTranscript")(functi
 
 export function formatProviderInstanceLabel(displayName: string, instanceId: string): string {
   return `${displayName} [${instanceId}]`;
+}
+
+export function formatSessionCandidateLine(candidate: SessionImportCandidate): string {
+  const linked =
+    candidate.linkedThread === null || candidate.linkedThread === undefined
+      ? ""
+      : `\tlinked:${candidate.linkedThread.threadId}${candidate.linkedThread.archivedAt === null ? "" : " (archived)"}`;
+  return `${candidate.nativeSessionId}\t${formatProviderInstanceLabel(candidate.providerDisplayName, candidate.instanceId)}\t${candidate.updatedAt}\t${candidate.preview}${linked}`;
 }
 
 export const resolveImportInstance = Effect.fn("resolveImportInstance")(function* (input: {
@@ -997,12 +1006,7 @@ const sessionCandidatesCommand = Command.make("candidates", {
             ? jsonOutput({ projectId: project.id, candidates: result.candidates })
             : result.candidates.length === 0
               ? "No importable sessions."
-              : result.candidates
-                  .map(
-                    (candidate) =>
-                      `${candidate.nativeSessionId}\t${formatProviderInstanceLabel(candidate.providerDisplayName, candidate.instanceId)}\t${candidate.updatedAt}\t${candidate.preview}`,
-                  )
-                  .join("\n"),
+              : result.candidates.map(formatSessionCandidateLine).join("\n"),
         );
       }),
     ),

@@ -9,6 +9,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderCatalogInstance,
+  type SessionImportCandidate,
+  ThreadId,
   type ProviderCatalogResult,
 } from "@t3tools/contracts";
 import { assert, expect, it } from "@effect/vitest";
@@ -26,6 +28,7 @@ import {
   deriveSessionWorktreePath,
   ensureWorktree,
   formatProviderInstanceLabel,
+  formatSessionCandidateLine,
   placeSessionFile,
   resolveCliModelSelection,
   resolveImportInstance,
@@ -207,6 +210,71 @@ it.effect("rejects malformed and unknown transcript formats", () =>
 it("formats provider instance labels for CLI output", () => {
   expect(formatProviderInstanceLabel("Claude Work", "claude_work")).toBe(
     "Claude Work [claude_work]",
+  );
+});
+
+it("marks linked and archived session candidates in CLI output", () => {
+  const candidate = {
+    instanceId: ProviderInstanceId.make("claude_work"),
+    provider: ProviderDriverKind.make("claudeAgent"),
+    providerDisplayName: "Claude Work",
+    nativeSessionId: claudeSessionId,
+    name: null,
+    preview: "Continue the payment retry",
+    messageCount: 12,
+    updatedAt: "2026-08-15T10:00:00.000Z",
+    linkedThread: {
+      threadId: ThreadId.make("thread-linked"),
+      title: "Payment retry",
+      archivedAt: "2026-08-14T10:00:00.000Z",
+      updatedAt: "2026-08-15T09:00:00.000Z",
+      canFork: true,
+    },
+  } satisfies SessionImportCandidate;
+
+  expect(formatSessionCandidateLine(candidate)).toBe(
+    `${claudeSessionId}\tClaude Work [claude_work]\t2026-08-15T10:00:00.000Z\tContinue the payment retry\tlinked:thread-linked (archived)`,
+  );
+});
+
+it("formats unlinked session candidates without a linked suffix", () => {
+  const candidate = {
+    instanceId: ProviderInstanceId.make("claude_work"),
+    provider: ProviderDriverKind.make("claudeAgent"),
+    providerDisplayName: "Claude Work",
+    nativeSessionId: claudeSessionId,
+    name: null,
+    preview: "Continue the payment retry",
+    messageCount: 12,
+    updatedAt: "2026-08-15T10:00:00.000Z",
+  } satisfies SessionImportCandidate;
+
+  expect(formatSessionCandidateLine(candidate)).toBe(
+    `${claudeSessionId}\tClaude Work [claude_work]\t2026-08-15T10:00:00.000Z\tContinue the payment retry`,
+  );
+});
+
+it("formats active linked session candidates without an archived marker", () => {
+  const candidate = {
+    instanceId: ProviderInstanceId.make("claude_work"),
+    provider: ProviderDriverKind.make("claudeAgent"),
+    providerDisplayName: "Claude Work",
+    nativeSessionId: claudeSessionId,
+    name: null,
+    preview: "Continue the payment retry",
+    messageCount: 12,
+    updatedAt: "2026-08-15T10:00:00.000Z",
+    linkedThread: {
+      threadId: ThreadId.make("thread-linked"),
+      title: "Payment retry",
+      archivedAt: null,
+      updatedAt: "2026-08-15T09:00:00.000Z",
+      canFork: true,
+    },
+  } satisfies SessionImportCandidate;
+
+  expect(formatSessionCandidateLine(candidate)).toBe(
+    `${claudeSessionId}\tClaude Work [claude_work]\t2026-08-15T10:00:00.000Z\tContinue the payment retry\tlinked:thread-linked`,
   );
 });
 

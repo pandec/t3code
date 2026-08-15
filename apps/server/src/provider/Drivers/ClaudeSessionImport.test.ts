@@ -9,9 +9,11 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   claudeProjectDirectoryName,
   findClaudeSessionCwd,
+  listClaudeSessionTranscripts,
   parseClaudeTranscript,
   readClaudeSessionTranscript,
 } from "./ClaudeSessionImport.ts";
+import { extractSubstantiveUserText } from "./substantiveUserText.ts";
 
 const SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
 
@@ -90,7 +92,53 @@ describe("parseClaudeTranscript", () => {
     }),
   );
 
-  it.effect("returns a null name when no custom-title record exists", () =>
+  it.effect("uses the latest generated ai-title when no custom title exists", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "ai-title", aiTitle: "First generated title", sessionId: SESSION_ID }),
+        toJsonLine({ type: "ai-title", aiTitle: "Final generated title", sessionId: SESSION_ID }),
+      ]);
+      expect(result.name).toBe("Final generated title");
+    }),
+  );
+
+  it.effect("prefers custom-title over ai-title regardless of record order", () =>
+    Effect.gen(function* () {
+      const customBeforeAi = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "custom-title", customTitle: "Explicit name", sessionId: SESSION_ID }),
+        toJsonLine({ type: "ai-title", aiTitle: "Generated later", sessionId: SESSION_ID }),
+      ]);
+      const customAfterAi = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "ai-title", aiTitle: "Generated first", sessionId: SESSION_ID }),
+        toJsonLine({ type: "custom-title", customTitle: "Explicit name", sessionId: SESSION_ID }),
+      ]);
+
+      expect(customBeforeAi.name).toBe("Explicit name");
+      expect(customAfterAi.name).toBe("Explicit name");
+    }),
+  );
+
+  it.effect("ignores empty ai-title records", () =>
+    Effect.gen(function* () {
+      const afterValidTitle = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "ai-title", aiTitle: "Generated title", sessionId: SESSION_ID }),
+        toJsonLine({ type: "ai-title", aiTitle: "   ", sessionId: SESSION_ID }),
+      ]);
+      const onlyWhitespace = yield* run([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
+        toJsonLine({ type: "ai-title", aiTitle: "\t", sessionId: SESSION_ID }),
+      ]);
+
+      expect(afterValidTitle.name).toBe("Generated title");
+      expect(onlyWhitespace.name).toBeNull();
+    }),
+  );
+
+  it.effect("returns a null name when no title record exists", () =>
     Effect.gen(function* () {
       const result = yield* run([
         entry({ uuid: "u1", parentUuid: null, type: "user", content: "hello" }),
@@ -294,6 +342,141 @@ describe("claudeProjectDirectoryName", () => {
     );
     expect(claudeProjectDirectoryName("/Users/user/.dotfiles")).toBe("-Users-user--dotfiles");
   });
+});
+
+describe("extractSubstantiveUserText", () => {
+  it("combines visible text with every command-args block after removing command wrappers", () => {
+    expect(
+      extractSubstantiveUserText(
+        "Visible context\n<command-args>first argument</command-args>\n<command-name>/task</command-name>\n<command-args>second argument</command-args>",
+      ),
+    ).toBe("Visible context first argument second argument");
+  });
+
+  it("distinguishes multi-segment paths from single-segment slash-command openers", () => {
+    expect(extractSubstantiveUserText("/Users/dev/app is broken")).toBe("/Users/dev/app is broken");
+    expect(extractSubstantiveUserText("/tmp is full, clean it up")).toBeNull();
+  });
+});
+
+describe("listClaudeSessionTranscripts", () => {
+  const listTranscript = Effect.fn("listTranscript")(function* (lines: ReadonlyArray<string>) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-list-" });
+    const configDirPath = path.join(root, ".claude");
+    const canonicalCwd = "/tmp/list-project";
+    const directory = path.join(
+      configDirPath,
+      "projects",
+      claudeProjectDirectoryName(canonicalCwd),
+    );
+    yield* fileSystem.makeDirectory(directory, { recursive: true });
+    yield* fileSystem.writeFileString(
+      path.join(directory, `${SESSION_ID}.jsonl`),
+      `${lines.join("\n")}\n`,
+    );
+    return yield* listClaudeSessionTranscripts({ configDirPath, canonicalCwd });
+  });
+
+  it.effect("skips command-only user messages when choosing a preview", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "/clear" }),
+        entry({
+          uuid: "u2",
+          parentUuid: "u1",
+          type: "user",
+          content:
+            "<command-name>/login</command-name>\n<command-message>login</command-message>\n<command-args></command-args>",
+        }),
+        entry({
+          uuid: "u3",
+          parentUuid: "u2",
+          type: "user",
+          content: "Investigate the flaky payment retry.",
+        }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Investigate the flaky payment retry.");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("previews prose arguments from a slash-command wrapper", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content:
+            "<command-name>/task</command-name>\n<command-message>task</command-message>\n<command-args>Fix the login bug</command-args>",
+        }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Fix the login bug");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the first-user fallback for all-command sessions", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({ uuid: "u1", parentUuid: null, type: "user", content: "/login" }),
+        entry({ uuid: "u2", parentUuid: "u1", type: "user", content: "/clear" }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("/login");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("skips command wrappers whatever their tag order", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content:
+            "<command-message>sync-upstream</command-message>\n<command-name>/sync-upstream</command-name>",
+        }),
+        entry({ uuid: "u2", parentUuid: "u1", type: "user", content: "Then push the branch." }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Then push the branch.");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("skips a single-segment absolute-path opener that matches command syntax", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content: "/tmp is full, clean it up",
+        }),
+        entry({ uuid: "u2", parentUuid: "u1", type: "user", content: "Clean the temp dir." }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("Clean the temp dir.");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads a multi-segment absolute path opener as prose", () =>
+    Effect.gen(function* () {
+      const summaries = yield* listTranscript([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content: "/Users/dev/app/server.ts throws on startup.",
+        }),
+        entry({ uuid: "u2", parentUuid: "u1", type: "user", content: "Any idea why?" }),
+      ]);
+
+      expect(summaries[0]?.preview).toBe("/Users/dev/app/server.ts throws on startup.");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
 
 describe("readClaudeSessionTranscript", () => {
