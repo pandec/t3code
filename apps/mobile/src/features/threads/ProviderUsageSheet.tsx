@@ -21,7 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Platform, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -185,11 +185,35 @@ type ProviderUsageRouteContextValue = {
 
 const ProviderUsageRouteContext = createContext<ProviderUsageRouteContextValue | null>(null);
 
+/**
+ * Whether a presented session would change anything on screen.
+ *
+ * The composer re-presents on every render while the sheet is open, and this
+ * provider sits above the whole navigator — so storing an equal-but-new session
+ * re-renders the app for nothing, and a caller whose session object is not
+ * memoized would drive that render loop indefinitely. Comparing field by field
+ * absorbs top-level identity churn; a caller that recreates a *field* (accounts,
+ * onRefresh, …) each render still loops and must memoize it.
+ */
+function isSameProviderUsageRouteSession(
+  current: ProviderUsageRouteSession | null,
+  next: ProviderUsageRouteSession,
+): boolean {
+  if (current === null) return false;
+  if (current === next) return true;
+  const keys = Object.keys(next) as ReadonlyArray<keyof ProviderUsageRouteSession>;
+  return (
+    keys.length === Object.keys(current).length && keys.every((key) => current[key] === next[key])
+  );
+}
+
 /** Bridges the active thread's quota state into the root native sheet route. */
 export function ProviderUsageRouteProvider(props: { readonly children: ReactNode }) {
   const [session, setSession] = useState<ProviderUsageRouteSession | null>(null);
   const present = useCallback((nextSession: ProviderUsageRouteSession) => {
-    setSession(nextSession);
+    setSession((current) =>
+      isSameProviderUsageRouteSession(current, nextSession) ? current : nextSession,
+    );
   }, []);
   const clear = useCallback((ownerId: string) => {
     setSession((current) => (current?.ownerId === ownerId ? null : current));
@@ -226,69 +250,96 @@ export function ProviderUsageSheet(
     : null;
 
   return (
-    <View className="flex-1 bg-sheet">
-      <View className="flex-row items-center gap-2 px-4 pb-2 pt-3">
-        <Pressable
-          accessibilityLabel={`Close ${title}`}
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={props.onClose}
-          className="p-1 active:opacity-70"
-        >
-          <SymbolView
-            name={Platform.OS === "android" ? "chevron.left" : "xmark"}
-            size={16}
-            tintColor={iconMuted}
-            type="monochrome"
-          />
-        </Pressable>
-        <Text className="text-base font-t3-bold text-foreground">{title}</Text>
-        <View className="flex-1" />
-        {/* One freshness line for the whole read; stale accounts add theirs. */}
-        <Text className="text-2xs text-foreground-tertiary tabular-nums">
-          {props.refreshing
-            ? "updating…"
-            : formatProviderUsageAge(props.panelObservedAt, props.nowMs)}
-        </Text>
-        <Pressable
-          accessibilityLabel="Refresh usage"
-          accessibilityRole="button"
-          accessibilityState={{ disabled: props.refreshing }}
-          disabled={props.refreshing}
-          hitSlop={8}
-          onPress={props.onRefresh}
-          className={cn("p-1 active:opacity-70", props.refreshing && "opacity-40")}
-        >
-          <SymbolView name="arrow.clockwise" size={15} tintColor={iconMuted} type="monochrome" />
-        </Pressable>
-      </View>
-      {props.fableUsage ? (
-        <View className="flex-row items-center gap-2 px-5 pb-2">
-          <Text className="text-2xs font-t3-medium text-foreground-muted">Fable next</Text>
-          <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
-            {props.fableUsage.accountName}
-          </Text>
-          <View className="flex-1" />
-          <Text
-            className={cn(
-              "text-2xs font-t3-medium tabular-nums",
-              STATUS_TEXT_CLASS[props.fableUsage.window.status],
-            )}
+    // A form sheet whose scrollable content sits beside other chrome is laid
+    // out natively, and react-native-screens only recognizes that shape when
+    // the sheet's container holds the chrome and the scroll view as two
+    // uncollapsed subviews. Flattening either one hands it a flat pile of
+    // leaves, and it positions the scroll view over the chrome instead of
+    // below it — the header ends up painted behind the first account card.
+    <View collapsable={false} className="flex-1 bg-sheet">
+      <View collapsable={false}>
+        <View className="flex-row items-center gap-2 px-4 pb-2 pt-3">
+          <Pressable
+            accessibilityLabel={`Close ${title}`}
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={props.onClose}
+            className="p-1 active:opacity-70"
           >
-            {describeProviderUsageWindowValue(props.fableUsage.window)}
-            {fableResetTime ? (
-              <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
-            ) : null}
+            <SymbolView
+              name={Platform.OS === "android" ? "chevron.left" : "xmark"}
+              size={16}
+              tintColor={iconMuted}
+              type="monochrome"
+            />
+          </Pressable>
+          <Text className="text-base font-t3-bold text-foreground">{title}</Text>
+          <View className="flex-1" />
+          {/* One freshness line for the whole read; stale accounts add theirs. */}
+          <Text className="text-2xs text-foreground-tertiary tabular-nums">
+            {props.refreshing
+              ? "updating…"
+              : formatProviderUsageAge(props.panelObservedAt, props.nowMs)}
           </Text>
+          {/* The spinner replaces the control it disables, so the refresh state
+              reads in the same place the action lives — the desktop meter spins
+              this same icon in place. */}
+          {props.refreshing ? (
+            <View
+              accessible
+              accessibilityLabel="Refreshing usage"
+              accessibilityRole="progressbar"
+              className="p-1"
+            >
+              <ActivityIndicator size="small" />
+            </View>
+          ) : (
+            <Pressable
+              accessibilityLabel="Refresh usage"
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={props.onRefresh}
+              className="p-1 active:opacity-70"
+            >
+              <SymbolView
+                name="arrow.clockwise"
+                size={15}
+                tintColor={iconMuted}
+                type="monochrome"
+              />
+            </Pressable>
+          )}
         </View>
-      ) : null}
+        {props.fableUsage ? (
+          <View className="flex-row items-center gap-2 px-5 pb-2">
+            <Text className="text-2xs font-t3-medium text-foreground-muted">Fable next</Text>
+            <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
+              {props.fableUsage.accountName}
+            </Text>
+            <View className="flex-1" />
+            <Text
+              className={cn(
+                "text-2xs font-t3-medium tabular-nums",
+                STATUS_TEXT_CLASS[props.fableUsage.window.status],
+              )}
+            >
+              {describeProviderUsageWindowValue(props.fableUsage.window)}
+              {fableResetTime ? (
+                <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
+              ) : null}
+            </Text>
+          </View>
+        ) : null}
+      </View>
       <ScrollView
         className="flex-1"
         contentContainerStyle={{
           gap: 10,
           paddingBottom: insets.bottom + 16,
           paddingHorizontal: 16,
-          paddingTop: 4,
+          // Matches the horizontal inset so the first card is framed evenly and
+          // the sheet's grabber keeps clear of it.
+          paddingTop: 16,
         }}
         showsVerticalScrollIndicator={false}
       >

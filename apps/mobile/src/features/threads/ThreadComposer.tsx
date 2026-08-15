@@ -647,7 +647,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }
       }
     })();
-  }, [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand]);
+    // `providerUsageQuery` itself is a fresh view object every render — listing
+    // it here would churn this callback's identity, and with it the sheet
+    // session memoized from it. The session feeds an effect that re-presents
+    // the sheet from a provider above the navigator, so that churn is a render
+    // loop that starves the sheet's own presentation frame: the panel never
+    // opens. `refresh` alone is atom-keyed and stable, so it is safe to depend on.
+  }, [
+    props.environmentId,
+    providerUsageAccounts,
+    providerUsageQuery.refresh,
+    refreshProviderUsageCommand,
+  ]);
   const providerUsagePanelObservedAt = useMemo(
     () => oldestProviderUsageObservedAt(providerUsageAccounts),
     [providerUsageAccounts],
