@@ -3116,6 +3116,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const promptForState = options?.prompt ?? promptRef.current;
         const cursor = clampCollapsedComposerCursor(promptForState, options?.cursor ?? 0);
         setComposerHighlightedItemId(null);
+        // The draft this picker was opened against is gone (send, restore,
+        // recovery); a pick now would insert into the replacement draft.
+        setInsertionPicker(null);
         setComposerCursor(cursor);
         setComposerTrigger(
           options?.detectTrigger

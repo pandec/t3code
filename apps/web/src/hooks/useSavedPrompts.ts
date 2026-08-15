@@ -8,7 +8,7 @@
  * environments when they reconnect. See
  * `@t3tools/client-runtime/state/saved-prompts` for the rules.
  */
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -93,36 +93,60 @@ export function useSavedPrompts(): SavedPrompts {
     () => resolveSavedPromptLibrary(librariesByEnvironment).library,
     [librariesByEnvironment],
   );
-  // Local pending baseline. Only ever advanced: a render carrying stale
-  // server state must not roll it back under an unacknowledged edit.
-  const libraryRef = useRef(library);
-  if (library.updatedAt > libraryRef.current.updatedAt) {
-    libraryRef.current = library;
-  }
+  // Unacknowledged local edit, rendered optimistically: the UI and the next
+  // edit's baseline are always the same library, so consecutive edits
+  // compose on what the user sees rather than on a hidden pending value.
+  const [pendingLibrary, setPendingLibrary] = useState<SavedPromptLibrary | null>(null);
+  // Strictly newer only: a resolved library that caught up — or tied, the
+  // accepted equal-stamp collision residue — wins over the pending one.
+  const effectiveLibrary =
+    pendingLibrary !== null && pendingLibrary.updatedAt > library.updatedAt
+      ? pendingLibrary
+      : library;
+  const effectiveLibraryRef = useRef(effectiveLibrary);
+  effectiveLibraryRef.current = effectiveLibrary;
+
+  // Housekeeping: once the resolved state reaches the pending stamp the edit
+  // is acknowledged, and keeping the pending value would only shadow later
+  // remote edits.
+  useEffect(() => {
+    if (pendingLibrary !== null && library.updatedAt >= pendingLibrary.updatedAt) {
+      setPendingLibrary(null);
+    }
+  }, [library, pendingLibrary]);
 
   const saveAll = useCallback(
     (update: (current: ReadonlyArray<SavedPrompt>) => ReadonlyArray<SavedPrompt>) => {
+      if (writableEnvironmentIds.size === 0) return;
       const savedPromptLibrary = stampSavedPromptLibrary(
-        libraryRef.current,
-        update(libraryRef.current.prompts),
+        effectiveLibraryRef.current,
+        update(effectiveLibraryRef.current.prompts),
         Date.now(),
       );
-      libraryRef.current = savedPromptLibrary;
-      for (const environmentId of writableEnvironmentIds) {
-        void updateEnvironmentSettings(environmentId, { savedPromptLibrary });
-      }
+      setPendingLibrary(savedPromptLibrary);
+      const writes = [...writableEnvironmentIds].map((environmentId) =>
+        updateEnvironmentSettings(environmentId, { savedPromptLibrary }),
+      );
+      void Promise.all(writes).then((results) => {
+        if (results.every((result) => result?._tag !== "Success")) {
+          // Every environment rejected the edit: drop the optimistic value so
+          // the UI returns to server truth instead of showing a write that
+          // never landed. (A later pending edit stays — it has its own fate.)
+          setPendingLibrary((current) => (current === savedPromptLibrary ? null : current));
+        }
+      });
     },
     [updateEnvironmentSettings, writableEnvironmentIds],
   );
 
   return useMemo(
     () => ({
-      prompts: library.prompts,
+      prompts: effectiveLibrary.prompts,
       hasConnectedEnvironment: librariesByEnvironment.size > 0,
       canEdit: writableEnvironmentIds.size > 0,
       saveAll,
     }),
-    [library, librariesByEnvironment, saveAll, writableEnvironmentIds],
+    [effectiveLibrary, librariesByEnvironment, saveAll, writableEnvironmentIds],
   );
 }
 
