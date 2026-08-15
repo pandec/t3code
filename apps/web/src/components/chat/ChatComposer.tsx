@@ -99,11 +99,14 @@ import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../Compos
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+import type { SavedPrompt } from "@t3tools/contracts/settings";
+import { ComposerPromptMenu } from "./ComposerPromptMenu";
 import { ComposerThreadWaitMenu } from "./ComposerThreadWaitMenu";
 import {
   buildThreadWaitInsertionText,
   type ThreadWaitPickerEntry,
 } from "./composerThreadWaitPicker";
+import { useSavedPrompts } from "~/hooks/useSavedPrompts";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import type { ThreadOutboxDeliveryIntent } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -1330,6 +1333,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     offset: number;
     promptAtOpen: string;
   } | null>(null);
+  // Non-null while the /prompt saved-prompt picker is open; same insertion
+  // bookkeeping as threadWaitInsertion above.
+  const [savedPromptInsertion, setSavedPromptInsertion] = useState<{
+    offset: number;
+    promptAtOpen: string;
+  } | null>(null);
+  const { prompts: savedPrompts } = useSavedPrompts();
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
@@ -1429,6 +1439,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/model",
           description: "Switch response model for this thread",
         },
+        ...(savedPrompts.length > 0
+          ? ([
+              {
+                id: "slash:prompt",
+                type: "slash-command",
+                command: "prompt",
+                label: "/prompt",
+                description: "Insert a saved prompt",
+              },
+            ] as const)
+          : []),
         ...(planModeUiEnabled
           ? ([
               {
@@ -1516,6 +1537,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     effectiveProviderSkills,
     isServerThread,
     planModeUiEnabled,
+    savedPrompts,
     selectedProvider,
     selectedProviderStatus,
     workspaceEntries.entries,
@@ -2160,6 +2182,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "prompt") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            setSavedPromptInsertion({
+              offset: trigger.rangeStart,
+              promptAtOpen: promptRef.current,
+            });
+          }
+          return;
+        }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2240,10 +2276,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerEditorRef.current?.focusAt(composerCursor);
   }, [composerCursor]);
 
+  const onSavedPromptPick = useCallback(
+    (prompt: SavedPrompt) => {
+      if (savedPromptInsertion === null) return;
+      const snapshot = readComposerSnapshot();
+      const insertionOffset =
+        snapshot.value === savedPromptInsertion.promptAtOpen
+          ? Math.min(savedPromptInsertion.offset, snapshot.value.length)
+          : snapshot.cursor;
+      setSavedPromptInsertion(null);
+      applyPromptReplacement(insertionOffset, insertionOffset, prompt.content, {
+        expectedText: "",
+      });
+    },
+    [applyPromptReplacement, readComposerSnapshot, savedPromptInsertion],
+  );
+
+  const onSavedPromptMenuClose = useCallback(() => {
+    setSavedPromptInsertion(null);
+    composerEditorRef.current?.focusAt(composerCursor);
+  }, [composerCursor]);
+
   // An approval taking over the composer or a reappearing trigger menu
-  // unmounts the picker; strand no insertion target behind either gate.
+  // unmounts the pickers; strand no insertion target behind either gate.
   useEffect(() => {
-    if (composerMenuOpen || isComposerApprovalState) setThreadWaitInsertion(null);
+    if (composerMenuOpen || isComposerApprovalState) {
+      setThreadWaitInsertion(null);
+      setSavedPromptInsertion(null);
+    }
   }, [composerMenuOpen, isComposerApprovalState]);
 
   const onComposerMenuItemHighlighted = useCallback(
@@ -3398,6 +3458,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             {isStashMenuOpen &&
               !composerMenuOpen &&
               threadWaitInsertion === null &&
+              savedPromptInsertion === null &&
               !isComposerApprovalState && (
                 <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
                   <ComposerStashMenu
@@ -3410,6 +3471,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )}
 
             {threadWaitInsertion !== null &&
+              savedPromptInsertion === null &&
               !isStashMenuOpen &&
               !composerMenuOpen &&
               !isComposerApprovalState && (
@@ -3419,6 +3481,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     excludeThreadId={activeThreadId}
                     onPick={onThreadWaitPick}
                     onClose={onThreadWaitClose}
+                  />
+                </ComposerCommandMenuLayer>
+              )}
+
+            {savedPromptInsertion !== null &&
+              threadWaitInsertion === null &&
+              !isStashMenuOpen &&
+              !composerMenuOpen &&
+              !isComposerApprovalState && (
+                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+                  <ComposerPromptMenu
+                    prompts={savedPrompts}
+                    onPick={onSavedPromptPick}
+                    onClose={onSavedPromptMenuClose}
                   />
                 </ComposerCommandMenuLayer>
               )}
