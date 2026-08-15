@@ -45,6 +45,7 @@ import {
   GitForkIcon,
   LinkIcon,
   MessageSquareIcon,
+  NotebookPenIcon,
   PaletteIcon,
   PinIcon,
   PinOffIcon,
@@ -68,8 +69,10 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
-import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { useCopyToClipboard, writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useSavedPrompts } from "../hooks/useSavedPrompts";
+import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import {
@@ -629,6 +632,8 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const composerHandleRef = useComposerHandleContext();
+  const { prompts: savedPrompts } = useSavedPrompts();
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1573,6 +1578,48 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (savedPrompts.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:prompts",
+      searchTerms: [
+        "prompts",
+        "insert prompt",
+        "copy prompt",
+        "saved prompt",
+        "snippet",
+        "template",
+      ],
+      title: "Prompts...",
+      icon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <NotebookPenIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "saved-prompts",
+          label: "Prompts",
+          items: savedPrompts.map((prompt) => ({
+            kind: "action",
+            value: `saved-prompt:${prompt.id}`,
+            searchTerms: [prompt.title, prompt.content],
+            title: prompt.title,
+            description: savedPromptPreview(prompt),
+            icon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              const didCopy = await writeTextToClipboard(prompt.content, "prompt");
+              if (didCopy) {
+                toastManager.add({
+                  type: "success",
+                  title: "Prompt copied",
+                  description: prompt.title,
+                });
+              }
+            },
+          })),
+        },
+      ],
+    });
+  }
+
   const openUnarchivedThread =
     routeThreadRef === null
       ? null
@@ -2254,6 +2301,10 @@ function OpenCommandPaletteDialog(props: {
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
+  const isSavedPromptsView = currentView?.groups[0]?.value === "saved-prompts";
+  // Ref read at render: fine for a footer hint — the composer mounts long
+  // before the palette opens, and re-opening re-renders this component.
+  const canInsertSavedPrompt = isSavedPromptsView && composerHandleRef?.current != null;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&
@@ -2348,6 +2399,26 @@ function OpenCommandPaletteDialog(props: {
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
       event.preventDefault();
       void submitAddProjectCloneFlow();
+      return;
+    }
+
+    // Plain Enter copies the highlighted prompt (its `run`); the primary
+    // modifier turns it into "insert into the composer" instead.
+    if (isSavedPromptsView && event.key === "Enter" && isPrimaryModifierPressed(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const highlightedItem =
+        displayedGroups
+          .flatMap((group) => group.items)
+          .find((item) => item.value === highlightedItemValue) ?? displayedGroups[0]?.items[0];
+      const prompt = savedPrompts.find(
+        (candidate) => `saved-prompt:${candidate.id}` === highlightedItem?.value,
+      );
+      const composer = composerHandleRef?.current;
+      if (prompt && composer) {
+        composer.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true });
+        setOpen(false);
+      }
       return;
     }
 
@@ -2583,14 +2654,20 @@ function OpenCommandPaletteDialog(props: {
       </Tooltip>
     ) : null;
 
-  const footerActionLabel =
-    addProjectCloneFlow?.step === "repository"
+  const footerActionLabel = isSavedPromptsView
+    ? "Copy"
+    : addProjectCloneFlow?.step === "repository"
       ? (remoteProjectButtonLabel ?? "Continue")
       : !canSubmitBrowsePath || hasHighlightedBrowseItem
         ? "Select"
         : undefined;
 
-  const footerTrailing = canOpenProjectFromFileManager ? (
+  const footerTrailing = canInsertSavedPrompt ? (
+    <KbdGroup className="items-center gap-1.5">
+      <Kbd>{`${submitModifierLabel} Enter`}</Kbd>
+      <span>Insert into composer</span>
+    </KbdGroup>
+  ) : canOpenProjectFromFileManager ? (
     <Button
       variant="ghost"
       size="xs"
