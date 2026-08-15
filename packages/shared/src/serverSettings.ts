@@ -132,6 +132,7 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     projectAccentColorsFill,
+    savedPromptLibrary,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -204,6 +205,9 @@ export function applyServerSettingsPatch(
     ...(patch.projectAccentColors !== undefined || projectAccentColorsFill !== undefined
       ? { projectAccentColors: nextProjectAccentColors }
       : {}),
+    // Replaced wholesale for the same reason: deleting a prompt removes an
+    // array entry, which a deep merge could never express.
+    ...(savedPromptLibrary !== undefined ? { savedPromptLibrary } : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

@@ -158,6 +158,7 @@ export const make = Effect.gen(function* () {
       recentArchivedThreads: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
+      savedPrompts: true,
       threadPinning: true,
       threadPinReorder: true,
       threadTitleRegeneration: true,

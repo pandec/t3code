@@ -816,6 +816,33 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+export const SavedPrompt = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  content: TrimmedNonEmptyString,
+});
+export type SavedPrompt = typeof SavedPrompt.Type;
+
+/**
+ * A user's reusable prompt library, one atomic value with a library-level
+ * last-write-wins stamp (epoch ms).
+ *
+ * Unlike `projectAccentColors` (a per-key map merged with owner precedence),
+ * the library syncs wholesale: clients read the newest stamp among connected
+ * environments, stamp and fan writes out to every environment that advertises
+ * `savedPrompts`, and push the newest library to stale environments on
+ * connect. Whole-library LWW keeps deletion trivial — a per-prompt merge
+ * would resurrect deleted prompts from any environment that was offline
+ * during the delete.
+ */
+export const SavedPromptLibrary = Schema.Struct({
+  updatedAt: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  prompts: Schema.Array(SavedPrompt).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type SavedPromptLibrary = typeof SavedPromptLibrary.Type;
+
+export const EMPTY_SAVED_PROMPT_LIBRARY: SavedPromptLibrary = { updatedAt: 0, prompts: [] };
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -909,6 +936,9 @@ export const ServerSettings = Schema.Struct({
    */
   projectAccentColors: Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  savedPromptLibrary: SavedPromptLibrary.pipe(
+    Schema.withDecodingDefault(Effect.succeed(EMPTY_SAVED_PROMPT_LIBRARY)),
   ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
@@ -1077,6 +1107,9 @@ export const ServerSettingsPatch = Schema.Struct({
   projectAccentColorsFill: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectAccentColor),
   ),
+  // Whole-library replacement, like `providerInstances`: the LWW stamp covers
+  // the whole value, and a deep merge could never express a prompt removal.
+  savedPromptLibrary: Schema.optionalKey(SavedPromptLibrary),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
