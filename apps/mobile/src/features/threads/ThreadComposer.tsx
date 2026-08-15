@@ -621,6 +621,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
     [],
   );
+  // `useEnvironmentQuery` returns a fresh view object on every render, so
+  // depending on it directly would make this callback — and with it the sheet
+  // session built from it — a new identity each time. The session feeds an
+  // effect that re-presents the sheet, and presenting re-renders this tree from
+  // the root, so that identity churn is a render loop that never settles: the
+  // sheet's own presentation frame never arrives and the panel never opens.
+  const providerUsageRefreshRef = useRef(providerUsageQuery.refresh);
+  providerUsageRefreshRef.current = providerUsageQuery.refresh;
   const handleRefreshProviderUsage = useCallback(() => {
     const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
     if (instanceIds.length === 0) return;
@@ -640,14 +648,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           input: { instanceIds },
         });
         if (providerUsageRefreshTokenRef.current !== token) return;
-        providerUsageQuery.refresh();
+        providerUsageRefreshRef.current();
       } finally {
         if (providerUsageRefreshTokenRef.current === token) {
           setIsRefreshingProviderUsage(false);
         }
       }
     })();
-  }, [props.environmentId, providerUsageAccounts, providerUsageQuery, refreshProviderUsageCommand]);
+  }, [props.environmentId, providerUsageAccounts, refreshProviderUsageCommand]);
   const providerUsagePanelObservedAt = useMemo(
     () => oldestProviderUsageObservedAt(providerUsageAccounts),
     [providerUsageAccounts],
