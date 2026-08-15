@@ -123,6 +123,9 @@ export function useSavedPrompts(): SavedPrompts {
         update(effectiveLibraryRef.current.prompts),
         Date.now(),
       );
+      // Advance the ref synchronously: a second saveAll in the same tick must
+      // compose on this edit, not wait for React to re-render.
+      effectiveLibraryRef.current = savedPromptLibrary;
       setPendingLibrary(savedPromptLibrary);
       const writes = [...writableEnvironmentIds].map((environmentId) =>
         updateEnvironmentSettings(environmentId, { savedPromptLibrary }),
