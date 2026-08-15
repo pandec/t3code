@@ -40,7 +40,6 @@ const BENIGN_RECORD_TYPES = new Set([
   "bridge-session",
   "permission-mode",
   "agent-name",
-  "ai-title",
   "pr-link",
   "worktree-state",
   "relocated",
@@ -62,7 +61,7 @@ export interface ClaudeParsedTranscript {
   readonly messages: ReadonlyArray<ClaudeTranscriptMessage>;
   readonly model: string | null;
   readonly lastTimestamp: string | null;
-  /** User-assigned session title (`/rename` in the CLI), latest record wins. */
+  /** Latest explicit `/rename` title, otherwise Claude's latest generated title. */
   readonly name: string | null;
 }
 
@@ -170,7 +169,8 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
   const parentByUuid = new Map<string, string | null>();
   const messagesByUuid = new Map<string, ChainEntry>();
   let activeLeaf: ChainEntry | undefined;
-  let name: string | null = null;
+  let latestAiTitle: string | null = null;
+  let latestCustomTitle: string | null = null;
 
   for (let index = 0; index < input.lines.length; index += 1) {
     const raw = input.lines[index]?.trim();
@@ -216,10 +216,14 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
       }
       continue;
     }
-    if (type === "custom-title") {
-      const customTitle = objectRecord.customTitle;
-      if (typeof customTitle === "string" && customTitle.trim().length > 0) {
-        name = customTitle.trim();
+    if (type === "custom-title" || type === "ai-title") {
+      const title = type === "custom-title" ? objectRecord.customTitle : objectRecord.aiTitle;
+      if (typeof title === "string" && title.trim().length > 0) {
+        if (type === "custom-title") {
+          latestCustomTitle = title.trim();
+        } else {
+          latestAiTitle = title.trim();
+        }
       }
       continue;
     }
@@ -275,7 +279,7 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
     messages,
     model,
     lastTimestamp: activeLeaf?.timestamp ?? null,
-    name,
+    name: latestCustomTitle ?? latestAiTitle,
   } satisfies ClaudeParsedTranscript;
 });
 
@@ -300,6 +304,28 @@ const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_PATTERN_SOURCE}$`);
 const SESSION_FILE_PATTERN = new RegExp(`^(${SESSION_ID_PATTERN_SOURCE})\\.jsonl$`);
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
 const PREVIEW_MAX_CHARS = 120;
+/**
+ * `<command-*>` blocks the CLI wraps a slash command invocation in. They are
+ * matched individually rather than as one fixed sequence because the tag order
+ * and the set of tags present both vary between CLI versions.
+ */
+const COMMAND_WRAPPER_BLOCK_PATTERN = /<command-[a-z-]+>[\s\S]*?<\/command-[a-z-]+>/g;
+/**
+ * A lone slash command, optionally with arguments. The command name may not
+ * contain a slash, so an absolute path (`/Users/...`) still reads as prose.
+ */
+const SLASH_COMMAND_ONLY_PATTERN = /^\/[A-Za-z][\w:-]*(?:[ \t]+[^\r\n]*)?$/;
+
+/**
+ * Whether a user message carries conversation rather than a bare command, so a
+ * `/clear`-then-work session previews as the work instead of the `/clear`.
+ */
+function isSubstantiveUserText(text: string): boolean {
+  const withoutCommandWrappers = text.replace(COMMAND_WRAPPER_BLOCK_PATTERN, "").trim();
+  return (
+    withoutCommandWrappers.length > 0 && !SLASH_COMMAND_ONLY_PATTERN.test(withoutCommandWrappers)
+  );
+}
 
 export interface ClaudeImportableSessionSummary {
   readonly sessionId: string;
@@ -411,10 +437,16 @@ export const listClaudeSessionTranscripts = Effect.fn("listClaudeSessionTranscri
       });
       if (transcript.messages.length === 0) continue;
       const firstUserText = transcript.messages.find((message) => message.role === "user")?.text;
+      const substantiveUserText = transcript.messages.find(
+        (message) => message.role === "user" && isSubstantiveUserText(message.text),
+      )?.text;
       summaries.push({
         sessionId,
         name: transcript.name,
-        preview: (firstUserText ?? transcript.messages[0]!.text).slice(0, PREVIEW_MAX_CHARS),
+        preview: (substantiveUserText ?? firstUserText ?? transcript.messages[0]!.text).slice(
+          0,
+          PREVIEW_MAX_CHARS,
+        ),
         messageCount: transcript.messages.length,
         updatedAt: transcript.lastTimestamp ?? transcript.messages.at(-1)!.createdAt,
       });

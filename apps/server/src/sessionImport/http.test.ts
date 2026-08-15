@@ -64,6 +64,39 @@ it.effect("enforces read versus operate scope on authenticated session-import ha
   }),
 );
 
+it.effect("carries fork-unsupported through the HTTP error envelope", () =>
+  Effect.gen(function* () {
+    const forkUnsupportedLayer = Layer.mock(SessionImportService)({
+      listCandidates: () => Effect.succeed([]),
+      importSession: () =>
+        Effect.fail(
+          new SessionImportError({
+            reason: "fork-unsupported",
+            detail: "fork is unavailable",
+            existingThreadId,
+          }),
+        ),
+    });
+
+    const error = yield* importSessionHttp({
+      projectId,
+      instanceId,
+      nativeSessionId: "native-http",
+      fork: true,
+    }).pipe(
+      Effect.provide(Layer.merge(forkUnsupportedLayer, principalLayer(["orchestration:operate"]))),
+      Effect.flip,
+    );
+
+    expect(error).toMatchObject({
+      _tag: "EnvironmentSessionImportError",
+      reason: "fork-unsupported",
+      detail: "fork is unavailable",
+      existingThreadId,
+    });
+  }),
+);
+
 it.effect("decodes extended session-import error payloads with deterministic retry ids", () =>
   Effect.gen(function* () {
     const decoded = yield* decodeEnvironmentSessionImportError({

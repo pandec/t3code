@@ -19,9 +19,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import type { ProviderSessionRuntime } from "../persistence/ProviderSessionRuntime.ts";
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import {
+  type ProjectionThread,
+  ProjectionThreadRepository,
+} from "../persistence/Services/ProjectionThreads.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
@@ -31,12 +36,15 @@ import { makeSessionImportService } from "./SessionImportService.ts";
 const projectId = ProjectId.make("project-1");
 const instanceId = ProviderInstanceId.make("claude-main");
 const NATIVE_SESSION_ID = "9fc85367-4ed9-4dc7-a44e-bee92408ff84";
+const FORKED_NATIVE_SESSION_ID = "296c8d7a-1eb6-49a0-a52e-d3f4d291d8fe";
 
 interface HarnessOptions {
   readonly additionalInstances?: ReadonlyArray<ProviderInstance>;
   readonly bindingStarted?: Deferred.Deferred<void>;
   readonly dispatchStarted?: Deferred.Deferred<void>;
   readonly dispatchFails?: boolean;
+  readonly forkFails?: boolean;
+  readonly forkUnsupported?: boolean;
   readonly historyMessages?: ReadonlyArray<{
     readonly role: "user" | "assistant";
     readonly text: string;
@@ -65,21 +73,60 @@ interface HarnessOptions {
   readonly releaseDispatch?: Deferred.Deferred<void>;
   readonly sessionName?: string | null;
   readonly snapshotDisplayName?: string;
+  readonly threadReadFails?: boolean;
   readonly yieldBeforeRead?: boolean;
 }
 
 interface HarnessState {
   readonly bindings: Map<string, ProviderSessionRuntime>;
+  readonly threads: Map<string, ProjectionThread>;
   readonly dispatched: Array<{ type: string; [key: string]: unknown }>;
-  readonly callOrder: Array<"binding-upsert" | "dispatch" | "binding-delete">;
+  readonly forkInputs: Array<{
+    readonly sourceThreadId: ThreadId;
+    readonly destinationThreadId: ThreadId;
+    readonly sourceResumeCursor: unknown;
+  }>;
+  readonly callOrder: Array<"fork" | "binding-upsert" | "dispatch" | "binding-delete">;
   readonly listCwds: Array<string>;
   readonly readCwds: Array<string>;
 }
 
+const makeProjectionThread = (input: {
+  readonly threadId: ThreadId;
+  readonly title: string;
+  readonly updatedAt: string;
+}): ProjectionThread => ({
+  threadId: input.threadId,
+  projectId,
+  title: input.title,
+  modelSelection: { instanceId, model: "claude-sonnet-5" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  latestTurnId: null,
+  createdAt: input.updatedAt,
+  updatedAt: input.updatedAt,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  snoozedUntil: null,
+  snoozedAt: null,
+  movedToTopAt: null,
+  pinnedAt: null,
+  latestUserMessageAt: null,
+  pendingApprovalCount: 0,
+  pendingUserInputCount: 0,
+  hasActionableProposedPlan: 0,
+  deletedAt: null,
+});
+
 const makeHarness = (options?: HarnessOptions) => {
   const state: HarnessState = {
     bindings: new Map(),
+    threads: new Map(),
     dispatched: [],
+    forkInputs: [],
     callOrder: [],
     listCwds: [],
     readCwds: [],
@@ -105,6 +152,29 @@ const makeHarness = (options?: HarnessOptions) => {
       }),
     },
     adapter: {
+      ...(options?.forkUnsupported === true
+        ? {}
+        : {
+            forkSession: (input: {
+              sourceThreadId: ThreadId;
+              destinationThreadId: ThreadId;
+              sourceResumeCursor: unknown;
+            }) =>
+              Effect.gen(function* () {
+                state.callOrder.push("fork");
+                state.forkInputs.push(input);
+                if (options?.forkFails === true) {
+                  return yield* Effect.fail({ _tag: "TestForkError" as const });
+                }
+                return {
+                  resumeCursor: {
+                    threadId: input.destinationThreadId,
+                    resume: FORKED_NATIVE_SESSION_ID,
+                    turnCount: 1,
+                  },
+                };
+              }),
+          }),
       listImportableSessions: (input: { cwd: string }) =>
         Effect.sync(() => {
           state.listCwds.push(input.cwd);
@@ -179,6 +249,13 @@ const makeHarness = (options?: HarnessOptions) => {
           deletedAt: null,
         }),
       ),
+  });
+
+  const threadLayer = Layer.mock(ProjectionThreadRepository)({
+    getById: ({ threadId }) =>
+      options?.threadReadFails === true
+        ? Effect.fail(new PersistenceSqlError({ operation: "test-thread-read" }))
+        : Effect.succeed(Option.fromNullishOr(state.threads.get(threadId))),
   });
 
   const runtimeRepositoryLayer = Layer.mock(ProviderSessionRuntimeRepository)({
@@ -274,7 +351,23 @@ const makeHarness = (options?: HarnessOptions) => {
         ) {
           return yield* Effect.die(new Error("dispatch failed"));
         }
-        state.dispatched.push(command as unknown as HarnessState["dispatched"][number]);
+        const dispatched = command as unknown as HarnessState["dispatched"][number];
+        state.dispatched.push(dispatched);
+        if (dispatched.type === "thread.import") {
+          const imported = dispatched as unknown as {
+            readonly threadId: ThreadId;
+            readonly title: string;
+            readonly createdAt: string;
+          };
+          state.threads.set(
+            imported.threadId,
+            makeProjectionThread({
+              threadId: imported.threadId,
+              title: imported.title,
+              updatedAt: imported.createdAt,
+            }),
+          );
+        }
         return { sequence: state.dispatched.length };
       });
     },
@@ -283,6 +376,7 @@ const makeHarness = (options?: HarnessOptions) => {
   const layer = Layer.mergeAll(
     registryLayer,
     projectLayer,
+    threadLayer,
     runtimeRepositoryLayer,
     directoryLayer,
     engineLayer,
@@ -332,6 +426,24 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       const candidates = yield* service.listCandidates({ projectId });
 
       expect(candidates[0]?.providerDisplayName).toBe("Claude Code");
+    }),
+  );
+
+  it.effect("lists unlinked candidates with provider fork capability", () =>
+    Effect.gen(function* () {
+      const { layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const candidates = yield* service.listCandidates({ projectId });
+
+      expect(candidates).toMatchObject([
+        {
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          linkedThread: null,
+          canFork: true,
+        },
+      ]);
     }),
   );
 
@@ -566,9 +678,196 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
       expect(error.existingThreadId).toBe([...state.bindings.keys()][0]);
       expect(state.bindings.size).toBe(1);
 
-      // And the candidate disappears from the listing.
+      const existingThread = state.threads.get(error.existingThreadId!);
+      expect(existingThread).toBeDefined();
+      state.threads.set(error.existingThreadId!, {
+        ...existingThread!,
+        archivedAt: "2026-07-17T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z",
+      });
       const candidates = yield* service.listCandidates({ projectId });
-      expect(candidates).toHaveLength(0);
+      expect(candidates).toMatchObject([
+        {
+          nativeSessionId: NATIVE_SESSION_ID,
+          canFork: true,
+          linkedThread: {
+            threadId: error.existingThreadId,
+            title: "Remember the codeword PINEAPPLE-42.",
+            archivedAt: "2026-07-17T00:00:00.000Z",
+            updatedAt: "2026-07-18T00:00:00.000Z",
+          },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("lists a session with a deleted owning thread as importable", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      const existing = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const thread = state.threads.get(existing.threadId);
+      expect(thread).toBeDefined();
+      state.threads.set(existing.threadId, {
+        ...thread!,
+        deletedAt: "2026-07-18T00:00:00.000Z",
+      });
+
+      const candidates = yield* service.listCandidates({ projectId });
+
+      expect(candidates).toMatchObject([
+        {
+          nativeSessionId: NATIVE_SESSION_ID,
+          linkedThread: null,
+          canFork: true,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("maps linked-thread read failures to import-failed", () =>
+    Effect.gen(function* () {
+      const { layer } = makeHarness({ threadReadFails: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      const error = yield* service.listCandidates({ projectId }).pipe(Effect.flip);
+
+      expect(error).toMatchObject({ reason: "import-failed" });
+      expect(error.detail).toContain("existing provider session binding");
+    }),
+  );
+
+  it.effect("forks a linked native session into a distinct provider continuation", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      const original = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+      const originalBinding = state.bindings.get(original.threadId);
+      expect(originalBinding).toBeDefined();
+
+      const forked = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        fork: true,
+      });
+
+      expect(forked.threadId).not.toBe(original.threadId);
+      expect(state.bindings.get(original.threadId)).toEqual(originalBinding);
+      expect(state.bindings.get(forked.threadId)?.resumeCursor).toMatchObject({
+        threadId: forked.threadId,
+        resume: FORKED_NATIVE_SESSION_ID,
+      });
+      expect(state.forkInputs).toMatchObject([
+        {
+          sourceThreadId: original.threadId,
+          destinationThreadId: forked.threadId,
+          sourceResumeCursor: { resume: NATIVE_SESSION_ID },
+        },
+      ]);
+      expect(state.callOrder).toEqual([
+        "binding-upsert",
+        "dispatch",
+        "fork",
+        "binding-upsert",
+        "dispatch",
+      ]);
+      expect(state.dispatched[1]).toMatchObject({
+        type: "thread.import",
+        source: {
+          nativeSessionId: FORKED_NATIVE_SESSION_ID,
+        },
+        messages: [
+          { role: "user", text: "Remember the codeword PINEAPPLE-42." },
+          { role: "assistant", text: "OK" },
+        ],
+      });
+    }),
+  );
+
+  it.effect("imports an unbound session normally when fork is allowed", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness();
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+
+      const imported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+        fork: true,
+      });
+
+      expect(state.forkInputs).toHaveLength(0);
+      expect(state.bindings.get(imported.threadId)?.resumeCursor).toMatchObject({
+        resume: NATIVE_SESSION_ID,
+      });
+    }),
+  );
+
+  it.effect("rejects linked-session forks when the adapter cannot fork", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ forkUnsupported: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      const error = yield* service
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          fork: true,
+        })
+        .pipe(Effect.flip);
+
+      expect(error.reason).toBe("fork-unsupported");
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
+      expect(yield* service.listCandidates({ projectId })).toMatchObject([
+        { canFork: false, linkedThread: { threadId: error.existingThreadId } },
+      ]);
+    }),
+  );
+
+  it.effect("maps provider fork failures to the import-failed reason", () =>
+    Effect.gen(function* () {
+      const { state, layer } = makeHarness({ forkFails: true });
+      const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
+      yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: NATIVE_SESSION_ID,
+      });
+
+      const error = yield* service
+        .importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: NATIVE_SESSION_ID,
+          fork: true,
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({ reason: "import-failed" });
+      expect(error.detail).toContain("fork");
+      expect(state.bindings.size).toBe(1);
+      expect(state.dispatched).toHaveLength(1);
     }),
   );
 
@@ -632,7 +931,9 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
         providerInstanceId: secondaryInstanceId,
       });
 
-      expect(yield* service.listCandidates({ projectId })).toHaveLength(0);
+      expect(yield* service.listCandidates({ projectId })).toMatchObject([
+        { linkedThread: { threadId: existing.threadId } },
+      ]);
       const error = yield* service
         .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
         .pipe(Effect.flip);
@@ -660,7 +961,9 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
         providerInstanceId: ProviderInstanceId.make("claude-removed"),
       });
 
-      expect(yield* service.listCandidates({ projectId })).toHaveLength(0);
+      expect(yield* service.listCandidates({ projectId })).toMatchObject([
+        { linkedThread: { threadId: existing.threadId } },
+      ]);
       const error = yield* service
         .importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID })
         .pipe(Effect.flip);

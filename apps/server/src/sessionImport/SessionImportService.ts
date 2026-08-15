@@ -2,11 +2,10 @@
  * SessionImportService — imports Claude Code / Codex CLI sessions created
  * outside t3code as new t3 threads.
  *
- * Flow per import: read native history through the provider adapter, write
- * the provider binding FIRST (so a half-completed import hides the candidate
- * instead of leaving a visible non-continuable thread), then dispatch the
- * `thread.import` orchestration command. On dispatch failure the binding is
- * compensated (deleted) so the candidate reappears.
+ * Flow per import: read native history through the provider adapter, fork it
+ * first when another live thread owns the continuation, write the provider
+ * binding, then dispatch the `thread.import` orchestration command. On dispatch
+ * failure the binding is compensated (deleted) so the import remains retryable.
  */
 import {
   CommandId,
@@ -42,6 +41,10 @@ import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSession
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import {
+  type ProjectionThread,
+  ProjectionThreadRepository,
+} from "../persistence/Services/ProjectionThreads.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { readPersistedContinuationKey } from "../provider/runtimeBindingContinuation.ts";
@@ -72,6 +75,7 @@ export interface SessionImportServiceShape {
     // Optionals accept `undefined` so a decoded transport payload forwards
     // verbatim instead of being re-listed field by field at each boundary.
     readonly title?: string | undefined;
+    readonly fork?: boolean | undefined;
     readonly modelSelection?: ModelSelection | undefined;
     readonly worktree?:
       | {
@@ -126,6 +130,7 @@ function nativeIdsFromCursor(resumeCursor: unknown): ReadonlyArray<string> {
 export const makeSessionImportService = Effect.gen(function* () {
   const instanceRegistry = yield* ProviderInstanceRegistry;
   const projectRepository = yield* ProjectionProjectRepository;
+  const threadRepository = yield* ProjectionThreadRepository;
   const runtimeRepository = yield* ProviderSessionRuntimeRepository;
   const sessionDirectory = yield* ProviderSessionDirectory;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -160,7 +165,7 @@ export const makeSessionImportService = Effect.gen(function* () {
     return { project: project.value, workspaceRoot };
   });
 
-  const listBoundNativeIdsByInstance = Effect.fn("listBoundNativeIdsByInstance")(function* (
+  const listBoundThreadsByInstance = Effect.fn("listBoundThreadsByInstance")(function* (
     instances: ReadonlyArray<ProviderInstance>,
   ) {
     const bindings = yield* runtimeRepository.list().pipe(
@@ -180,8 +185,31 @@ export const makeSessionImportService = Effect.gen(function* () {
           `provider-instance:${instance.instanceId}`,
       ]),
     );
-    const idsByContinuationKey = new Map<string, Map<string, ThreadId>>();
+    const threadById = new Map<ThreadId, Option.Option<ProjectionThread>>();
+    const readThread = Effect.fn("SessionImportService.readBoundThread")(function* (
+      threadId: ThreadId,
+    ) {
+      const cached = threadById.get(threadId);
+      if (cached !== undefined) return cached;
+      const thread = yield* threadRepository.getById({ threadId }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SessionImportError({
+              reason: "import-failed",
+              detail: `Failed to read thread '${threadId}' for an existing provider session binding.`,
+              cause,
+            }),
+        ),
+      );
+      threadById.set(threadId, thread);
+      return thread;
+    });
+    const idsByContinuationKey = new Map<string, Map<string, ProjectionThread>>();
     for (const binding of bindings) {
+      const nativeIds = nativeIdsFromCursor(binding.resumeCursor);
+      if (nativeIds.length === 0) continue;
+      const thread = yield* readThread(binding.threadId);
+      if (Option.isNone(thread) || thread.value.deletedAt !== null) continue;
       // Legacy rows without an explicit instance id belong to the default
       // instance, whose id is the provider/driver name.
       const ownerInstanceId = binding.providerInstanceId ?? binding.providerName;
@@ -189,15 +217,13 @@ export const makeSessionImportService = Effect.gen(function* () {
         readPersistedContinuationKey(binding.runtimePayload) ??
         continuationKeyByInstance.get(ownerInstanceId) ??
         `provider-instance:${ownerInstanceId}`;
-      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ThreadId>();
-      for (const id of nativeIdsFromCursor(binding.resumeCursor)) {
-        if (!ids.has(id)) ids.set(id, binding.threadId);
+      const ids = idsByContinuationKey.get(continuationKey) ?? new Map<string, ProjectionThread>();
+      for (const id of nativeIds) {
+        if (!ids.has(id)) ids.set(id, thread.value);
       }
-      if (ids.size > 0) {
-        idsByContinuationKey.set(continuationKey, ids);
-      }
+      idsByContinuationKey.set(continuationKey, ids);
     }
-    const idsByInstance = new Map<string, Map<string, ThreadId>>();
+    const idsByInstance = new Map<string, Map<string, ProjectionThread>>();
     for (const instance of instances) {
       const continuationKey =
         instance.continuationIdentity?.continuationKey ??
@@ -325,7 +351,7 @@ export const makeSessionImportService = Effect.gen(function* () {
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
     const instances = yield* instanceRegistry.listInstances;
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
+    const boundThreadsByInstance = yield* listBoundThreadsByInstance(instances);
     const effectiveCwd =
       input.cwd === undefined
         ? workspaceRoot
@@ -340,7 +366,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         const snapshot = yield* instance.snapshot.getSnapshot;
         providerDisplayName = snapshot.displayName ?? instance.driverKind;
       }
-      const boundNativeIds = boundNativeIdsByInstance.get(instance.instanceId);
+      const boundThreads = boundThreadsByInstance.get(instance.instanceId);
       const sessions = yield* listImportable({ cwd: effectiveCwd }).pipe(
         Effect.mapError(
           (cause) =>
@@ -356,7 +382,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         ),
       );
       for (const session of sessions) {
-        if (boundNativeIds?.has(session.nativeSessionId) === true) continue;
+        const linkedThread = boundThreads?.get(session.nativeSessionId);
         candidates.push({
           instanceId: instance.instanceId,
           provider: instance.driverKind,
@@ -366,6 +392,16 @@ export const makeSessionImportService = Effect.gen(function* () {
           preview: session.preview.slice(0, PREVIEW_MAX_CHARS),
           messageCount: session.messageCount,
           updatedAt: session.updatedAt,
+          linkedThread:
+            linkedThread === undefined
+              ? null
+              : {
+                  threadId: linkedThread.threadId,
+                  title: linkedThread.title,
+                  archivedAt: linkedThread.archivedAt,
+                  updatedAt: linkedThread.updatedAt,
+                },
+          canFork: instance.adapter.forkSession !== undefined,
         });
       }
     }
@@ -432,11 +468,11 @@ export const makeSessionImportService = Effect.gen(function* () {
   )(function* (input) {
     const { workspaceRoot } = yield* resolveProjectWorkspaceRoot(input.projectId);
     const instances = yield* instanceRegistry.listInstances;
-    const boundNativeIdsByInstance = yield* listBoundNativeIdsByInstance(instances);
-    const existingThreadId = boundNativeIdsByInstance
+    const boundThreadsByInstance = yield* listBoundThreadsByInstance(instances);
+    const existingThreadId = boundThreadsByInstance
       .get(input.instanceId)
-      ?.get(input.nativeSessionId);
-    if (existingThreadId !== undefined) {
+      ?.get(input.nativeSessionId)?.threadId;
+    if (existingThreadId !== undefined && input.fork !== true) {
       return yield* new SessionImportError({
         reason: "already-imported",
         detail: `Session '${input.nativeSessionId}' is already attached to a t3 thread.`,
@@ -533,6 +569,41 @@ export const makeSessionImportService = Effect.gen(function* () {
         detail: `Provider instance '${input.instanceId}' changed while the session was being read. Retry the import with the current provider configuration.`,
       });
     }
+
+    let resumeCursor = history.resumeCursor;
+    let continuedNativeSessionId = input.nativeSessionId;
+    if (existingThreadId !== undefined) {
+      const forkSession = instance.adapter.forkSession;
+      if (forkSession === undefined) {
+        return yield* new SessionImportError({
+          reason: "fork-unsupported",
+          detail: `Provider instance '${input.instanceId}' does not support forking imported sessions.`,
+          existingThreadId,
+        });
+      }
+      const forked = yield* forkSession({
+        sourceThreadId: existingThreadId,
+        destinationThreadId: threadId,
+        sourceResumeCursor: history.resumeCursor,
+        cwd: effectiveCwd,
+        modelSelection,
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SessionImportError({
+              reason: "import-failed",
+              detail: `Failed to fork ${instance.driverKind} session '${input.nativeSessionId}' for import.`,
+              cause,
+            }),
+        ),
+      );
+      resumeCursor = forked.resumeCursor;
+      continuedNativeSessionId =
+        nativeIdsFromCursor(forked.resumeCursor).find((id) => id !== threadId) ??
+        input.nativeSessionId;
+    }
+
     const messages: ReadonlyArray<ThreadImportMessage> = importedMessages.map((message, index) => ({
       messageId: importMessageId(threadId, index),
       role: message.role,
@@ -545,8 +616,8 @@ export const makeSessionImportService = Effect.gen(function* () {
     // one critical section. Caller interruption must not leave either a visible
     // thread without its binding or a binding-only orphan.
     yield* Effect.gen(function* () {
-      // Binding first: a failed dispatch leaves only a hidden candidate (safe,
-      // compensated below), never a visible thread without continuation.
+      // Binding first: a failed dispatch never leaves a visible thread without
+      // continuation, and the binding is compensated below.
       yield* sessionDirectory
         .upsert({
           threadId,
@@ -554,7 +625,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           providerInstanceId: instance.instanceId,
           runtimeMode: DEFAULT_RUNTIME_MODE,
           status: "stopped",
-          resumeCursor: history.resumeCursor,
+          resumeCursor,
           runtimePayload: {
             cwd: effectiveCwd,
             modelSelection,
@@ -590,7 +661,7 @@ export const makeSessionImportService = Effect.gen(function* () {
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           source: {
             provider: instance.driverKind,
-            nativeSessionId: input.nativeSessionId,
+            nativeSessionId: continuedNativeSessionId,
             nativeCwd: history.nativeCwd,
           },
           messages,
@@ -600,7 +671,7 @@ export const makeSessionImportService = Effect.gen(function* () {
         .pipe(Effect.exit);
 
       if (Exit.isFailure(dispatchResult)) {
-        // Compensation: remove the binding so the candidate reappears.
+        // Compensation: remove the binding so the import remains retryable.
         yield* runtimeRepository.deleteByThreadId({ threadId }).pipe(
           Effect.catch((cause) =>
             Effect.logError("Failed to compensate the import provider binding.", {

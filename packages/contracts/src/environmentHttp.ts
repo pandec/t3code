@@ -384,6 +384,7 @@ export class EnvironmentSessionImportError extends Schema.TaggedErrorClass<Envir
       "provider-read-failed",
       "nothing-to-import",
       "already-imported",
+      "fork-unsupported",
       "invalid-model",
       "invalid-options",
       "invalid-worktree",

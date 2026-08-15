@@ -33,6 +33,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime.ts";
+import { ProjectionThreadRepositoryLive } from "./persistence/Layers/ProjectionThreads.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -421,7 +422,11 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
   // Core Services
   Layer.provideMerge(
     Layer.mergeAll(
-      SessionImportServiceLive.pipe(Layer.provide(ProviderSessionRuntimeRepositoryLive)),
+      SessionImportServiceLive.pipe(
+        Layer.provide(
+          Layer.merge(ProviderSessionRuntimeRepositoryLive, ProjectionThreadRepositoryLive),
+        ),
+      ),
       CheckpointingLayerLive,
     ),
   ),

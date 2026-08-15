@@ -1388,29 +1388,22 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.sessionImportListCandidates]: ({ projectId }) =>
+        [WS_METHODS.sessionImportListCandidates]: ({ projectId, cwd }) =>
           observeRpcEffect(
             WS_METHODS.sessionImportListCandidates,
             sessionImport
-              .listCandidates({ projectId })
+              .listCandidates({ projectId, ...(cwd === undefined ? {} : { cwd }) })
               .pipe(Effect.map((candidates) => ({ candidates }))),
             {
               "rpc.aggregate": "sessionImport",
             },
           ),
-        [WS_METHODS.sessionImportImport]: ({ projectId, instanceId, nativeSessionId, title }) =>
-          observeRpcEffect(
-            WS_METHODS.sessionImportImport,
-            sessionImport.importSession({
-              projectId,
-              instanceId,
-              nativeSessionId,
-              ...(title === undefined ? {} : { title }),
-            }),
-            {
-              "rpc.aggregate": "sessionImport",
-            },
-          ),
+        // Forward the decoded payload verbatim: re-listing the contract's
+        // optional fields here silently drops any field added later.
+        [WS_METHODS.sessionImportImport]: (input) =>
+          observeRpcEffect(WS_METHODS.sessionImportImport, sessionImport.importSession(input), {
+            "rpc.aggregate": "sessionImport",
+          }),
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverGetTraceDiagnostics,

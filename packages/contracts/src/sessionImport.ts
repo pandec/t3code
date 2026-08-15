@@ -18,6 +18,7 @@ export class SessionImportError extends Schema.TaggedErrorClass<SessionImportErr
       "provider-read-failed",
       "nothing-to-import",
       "already-imported",
+      "fork-unsupported",
       "invalid-model",
       "invalid-options",
       "invalid-worktree",
@@ -33,6 +34,16 @@ export class SessionImportError extends Schema.TaggedErrorClass<SessionImportErr
   }
 }
 
+/** The t3 thread that already owns a native session's continuation. */
+export const SessionImportLinkedThread = Schema.Struct({
+  threadId: ThreadId,
+  title: Schema.String,
+  archivedAt: Schema.NullOr(IsoDateTime),
+  /** Last activity t3 recorded for the thread, for comparison with the session. */
+  updatedAt: IsoDateTime,
+});
+export type SessionImportLinkedThread = typeof SessionImportLinkedThread.Type;
+
 export const SessionImportCandidate = Schema.Struct({
   instanceId: ProviderInstanceId,
   provider: ProviderDriverKind,
@@ -43,6 +54,14 @@ export const SessionImportCandidate = Schema.Struct({
   preview: Schema.String,
   messageCount: Schema.NullOr(Schema.Number),
   updatedAt: IsoDateTime,
+  /**
+   * Set when a t3 thread already owns this session's continuation. Such a
+   * candidate is listed rather than hidden, but importing it again requires
+   * `fork` so the two threads never resume the same provider session.
+   */
+  linkedThread: Schema.NullOr(SessionImportLinkedThread),
+  /** Whether the owning provider instance can fork this session. */
+  canFork: Schema.Boolean,
 });
 export type SessionImportCandidate = typeof SessionImportCandidate.Type;
 
@@ -63,6 +82,11 @@ export const SessionImportPayload = Schema.Struct({
   nativeSessionId: TrimmedNonEmptyString,
   /** Overrides the title derived from the provider session (e.g. to carry a T3 thread title across a handover). */
   title: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Permit importing a session another thread already continues by forking it
+   * into a fresh provider session. Ignored when the session is unlinked.
+   */
+  fork: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   worktree: Schema.optional(
     Schema.Struct({
