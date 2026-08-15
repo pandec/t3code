@@ -71,7 +71,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useCopyToClipboard, writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useSavedPrompts } from "../hooks/useSavedPrompts";
+import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
@@ -124,6 +124,9 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildArchiveCurrentThreadAction,
+  buildSavedPromptsSubmenu,
+  SAVED_PROMPTS_GROUP_VALUE,
+  savedPromptItemValue,
   buildArchivedThreadsActionItems,
   buildCurrentThreadActionItems,
   buildMoveCurrentThreadToTopAction,
@@ -633,7 +636,7 @@ function OpenCommandPaletteDialog(props: {
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
   const composerHandleRef = useComposerHandleContext();
-  const { prompts: savedPrompts } = useSavedPrompts();
+  const savedPrompts = useSavedPromptList();
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1578,46 +1581,24 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (savedPrompts.length > 0) {
-    actionItems.push({
-      kind: "submenu",
-      value: "action:prompts",
-      searchTerms: [
-        "prompts",
-        "insert prompt",
-        "copy prompt",
-        "saved prompt",
-        "snippet",
-        "template",
-      ],
-      title: "Prompts...",
-      icon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
-      addonIcon: <NotebookPenIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        {
-          value: "saved-prompts",
-          label: "Prompts",
-          items: savedPrompts.map((prompt) => ({
-            kind: "action",
-            value: `saved-prompt:${prompt.id}`,
-            searchTerms: [prompt.title, prompt.content],
-            title: prompt.title,
-            description: savedPromptPreview(prompt),
-            icon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
-            run: async () => {
-              const didCopy = await writeTextToClipboard(prompt.content, "prompt");
-              if (didCopy) {
-                toastManager.add({
-                  type: "success",
-                  title: "Prompt copied",
-                  description: prompt.title,
-                });
-              }
-            },
-          })),
-        },
-      ],
-    });
+  const savedPromptsSubmenu = buildSavedPromptsSubmenu({
+    prompts: savedPrompts,
+    promptPreview: savedPromptPreview,
+    itemIcon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <NotebookPenIcon className={ADDON_ICON_CLASS} />,
+    copyPrompt: async (prompt) => {
+      const didCopy = await writeTextToClipboard(prompt.content, "prompt");
+      if (didCopy) {
+        toastManager.add({
+          type: "success",
+          title: "Prompt copied",
+          description: prompt.title,
+        });
+      }
+    },
+  });
+  if (savedPromptsSubmenu) {
+    actionItems.push(savedPromptsSubmenu);
   }
 
   const openUnarchivedThread =
@@ -2301,7 +2282,7 @@ function OpenCommandPaletteDialog(props: {
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
-  const isSavedPromptsView = currentView?.groups[0]?.value === "saved-prompts";
+  const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   // Ref read at render: fine for a footer hint — the composer mounts long
   // before the palette opens, and re-opening re-renders this component.
   const canInsertSavedPrompt = isSavedPromptsView && composerHandleRef?.current != null;
@@ -2412,11 +2393,13 @@ function OpenCommandPaletteDialog(props: {
           .flatMap((group) => group.items)
           .find((item) => item.value === highlightedItemValue) ?? displayedGroups[0]?.items[0];
       const prompt = savedPrompts.find(
-        (candidate) => `saved-prompt:${candidate.id}` === highlightedItem?.value,
+        (candidate) => savedPromptItemValue(candidate) === highlightedItem?.value,
       );
       const composer = composerHandleRef?.current;
-      if (prompt && composer) {
-        composer.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true });
+      // Close only on a successful insert — a busy composer (approval,
+      // pending input) refuses it, and silently dismissing the palette would
+      // make that failure look like success.
+      if (prompt && composer?.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true })) {
         setOpen(false);
       }
       return;

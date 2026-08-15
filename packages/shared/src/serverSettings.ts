@@ -206,8 +206,14 @@ export function applyServerSettingsPatch(
       ? { projectAccentColors: nextProjectAccentColors }
       : {}),
     // Replaced wholesale for the same reason: deleting a prompt removes an
-    // array entry, which a deep merge could never express.
-    ...(savedPromptLibrary !== undefined ? { savedPromptLibrary } : {}),
+    // array entry, which a deep merge could never express. Last-write-wins on
+    // the library stamp: a delayed or repeated write carrying an older (or
+    // equal — clients stamp strictly above what they observed) revision must
+    // not overwrite a newer one that already landed.
+    ...(savedPromptLibrary !== undefined &&
+    savedPromptLibrary.updatedAt > current.savedPromptLibrary.updatedAt
+      ? { savedPromptLibrary }
+      : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

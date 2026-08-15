@@ -836,8 +836,11 @@ export type SavedPrompt = typeof SavedPrompt.Type;
  * during the delete.
  */
 export const SavedPromptLibrary = Schema.Struct({
-  updatedAt: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  prompts: Schema.Array(SavedPrompt).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  // Deliberately strict (no inner decoding defaults): a partial library in a
+  // replacement patch would silently decode as "delete everything". The
+  // persisted settings field below defaults only when the KEY is absent.
+  updatedAt: Schema.Number,
+  prompts: Schema.Array(SavedPrompt),
 });
 export type SavedPromptLibrary = typeof SavedPromptLibrary.Type;
 

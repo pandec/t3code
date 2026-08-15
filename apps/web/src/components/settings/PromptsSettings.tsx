@@ -4,6 +4,7 @@ import React, { type FormEvent, useEffect, useState } from "react";
 
 import { useSavedPrompts } from "~/hooks/useSavedPrompts";
 import { randomUUID } from "~/lib/utils";
+import { searchableSetting } from "./settingsSearch";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -40,25 +41,26 @@ interface SavedPromptEditorRequest {
 }
 
 export function PromptsSettings() {
-  const { prompts, canEdit, saveAll } = useSavedPrompts();
+  const { prompts, hasConnectedEnvironment, canEdit, saveAll } = useSavedPrompts();
   const [editorRequest, setEditorRequest] = useState<SavedPromptEditorRequest | null>(null);
 
   const submitPrompt = (promptId: string | null, input: SavedPromptInput) => {
     if (promptId === null) {
-      saveAll([...prompts, { id: randomUUID(), ...input }]);
+      saveAll((current) => [...current, { id: randomUUID(), ...input }]);
       return;
     }
-    saveAll(prompts.map((prompt) => (prompt.id === promptId ? { ...prompt, ...input } : prompt)));
+    saveAll((current) =>
+      current.map((prompt) => (prompt.id === promptId ? { ...prompt, ...input } : prompt)),
+    );
   };
   const deletePrompt = (promptId: string) => {
-    saveAll(prompts.filter((prompt) => prompt.id !== promptId));
+    saveAll((current) => current.filter((prompt) => prompt.id !== promptId));
   };
 
   return (
     <SettingsPageContainer>
       <SettingsSection
-        id="prompts"
-        title="Prompts"
+        {...searchableSetting("prompts")}
         headerAction={
           <Button
             size="xs"
@@ -74,15 +76,15 @@ export function PromptsSettings() {
         }
       >
         <p className="px-3 text-pretty text-sm text-muted-foreground sm:px-4">
-          Reusable prompts, synced to every connected environment. Type{" "}
+          Reusable prompts, synced to every connected environment that supports them. Type{" "}
           <code className="font-mono">/prompt</code> in the composer to insert one, or copy it from
           the command palette.
         </p>
-        {canEdit ? null : (
+        {hasConnectedEnvironment && !canEdit ? (
           <p className="px-3 pt-2 text-sm text-warning sm:px-4">
             No connected environment supports saved prompts, so the library is read-only right now.
           </p>
-        )}
+        ) : null}
         {prompts.length === 0 ? (
           <p className="px-3 py-2 text-base text-muted-foreground sm:px-4 sm:text-sm">
             No saved prompts yet.

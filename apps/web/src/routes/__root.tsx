@@ -125,7 +125,9 @@ function RootRouteView() {
             <SlowRpcRequestToastCoordinator />
             <HostedStaticEnvironmentBootstrap />
             {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-            {primaryEnvironmentAuthenticated ? <SavedPromptLibrarySync /> : null}
+            {/* Also under hosted-static: any connected capable environment
+                can go stale and needs the reconnect repair. */}
+            <SavedPromptLibrarySync />
             {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
             <CommandPalette>
               <AppSidebarLayout>

@@ -106,7 +106,7 @@ import {
   buildThreadWaitInsertionText,
   type ThreadWaitPickerEntry,
 } from "./composerThreadWaitPicker";
-import { useSavedPrompts } from "~/hooks/useSavedPrompts";
+import { useSavedPromptList } from "~/hooks/useSavedPrompts";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import type { ThreadOutboxDeliveryIntent } from "@t3tools/client-runtime/state/thread-outbox-model";
@@ -1324,22 +1324,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  // Non-null while the /t3-wait thread picker is open: the prompt offset the
-  // picked thread's wait instruction is inserted at (the cleared trigger's
-  // position) together with the prompt it was computed against, so a prompt
-  // that mutated meanwhile falls back to the live cursor instead of landing
-  // the insertion mid-word.
-  const [threadWaitInsertion, setThreadWaitInsertion] = useState<{
+  // Non-null while a slash-command picker (the /t3-wait thread picker or the
+  // /prompt saved-prompt picker) is open: the prompt offset the picked
+  // insertion lands at (the cleared trigger's position) together with the
+  // prompt it was computed against, so a prompt that mutated meanwhile falls
+  // back to the live cursor instead of landing the insertion mid-word. One
+  // state for both pickers — two could never be open at once, and a single
+  // value makes that impossible to misrepresent.
+  const [insertionPicker, setInsertionPicker] = useState<{
+    kind: "thread-wait" | "saved-prompt";
     offset: number;
     promptAtOpen: string;
   } | null>(null);
-  // Non-null while the /prompt saved-prompt picker is open; same insertion
-  // bookkeeping as threadWaitInsertion above.
-  const [savedPromptInsertion, setSavedPromptInsertion] = useState<{
-    offset: number;
-    promptAtOpen: string;
-  } | null>(null);
-  const { prompts: savedPrompts } = useSavedPrompts();
+  const savedPrompts = useSavedPromptList();
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
@@ -1839,7 +1836,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   useEffect(() => {
     setComposerHighlightedItemId(null);
-    setThreadWaitInsertion(null);
+    setInsertionPicker(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     dragDepthRef.current = 0;
@@ -2168,28 +2165,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
-        if (item.command === "t3-wait") {
+        if (item.command === "t3-wait" || item.command === "prompt") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
             focusEditorAfterReplace: false,
           });
           if (applied) {
             setComposerHighlightedItemId(null);
-            setThreadWaitInsertion({
-              offset: trigger.rangeStart,
-              promptAtOpen: promptRef.current,
-            });
-          }
-          return;
-        }
-        if (item.command === "prompt") {
-          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-            focusEditorAfterReplace: false,
-          });
-          if (applied) {
-            setComposerHighlightedItemId(null);
-            setSavedPromptInsertion({
+            setInsertionPicker({
+              kind: item.command === "t3-wait" ? "thread-wait" : "saved-prompt",
               offset: trigger.rangeStart,
               promptAtOpen: promptRef.current,
             });
@@ -2250,61 +2234,47 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ],
   );
 
-  const onThreadWaitPick = useCallback(
-    (entry: ThreadWaitPickerEntry) => {
-      if (threadWaitInsertion === null) return;
+  const insertFromPicker = useCallback(
+    (kind: "thread-wait" | "saved-prompt", text: string) => {
+      if (insertionPicker === null || insertionPicker.kind !== kind) return;
       const snapshot = readComposerSnapshot();
+      // The stored offset and applyPromptReplacement both index the expanded
+      // (raw) prompt text, so the stale-draft fallback must use the expanded
+      // cursor — the collapsed one counts inline tokens as one character.
       const insertionOffset =
-        snapshot.value === threadWaitInsertion.promptAtOpen
-          ? Math.min(threadWaitInsertion.offset, snapshot.value.length)
-          : snapshot.cursor;
-      setThreadWaitInsertion(null);
-      applyPromptReplacement(
-        insertionOffset,
-        insertionOffset,
-        buildThreadWaitInsertionText(entry),
-        {
-          expectedText: "",
-        },
-      );
+        snapshot.value === insertionPicker.promptAtOpen
+          ? Math.min(insertionPicker.offset, snapshot.value.length)
+          : Math.min(snapshot.expandedCursor, snapshot.value.length);
+      setInsertionPicker(null);
+      applyPromptReplacement(insertionOffset, insertionOffset, text, { expectedText: "" });
     },
-    [applyPromptReplacement, readComposerSnapshot, threadWaitInsertion],
+    [applyPromptReplacement, insertionPicker, readComposerSnapshot],
   );
 
-  const onThreadWaitClose = useCallback(() => {
-    setThreadWaitInsertion(null);
-    composerEditorRef.current?.focusAt(composerCursor);
-  }, [composerCursor]);
+  const onThreadWaitPick = useCallback(
+    (entry: ThreadWaitPickerEntry) =>
+      insertFromPicker("thread-wait", buildThreadWaitInsertionText(entry)),
+    [insertFromPicker],
+  );
 
   const onSavedPromptPick = useCallback(
-    (prompt: SavedPrompt) => {
-      if (savedPromptInsertion === null) return;
-      const snapshot = readComposerSnapshot();
-      const insertionOffset =
-        snapshot.value === savedPromptInsertion.promptAtOpen
-          ? Math.min(savedPromptInsertion.offset, snapshot.value.length)
-          : snapshot.cursor;
-      setSavedPromptInsertion(null);
-      applyPromptReplacement(insertionOffset, insertionOffset, prompt.content, {
-        expectedText: "",
-      });
-    },
-    [applyPromptReplacement, readComposerSnapshot, savedPromptInsertion],
+    (prompt: SavedPrompt) => insertFromPicker("saved-prompt", prompt.content),
+    [insertFromPicker],
   );
 
-  const onSavedPromptMenuClose = useCallback(() => {
-    setSavedPromptInsertion(null);
+  const onInsertionPickerClose = useCallback(() => {
+    setInsertionPicker(null);
     composerEditorRef.current?.focusAt(composerCursor);
   }, [composerCursor]);
 
-  // An approval taking over the composer or a reappearing trigger menu
-  // unmounts the pickers; strand no insertion target behind either gate.
+  // An approval taking over the composer, a reappearing trigger menu, or the
+  // stash menu opening unmounts the picker; strand no insertion target
+  // behind any of those gates.
   useEffect(() => {
-    if (composerMenuOpen || isComposerApprovalState) {
-      setThreadWaitInsertion(null);
-      setSavedPromptInsertion(null);
+    if (composerMenuOpen || isComposerApprovalState || isStashMenuOpen) {
+      setInsertionPicker(null);
     }
-  }, [composerMenuOpen, isComposerApprovalState]);
+  }, [composerMenuOpen, isComposerApprovalState, isStashMenuOpen]);
 
   const onComposerMenuItemHighlighted = useCallback(
     (itemId: string | null) => {
@@ -3457,8 +3427,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
             {isStashMenuOpen &&
               !composerMenuOpen &&
-              threadWaitInsertion === null &&
-              savedPromptInsertion === null &&
+              insertionPicker === null &&
               !isComposerApprovalState && (
                 <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
                   <ComposerStashMenu
@@ -3470,32 +3439,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 </ComposerCommandMenuLayer>
               )}
 
-            {threadWaitInsertion !== null &&
-              savedPromptInsertion === null &&
+            {insertionPicker !== null &&
               !isStashMenuOpen &&
               !composerMenuOpen &&
               !isComposerApprovalState && (
                 <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
-                  <ComposerThreadWaitMenu
-                    environmentId={environmentId}
-                    excludeThreadId={activeThreadId}
-                    onPick={onThreadWaitPick}
-                    onClose={onThreadWaitClose}
-                  />
-                </ComposerCommandMenuLayer>
-              )}
-
-            {savedPromptInsertion !== null &&
-              threadWaitInsertion === null &&
-              !isStashMenuOpen &&
-              !composerMenuOpen &&
-              !isComposerApprovalState && (
-                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
-                  <ComposerPromptMenu
-                    prompts={savedPrompts}
-                    onPick={onSavedPromptPick}
-                    onClose={onSavedPromptMenuClose}
-                  />
+                  {insertionPicker.kind === "thread-wait" ? (
+                    <ComposerThreadWaitMenu
+                      environmentId={environmentId}
+                      excludeThreadId={activeThreadId}
+                      onPick={onThreadWaitPick}
+                      onClose={onInsertionPickerClose}
+                    />
+                  ) : (
+                    <ComposerPromptMenu
+                      prompts={savedPrompts}
+                      onPick={onSavedPromptPick}
+                      onClose={onInsertionPickerClose}
+                    />
+                  )}
                 </ComposerCommandMenuLayer>
               )}
 

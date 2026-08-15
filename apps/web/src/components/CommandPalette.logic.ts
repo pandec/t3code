@@ -5,6 +5,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import type {
+  SavedPrompt,
   SidebarProjectAccentColor,
   SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
@@ -161,6 +162,57 @@ export function buildProjectActionItems(input: {
       },
     };
   });
+}
+
+export const SAVED_PROMPTS_GROUP_VALUE = "saved-prompts";
+
+export function savedPromptItemValue(prompt: SavedPrompt): string {
+  return `saved-prompt:${prompt.id}`;
+}
+
+/**
+ * The ⌘K "Prompts..." submenu. Enter runs `copyPrompt` on the picked item;
+ * the palette's keydown handler additionally offers primary-modifier+Enter
+ * to insert the highlighted prompt into the composer. Note the submenu
+ * snapshots its items when pushed — only the insert path re-resolves against
+ * the live library, so a library change while the submenu is open can make
+ * the two keys briefly disagree.
+ */
+export function buildSavedPromptsSubmenu(input: {
+  prompts: ReadonlyArray<SavedPrompt>;
+  promptPreview: (prompt: SavedPrompt) => string;
+  itemIcon: ReactNode;
+  addonIcon: ReactNode;
+  copyPrompt: (prompt: SavedPrompt) => Promise<void>;
+}): CommandPaletteSubmenuItem | null {
+  if (input.prompts.length === 0) {
+    return null;
+  }
+  return {
+    kind: "submenu",
+    value: "action:prompts",
+    searchTerms: ["prompts", "insert prompt", "copy prompt", "saved prompt", "snippet", "template"],
+    title: "Prompts...",
+    icon: input.itemIcon,
+    addonIcon: input.addonIcon,
+    groups: [
+      {
+        value: SAVED_PROMPTS_GROUP_VALUE,
+        label: "Prompts",
+        items: input.prompts.map((prompt) => ({
+          kind: "action",
+          value: savedPromptItemValue(prompt),
+          searchTerms: [prompt.title, prompt.content],
+          title: prompt.title,
+          description: input.promptPreview(prompt),
+          icon: input.itemIcon,
+          run: async () => {
+            await input.copyPrompt(prompt);
+          },
+        })),
+      },
+    ],
+  };
 }
 
 export function buildArchiveCurrentThreadAction(input: {

@@ -28,8 +28,9 @@ export interface ResolvedSavedPromptLibrary {
   readonly sourceEnvironmentId: EnvironmentId | null;
 }
 
-// .sort() on a copy, not .toSorted(): this module is bundled into the mobile
-// app, and Hermes doesn't ship the ES2023 change-by-copy array methods.
+// .sort() on a copy, not .toSorted(): client-runtime state modules are shared
+// with the mobile app, where Hermes doesn't ship the ES2023 change-by-copy
+// array methods.
 function orderedEntries(
   librariesByEnvironment: ReadonlyMap<EnvironmentId, SavedPromptLibrary>,
 ): Array<[EnvironmentId, SavedPromptLibrary]> {
