@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - verifies cleanup of real temporary log files.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 
 import {
@@ -91,7 +95,16 @@ function fakeTerminal(keys: ReadonlyArray<string>): {
 } {
   let listener: ((data: Buffer) => void) | undefined;
   let written = "";
+  let nextKey = 0;
   const rawModes: boolean[] = [];
+  const deliverNextKey = () => {
+    const current = listener;
+    const key = keys[nextKey];
+    if (!current || key === undefined) return;
+    nextKey += 1;
+    current(Buffer.from(key));
+    if (listener === current) queueMicrotask(deliverNextKey);
+  };
   const input: TerminalInput = {
     isTTY: true,
     setRawMode(mode) {
@@ -102,11 +115,11 @@ function fakeTerminal(keys: ReadonlyArray<string>): {
     pause: () => undefined,
     on: (_event, nextListener) => {
       listener = nextListener;
-      queueMicrotask(() => {
-        for (const key of keys) listener?.(Buffer.from(key));
-      });
+      queueMicrotask(deliverNextKey);
     },
-    off: () => undefined,
+    off: (_event, currentListener) => {
+      if (listener === currentListener) listener = undefined;
+    },
   };
   return {
     input,
@@ -745,6 +758,239 @@ it("batches clean non-dev approvals unchecked and skips declined targets", async
   );
 });
 
+it("reports mixed preflight issues before confirming and mutating a partial fleet", async () => {
+  const terminal = fakeTerminal([" ", "\r", "y"]);
+  const events: string[] = [];
+  const requests: RunRequest[] = [];
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => undefined,
+    run: async (request) => {
+      requests.push(request);
+      return ok();
+    },
+  };
+  const output: TerminalOutput = {
+    isTTY: true,
+    write: (value) => {
+      events.push(`output:${value}`);
+      terminal.output.write(value);
+    },
+  };
+  const plan = {
+    remoteTargets: ["grey-mac", "ubuntu-dell"] as const,
+    local: { machine: "space-mac" as const, desktop: true, ios: true },
+  };
+  const dependencies: UpdateDependencies = {
+    ...testDependencies(runner),
+    input: terminal.input,
+    output,
+    log: (line) => events.push(`log:${line}`),
+    inspectPlan: async () => [
+      {
+        target: "grey-mac",
+        local: false,
+        checkout: "/grey",
+        branch: "dev",
+        dirty: true,
+        stage: { stage: "preflight", status: "FAILED", detail: "checkout is dirty" },
+      },
+      {
+        target: "ubuntu-dell",
+        local: false,
+        checkout: "/ubuntu",
+        branch: "feature",
+        dirty: false,
+        stage: { stage: "preflight", status: "OK" },
+      },
+      {
+        target: "space-mac",
+        local: true,
+        checkout: "/space",
+        branch: "dev",
+        dirty: false,
+        stage: { stage: "preflight", status: "OK" },
+      },
+    ],
+  };
+
+  const prepared = await prepareUpdatePlan(plan, dependencies);
+  assert.deepStrictEqual(requests, []);
+  const issueIndex = events.findIndex((event) => event.includes("Preflight issues"));
+  const selectorIndex = events.findIndex((event) => event.includes("Switch clean targets to dev?"));
+  const partialIndex = events.findIndex((event) => event.includes("Partial update plan"));
+  const continueIndex = events.findIndex((event) =>
+    event.includes("Continue with the 2 remaining"),
+  );
+  assert.isAtLeast(issueIndex, 0);
+  assert.isAbove(selectorIndex, issueIndex);
+  assert.isAbove(partialIndex, selectorIndex);
+  assert.isAbove(continueIndex, partialIndex);
+  assert.include(events.join("\n"), "BLOCKED grey-mac desktop — checkout is dirty");
+  assert.include(events.join("\n"), "SWITCH  ubuntu-dell desktop — feature → dev");
+  assert.deepStrictEqual(
+    prepared.decisions.map(({ preflight, approved }) => [preflight.target, approved]),
+    [
+      ["grey-mac", false],
+      ["ubuntu-dell", true],
+      ["space-mac", true],
+    ],
+  );
+
+  const execution = await executePreparedUpdatePlan(prepared, dependencies);
+  assert.isTrue(requests.every((request) => request.target !== "grey-mac"));
+  assert.isTrue(requests.some((request) => request.target === "ubuntu-dell"));
+  assert.isTrue(requests.some((request) => request.target === "space-mac"));
+  assert.equal(resultExitCode(execution), 1);
+});
+
+it("defaults a partial fleet to cancellation before any mutation", async () => {
+  const terminal = fakeTerminal(["\r"]);
+  const logRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-update-cancel-"));
+  const runDir = NodePath.join(logRoot, "run");
+  const preflightLog = NodePath.join(runDir, "remote-grey-mac.log");
+  NodeFS.mkdirSync(runDir);
+  NodeFS.writeFileSync(preflightLog, "preflight");
+  const requests: RunRequest[] = [];
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => undefined,
+    run: async (request) => {
+      requests.push(request);
+      return ok();
+    },
+  };
+  let caught: unknown;
+  try {
+    await executeUpdatePlan(
+      { remoteTargets: ["grey-mac", "ubuntu-dell"] },
+      {
+        ...testDependencies(runner),
+        input: terminal.input,
+        output: terminal.output,
+        inspectPlan: async () => [
+          {
+            target: "grey-mac",
+            local: false,
+            checkout: "/grey",
+            branch: "dev",
+            dirty: true,
+            stage: { stage: "preflight", status: "FAILED", detail: "checkout is dirty" },
+            logPath: preflightLog,
+            hasLog: true,
+          },
+          {
+            target: "ubuntu-dell",
+            local: false,
+            checkout: "/ubuntu",
+            branch: "dev",
+            dirty: false,
+            stage: { stage: "preflight", status: "OK" },
+          },
+        ],
+      },
+    );
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.instanceOf(caught, MachineUpdateError);
+  assert.equal((caught as MachineUpdateError).exitCode, 130);
+  assert.match((caught as MachineUpdateError).message, /Cancelled before updates/);
+  assert.deepStrictEqual(requests, []);
+  assert.include(terminal.written(), "Continue with the 1 remaining environment? [y/N]");
+  assert.deepStrictEqual(terminal.rawModes, [true, false]);
+  assert.isFalse(NodeFS.existsSync(preflightLog));
+  assert.isFalse(NodeFS.existsSync(runDir));
+  NodeFS.rmSync(logRoot, { recursive: true, force: true });
+});
+
+it("asks before continuing after a clean non-dev switch is declined", async () => {
+  const terminal = fakeTerminal(["\r", "y"]);
+  const requests: RunRequest[] = [];
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => undefined,
+    run: async (request) => {
+      requests.push(request);
+      return ok();
+    },
+  };
+  const dependencies: UpdateDependencies = {
+    ...testDependencies(runner),
+    input: terminal.input,
+    output: terminal.output,
+    inspectPlan: async () => [
+      {
+        target: "grey-mac",
+        local: false,
+        checkout: "/grey",
+        branch: "main",
+        dirty: false,
+        stage: { stage: "preflight", status: "OK" },
+      },
+      {
+        target: "ubuntu-dell",
+        local: false,
+        checkout: "/ubuntu",
+        branch: "dev",
+        dirty: false,
+        stage: { stage: "preflight", status: "OK" },
+      },
+    ],
+  };
+
+  const execution = await executeUpdatePlan(
+    { remoteTargets: ["grey-mac", "ubuntu-dell"] },
+    dependencies,
+  );
+  assert.include(terminal.written(), "Switch clean targets to dev?");
+  assert.include(terminal.written(), "Continue with the 1 remaining environment? [y/N]");
+  assert.isTrue(requests.every((request) => request.target === "ubuntu-dell"));
+  assert.deepStrictEqual(
+    execution.results.map(({ target, stages }) => [target, stages[0]?.status]),
+    [
+      ["grey-mac", "SKIPPED"],
+      ["ubuntu-dell", "OK"],
+    ],
+  );
+  assert.equal(resultExitCode(execution), 0);
+});
+
+it("does not ask to continue when every selected environment is blocked", async () => {
+  const terminal = fakeTerminal([]);
+  const requests: RunRequest[] = [];
+  const execution = await executeUpdatePlan(
+    { remoteTargets: ["grey-mac"] },
+    {
+      ...testDependencies({
+        dryRun: false,
+        cancel: () => undefined,
+        run: async (request) => {
+          requests.push(request);
+          return ok();
+        },
+      }),
+      input: terminal.input,
+      output: terminal.output,
+      inspectPlan: async () => [
+        {
+          target: "grey-mac",
+          local: false,
+          checkout: "/grey",
+          branch: "dev",
+          dirty: true,
+          stage: { stage: "preflight", status: "FAILED", detail: "checkout is dirty" },
+        },
+      ],
+    },
+  );
+
+  assert.deepStrictEqual(requests, []);
+  assert.notInclude(terminal.written(), "Continue with");
+  assert.equal(resultExitCode(execution), 1);
+});
+
 it("never mutates a declined clean non-dev target", async () => {
   const requests: RunRequest[] = [];
   const runner: CommandRunner = {
@@ -911,6 +1157,7 @@ it("finishes branch decisions before progress and mutation start", async () => {
   };
   const prepared = await prepareUpdatePlan({ remoteTargets: ["grey-mac"] }, dependencies);
   assert.deepStrictEqual(events, []);
+  assert.notInclude(terminal.written(), "Continue with");
   assert.notInclude(terminal.written(), "[1A");
   await executePreparedUpdatePlan(prepared, dependencies);
   assert.deepStrictEqual(events, ["run:remote"]);
@@ -973,6 +1220,69 @@ it("skips clean non-dev targets non-interactively and fails dirty targets", asyn
   assert.equal(decisions[0]?.skipDetail, "non-TTY non-dev target");
   assert.isFalse(decisions[0]?.approved);
   assert.isFalse(decisions[1]?.approved);
+});
+
+it("reports issues early and continues eligible targets non-interactively", async () => {
+  const lines: string[] = [];
+  const requests: RunRequest[] = [];
+  let output = "";
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => undefined,
+    run: async (request) => {
+      requests.push(request);
+      return ok();
+    },
+  };
+  const execution = await executeUpdatePlan(
+    {
+      remoteTargets: ["grey-mac", "ubuntu-dell"],
+      local: { machine: "space-mac", desktop: true, ios: false },
+    },
+    {
+      ...testDependencies(runner, lines),
+      input: {
+        isTTY: false,
+        resume: () => undefined,
+        pause: () => undefined,
+        on: () => undefined,
+        off: () => undefined,
+      },
+      output: { isTTY: false, write: (value) => (output += value) },
+      inspectPlan: async () => [
+        {
+          target: "grey-mac",
+          local: false,
+          checkout: "/grey",
+          branch: "main",
+          dirty: false,
+          stage: { stage: "preflight", status: "OK" },
+        },
+        {
+          target: "ubuntu-dell",
+          local: false,
+          checkout: "/ubuntu",
+          branch: "dev",
+          dirty: true,
+          stage: { stage: "preflight", status: "FAILED", detail: "checkout is dirty" },
+        },
+        {
+          target: "space-mac",
+          local: true,
+          checkout: "/space",
+          branch: "dev",
+          dirty: false,
+          stage: { stage: "preflight", status: "OK" },
+        },
+      ],
+    },
+  );
+
+  assert.include(lines.join("\n"), "SKIP    grey-mac desktop — main (non-dev, non-TTY)");
+  assert.include(lines.join("\n"), "BLOCKED ubuntu-dell desktop — checkout is dirty");
+  assert.equal(output, "");
+  assert.isTrue(requests.every((request) => request.target === "space-mac"));
+  assert.equal(resultExitCode(execution), 1);
 });
 
 it("dry-run ignores the real checkout and defaults to synthetic clean dev", async () => {
@@ -1118,14 +1428,20 @@ it("exposes logs from defensive revalidation failures", async () => {
   assert.deepStrictEqual(failureLogPaths(execution.results), ["/logs/test/local-space-mac.log"]);
 });
 
-it("dry-run supports synthetic preflight failures", async () => {
+it("dry-run reports synthetic preflight failures early", async () => {
+  const lines: string[] = [];
   const execution = await executeUpdatePlan(
     { remoteTargets: ["grey-mac"] },
     {
-      ...testDependencies(createDryRunRunner(parseSimulatedFailures(["grey-mac:preflight"]))),
+      ...testDependencies(
+        createDryRunRunner(parseSimulatedFailures(["grey-mac:preflight"])),
+        lines,
+      ),
       inspectPlan: undefined,
     },
   );
+  assert.include(lines.join("\n"), "Preflight issues");
+  assert.include(lines.join("\n"), "BLOCKED grey-mac desktop");
   assert.deepStrictEqual(
     execution.results[0]?.stages.map(({ stage, status }) => [stage, status]),
     [

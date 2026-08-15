@@ -1184,6 +1184,46 @@ export async function preflightUpdatePlan(
   return Promise.all(inspections);
 }
 
+function hasInteractiveTerminal(input: TerminalInput, output: TerminalOutput): boolean {
+  return input.isTTY === true && output.isTTY === true && input.setRawMode !== undefined;
+}
+
+function selectedTargetLabel(plan: UpdatePlan, target: Machine): string {
+  const local = plan.local?.machine === target ? plan.local : undefined;
+  const surfaces = local
+    ? [local.desktop ? "desktop" : "", local.ios ? "iOS" : ""].filter(Boolean).join(" + ")
+    : "desktop";
+  return `${target} ${surfaces}`;
+}
+
+function preflightIssueDetail(preflight: PreflightResult): string {
+  return preflight.stage.detail ?? preflight.stage.status.toLowerCase();
+}
+
+function reportPreflightIssues(
+  plan: UpdatePlan,
+  preflights: ReadonlyArray<PreflightResult>,
+  interactive: boolean,
+  log: (line: string) => void,
+): void {
+  const issues = preflights.flatMap((preflight): ReadonlyArray<string> => {
+    const label = selectedTargetLabel(plan, preflight.target);
+    if (preflight.stage.status !== "OK") {
+      return [`  BLOCKED ${label} — ${preflightIssueDetail(preflight)}`];
+    }
+    if (preflight.branch !== "dev") {
+      const branch = preflight.branch ?? "unknown";
+      return interactive
+        ? [`  SWITCH  ${label} — ${branch} → dev`]
+        : [`  SKIP    ${label} — ${branch} (non-dev, non-TTY)`];
+    }
+    return [];
+  });
+  if (issues.length === 0) return;
+  log("\nPreflight issues");
+  for (const issue of issues) log(issue);
+}
+
 export async function selectBranchSwitches(
   preflights: ReadonlyArray<PreflightResult>,
   input: TerminalInput,
@@ -1235,7 +1275,7 @@ export async function decidePreflights(
   const approved =
     switchable.length === 0
       ? new Set<Machine>()
-      : input.isTTY && output.isTTY && input.setRawMode !== undefined
+      : hasInteractiveTerminal(input, output)
         ? await selectBranchSwitches(preflights, input, output, cancellation)
         : new Set<Machine>();
   return preflights.map((preflight) => {
@@ -1246,9 +1286,54 @@ export async function decidePreflights(
     return {
       preflight,
       approved: false,
-      skipDetail: input.isTTY && output.isTTY ? "dev switch declined" : "non-TTY non-dev target",
+      skipDetail: hasInteractiveTerminal(input, output)
+        ? "dev switch declined"
+        : "non-TTY non-dev target",
     };
   });
+}
+
+function reportPartialUpdatePlan(
+  plan: UpdatePlan,
+  decisions: ReadonlyArray<PreflightDecision>,
+  log: (line: string) => void,
+): void {
+  const approved = decisions.filter((decision) => decision.approved);
+  const excluded = decisions.filter((decision) => !decision.approved);
+  log("\nPartial update plan");
+  for (const decision of approved) {
+    const branchAction =
+      decision.preflight.branch === "dev"
+        ? ""
+        : ` — switch ${decision.preflight.branch ?? "unknown"} → dev, then update`;
+    log(`  RUN   ${selectedTargetLabel(plan, decision.preflight.target)}${branchAction}`);
+  }
+  for (const decision of excluded) {
+    const detail = decision.skipDetail ?? preflightIssueDetail(decision.preflight);
+    log(`  SKIP  ${selectedTargetLabel(plan, decision.preflight.target)} — ${detail}`);
+  }
+}
+
+async function promptContinuePartialUpdate(
+  remainingCount: number,
+  input: TerminalInput,
+  output: TerminalOutput,
+  cancellation?: CancellationController,
+): Promise<boolean> {
+  const noun = remainingCount === 1 ? "environment" : "environments";
+  return runRawPrompt(
+    input,
+    output,
+    () => `Continue with the ${String(remainingCount)} remaining ${noun}? [y/N] `,
+    (key, raw) => {
+      if (key === "confirm") return false;
+      if (raw.toLowerCase() === "y") return true;
+      if (raw.toLowerCase() === "n") return false;
+      return undefined;
+    },
+    false,
+    cancellation,
+  );
 }
 
 function developmentLogRoot(homeDir: string, env: NodeJS.ProcessEnv): string {
@@ -1637,19 +1722,15 @@ export async function runLocalTarget(
   return result;
 }
 
-function cleanupSuccessfulLogs(results: ReadonlyArray<TargetResult>): void {
-  for (const result of results) {
+function cleanupLogPaths(paths: ReadonlyArray<string>): void {
+  for (const path of paths) {
     try {
-      if (targetStatus(result) !== "FAILED" && result.logPath)
-        NodeFS.rmSync(result.logPath, { force: true });
+      NodeFS.rmSync(path, { force: true });
     } catch {
       // Failure logging is best-effort and must not change the update result.
     }
   }
-  const runDirs = new Set(
-    results.flatMap((result) => (result.logPath ? [NodePath.dirname(result.logPath)] : [])),
-  );
-  for (const runDir of runDirs) {
+  for (const runDir of new Set(paths.map(NodePath.dirname))) {
     try {
       if (NodeFS.readdirSync(runDir).length === 0) NodeFS.rmdirSync(runDir);
     } catch {
@@ -1658,11 +1739,16 @@ function cleanupSuccessfulLogs(results: ReadonlyArray<TargetResult>): void {
   }
 }
 
+function cleanupSuccessfulLogs(results: ReadonlyArray<TargetResult>): void {
+  cleanupLogPaths(
+    results.flatMap((result) =>
+      targetStatus(result) !== "FAILED" && result.logPath ? [result.logPath] : [],
+    ),
+  );
+}
+
 function skippedPreflightTarget(plan: UpdatePlan, decision: PreflightDecision): TargetResult {
   const local = plan.local?.machine === decision.preflight.target ? plan.local : undefined;
-  const selectedSurfaces = local
-    ? [local.desktop ? "desktop" : "", local.ios ? "iOS" : ""].filter(Boolean).join(" + ")
-    : "desktop";
   const remaining = [
     "checkout",
     "pull",
@@ -1672,7 +1758,7 @@ function skippedPreflightTarget(plan: UpdatePlan, decision: PreflightDecision): 
   ] as const;
   return {
     target: decision.preflight.target,
-    label: `${decision.preflight.target} ${selectedSurfaces}`,
+    label: selectedTargetLabel(plan, decision.preflight.target),
     logPath: decision.preflight.logPath,
     hasLog: decision.preflight.hasLog,
     stages:
@@ -1713,12 +1799,27 @@ export async function prepareUpdatePlan(
         })),
       };
     }
-    const decisions = await decidePreflights(
+    const input = dependencies.input ?? ({ isTTY: false } as TerminalInput);
+    const output =
+      dependencies.output ?? ({ isTTY: false, write: () => undefined } as TerminalOutput);
+    reportPreflightIssues(
+      plan,
       preflights,
-      dependencies.input ?? ({ isTTY: false } as TerminalInput),
-      dependencies.output ?? ({ isTTY: false, write: () => undefined } as TerminalOutput),
-      cancellation,
+      hasInteractiveTerminal(input, output),
+      dependencies.log,
     );
+    const decisions = await decidePreflights(preflights, input, output, cancellation);
+    const approvedCount = decisions.filter((decision) => decision.approved).length;
+    const excludedCount = decisions.length - approvedCount;
+    if (hasInteractiveTerminal(input, output) && approvedCount > 0 && excludedCount > 0) {
+      reportPartialUpdatePlan(plan, decisions, dependencies.log);
+      if (!(await promptContinuePartialUpdate(approvedCount, input, output, cancellation))) {
+        cleanupLogPaths(
+          preflights.flatMap((preflight) => (preflight.logPath ? [preflight.logPath] : [])),
+        );
+        throw new MachineUpdateError("Cancelled before updates.", 130);
+      }
+    }
     return { plan, decisions };
   } finally {
     unsubscribe();
@@ -1730,14 +1831,13 @@ export function buildProgressRows(
 ): ReadonlyArray<readonly [string, string]> {
   return prepared.decisions.flatMap((decision): ReadonlyArray<readonly [string, string]> => {
     if (!decision.approved) return [];
-    const local =
-      prepared.plan.local?.machine === decision.preflight.target ? prepared.plan.local : undefined;
-    const label = local
-      ? `${local.machine} ${[local.desktop ? "desktop" : "", local.ios ? "iOS" : ""]
-          .filter(Boolean)
-          .join(" + ")}`
-      : `${decision.preflight.target} desktop`;
-    return [[`${local ? "local" : "remote"}-${decision.preflight.target}`, label]];
+    const local = prepared.plan.local?.machine === decision.preflight.target;
+    return [
+      [
+        `${local ? "local" : "remote"}-${decision.preflight.target}`,
+        selectedTargetLabel(prepared.plan, decision.preflight.target),
+      ],
+    ];
   });
 }
 
@@ -2027,7 +2127,7 @@ async function readSshAliases(homeDir: string): Promise<ReadonlyArray<string>> {
 
 export const HELP = `Usage: pnpm update:machines [options]
 
-With no selection flags, one arrow/Space selector lists remote desktops plus local desktop and, on macOS, local iOS. Every row starts unchecked. Any explicit selection flag defines the complete plan and suppresses the selector. All selected checkouts are inspected concurrently before mutation. Dirty or uninspectable targets fail; clean non-dev targets require one unchecked batch approval and are skipped without failure when declined or run non-interactively.
+With no selection flags, one arrow/Space selector lists remote desktops plus local desktop and, on macOS, local iOS. Every row starts unchecked. Any explicit selection flag defines the complete plan and suppresses the selector. All selected checkouts are inspected concurrently and dirty, uninspectable, or non-dev states are shown before mutation. Clean non-dev targets can be approved in one unchecked batch to switch to dev. When some selected targets are eligible and others are excluded, interactive runs ask (default No) before continuing with the eligible remainder; non-TTY runs skip non-dev targets while dirty or uninspectable targets fail.
 
 Options:
   --host <alias>              Select a remote fleet desktop; repeatable
