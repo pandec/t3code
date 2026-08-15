@@ -92,6 +92,7 @@ export interface RunRequest {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string | undefined;
   readonly logPath?: string | undefined;
+  readonly interactiveTerminal?: boolean | undefined;
   readonly onOutput?: ((chunk: string) => void) | undefined;
 }
 
@@ -143,6 +144,8 @@ export interface ProgressReporter {
   readonly start: (jobId: string, label: string, stage: string) => void;
   readonly stage: (jobId: string, stage: string) => void;
   readonly finish: (jobId: string, status: "OK" | "FAILED" | "SKIPPED" | "CANCELLED") => void;
+  readonly suspend: () => void;
+  readonly resume: () => void;
   readonly close: () => void;
 }
 
@@ -849,7 +852,9 @@ export function createRealRunner(
           cwd: request.cwd,
           env,
           detached: platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: request.interactiveTerminal
+            ? ["inherit", "inherit", "inherit"]
+            : ["ignore", "pipe", "pipe"],
         });
         children.add(child);
         child.stdout?.on("data", (chunk: Buffer) => {
@@ -1572,14 +1577,34 @@ export async function runLocalTarget(
   ];
   for (const [stage, command, args] of surfaces) {
     dependencies.progress?.stage(jobId, stage);
-    const commandResult = await dependencies.runner.run({
-      target: plan.machine,
-      stage,
-      command,
-      args,
-      cwd: checkout,
-      logPath,
-    });
+    const interactiveTerminal =
+      stage === "ios" &&
+      !dependencies.runner.dryRun &&
+      dependencies.input?.isTTY === true &&
+      dependencies.input.setRawMode !== undefined &&
+      dependencies.output?.isTTY === true;
+    if (interactiveTerminal) dependencies.progress?.suspend();
+    let commandResult: CommandResult;
+    try {
+      commandResult = await dependencies.runner.run({
+        target: plan.machine,
+        stage,
+        command,
+        args,
+        cwd: checkout,
+        logPath,
+        ...(interactiveTerminal ? { interactiveTerminal: true } : {}),
+      });
+    } finally {
+      if (interactiveTerminal) {
+        try {
+          dependencies.input.setRawMode(false);
+        } catch {
+          // Expo may already have released or closed terminal input.
+        }
+        dependencies.progress?.resume();
+      }
+    }
     stages.push(
       commandResult.exitCode === 0 && !commandResult.cancelled
         ? { stage, status: "OK" }
@@ -1864,14 +1889,17 @@ export function createProgressReporter(
         if (current) state.set(jobId, { ...current, status });
         output.write(`[finish] ${label}: ${status}\n`);
       },
+      suspend: () => undefined,
+      resume: () => undefined,
       close: () => undefined,
     };
   }
 
   let rendered = false;
+  let suspended = false;
   let closed = false;
   const render = () => {
-    if (closed) return;
+    if (closed || suspended) return;
     if (rendered) output.write(`[${String(rows.length)}A`);
     for (const [id, fallbackLabel] of rows) {
       const current = state.get(id);
@@ -1880,6 +1908,12 @@ export function createProgressReporter(
       output.write(`[2K${status} ${label} — ${status === "RUNNING" ? current?.stage : status}\n`);
     }
     rendered = true;
+  };
+  const clear = () => {
+    if (!rendered) return;
+    if (rows.length > 0) output.write(`[${String(rows.length)}A`);
+    output.write("[J");
+    rendered = false;
   };
   output.write("[?25l");
   render();
@@ -1898,6 +1932,18 @@ export function createProgressReporter(
     finish: (jobId, status) => {
       const current = state.get(jobId);
       if (current) state.set(jobId, { ...current, status });
+      render();
+    },
+    suspend: () => {
+      if (closed || suspended) return;
+      clear();
+      suspended = true;
+      output.write("[?25h");
+    },
+    resume: () => {
+      if (closed || !suspended) return;
+      suspended = false;
+      output.write("\n[?25l");
       render();
     },
     close: () => {

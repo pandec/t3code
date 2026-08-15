@@ -75,9 +75,10 @@ platform-specific list.
   are skipped in non-TTY use. Local targets share checkout/dependency preparation; remote targets and the
   local lane run concurrently while local desktop/iOS installs stay serialized. Explicit `--host`,
   `--include-local-desktop`, and `--include-local-ios` flags define the complete non-interactive plan.
-  Real subprocess output is captured in compact progress rows; failed-job logs are retained under the T3
-  development log directory. Use `--show-failure-logs` to display them or `--dry-run` for fully synthetic
-  preflight, command, and failure verification without spawning update processes.
+  Real subprocess output stays in compact progress rows and retained failure logs, except interactive local
+  iOS temporarily owns the terminal and streams live so Expo can prompt to unlock the phone. Use
+  `--show-failure-logs` to display captured failures or `--dry-run` for fully synthetic preflight, command,
+  and failure verification without spawning update processes.
 - `t3-build`: build the packaged Dev desktop artifact (DMG on macOS, AppImage on Ubuntu).
 - `t3-install-desktop`: stop the installed T3 Code Dev app if needed, rebuild and replace it while
   preserving its application data, then launch it.

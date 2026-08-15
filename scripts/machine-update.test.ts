@@ -10,6 +10,7 @@ import {
   createDefaultDependencies,
   createDryRunRunner,
   createExplicitPlan,
+  createProgressReporter,
   decidePreflights,
   executePreparedUpdatePlan,
   executeUpdatePlan,
@@ -350,6 +351,7 @@ it("shares local prep, serializes surfaces, and lets iOS run after desktop failu
     requests.map(({ stage }) => stage),
     ["pull", "dependencies", "desktop", "ios"],
   );
+  assert.isTrue(requests.every((request) => request.interactiveTerminal === undefined));
   assert.deepStrictEqual(
     execution.results[0]?.stages.map(({ stage, status }) => [stage, status]),
     [
@@ -362,6 +364,102 @@ it("shares local prep, serializes surfaces, and lets iOS run after desktop failu
     ],
   );
   assert.equal(resultExitCode(execution), 1);
+});
+
+it("hands only real TTY local iOS execution to the terminal", async () => {
+  const terminal = fakeTerminal([]);
+  const requests: RunRequest[] = [];
+  const progress: string[] = [];
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => undefined,
+    run: async (request) => {
+      requests.push(request);
+      progress.push(`run:${request.stage}:${String(request.interactiveTerminal === true)}`);
+      return ok();
+    },
+  };
+  const execution = await executeUpdatePlan(
+    {
+      remoteTargets: [],
+      local: { machine: "space-mac", desktop: true, ios: true },
+    },
+    {
+      ...testDependencies(runner),
+      input: terminal.input,
+      output: terminal.output,
+      progress: {
+        start: () => undefined,
+        stage: (_id, stage) => progress.push(`stage:${stage}`),
+        finish: (_id, status) => progress.push(`finish:${status}`),
+        suspend: () => progress.push("suspend"),
+        resume: () => progress.push("resume"),
+        close: () => undefined,
+      },
+    },
+  );
+
+  assert.deepStrictEqual(
+    requests.map(({ stage, interactiveTerminal }) => [stage, interactiveTerminal]),
+    [
+      ["pull", undefined],
+      ["dependencies", undefined],
+      ["desktop", undefined],
+      ["ios", true],
+    ],
+  );
+  assert.deepStrictEqual(progress.slice(-5), [
+    "stage:ios",
+    "suspend",
+    "run:ios:true",
+    "resume",
+    "finish:OK",
+  ]);
+  assert.deepStrictEqual(terminal.rawModes, [false]);
+  assert.equal(resultExitCode(execution), 0);
+});
+
+it("restores terminal ownership when interactive iOS execution rejects", async () => {
+  const terminal = fakeTerminal([]);
+  const progress: string[] = [];
+  const failure = new Error("spawn failed");
+  const runner: CommandRunner = {
+    dryRun: false,
+    cancel: () => progress.push("cancel"),
+    run: async (request) => {
+      if (request.stage === "ios") throw failure;
+      return ok();
+    },
+  };
+
+  let caught: unknown;
+  try {
+    await executeUpdatePlan(
+      {
+        remoteTargets: [],
+        local: { machine: "space-mac", desktop: false, ios: true },
+      },
+      {
+        ...testDependencies(runner),
+        input: terminal.input,
+        output: terminal.output,
+        progress: {
+          start: () => undefined,
+          stage: () => undefined,
+          finish: () => undefined,
+          suspend: () => progress.push("suspend"),
+          resume: () => progress.push("resume"),
+          close: () => undefined,
+        },
+      },
+    );
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(caught, failure);
+  assert.deepStrictEqual(progress, ["suspend", "resume", "cancel"]);
+  assert.deepStrictEqual(terminal.rawModes, [false]);
 });
 
 it("prep failure skips both selected local surfaces", async () => {
@@ -413,12 +511,43 @@ it("reports quiet progress without forwarding captured subprocess output", async
         start: (_id, label, stage) => progress.push(`start:${label}:${stage}`),
         stage: () => undefined,
         finish: (_id, status) => progress.push(`finish:${status}`),
+        suspend: () => undefined,
+        resume: () => undefined,
         close: () => progress.push("close"),
       },
     },
   );
   assert.deepStrictEqual(progress, ["start:grey-mac desktop:checkout", "finish:OK"]);
   assert.isUndefined(execution.results[0]?.stages[0]?.tail);
+});
+
+it("suspends TTY progress redraws while an interactive child owns the terminal", () => {
+  let written = "";
+  const reporter = createProgressReporter(
+    [
+      ["remote-grey-mac", "grey-mac desktop"],
+      ["local-space-mac", "space-mac iOS"],
+    ],
+    { isTTY: true, write: (value) => (written += value) },
+  );
+
+  reporter.suspend();
+  const suspendedOutput = written;
+  reporter.stage("remote-grey-mac", "pull");
+  reporter.finish("local-space-mac", "OK");
+  assert.equal(written, suspendedOutput);
+
+  reporter.resume();
+  const resumedOutput = written.slice(suspendedOutput.length);
+  assert.include(resumedOutput, "RUNNING grey-mac desktop — pull");
+  assert.include(resumedOutput, "OK space-mac iOS — OK");
+  assert.isTrue(suspendedOutput.endsWith("[2A[J[?25h"));
+
+  reporter.close();
+  const closedOutput = written;
+  reporter.close();
+  assert.equal(written, closedOutput);
+  assert.isTrue(written.endsWith("[?25h"));
 });
 
 it("retains failure log paths and prompts only for TTY failures unless forced", () => {
@@ -1011,17 +1140,42 @@ it("dry-run supports synthetic preflight failures", async () => {
 
 it("dry-run is synthetic, invokes only its fake runner, and simulates all lanes", async () => {
   const lines: string[] = [];
-  const runner = createDryRunRunner(
+  const requests: RunRequest[] = [];
+  const suspensions: string[] = [];
+  const terminal = fakeTerminal([]);
+  const dryRunner = createDryRunRunner(
     parseSimulatedFailures(["grey-mac:pull", "space-mac:desktop"]),
     (line) => lines.push(line),
   );
+  const runner: CommandRunner = {
+    ...dryRunner,
+    run: (request) => {
+      requests.push(request);
+      return dryRunner.run(request);
+    },
+  };
   const execution = await executeUpdatePlan(
     {
       remoteTargets: ["grey-mac"],
       local: { machine: "space-mac", desktop: true, ios: true },
     },
-    testDependencies(runner),
+    {
+      ...testDependencies(runner),
+      input: terminal.input,
+      output: terminal.output,
+      progress: {
+        start: () => undefined,
+        stage: () => undefined,
+        finish: () => undefined,
+        suspend: () => suspensions.push("suspend"),
+        resume: () => suspensions.push("resume"),
+        close: () => undefined,
+      },
+    },
   );
+  assert.isTrue(requests.every((request) => request.interactiveTerminal === undefined));
+  assert.deepStrictEqual(suspensions, []);
+  assert.deepStrictEqual(terminal.rawModes, []);
   assert.isTrue(lines.some((line) => line.startsWith("$ 'ssh'")));
   assert.isTrue(lines.some((line) => line.includes("install:desktop:dev")));
   assert.isTrue(lines.some((line) => line.includes("ios:local:release")));
