@@ -132,6 +132,8 @@ function fakeTerminal(keys: ReadonlyArray<string>): {
 it("normalizes known hostnames and fails safely for unknown machines", () => {
   assert.equal(normalizeHostname("SpaceMac.local"), "spacemac");
   assert.equal(resolveLocalMachine("SpaceMac.local"), "space-mac");
+  assert.equal(resolveLocalMachine("Mac.ts.net lan", undefined, ["SpaceMac"]), "space-mac");
+  assert.equal(resolveLocalMachine("Mac.ts.net lan", "grey-mac", ["SpaceMac"]), "grey-mac");
   assert.equal(resolveLocalMachine("unknown", "grey-mac"), "grey-mac");
   assert.throws(() => resolveLocalMachine("build-box"), MachineUpdateError);
   assert.throws(() => resolveLocalMachine("constructor", "constructor"), MachineUpdateError);

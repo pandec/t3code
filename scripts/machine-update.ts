@@ -231,8 +231,11 @@ export function normalizeHostname(hostname: string): string {
   return normalized.replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "");
 }
 
-export function resolveLocalMachine(hostname: string, override?: string): Machine {
-  const normalized = normalizeHostname(override ?? hostname);
+export function resolveLocalMachine(
+  hostname: string,
+  override?: string,
+  fallbackHostnames: ReadonlyArray<string> = [],
+): Machine {
   const aliases: Readonly<Record<string, Machine>> = {
     spacemac: "space-mac",
     "space-mac": "space-mac",
@@ -241,13 +244,24 @@ export function resolveLocalMachine(hostname: string, override?: string): Machin
     "ubuntu-dell": "ubuntu-dell",
     ubuntudell: "ubuntu-dell",
   };
-  const machine = Object.hasOwn(aliases, normalized) ? aliases[normalized] : undefined;
-  if (machine === undefined) {
-    throw new MachineUpdateError(
-      `Unknown local machine "${hostname}". Use --local-machine ${FLEET.join("|")} to override.`,
-    );
+  const candidates = override === undefined ? [hostname, ...fallbackHostnames] : [override];
+  for (const candidate of candidates) {
+    const normalized = normalizeHostname(candidate);
+    const machine = Object.hasOwn(aliases, normalized) ? aliases[normalized] : undefined;
+    if (machine !== undefined) return machine;
   }
-  return machine;
+  throw new MachineUpdateError(
+    `Unknown local machine "${override ?? hostname}". Use --local-machine ${FLEET.join("|")} to override.`,
+  );
+}
+
+function readMacLocalHostname(): string | undefined {
+  const result = NodeChildProcess.spawnSync("/usr/sbin/scutil", ["--get", "LocalHostName"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const hostname = result.status === 0 ? result.stdout.trim() : "";
+  return hostname.length > 0 ? hostname : undefined;
 }
 
 export function getEligibleRemoteTargets(
@@ -2165,7 +2179,16 @@ export async function main(
   }
 
   const homeDir = NodeOS.homedir();
-  const localMachine = resolveLocalMachine(NodeOS.hostname(), options.localMachine);
+  const hostname = NodeOS.hostname();
+  const macLocalHostname =
+    options.localMachine === undefined && platform === "darwin"
+      ? readMacLocalHostname()
+      : undefined;
+  const localMachine = resolveLocalMachine(
+    hostname,
+    options.localMachine,
+    macLocalHostname === undefined ? [] : [macLocalHostname],
+  );
   const needsRemoteChoices = !options.explicitSelection || options.hosts.length > 0;
   const eligibleTargets = needsRemoteChoices
     ? getEligibleRemoteTargets(localMachine, await readSshAliases(homeDir))
