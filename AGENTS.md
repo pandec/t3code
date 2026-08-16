@@ -69,19 +69,6 @@ Personal shell helpers from `~/.dotfiles` operate on this checkout at
 `~/SynologyDrive/AIMac/repos/t3code`. Run them from a shell with the dotfiles loaded; `qh` shows the current
 platform-specific list.
 
-- `t3-update-machines`: use one arrow/Space selector to opt into remote desktops, the local desktop,
-  and (on macOS) local iOS. Every selected checkout is inspected concurrently and dirty, uninspectable, or
-  non-`dev` states are reported before mutation; dirty or uninspectable targets fail the run. Clean non-`dev`
-  targets require a second unchecked batch approval to switch branches. When some targets are eligible and
-  others are excluded, interactive runs ask (default No) before continuing with the eligible remainder,
-  while non-TTY use skips non-`dev` targets. Local targets share
-  checkout/dependency preparation; remote targets and the local lane run concurrently while local
-  desktop/iOS installs stay serialized. Explicit `--host`, `--include-local-desktop`, and
-  `--include-local-ios` flags define the complete non-interactive plan.
-  Real subprocess output stays in compact progress rows and retained failure logs, except interactive local
-  iOS temporarily owns the terminal and streams live so Expo can prompt to unlock the phone. Use
-  `--show-failure-logs` to display captured failures or `--dry-run` for fully synthetic preflight, command,
-  and failure verification without spawning update processes.
 - `t3-build`: build the packaged Dev desktop artifact (DMG on macOS, AppImage on Ubuntu).
 - `t3-install-desktop`: stop the installed T3 Code Dev app if needed, rebuild and replace it while
   preserving its application data, then launch it.
@@ -91,6 +78,20 @@ platform-specific list.
 - `t3-build-ios` (macOS): archive the production iOS app and upload it to internal TestFlight.
 - `t3-build-expo` (macOS): publish a JavaScript-only Expo (OTA) update to the installed production
   build; only valid while the runtime fingerprint still matches that binary.
+
+The fleet updater is a repo script, not a shell helper: run `vp run update:machines` from this checkout
+(`scripts/machine-update.ts`; the maintainer's shell aliases it as `t3-update-machines`). It offers one
+arrow/Space selector to opt into remote desktops, the local desktop, and (on macOS) local iOS. Every selected
+checkout is inspected concurrently and dirty, uninspectable, or non-`dev` states are reported before mutation;
+dirty or uninspectable targets fail the run. Clean non-`dev` targets require a second unchecked batch approval
+to switch branches. When some targets are eligible and others are excluded, interactive runs ask (default No)
+before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. Local targets share
+checkout/dependency preparation; remote targets and the local lane run concurrently while local desktop/iOS
+installs stay serialized. Explicit `--host`, `--include-local-desktop`, and `--include-local-ios` flags define
+the complete non-interactive plan. Real subprocess output stays in compact progress rows and retained failure
+logs, except interactive local iOS temporarily owns the terminal and streams live so Expo can prompt to unlock
+the phone. Use `--show-failure-logs` to display captured failures or `--dry-run` for fully synthetic preflight,
+command, and failure verification without spawning update processes.
 
 ## Upstream project guidance
 
