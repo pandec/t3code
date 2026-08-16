@@ -157,7 +157,7 @@ describe("ContextWindowMeter", () => {
       <ContextWindowMeter
         usage={contextUsage(50_000, 25)}
         providerUsage={null}
-        providerDisplayName="Claude"
+        modelDisplayName="Claude"
       />,
     );
 

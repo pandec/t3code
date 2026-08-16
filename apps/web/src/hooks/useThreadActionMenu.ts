@@ -15,7 +15,6 @@ import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
-import { canArchiveThreadNow } from "../components/Sidebar.logic";
 import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
@@ -152,6 +151,7 @@ export function useThreadActionMenu(input: {
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
+          isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
           supports,
           snoozePresets,
           forkExtras: {
@@ -161,7 +161,6 @@ export function useThreadActionMenu(input: {
             moveToTop:
               !legacySidebarEnabled && readEnvironmentSupportsMoveToTop(threadRef.environmentId),
             fork: canForkConversation(thread),
-            canArchiveNow: canArchiveThreadNow(thread),
           },
         });
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));

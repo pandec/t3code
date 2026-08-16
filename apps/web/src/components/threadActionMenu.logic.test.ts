@@ -9,6 +9,7 @@ const baseState: ThreadActionMenuState = {
   isSnoozed: false,
   canSnoozeNow: true,
   isRegeneratingTitle: false,
+  isRunning: false,
   supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
   snoozePresets: [{ id: "hour", label: "In 1 hour", whenLabel: "3:00 PM" }],
 };
@@ -24,7 +25,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "delete"]);
+    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "archive", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -65,13 +66,11 @@ describe("buildThreadActionMenuItems", () => {
   const forkExtras = {
     moveToTop: true,
     fork: true,
-    canArchiveNow: true,
   };
 
   it("omits the fork-only entries for surfaces that pass no extras", () => {
     expect(ids(baseState)).not.toContain("move-to-top");
     expect(ids(baseState)).not.toContain("fork");
-    expect(ids(baseState)).not.toContain("archive");
     expect(ids(baseState).filter((id) => id === "copy-thread-id")).toHaveLength(1);
   });
 
@@ -85,18 +84,19 @@ describe("buildThreadActionMenuItems", () => {
       "mark-unread",
       "move-to-top",
       "fork",
-      "archive",
       "copy-path",
       "copy-thread-id",
+      "archive",
       "delete",
     ]);
   });
 
   it("keeps branch copy before the single upstream-owned thread ID copy", () => {
-    expect(ids({ ...baseState, branch: "main", forkExtras }).slice(-4)).toEqual([
+    expect(ids({ ...baseState, branch: "main", forkExtras }).slice(-5)).toEqual([
       "copy-path",
       "copy-branch",
       "copy-thread-id",
+      "archive",
       "delete",
     ]);
   });
@@ -111,11 +111,27 @@ describe("buildThreadActionMenuItems", () => {
     }
   });
 
-  it("keeps archive visible but disabled during a running turn", () => {
-    const item = buildThreadActionMenuItems({
-      ...baseState,
-      forkExtras: { ...forkExtras, canArchiveNow: false },
-    }).find((candidate) => candidate.id === "archive");
-    expect(item).toMatchObject({ label: "Archive thread", disabled: true });
+  it("offers archive as a non-destructive action right before delete", () => {
+    const items = buildThreadActionMenuItems(baseState);
+    const archiveItem = items.at(-2);
+    expect(archiveItem?.id).toBe("archive");
+    expect(archiveItem?.destructive).toBeFalsy();
+    expect(items.at(-1)?.id).toBe("delete");
+  });
+
+  it("keeps archive available even when the environment lacks every other capability", () => {
+    expect(
+      ids({
+        ...baseState,
+        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+      }),
+    ).toContain("archive");
+  });
+
+  it("disables archive while the thread is running", () => {
+    const archiveItem = buildThreadActionMenuItems({ ...baseState, isRunning: true }).find(
+      (item) => item.id === "archive",
+    );
+    expect(archiveItem?.disabled).toBe(true);
   });
 });

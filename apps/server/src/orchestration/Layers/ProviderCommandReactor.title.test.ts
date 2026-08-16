@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import { canReplaceThreadTitle } from "./ProviderCommandReactor.ts";
+import { canReplaceThreadTitle } from "../threadTitles.ts";
 
 it("does not replace a pinned title even when it equals the default sentinel", () => {
   assert.isFalse(canReplaceThreadTitle("New thread", undefined, true));

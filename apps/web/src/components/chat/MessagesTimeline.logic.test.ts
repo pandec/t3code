@@ -9,6 +9,7 @@ import {
   resolveTimelineMinimapAriaLabel,
   resolveTimelineMinimapItemIndexFromPointer,
   resolveTimelineMinimapTooltipTranslate,
+  shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
 
 describe("resolveTimelineMinimapAriaLabel", () => {
@@ -113,6 +114,17 @@ describe("deriveTimelineMinimapItems", () => {
       { id: "assistant-1", positionIndex: 0, positionCount: 3 },
       { id: "assistant-3", positionIndex: 2, positionCount: 3 },
     ]);
+  });
+});
+
+describe("shouldPreserveAssistantLineBreaks", () => {
+  it("preserves Claude insight formatting without changing regular markdown", () => {
+    expect(
+      shouldPreserveAssistantLineBreaks(
+        "★ Insight ─────────────────\\nFirst observation\\nSecond observation\\n─────────────────",
+      ),
+    ).toBe(true);
+    expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
   });
 });
 

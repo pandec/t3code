@@ -16,6 +16,7 @@ const clientSettings: ClientSettings = {
   archivedSectionVisibleCount: 10,
   accentTintsEnabled: true,
   accentTintIntensityPercent: 12,
+  confirmQuit: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],

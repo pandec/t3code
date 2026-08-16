@@ -51,6 +51,45 @@ describe("DesktopAssets", () => {
     }),
   );
 
+  it.effect("uses canonical source-tree icons for unpackaged development", () =>
+    Effect.gen(function* () {
+      const developmentEnvironmentLayer = DesktopEnvironment.layer({
+        dirname: "/repo/apps/desktop/dist-electron",
+        homeDirectory: "/Users/alice",
+        platform: "linux",
+        processArch: "x64",
+        appVersion: "1.2.3",
+        appPath: "/repo",
+        isPackaged: false,
+        resourcesPath: "/repo/apps/desktop/resources",
+        runningUnderArm64Translation: false,
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            DesktopConfig.layerTest({ VITE_DEV_SERVER_URL: "http://localhost:5733" }),
+          ),
+        ),
+      );
+      const fileSystemLayer = FileSystem.layerNoop({
+        exists: (path) => Effect.succeed(String(path).includes("/assets/dev/")),
+      });
+      const assets = yield* DesktopAssets.DesktopAssets.pipe(
+        Effect.provide(
+          DesktopAssets.layer.pipe(
+            Layer.provide(Layer.merge(fileSystemLayer, developmentEnvironmentLayer)),
+          ),
+        ),
+      );
+
+      const icons = yield* assets.iconPaths;
+
+      assert.match(Option.getOrThrow(icons.ico), /assets\/dev\/blueprint-windows\.ico$/);
+      assert.match(Option.getOrThrow(icons.png), /assets\/dev\/blueprint-universal-1024\.png$/);
+      assert.isTrue(Option.isNone(icons.icns));
+    }),
+  );
+
   it.effect("preserves the failed asset candidate and filesystem cause", () =>
     Effect.gen(function* () {
       const fileName = "custom.bin";

@@ -28,6 +28,8 @@ interface ComposerPrimaryActionsProps {
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
+  /** Enter-to-send is disabled on mobile viewports, where stop would otherwise
+   * be the only primary action and a running turn could not be steered. */
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onQueue: () => void;
@@ -248,7 +250,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  return (
+  const sendButton = (
     <button
       type="submit"
       className={cn(
@@ -299,4 +301,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       )}
     </button>
   );
+
+  // Running turns never reach here: the branch above owns them, offering
+  // Stop alongside Steer and Queue for later on every viewport.
+  return sendButton;
 });

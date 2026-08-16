@@ -19,10 +19,10 @@ export type ThreadActionMenuId =
   | "mark-unread"
   | "move-to-top"
   | "fork"
-  | "archive"
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "archive"
   | "delete";
 
 /**
@@ -35,9 +35,6 @@ export interface ThreadActionMenuForkExtras {
   // thread is pinned, settled, or snoozed (those rows have their own order).
   readonly moveToTop: boolean;
   readonly fork: boolean;
-  // Archiving mid-turn would strand a running session, so the entry stays
-  // visible but disabled until the turn ends.
-  readonly canArchiveNow: boolean;
 }
 
 export interface ThreadActionMenuState {
@@ -47,6 +44,8 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
+  /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
+  readonly isRunning: boolean;
   readonly supports: {
     readonly settlement: boolean;
     readonly snooze: boolean;
@@ -130,18 +129,15 @@ export function buildThreadActionMenuItems(
       ? [{ id: "move-to-top" as const, label: "Move to top" }]
       : []),
     ...(state.forkExtras?.fork ? [{ id: "fork" as const, label: "Fork conversation" }] : []),
-    ...(state.forkExtras
-      ? [
-          {
-            id: "archive" as const,
-            label: "Archive thread",
-            disabled: !state.forkExtras.canArchiveNow,
-          },
-        ]
-      : []),
     { id: "copy-path", label: "Copy path", icon: "copy" },
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),
     { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
+    // Archive removes the thread from the sidebar while keeping its
+    // conversation under Settings > Archived threads — distinct from Settle
+    // (stays visible in the Settled shelf) and Delete (clears history for
+    // good), so it sits beside Delete without borrowing its destructive
+    // styling.
+    { id: "archive", label: "Archive thread", disabled: state.isRunning },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }

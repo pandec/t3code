@@ -27,6 +27,7 @@ import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 /**
  * Two concentric rings in one control: the outer ring is the thread's context
@@ -177,10 +178,11 @@ export function ContextWindowMeter(props: {
   maskProviderUsageEmails?: boolean;
   /** Driver-derived label ("Claude", "Codex") for the accounts header. */
   providerUsageLabel?: string | null;
-  providerDisplayName?: string | null;
+  /** Selected model, named in the automatic-compaction note. */
+  modelDisplayName?: string | null;
   onRefreshProviderUsage?: () => Promise<void> | void;
 }) {
-  const { usage, providerDisplayName } = props;
+  const { usage, modelDisplayName } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
   // change applies to whatever is already on screen.
   const usageThresholds = useProviderUsageThresholds();
@@ -518,7 +520,7 @@ export function ContextWindowMeter(props: {
                 ) : null}
                 {usage.compactsAutomatically ? (
                   <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
-                    {providerDisplayName ?? "It"} automatically compacts its context when needed.
+                    {formatContextWindowCompactionMessage(modelDisplayName)}
                   </div>
                 ) : null}
               </div>

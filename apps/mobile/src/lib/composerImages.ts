@@ -3,6 +3,7 @@ import {
   type DraftComposerImageAttachment,
 } from "@t3tools/client-runtime/state/composer-attachment";
 import {
+  isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
@@ -160,7 +161,6 @@ async function pickComposerImagesOnce(input: { readonly existingCount: number })
       error = `Unsupported file type for '${asset.fileName ?? "image"}'.`;
       continue;
     }
-
     const originalBase64 = asset.base64;
     if (!originalBase64) {
       error = `Failed to read '${asset.fileName ?? "image"}'.`;
@@ -169,6 +169,13 @@ async function pickComposerImagesOnce(input: { readonly existingCount: number })
 
     const reencoded = await reencodeImageAsJpeg({ uri: asset.uri, mimeType: originalMimeType });
     const mimeType = reencoded ? "image/jpeg" : originalMimeType;
+    // Validate what we actually ship, not what the picker handed us: HEIC and
+    // friends are unsupported on the wire but re-encode to JPEG above, so
+    // checking the original type here would reject pictures we can send.
+    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      error = `'${asset.fileName ?? "image"}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
+      continue;
+    }
     const name = reencoded
       ? toJpegFileName(asset.fileName ?? "image")
       : (asset.fileName ?? "image");
@@ -332,6 +339,11 @@ export async function convertPastedImagesToAttachments(input: {
       const reencoded = await reencodeImageAsJpeg({ uri, mimeType: originalMimeType });
       const base64 = reencoded ? reencoded.base64 : await new File(uri).base64();
       const mimeType = reencoded ? "image/jpeg" : originalMimeType;
+      // Same attach-time invariant as the picker: a paste whose re-encode
+      // failed must not enter the draft as an unsendable type.
+      if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+        continue;
+      }
       const sizeBytes = reencoded ? reencoded.sizeBytes : estimateBase64ByteSize(base64);
       if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
         continue;

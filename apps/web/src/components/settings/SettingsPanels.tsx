@@ -631,6 +631,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.voice.ttsVoiceId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId
         ? ["Text-to-speech voice"]
         : []),
+      ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit
+        ? ["Quit confirmation"]
+        : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ],
     [
@@ -646,6 +649,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.voice.ttsModelId,
       settings.voice.ttsVoiceId,
       projectAccentColors.hasAnyServerAccentColors,
+      settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.enableTurnCompletionToasts,
@@ -798,6 +802,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ttsModelId: DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId,
         ttsVoiceId: DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId,
       },
+      confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
@@ -2402,6 +2407,30 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {isElectron ? (
+          <SettingsRow
+            {...searchableSetting("quit-confirmation")}
+            description="Require holding the quit shortcut before the desktop app quits. A quick tap shows a hint instead."
+            resetAction={
+              settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? (
+                <SettingResetButton
+                  label="quit confirmation"
+                  onClick={() =>
+                    updateSettings({ confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.confirmQuit}
+                onCheckedChange={(checked) => updateSettings({ confirmQuit: Boolean(checked) })}
+                aria-label="Hold to quit"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("text-generation-model")}

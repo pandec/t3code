@@ -95,6 +95,7 @@ const ISOLATED_TEST_FILES = [
   "src/clientPersistenceStorage.test.ts",
   "src/cloud/linkEnvironment.test.ts",
   "src/cloud/managedAuth.test.ts",
+  "src/components/chat/ComposerPrimaryActions.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
   "src/components/CommandPalette.logic.test.ts",
   "src/components/diffs/AnnotatableCodeView.test.tsx",
