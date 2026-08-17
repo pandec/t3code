@@ -44,7 +44,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     <View
       className={cn(
         "flex-row items-center gap-1 py-1 pl-4 pr-2",
-        !props.isFirst && "border-t border-neutral-200 dark:border-white/6",
+        !props.isFirst && "border-t border-border",
       )}
     >
       <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
@@ -143,7 +143,7 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
       entering={FadeInDown.duration(220)}
       exiting={FadeOut.duration(140)}
     >
-      <View className="overflow-hidden rounded-[20px] border border-neutral-200 bg-neutral-100/80 py-1 dark:border-white/6 dark:bg-neutral-900/80">
+      <View className="overflow-hidden rounded-[20px] border border-border bg-card-translucent py-1">
         <ScrollView
           style={{ maxHeight: 220 }}
           nestedScrollEnabled

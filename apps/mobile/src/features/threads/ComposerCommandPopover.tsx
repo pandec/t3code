@@ -141,7 +141,7 @@ const CommandRow = memo(function CommandRow(props: {
         </Text>
       ) : null}
       {isManualSkill ? (
-        <Text className="shrink-0 text-xs text-zinc-400" numberOfLines={1}>
+        <Text className="shrink-0 text-xs text-foreground-tertiary" numberOfLines={1}>
           Manual
         </Text>
       ) : null}

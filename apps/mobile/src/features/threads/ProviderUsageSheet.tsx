@@ -41,7 +41,7 @@ import { useThemeColor } from "../../lib/useThemeColor";
  */
 
 const STATUS_BAR_CLASS: Record<ProviderUsageStatus, string> = {
-  ok: "bg-neutral-400 dark:bg-neutral-500",
+  ok: "bg-foreground-muted",
   warning: "bg-amber-500",
   critical: "bg-rose-500",
 };

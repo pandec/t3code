@@ -1389,7 +1389,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                             ? "bg-rose-500"
                             : providerUsageStatus === "warning"
                               ? "bg-amber-500"
-                              : "bg-neutral-400 dark:bg-neutral-500",
+                              : "bg-foreground-muted",
                         )}
                       />
                     }
