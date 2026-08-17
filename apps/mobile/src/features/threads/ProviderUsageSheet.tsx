@@ -258,7 +258,13 @@ export function ProviderUsageSheet(
     // below it — the header ends up painted behind the first account card.
     <View collapsable={false} className="flex-1 bg-sheet">
       <View collapsable={false}>
-        <View className="flex-row items-center gap-2 px-4 pb-2 pt-3">
+        {/* Android presents this as a full-screen card under a translucent
+            status bar, so the close/refresh row needs the top inset the iOS
+            form sheet does not. Same rule the shared Android header uses. */}
+        <View
+          className="flex-row items-center gap-2 px-4 pb-2 pt-3"
+          style={Platform.OS === "android" ? { paddingTop: Math.max(insets.top, 12) } : undefined}
+        >
           <Pressable
             accessibilityLabel={`Close ${title}`}
             accessibilityRole="button"

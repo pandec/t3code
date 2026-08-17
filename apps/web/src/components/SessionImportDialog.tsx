@@ -38,6 +38,7 @@ import {
   partitionSessionImportCandidates,
 } from "./SessionImportDialog.logic";
 import { toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function SessionImportDialog(props: {
   readonly member: SidebarProjectGroupMember | null;
@@ -175,9 +176,12 @@ export function SessionImportDialog(props: {
     return (
       <>
         <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground" title={providerLabel}>
-            {providerLabel}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="font-medium text-foreground">{providerLabel}</span>}
+            />
+            <TooltipPopup>{providerLabel}</TooltipPopup>
+          </Tooltip>
           <span>
             {candidate.messageCount !== null ? `${candidate.messageCount} messages · ` : ""}
             {formatRelativeTimeLabel(candidate.updatedAt)}
@@ -271,12 +275,16 @@ export function SessionImportDialog(props: {
                               {renderCandidateSummary(candidate, false)}
                               <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
                                 <span className="shrink-0">In thread</span>
-                                <span
-                                  className="min-w-0 truncate font-medium text-foreground"
-                                  title={candidate.linkedThread.title}
-                                >
-                                  {candidate.linkedThread.title}
-                                </span>
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <span className="min-w-0 truncate font-medium text-foreground">
+                                        {candidate.linkedThread.title}
+                                      </span>
+                                    }
+                                  />
+                                  <TooltipPopup>{candidate.linkedThread.title}</TooltipPopup>
+                                </Tooltip>
                                 {candidate.linkedThread.archivedAt !== null ? (
                                   <Badge size="sm" variant="secondary">
                                     Archived

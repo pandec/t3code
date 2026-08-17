@@ -6,6 +6,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type { SidebarProjectGroupingMode } from "@t3tools/contracts";
+import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 
 import * as MobileDatabase from "./mobile-database";
 import * as MobileSecureStorage from "./mobile-secure-storage";
@@ -18,6 +19,10 @@ export const MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS = 5_000;
 export interface Preferences {
   readonly archivedSectionVisibleCount?: number;
   readonly liveActivitiesEnabled?: boolean;
+  readonly themeId?: MobileThemeId;
+  readonly lightThemeId?: MobileThemeId;
+  readonly darkThemeId?: MobileThemeId;
+  readonly themeMode?: MobileThemeMode;
   readonly baseFontSize?: number;
   readonly terminalFontSize?: number | null;
   readonly markdownFontSize?: number;
@@ -101,6 +106,10 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     archivedSectionVisibleCount?: number;
     liveActivitiesEnabled?: boolean;
+    themeId?: MobileThemeId;
+    lightThemeId?: MobileThemeId;
+    darkThemeId?: MobileThemeId;
+    themeMode?: MobileThemeMode;
     baseFontSize?: number;
     terminalFontSize?: number | null;
     markdownFontSize?: number;
@@ -126,6 +135,31 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
+  }
+  if (
+    typeof parsed.themeId === "string" &&
+    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.themeId)
+  ) {
+    preferences.themeId = parsed.themeId as MobileThemeId;
+  }
+  if (
+    typeof parsed.lightThemeId === "string" &&
+    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.lightThemeId)
+  ) {
+    preferences.lightThemeId = parsed.lightThemeId as MobileThemeId;
+  }
+  if (
+    typeof parsed.darkThemeId === "string" &&
+    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.darkThemeId)
+  ) {
+    preferences.darkThemeId = parsed.darkThemeId as MobileThemeId;
+  }
+  if (
+    parsed.themeMode === "system" ||
+    parsed.themeMode === "light" ||
+    parsed.themeMode === "dark"
+  ) {
+    preferences.themeMode = parsed.themeMode;
   }
   if (typeof parsed.baseFontSize === "number") preferences.baseFontSize = parsed.baseFontSize;
   if (typeof parsed.terminalFontSize === "number" || parsed.terminalFontSize === null) {

@@ -12,6 +12,7 @@ import type {
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -181,6 +182,7 @@ function makeService(input: {
               updatedAt: "2026-07-01T00:00:00Z",
             }),
         }),
+        SourceControlRateLimit.layer,
       ),
     ),
   );
@@ -1075,6 +1077,74 @@ it.effect("uses a healthy sibling checkout to verify a mutation", () =>
   }),
 );
 
+it.effect("spends the shared host budget when a mutation falls back to a sibling checkout", () =>
+  Effect.gen(function* () {
+    // Sibling checkouts are recorded before project filtering, so they are built from a
+    // different code path than the listing's own entries. Both must carry the rate-limit
+    // wrapper: an unwrapped fallback would spend provider budget without recording it, and
+    // the host would never pause.
+    let listCalls = 0;
+    const actionRoots: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p2",
+          title: "web healthy",
+          workspaceRoot: "/healthy",
+          repository: "acme/web",
+        }),
+        project({ id: "p1", title: "web gone", workspaceRoot: "/gone", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          runAction: (input) => {
+            actionRoots.push(input.cwd);
+            return Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "runAction",
+                reason: "rate-limited",
+                detail: "API rate limit exceeded.",
+              }),
+            );
+          },
+          listChangeRequests: () => {
+            listCalls += 1;
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(
+          cwd === "/healthy"
+            ? (project({
+                id: "live",
+                title: "web",
+                workspaceRoot: cwd,
+                repository: "acme/web",
+              }).repositoryIdentity ?? null)
+            : null,
+        ),
+    });
+
+    yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "close",
+      }),
+    );
+    assert.deepStrictEqual(actionRoots, ["/healthy"]);
+
+    // The rate limit the sibling hit pauses github.com for every later non-interactive
+    // call, so the listing is refused before it reaches the provider.
+    const listError = yield* Effect.flip(service.list({ state: "open" }));
+    assert.strictEqual(listError._tag, "PullRequestOperationError");
+    assert.strictEqual(listCalls, 0);
+  }),
+);
+
 it.effect("refines an unknown self-hosted GitLab sibling before verifying a mutation", () =>
   Effect.gen(function* () {
     const refinementRoots: string[] = [];
@@ -1526,6 +1596,97 @@ it.effect("reports repositories on a host that could not be read", () =>
       result.errors.map((error) => error.projectId),
       ["p2"],
     );
+  }),
+);
+
+it.effect("stops new reads after a rate limit while leaving manual actions available", () =>
+  Effect.gen(function* () {
+    let listCalls = 0;
+    let actionCalls = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.sync(() => {
+              listCalls += 1;
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new PullRequestProviderError({
+                    provider: "github",
+                    operation: "listChangeRequests",
+                    reason: "rate-limited",
+                    detail: "GitHub API rate limit exceeded.",
+                  }),
+                ),
+              ),
+            ),
+          runAction: () =>
+            Effect.sync(() => {
+              actionCalls += 1;
+            }),
+        }),
+      ],
+    });
+
+    const first = yield* service.list({ state: "open", involvement: "all" });
+    const paused = yield* service.list({ state: "open", involvement: "authored" });
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "close",
+    });
+
+    assert.strictEqual(listCalls, 1);
+    assert.strictEqual(actionCalls, 1);
+    assert.lengthOf(first.errors, 1);
+    assert.lengthOf(paused.errors, 1);
+  }),
+);
+
+it.effect("uses a manual rate limit to pause later reads", () =>
+  Effect.gen(function* () {
+    let listCalls = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.sync(() => {
+              listCalls += 1;
+              return { items: [], truncated: false, continues: true };
+            }),
+          runAction: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "runAction",
+                reason: "rate-limited",
+                detail: "GitHub API rate limit exceeded.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "close",
+      }),
+    );
+    const error = yield* Effect.flip(service.list({ state: "open", involvement: "all" }));
+
+    assert.strictEqual(listCalls, 0);
+    assert.strictEqual(error._tag, "PullRequestOperationError");
   }),
 );
 

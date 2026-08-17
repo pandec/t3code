@@ -628,15 +628,21 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               {props.projectTitle}
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
-              <button
-                type="button"
-                aria-label="Discard draft"
-                title="Discard draft"
-                onClick={handleDiscard}
-                className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
-              >
-                <XIcon className="size-3" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Discard draft"
+                      onClick={handleDiscard}
+                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">Discard draft</TooltipPopup>
+              </Tooltip>
             </span>
           </div>
           <div className="mt-0.5 truncate text-sm font-medium text-foreground/90">{preview}</div>
@@ -1434,16 +1440,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ) : isWoke ? (
                   // A wake can land straight in the settled tail (e.g. PR
                   // merged while snoozed); the signal must survive the trip.
-                  <button
-                    type="button"
-                    aria-label="Dismiss Woke notification"
-                    title="Dismiss Woke notification"
-                    onClick={handleAcknowledgeWokeClick}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs font-medium text-amber-700 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
-                  >
-                    <AlarmClockIcon aria-hidden className="size-3" />
-                    <span role="status">Woke</span>
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Dismiss Woke notification"
+                          onClick={handleAcknowledgeWokeClick}
+                          className="inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs font-medium text-amber-700 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
+                        >
+                          <AlarmClockIcon aria-hidden className="size-3" />
+                          <span role="status">Woke</span>
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
+                  </Tooltip>
                 ) : (
                   <span className="text-xs">
                     {variantAction === "unsettle"
@@ -1613,19 +1625,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 >
                   {topStatus ? (
                     isWokeStatus ? (
-                      <button
-                        type="button"
-                        aria-label="Dismiss Woke notification"
-                        title="Dismiss Woke notification"
-                        onClick={handleAcknowledgeWokeClick}
-                        className={cn(
-                          "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring",
-                          topStatus.className,
-                        )}
-                      >
-                        <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
-                        <span role="status">{topStatus.label}</span>
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Dismiss Woke notification"
+                              onClick={handleAcknowledgeWokeClick}
+                              className={cn(
+                                "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring",
+                                topStatus.className,
+                              )}
+                            >
+                              <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                              <span role="status">{topStatus.label}</span>
+                            </button>
+                          }
+                        />
+                        <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
+                      </Tooltip>
                     ) : (
                       <span
                         className={cn(
@@ -1693,15 +1711,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       </Tooltip>
                     ) : null}
                     {showArchiveButton ? (
-                      <button
-                        type="button"
-                        aria-label="Archive thread"
-                        title="Archive"
-                        onClick={handleArchiveClick}
-                        className="-mr-1 inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
-                      >
-                        <ArchiveIcon className="size-3" />
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Archive thread"
+                              onClick={handleArchiveClick}
+                              className="-mr-1 inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <ArchiveIcon className="size-3" />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>Archive</TooltipPopup>
+                      </Tooltip>
                     ) : null}
                   </span>
                 ) : null}
@@ -1791,15 +1815,21 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
           )}
         </span>
       </button>
-      <button
-        type="button"
-        aria-label={`Unarchive ${props.thread.title}`}
-        title="Unarchive"
-        className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/v2-archived-row:pointer-events-auto group-hover/v2-archived-row:opacity-100 group-focus-within/v2-archived-row:pointer-events-auto group-focus-within/v2-archived-row:opacity-100"
-        onClick={() => props.onUnarchive(threadRef)}
-      >
-        <Undo2Icon className="size-3.5" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`Unarchive ${props.thread.title}`}
+              className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/v2-archived-row:pointer-events-auto group-hover/v2-archived-row:opacity-100 group-focus-within/v2-archived-row:pointer-events-auto group-focus-within/v2-archived-row:opacity-100"
+              onClick={() => props.onUnarchive(threadRef)}
+            >
+              <Undo2Icon className="size-3.5" />
+            </button>
+          }
+        />
+        <TooltipPopup>Unarchive</TooltipPopup>
+      </Tooltip>
     </li>
   );
 });
@@ -4195,24 +4225,30 @@ export default function Sidebar() {
                                 <span className="sr-only">Accent {accentColor}</span>
                               </>
                             ) : null}
-                            <button
-                              type="button"
-                              aria-label={`${isHidden ? "Show" : "Hide"} ${project.displayName}`}
-                              title={`${isHidden ? "Show" : "Hide"} project`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onMouseUp={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                toggleProjectHidden(scopeKey);
-                              }}
-                            >
-                              {isHidden ? (
-                                <EyeIcon className="size-3.5" />
-                              ) : (
-                                <EyeOffIcon className="size-3.5" />
-                              )}
-                            </button>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <button
+                                    type="button"
+                                    aria-label={`${isHidden ? "Show" : "Hide"} ${project.displayName}`}
+                                    className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onMouseUp={(event) => event.stopPropagation()}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      toggleProjectHidden(scopeKey);
+                                    }}
+                                  >
+                                    {isHidden ? (
+                                      <EyeIcon className="size-3.5" />
+                                    ) : (
+                                      <EyeOffIcon className="size-3.5" />
+                                    )}
+                                  </button>
+                                }
+                              />
+                              <TooltipPopup>{`${isHidden ? "Show" : "Hide"} project`}</TooltipPopup>
+                            </Tooltip>
                             <Button
                               size="icon-xs"
                               variant="ghost-muted"
@@ -4240,16 +4276,22 @@ export default function Sidebar() {
                     </MenuPopup>
                   </Menu>
                   {projectScopeKeys !== null || hiddenProjectKeys.size > 0 ? (
-                    <button
-                      type="button"
-                      data-testid="sidebar-v2-project-filter-clear"
-                      aria-label="Clear project filter"
-                      title="Clear project filter"
-                      className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      onClick={clearProjectFilters}
-                    >
-                      <XIcon className="size-3.5" />
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            data-testid="sidebar-v2-project-filter-clear"
+                            aria-label="Clear project filter"
+                            className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                            onClick={clearProjectFilters}
+                          >
+                            <XIcon className="size-3.5" />
+                          </button>
+                        }
+                      />
+                      <TooltipPopup>Clear project filter</TooltipPopup>
+                    </Tooltip>
                   ) : null}
                 </div>
                 <Tooltip>
