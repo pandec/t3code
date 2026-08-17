@@ -167,6 +167,23 @@ export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivid
   );
 });
 
+/**
+ * Closes the pinned block, matching the web sidebar: a headerless rule with
+ * more breathing room than the hairline between rows. The pin glyphs already
+ * say what the block is, so it carries no label.
+ */
+export const ThreadListV2PinnedDivider = memo(function ThreadListV2PinnedDivider(props: {
+  readonly pane?: "screen" | "sidebar";
+}) {
+  return (
+    <View className={cn("my-2", props.pane === "sidebar" ? "px-3" : "px-5")}>
+      {/* `bg-border`, not the rows' `bg-border-subtle`: a block boundary has
+          to read stronger than the hairline between neighboring rows. */}
+      <View className="h-px bg-border" />
+    </View>
+  );
+});
+
 const SNOOZE_ACCENT_LIGHT = "#2563eb";
 const SNOOZE_ACCENT_DARK = "#60a5fa";
 

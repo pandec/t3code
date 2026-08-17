@@ -285,6 +285,13 @@ export interface ThreadListV2PendingListItem {
   readonly showPendingDivider: boolean;
 }
 
+/** Closes the pinned block, matching the web sidebar's headerless rule. The
+    pin glyphs carry the meaning, so the divider stays unlabeled. */
+export interface ThreadListV2PinnedDividerListItem {
+  readonly type: "v2-pinned-divider";
+  readonly key: "v2-pinned-divider";
+}
+
 export interface ThreadListV2SnoozedShelfListItem {
   readonly type: "v2-snoozed-shelf";
   readonly key: "v2-snoozed-shelf";
@@ -302,11 +309,13 @@ export interface ThreadListV2SettledShelfListItem {
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2PinnedDividerListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
 
 /**
- * Builds the shared mobile order: active → pending → snoozed shelf → settled.
+ * Builds the shared mobile order: pinned → pinned divider → active → pending →
+ * snoozed shelf → settled.
  * Pending tasks are waiting rather than asking, and parked work remains
  * reachable without competing with either the inbox or settled history.
  */
@@ -346,7 +355,19 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  // Pinned rows lead the list; close them with the same headerless rule the
+  // web sidebar draws, so the inbox reads as its own block.
+  let pinnedEnd = 0;
+  while (pinnedEnd < activeEnd) {
+    const item = threadItems[pinnedEnd];
+    if (item?.type !== "v2-thread" || !item.item.pinned) break;
+    pinnedEnd += 1;
+  }
+  const result: ThreadListV2ListItem[] = threadItems.slice(0, pinnedEnd);
+  if (pinnedEnd > 0) {
+    result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
+  }
+  result.push(...threadItems.slice(pinnedEnd, activeEnd), ...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
