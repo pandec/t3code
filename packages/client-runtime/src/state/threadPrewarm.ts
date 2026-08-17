@@ -100,7 +100,13 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
 );
 
 export interface EnvironmentThreadPrewarmStatus {
-  /** Latest successful cache population; drives the user-facing sync label. */
+  /**
+   * Completion time of the latest full sweep that was not a total failure: one
+   * that populated an entry, confirmed an entry already cached, or found
+   * nothing to warm. Prewarm only populates missing entries, so an already-warm
+   * cache legitimately writes nothing and must still read as synced. Drives the
+   * user-facing sync label; targeted settle runs never advance it.
+   */
   readonly lastRunAt: number | null;
   /** Completion cursor for manual requests, including unavailable outcomes. */
   readonly lastManualRequestCompletedAt: number | null;
@@ -399,7 +405,15 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
       }),
     { concurrency: PREWARM_CONCURRENCY, discard: true },
   );
-  const lastRunAt = refreshed > 0 ? yield* Clock.currentTimeMillis : input.previousLastRunAt;
+  // A full run that only skipped already-cached threads still swept them, so it
+  // counts as a sync; so does one that found nothing to warm. Two outcomes keep
+  // the previous timestamp: a run where every candidate failed, which confirmed
+  // nothing, and a targeted settle run, which inspects only the threads that
+  // just settled and therefore says nothing about the sweep the label reports.
+  const lastRunAt =
+    input.only !== undefined || (failed > 0 && refreshed === 0 && skipped === 0)
+      ? input.previousLastRunAt
+      : yield* Clock.currentTimeMillis;
   const status: EnvironmentThreadPrewarmStatus = {
     ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
     lastRunAt,
@@ -685,12 +699,15 @@ export function createEnvironmentThreadPrewarmAtoms<R, E>(
 }
 
 export interface ThreadPrewarmSummary {
-  /** Latest successful cache population across environments. */
+  /** Latest sweep across environments; settle runs and total failures do not advance it. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
   /** True while any environment has a prewarm run in flight. */
   readonly syncing: boolean;
-  /** Per-environment successful-population timestamps. */
+  /**
+   * Per-environment sweep timestamps. Not a completion signal — a request whose
+   * candidates all failed never advances this; use the manual cursor instead.
+   */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
   /** Per-environment cursors used to track manual request completion. */
   readonly environmentLastManualRequestCompletedAt: ReadonlyMap<EnvironmentIdType, number | null>;
@@ -756,7 +773,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       refreshed += status.refreshed;
       syncing ||= status.running;
       // A stream restart re-emits the empty baseline to clear a stranded
-      // `running`. Successful-population and manual-completion cursors must survive
+      // `running`. Completed-run and manual-completion cursors must survive
       // that baseline so labels do not roll back and pending requests do not
       // observe a false completion.
       const environmentLastRun =

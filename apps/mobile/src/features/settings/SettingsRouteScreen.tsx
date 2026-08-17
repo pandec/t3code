@@ -664,7 +664,8 @@ function useMinuteClockMs(): number {
 /**
  * Manual counterpart of the automatic thread prewarming: fires the same
  * engine on demand (bypassing its cooldown) and shows when any environment
- * last completed a warm run. The engine debounces briefly before running, so
+ * last completed a full sweep, excluding targeted settle runs. The engine
+ * debounces briefly before running, so
  * the row tracks a separate manual-completion cursor until that request reaches
  * a terminal outcome without treating unavailable attempts as successful syncs.
  */
