@@ -1069,6 +1069,44 @@ describe("buildThreadListV2ListItems", () => {
     expect(items.map((item) => item.type)).toEqual(["v2-thread", "v2-pending"]);
   });
 
+  it("closes the pinned block with a divider above the inbox", () => {
+    const pinnedLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "active" }),
+        makeThread({
+          id: ThreadId.make("pinned"),
+          title: "pinned",
+          pinnedAt: "2026-06-01T10:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({
+      items: pinnedLayout.items,
+      pendingTasks: [makePendingTask("queued")],
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      `v2-thread:${environmentId}:pinned`,
+      "v2-pinned-divider",
+      `v2-thread:${environmentId}:active`,
+      "v2-pending:queued",
+    ]);
+  });
+
+  it("omits the pinned divider when nothing is pinned", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      settledCount: layout.settledCount,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+    });
+
+    expect(items.some((item) => item.type === "v2-pinned-divider")).toBe(false);
+  });
+
   it("keeps the settled shelf between active and settled rows when nothing is queued", () => {
     const items = buildThreadListV2ListItems({
       items: layout.items,

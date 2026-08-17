@@ -84,6 +84,7 @@ import {
 } from "./thread-list-items";
 import {
   ThreadListV2PendingRow,
+  ThreadListV2PinnedDivider,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
@@ -1047,6 +1048,10 @@ function ThreadNavigationSidebarPane(
           previous.showPendingDivider === item.showPendingDivider
         );
       }
+      // Static rule: identical whenever both sides are the divider.
+      if (previous.type === "v2-pinned-divider" || item.type === "v2-pinned-divider") {
+        return previous.type === item.type;
+      }
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
@@ -1184,6 +1189,8 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
+        case "v2-pinned-divider":
+          return <ThreadListV2PinnedDivider pane="sidebar" />;
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader

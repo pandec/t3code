@@ -53,6 +53,7 @@ import {
 } from "../threads/thread-list-items";
 import {
   ThreadListV2PendingRow,
+  ThreadListV2PinnedDivider,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
@@ -900,6 +901,9 @@ export function HomeScreen(props: HomeScreenProps) {
             onDeletePendingTask={props.onDeletePendingTask}
           />
         );
+      }
+      if (item.type === "v2-pinned-divider") {
+        return <ThreadListV2PinnedDivider />;
       }
       if (item.type === "v2-snoozed-shelf") {
         return (
