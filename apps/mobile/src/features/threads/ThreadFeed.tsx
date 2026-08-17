@@ -62,8 +62,8 @@ import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
-import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { listeningPlayerChrome } from "./listeningPlayerChrome";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -1346,14 +1346,8 @@ function AssistantSpeechPlayer(props: {
   // background family to stay legible. A literal white disappears on the light
   // `--color-foreground` that dark appearances and several built-in themes use.
   const onForegroundColor = useThemeColor("--color-sheet");
-  // The scrubber track and the speed pill's outline both sit on this card's
-  // `bg-subtle` fill. Surface-ramp tokens are no good there — they are adjacent
-  // tiers of the same ramp, so `--color-subtle-strong` lands within 1.03 of the
-  // fill on some built-in themes. Derive both from the text colour instead,
-  // which every theme guarantees to contrast against its own surfaces.
   const foregroundColor = String(useThemeColor("--color-foreground"));
-  const trackColor = themeColorWithAlpha(foregroundColor, 0.18);
-  const outlineColor = themeColorWithAlpha(foregroundColor, 0.22);
+  const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
@@ -1539,7 +1533,7 @@ function ListeningSpeedControl(props: { readonly speed: number; readonly outline
           accessibilityLabel="Decrease playback speed"
           accessibilityRole="button"
           accessibilityState={{ disabled: props.speed <= LISTENING_SPEED_MIN }}
-          className="size-8 items-center justify-center rounded-lg active:bg-subtle-strong disabled:opacity-40"
+          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
           disabled={props.speed <= LISTENING_SPEED_MIN}
           hitSlop={6}
           onPress={() => listeningPlayback.nudgeSpeed(-1)}
@@ -1555,7 +1549,7 @@ function ListeningSpeedControl(props: { readonly speed: number; readonly outline
           <Pressable
             accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
             accessibilityRole="button"
-            className="h-8 min-w-16 items-center justify-center rounded-lg border px-2 active:bg-subtle-strong"
+            className="h-8 min-w-16 items-center justify-center rounded-lg border px-2 active:bg-foreground/10"
             style={{ borderColor: props.outlineColor }}
           >
             <Text className="font-t3-bold text-xs tabular-nums text-foreground">
@@ -1567,7 +1561,7 @@ function ListeningSpeedControl(props: { readonly speed: number; readonly outline
           accessibilityLabel="Increase playback speed"
           accessibilityRole="button"
           accessibilityState={{ disabled: props.speed >= LISTENING_SPEED_MAX }}
-          className="size-8 items-center justify-center rounded-lg active:bg-subtle-strong disabled:opacity-40"
+          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
           disabled={props.speed >= LISTENING_SPEED_MAX}
           hitSlop={6}
           onPress={() => listeningPlayback.nudgeSpeed(1)}
