@@ -63,6 +63,7 @@ import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { listeningPlayerChrome } from "./listeningPlayerChrome";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -230,7 +231,7 @@ function SteerPendingMarker({ tintColor }: { readonly tintColor: ColorValue }) {
   return (
     <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
       <SymbolView name="circle.dashed" size={11} tintColor={tintColor} type="monochrome" />
-      <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+      <Text className="font-t3-medium text-xs text-foreground-secondary">
         Waiting for the agent to pick this up
       </Text>
     </View>
@@ -1016,7 +1017,7 @@ function renderFeedEntry(
                   tintColor={iconSubtleColor}
                   type="monochrome"
                 />
-                <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+                <Text className="font-t3-medium text-xs text-foreground-secondary">
                   Transcribed
                 </Text>
               </View>
@@ -1240,7 +1241,7 @@ function AssistantMessageMetaAndArtifacts(props: {
               expanded: summary === null ? undefined : summaryExpanded,
               busy: summaryPreparing,
             }}
-            className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
             disabled={summaryPreparing}
             hitSlop={8}
             onPress={() => void onPressSummary()}
@@ -1267,7 +1268,7 @@ function AssistantMessageMetaAndArtifacts(props: {
               expanded: speech === null ? undefined : expanded,
               busy: preparing,
             }}
-            className="size-7 items-center justify-center rounded-lg active:bg-neutral-200 dark:active:bg-neutral-800"
+            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
             disabled={preparing}
             hitSlop={8}
             onPress={() => void onPressSpeech()}
@@ -1284,12 +1285,12 @@ function AssistantMessageMetaAndArtifacts(props: {
             )}
           </Pressable>
         ) : null}
-        <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+        <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
           {props.timestampLabel}
         </Text>
       </View>
       {summary !== null && summaryExpanded ? (
-        <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
+        <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
           <View className="flex-row items-center gap-2">
             <SymbolView
               name="doc.text"
@@ -1341,6 +1342,12 @@ function AssistantSpeechPlayer(props: {
   readonly onRetry: () => void;
 }) {
   const { blocked, speed } = useListeningPlaybackSnapshot();
+  // The transport sits on `bg-foreground`, so its glyph has to come from the
+  // background family to stay legible. A literal white disappears on the light
+  // `--color-foreground` that dark appearances and several built-in themes use.
+  const onForegroundColor = useThemeColor("--color-sheet");
+  const foregroundColor = String(useThemeColor("--color-foreground"));
+  const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
@@ -1407,7 +1414,7 @@ function AssistantSpeechPlayer(props: {
   ]);
 
   return (
-    <View className="mt-2 gap-2 rounded-2xl border border-neutral-200 bg-neutral-100/70 p-3 dark:border-white/10 dark:bg-white/[0.04]">
+    <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
       <View className="flex-row items-center gap-2">
         <SymbolView
           name="headphones"
@@ -1454,12 +1461,15 @@ function AssistantSpeechPlayer(props: {
               <SymbolView
                 name={status.playing ? "pause.fill" : "play"}
                 size={15}
-                tintColor="white"
+                tintColor={onForegroundColor}
                 type="monochrome"
               />
             </Pressable>
             <View className="flex-1 gap-1.5">
-              <View className="h-1.5 overflow-hidden rounded-full bg-neutral-300 dark:bg-neutral-700">
+              <View
+                className="h-1.5 overflow-hidden rounded-full"
+                style={{ backgroundColor: trackColor }}
+              >
                 <View
                   className="h-full rounded-full bg-foreground"
                   style={{ width: `${progress * 100}%` }}
@@ -1473,7 +1483,7 @@ function AssistantSpeechPlayer(props: {
           {blocked ? (
             <Text className="text-xs text-foreground-muted">Finish recording to listen.</Text>
           ) : null}
-          <ListeningSpeedControl speed={speed} />
+          <ListeningSpeedControl outlineColor={outlineColor} speed={speed} />
         </View>
       )}
       <Pressable
@@ -1499,7 +1509,7 @@ function AssistantSpeechPlayer(props: {
   );
 }
 
-function ListeningSpeedControl(props: { readonly speed: number }) {
+function ListeningSpeedControl(props: { readonly speed: number; readonly outlineColor: string }) {
   const speedActions = useMemo(
     () =>
       LISTENING_SPEED_PRESETS.map((preset) => ({
@@ -1523,7 +1533,7 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
           accessibilityLabel="Decrease playback speed"
           accessibilityRole="button"
           accessibilityState={{ disabled: props.speed <= LISTENING_SPEED_MIN }}
-          className="size-8 items-center justify-center rounded-lg active:bg-neutral-200 disabled:opacity-40 dark:active:bg-neutral-800"
+          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
           disabled={props.speed <= LISTENING_SPEED_MIN}
           hitSlop={6}
           onPress={() => listeningPlayback.nudgeSpeed(-1)}
@@ -1539,7 +1549,8 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
           <Pressable
             accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
             accessibilityRole="button"
-            className="h-8 min-w-16 items-center justify-center rounded-lg border border-neutral-300 px-2 active:bg-neutral-200 dark:border-neutral-700 dark:active:bg-neutral-800"
+            className="h-8 min-w-16 items-center justify-center rounded-lg border px-2 active:bg-foreground/10"
+            style={{ borderColor: props.outlineColor }}
           >
             <Text className="font-t3-bold text-xs tabular-nums text-foreground">
               {formatListeningSpeed(props.speed)}
@@ -1550,7 +1561,7 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
           accessibilityLabel="Increase playback speed"
           accessibilityRole="button"
           accessibilityState={{ disabled: props.speed >= LISTENING_SPEED_MAX }}
-          className="size-8 items-center justify-center rounded-lg active:bg-neutral-200 disabled:opacity-40 dark:active:bg-neutral-800"
+          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
           disabled={props.speed >= LISTENING_SPEED_MAX}
           hitSlop={6}
           onPress={() => listeningPlayback.nudgeSpeed(1)}
