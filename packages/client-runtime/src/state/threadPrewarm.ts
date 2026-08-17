@@ -408,8 +408,8 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   // A full run that only skipped already-cached threads still swept them, so it
   // counts as a sync; so does one that found nothing to warm. Two outcomes keep
   // the previous timestamp: a run where every candidate failed, which confirmed
-  // nothing, and a targeted settle run, which inspects one thread and therefore
-  // says nothing about the sweep the label reports.
+  // nothing, and a targeted settle run, which inspects only the threads that
+  // just settled and therefore says nothing about the sweep the label reports.
   const lastRunAt =
     input.only !== undefined || (failed > 0 && refreshed === 0 && skipped === 0)
       ? input.previousLastRunAt
@@ -699,12 +699,15 @@ export function createEnvironmentThreadPrewarmAtoms<R, E>(
 }
 
 export interface ThreadPrewarmSummary {
-  /** Latest completed run across environments. */
+  /** Latest sweep across environments; settle runs and total failures do not advance it. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
   /** True while any environment has a prewarm run in flight. */
   readonly syncing: boolean;
-  /** Per-environment completed-run timestamps. */
+  /**
+   * Per-environment sweep timestamps. Not a completion signal — a request whose
+   * candidates all failed never advances this; use the manual cursor instead.
+   */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
   /** Per-environment cursors used to track manual request completion. */
   readonly environmentLastManualRequestCompletedAt: ReadonlyMap<EnvironmentIdType, number | null>;

@@ -1162,8 +1162,8 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
-  // The label reports when the sweep last ran. A settle run inspects the single
-  // thread whose turn just ended, so letting it advance the label would pin it
+  // The label reports when the sweep last ran. A settle run inspects only the
+  // threads whose turns just ended, so letting it advance the label would pin it
   // to "just now" on any active device and hide a sweep that stopped running.
   it.effect("does not advance lastRunAt for a targeted settle run", () =>
     Effect.scoped(
