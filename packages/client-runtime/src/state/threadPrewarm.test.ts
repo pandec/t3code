@@ -1162,6 +1162,38 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
+  // The label reports when the sweep last ran. A settle run inspects the single
+  // thread whose turn just ended, so letting it advance the label would pin it
+  // to "just now" on any active device and hide a sweep that stopped running.
+  it.effect("does not advance lastRunAt for a targeted settle run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        const initial = yield* Queue.take(harness.statuses);
+        expect(initial.lastRunAt).not.toBe(null);
+
+        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
+        yield* TestClock.adjust("1 second");
+        yield* harness.fire({
+          reason: "thread-settled",
+          environmentId: ENVIRONMENT_ID,
+          threadId: ThreadId.make("stale"),
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+
+        // Even a settle run that populated the thread leaves the label alone.
+        const status = yield* Queue.take(harness.statuses);
+        expect(status.refreshed).toBe(1);
+        expect(status.lastRunAt).toBe(initial.lastRunAt);
+      }),
+    ),
+  );
+
   it.effect("ignores settle triggers for other environments", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1243,7 +1275,11 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.failed).toBe(2);
         expect(status.lastRunAt).toBe(initial.lastRunAt);
         expect(status.lastManualRequestCompletedAt).not.toBe(null);
-        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale", "current"]);
+        // The manual run loads its two candidates concurrently, so only the
+        // initial run's single call has a guaranteed position.
+        const loaderCalls = yield* Ref.get(harness.loaderCalls);
+        expect(loaderCalls[0]).toBe("stale");
+        expect([...loaderCalls.slice(1)].sort()).toEqual(["current", "stale"]);
       }),
     ),
   );

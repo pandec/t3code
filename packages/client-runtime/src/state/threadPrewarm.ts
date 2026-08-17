@@ -101,10 +101,11 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
 
 export interface EnvironmentThreadPrewarmStatus {
   /**
-   * Completion time of the latest run that reached a good state for at least
-   * one candidate; drives the user-facing sync label. Prewarm only populates
-   * missing entries, so an already-warm cache legitimately writes nothing and
-   * must still read as synced.
+   * Completion time of the latest full sweep that was not a total failure: one
+   * that populated an entry, confirmed an entry already cached, or found
+   * nothing to warm. Prewarm only populates missing entries, so an already-warm
+   * cache legitimately writes nothing and must still read as synced. Drives the
+   * user-facing sync label; targeted settle runs never advance it.
    */
   readonly lastRunAt: number | null;
   /** Completion cursor for manual requests, including unavailable outcomes. */
@@ -404,11 +405,13 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
       }),
     { concurrency: PREWARM_CONCURRENCY, discard: true },
   );
-  // A run that only skipped already-cached threads still swept them, so it
-  // counts as a sync. Only a run where every candidate failed leaves the
-  // previous timestamp in place, because nothing about the cache was confirmed.
+  // A full run that only skipped already-cached threads still swept them, so it
+  // counts as a sync; so does one that found nothing to warm. Two outcomes keep
+  // the previous timestamp: a run where every candidate failed, which confirmed
+  // nothing, and a targeted settle run, which inspects one thread and therefore
+  // says nothing about the sweep the label reports.
   const lastRunAt =
-    failed > 0 && refreshed === 0 && skipped === 0
+    input.only !== undefined || (failed > 0 && refreshed === 0 && skipped === 0)
       ? input.previousLastRunAt
       : yield* Clock.currentTimeMillis;
   const status: EnvironmentThreadPrewarmStatus = {
