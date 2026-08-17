@@ -62,6 +62,7 @@ import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
+import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
@@ -1345,6 +1346,14 @@ function AssistantSpeechPlayer(props: {
   // background family to stay legible. A literal white disappears on the light
   // `--color-foreground` that dark appearances and several built-in themes use.
   const onForegroundColor = useThemeColor("--color-sheet");
+  // The scrubber track and the speed pill's outline both sit on this card's
+  // `bg-subtle` fill. Surface-ramp tokens are no good there — they are adjacent
+  // tiers of the same ramp, so `--color-subtle-strong` lands within 1.03 of the
+  // fill on some built-in themes. Derive both from the text colour instead,
+  // which every theme guarantees to contrast against its own surfaces.
+  const foregroundColor = String(useThemeColor("--color-foreground"));
+  const trackColor = themeColorWithAlpha(foregroundColor, 0.18);
+  const outlineColor = themeColorWithAlpha(foregroundColor, 0.22);
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
@@ -1463,7 +1472,10 @@ function AssistantSpeechPlayer(props: {
               />
             </Pressable>
             <View className="flex-1 gap-1.5">
-              <View className="h-1.5 overflow-hidden rounded-full bg-subtle-strong">
+              <View
+                className="h-1.5 overflow-hidden rounded-full"
+                style={{ backgroundColor: trackColor }}
+              >
                 <View
                   className="h-full rounded-full bg-foreground"
                   style={{ width: `${progress * 100}%` }}
@@ -1477,7 +1489,7 @@ function AssistantSpeechPlayer(props: {
           {blocked ? (
             <Text className="text-xs text-foreground-muted">Finish recording to listen.</Text>
           ) : null}
-          <ListeningSpeedControl speed={speed} />
+          <ListeningSpeedControl outlineColor={outlineColor} speed={speed} />
         </View>
       )}
       <Pressable
@@ -1503,7 +1515,7 @@ function AssistantSpeechPlayer(props: {
   );
 }
 
-function ListeningSpeedControl(props: { readonly speed: number }) {
+function ListeningSpeedControl(props: { readonly speed: number; readonly outlineColor: string }) {
   const speedActions = useMemo(
     () =>
       LISTENING_SPEED_PRESETS.map((preset) => ({
@@ -1543,7 +1555,8 @@ function ListeningSpeedControl(props: { readonly speed: number }) {
           <Pressable
             accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
             accessibilityRole="button"
-            className="h-8 min-w-16 items-center justify-center rounded-lg border border-border px-2 active:bg-subtle-strong"
+            className="h-8 min-w-16 items-center justify-center rounded-lg border px-2 active:bg-subtle-strong"
+            style={{ borderColor: props.outlineColor }}
           >
             <Text className="font-t3-bold text-xs tabular-nums text-foreground">
               {formatListeningSpeed(props.speed)}
