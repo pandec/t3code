@@ -685,7 +685,8 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.refreshed).toBe(0);
         expect(status.skipped).toBe(1);
         expect(status.failed).toBe(1);
-        expect(status.lastRunAt).toBe(null);
+        // A partial failure still swept the other candidate, so the run counts.
+        expect(status.lastRunAt).not.toBe(null);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
         expect(yield* Ref.get(harness.saveCalls)).toEqual([]);
       }),
@@ -1183,7 +1184,10 @@ describe("makeEnvironmentThreadPrewarm", () => {
     ),
   );
 
-  it.effect("does not advance lastRunAt when every manual candidate is already cached", () =>
+  // Prewarm only populates missing entries, so a warm cache is the steady state
+  // for a device that has been used. Gating the sync label on a write would
+  // leave it reading "Not synced yet" forever.
+  it.effect("advances lastRunAt when every manual candidate is already cached", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
@@ -1203,14 +1207,14 @@ describe("makeEnvironmentThreadPrewarm", () => {
         const status = yield* Queue.take(harness.statuses);
         expect(status.refreshed).toBe(0);
         expect(status.skipped).toBe(2);
-        expect(status.lastRunAt).toBe(initial.lastRunAt);
+        expect(status.lastRunAt).toBeGreaterThan(initial.lastRunAt ?? 0);
         expect(status.lastManualRequestCompletedAt).not.toBe(null);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
       }),
     ),
   );
 
-  it.effect("preserves the previous lastRunAt when every loader returns no snapshot", () =>
+  it.effect("preserves the previous lastRunAt when every candidate fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
@@ -1222,7 +1226,11 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(initial.refreshed).toBe(1);
         expect(initial.lastRunAt).not.toBe(null);
 
-        yield* Ref.update(harness.stored, (map) => withoutStoredThread(map, "stale"));
+        // Both candidates become cold, and the loader has nothing to offer for
+        // either: the run confirms nothing about the cache and is not a sync.
+        yield* Ref.update(harness.stored, (map) =>
+          withoutStoredThread(withoutStoredThread(map, "stale"), "current"),
+        );
         yield* Ref.set(harness.snapshotAvailable, false);
         yield* TestClock.adjust("1 second");
         yield* harness.fire({ reason: "manual" });
@@ -1231,10 +1239,11 @@ describe("makeEnvironmentThreadPrewarm", () => {
 
         const status = yield* Queue.take(harness.statuses);
         expect(status.refreshed).toBe(0);
-        expect(status.failed).toBe(1);
+        expect(status.skipped).toBe(0);
+        expect(status.failed).toBe(2);
         expect(status.lastRunAt).toBe(initial.lastRunAt);
         expect(status.lastManualRequestCompletedAt).not.toBe(null);
-        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale"]);
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale", "stale", "current"]);
       }),
     ),
   );

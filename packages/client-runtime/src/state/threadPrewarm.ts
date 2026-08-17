@@ -100,7 +100,12 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
 );
 
 export interface EnvironmentThreadPrewarmStatus {
-  /** Latest successful cache population; drives the user-facing sync label. */
+  /**
+   * Completion time of the latest run that reached a good state for at least
+   * one candidate; drives the user-facing sync label. Prewarm only populates
+   * missing entries, so an already-warm cache legitimately writes nothing and
+   * must still read as synced.
+   */
   readonly lastRunAt: number | null;
   /** Completion cursor for manual requests, including unavailable outcomes. */
   readonly lastManualRequestCompletedAt: number | null;
@@ -399,7 +404,13 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
       }),
     { concurrency: PREWARM_CONCURRENCY, discard: true },
   );
-  const lastRunAt = refreshed > 0 ? yield* Clock.currentTimeMillis : input.previousLastRunAt;
+  // A run that only skipped already-cached threads still swept them, so it
+  // counts as a sync. Only a run where every candidate failed leaves the
+  // previous timestamp in place, because nothing about the cache was confirmed.
+  const lastRunAt =
+    failed > 0 && refreshed === 0 && skipped === 0
+      ? input.previousLastRunAt
+      : yield* Clock.currentTimeMillis;
   const status: EnvironmentThreadPrewarmStatus = {
     ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
     lastRunAt,
@@ -685,12 +696,12 @@ export function createEnvironmentThreadPrewarmAtoms<R, E>(
 }
 
 export interface ThreadPrewarmSummary {
-  /** Latest successful cache population across environments. */
+  /** Latest completed run across environments. */
   readonly lastRunAt: number | null;
   readonly refreshed: number;
   /** True while any environment has a prewarm run in flight. */
   readonly syncing: boolean;
-  /** Per-environment successful-population timestamps. */
+  /** Per-environment completed-run timestamps. */
   readonly environmentLastRunAt: ReadonlyMap<EnvironmentIdType, number | null>;
   /** Per-environment cursors used to track manual request completion. */
   readonly environmentLastManualRequestCompletedAt: ReadonlyMap<EnvironmentIdType, number | null>;
@@ -756,7 +767,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
       refreshed += status.refreshed;
       syncing ||= status.running;
       // A stream restart re-emits the empty baseline to clear a stranded
-      // `running`. Successful-population and manual-completion cursors must survive
+      // `running`. Completed-run and manual-completion cursors must survive
       // that baseline so labels do not roll back and pending requests do not
       // observe a false completion.
       const environmentLastRun =
