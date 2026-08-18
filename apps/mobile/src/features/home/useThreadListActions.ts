@@ -296,6 +296,13 @@ export function useThreadListActions(): {
             environmentId: String(thread.environmentId),
             threadId: String(result.value.threadId),
           });
+        } catch {
+          // forkMutation resolves to a Result even on defects, so only the
+          // navigate above can land here: the fork exists but did not open.
+          Alert.alert(
+            "Could not open the fork",
+            "The conversation was forked, but the copy could not be opened. It is in the thread list.",
+          );
         } finally {
           forkInFlightThreadKeys.current.delete(key);
         }

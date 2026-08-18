@@ -116,10 +116,11 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
 
-// Leading-swipe hues. Archive keeps the panel's default blue; the actions
-// that precede it take the system tints their row menu icons already imply.
+// Leading-swipe hues. Archive keeps the panel's default blue; pin and fork
+// take iOS system tints no other swipe button uses, so a hue never means two
+// different actions (the trailing panel already owns indigo for Snooze).
 const PIN_SWIPE_COLOR = "#ff9500";
-const FORK_SWIPE_COLOR = "#5856d6";
+const FORK_SWIPE_COLOR = "#30b0c7";
 
 /**
  * The project accent as a flat tint layered over the row's own background,
@@ -1117,7 +1118,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onSwipeableWillOpen={props.onSwipeableWillOpen}
         primaryAction={primaryAction}
         secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}`}
+        // The action count folds in because the leading panel's width is
+        // measured at pan start: if forkability flips while the row rests
+        // open (a turn ending adds Fork), the panel would otherwise desync
+        // from the row and leave Archive covered. Identity flips that keep
+        // the width (Pin -> Unpin) deliberately do not reset, so a pin's
+        // close animation is never snapped short.
+        resetKey={`${thread.environmentId}:${thread.id}:${swipeActions.left.length}`}
         simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >

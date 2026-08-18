@@ -664,7 +664,9 @@ function ThreadSwipeLeftActions(props: {
         const offset = index * ACTION_ITEM_WIDTH;
         return (
           <SwipeActionButton
-            key={action.label}
+            // Positional: a slot whose action flips label (Pin -> Unpin while
+            // the panel slides shut) keeps its mounted button.
+            key={index}
             accessibilityLabel={action.accessibilityLabel}
             actionsWidth={actionsWidth}
             backgroundColor={action.backgroundColor ?? DEFAULT_LEFT_ACTION_COLOR}
