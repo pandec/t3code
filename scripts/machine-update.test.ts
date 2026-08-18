@@ -343,13 +343,25 @@ it("starts remote lanes and the local lane concurrently, while preserving summar
   );
 });
 
-it("shares local prep, serializes surfaces, and lets iOS run after desktop failure", async () => {
+it("shares local prep, runs surfaces concurrently, and reports a failed desktop beside iOS", async () => {
   const requests: RunRequest[] = [];
+  // Both surfaces must be in flight at once for this barrier to release, so a
+  // regression back to serialized installs deadlocks instead of passing.
+  let startedSurfaces = 0;
+  let releaseSurfaces: (() => void) | undefined;
+  const bothSurfacesStarted = new Promise<void>((resolve) => {
+    releaseSurfaces = resolve;
+  });
   const runner: CommandRunner = {
     dryRun: false,
     cancel: () => undefined,
     run: async (request) => {
       requests.push(request);
+      if (request.stage === "desktop" || request.stage === "ios") {
+        startedSurfaces += 1;
+        if (startedSurfaces === 2) releaseSurfaces?.();
+        await bothSurfacesStarted;
+      }
       return request.stage === "desktop"
         ? { ...ok(), exitCode: 12, stderrTail: "desktop failed" }
         : ok();
@@ -423,9 +435,10 @@ it("hands only real TTY local iOS execution to the terminal", async () => {
       ["ios", true],
     ],
   );
-  assert.deepStrictEqual(progress.slice(-5), [
-    "stage:ios",
+  assert.deepStrictEqual(progress.slice(-6), [
+    "stage:desktop + ios",
     "suspend",
+    "run:desktop:false",
     "run:ios:true",
     "resume",
     "finish:OK",

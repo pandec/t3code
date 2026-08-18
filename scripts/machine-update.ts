@@ -1674,26 +1674,37 @@ export async function runLocalTarget(
     ...(plan.desktop ? ([["desktop", "pnpm", ["run", "install:desktop:dev"]]] as const) : []),
     ...(plan.ios ? ([["ios", "pnpm", ["run", "ios:local:release"]]] as const) : []),
   ];
-  for (const [stage, command, args] of surfaces) {
-    dependencies.progress?.stage(jobId, stage);
+  if (surfaces.length > 0) {
+    dependencies.progress?.stage(jobId, surfaces.map(([stage]) => stage).join(" + "));
+    // The desktop install never reads stdin, so it runs alongside the iOS build
+    // instead of after it. Only iOS is handed the terminal, because Expo needs a
+    // real TTY to offer its device-unlock prompt.
     const interactiveTerminal =
-      stage === "ios" &&
+      plan.ios &&
       !dependencies.runner.dryRun &&
       dependencies.input?.isTTY === true &&
       dependencies.input.setRawMode !== undefined &&
       dependencies.output?.isTTY === true;
     if (interactiveTerminal) dependencies.progress?.suspend();
-    let commandResult: CommandResult;
+    let surfaceResults: ReadonlyArray<readonly ["desktop" | "ios", CommandResult]>;
     try {
-      commandResult = await dependencies.runner.run({
-        target: plan.machine,
-        stage,
-        command,
-        args,
-        cwd: checkout,
-        logPath,
-        ...(interactiveTerminal ? { interactiveTerminal: true } : {}),
-      });
+      surfaceResults = await Promise.all(
+        surfaces.map(
+          async ([stage, command, args]) =>
+            [
+              stage,
+              await dependencies.runner.run({
+                target: plan.machine,
+                stage,
+                command,
+                args,
+                cwd: checkout,
+                logPath,
+                ...(interactiveTerminal && stage === "ios" ? { interactiveTerminal: true } : {}),
+              }),
+            ] as const,
+        ),
+      );
     } finally {
       if (interactiveTerminal) {
         try {
@@ -1704,24 +1715,12 @@ export async function runLocalTarget(
         dependencies.progress?.resume();
       }
     }
-    stages.push(
-      commandResult.exitCode === 0 && !commandResult.cancelled
-        ? { stage, status: "OK" }
-        : commandFailure(stage, commandResult),
-    );
-    if (commandResult.cancelled) {
-      const remaining = surfaces.slice(
-        surfaces.findIndex(([candidate]) => candidate === stage) + 1,
-      );
+    for (const [stage, commandResult] of surfaceResults) {
       stages.push(
-        ...remaining.map(
-          ([remainingStage]): StageResult => ({
-            stage: remainingStage,
-            status: "CANCELLED",
-          }),
-        ),
+        commandResult.exitCode === 0 && !commandResult.cancelled
+          ? { stage, status: "OK" }
+          : commandFailure(stage, commandResult),
       );
-      break;
     }
   }
 

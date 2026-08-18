@@ -86,11 +86,12 @@ checkout is inspected concurrently and dirty, uninspectable, or non-`dev` states
 dirty or uninspectable targets fail the run. Clean non-`dev` targets require a second unchecked batch approval
 to switch branches. When some targets are eligible and others are excluded, interactive runs ask (default No)
 before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. Local targets share
-checkout/dependency preparation; remote targets and the local lane run concurrently while local desktop/iOS
-installs stay serialized. Explicit `--host`, `--include-local-desktop`, and `--include-local-ios` flags define
-the complete non-interactive plan. Real subprocess output stays in compact progress rows and retained failure
-logs, except interactive local iOS temporarily owns the terminal and streams live so Expo can prompt to unlock
-the phone. Use `--show-failure-logs` to display captured failures or `--dry-run` for fully synthetic preflight,
+checkout/dependency preparation; remote targets, the local desktop install, and the local iOS build all run
+concurrently. Explicit `--host`, `--include-local-desktop`, and `--include-local-ios` flags define the
+complete non-interactive plan. Real subprocess output stays in compact progress rows and retained failure
+logs, except interactive local iOS temporarily owns the terminal and streams live so Expo can prompt to
+unlock the phone; the progress rows, including the concurrent desktop install, stay hidden until that build
+ends. Use `--show-failure-logs` to display captured failures or `--dry-run` for fully synthetic preflight,
 command, and failure verification without spawning update processes.
 
 ## Upstream project guidance
