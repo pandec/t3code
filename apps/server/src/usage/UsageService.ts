@@ -43,6 +43,7 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
+import { attributeGatewayUsage } from "./usageGatewayAttribution.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -481,10 +482,14 @@ export const make = Effect.gen(function* () {
         }
         scannedFiles += 1;
         for (const record of scanned.records) {
+          // Applied here rather than in the parser so the per-file scan cache
+          // keeps storing what the transcript said, and a change to the rule
+          // takes effect on the next scan without invalidating the cache.
+          const attributed = attributeGatewayUsage(record);
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
-            sessionIds.add(record.sessionId);
+          if (aggregator.add(attributed) && attributed.sessionId.length > 0) {
+            sessionIds.add(attributed.sessionId);
           }
         }
       }
