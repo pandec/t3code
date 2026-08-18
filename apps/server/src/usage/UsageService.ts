@@ -43,7 +43,6 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { attributeGatewayUsage } from "./usageGatewayAttribution.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -464,11 +463,6 @@ export const make = Effect.gen(function* () {
       // Distinct per directory. Buckets carry per-cell session counts, but a
       // session spans days and models, so clients total this figure instead.
       const sessionIds = new Set<string>();
-      // Providers other than this directory's own that its records were
-      // credited to. Clients claim a summary's buckets through the providers
-      // of the sources it owns, so a reattributed bucket needs a source under
-      // its new provider or the merge drops it and its tokens vanish.
-      const gatewayProviders = new Set<UsageProviderKind>();
 
       for (const file of files) {
         // Added before the read: the walk saw the file, so it is not deleted,
@@ -487,15 +481,11 @@ export const make = Effect.gen(function* () {
         }
         scannedFiles += 1;
         for (const record of scanned.records) {
-          // Applied here rather than in the parser so the per-file scan cache
-          // keeps storing what the transcript said, and a change to the rule
-          // takes effect on the next scan without invalidating the cache.
-          const attributed = attributeGatewayUsage(record);
-          // Only records that contributed in-window count: the mtime slack
+          // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (!aggregator.add(attributed)) continue;
-          if (attributed.sessionId.length > 0) sessionIds.add(attributed.sessionId);
-          if (attributed.provider !== provider) gatewayProviders.add(attributed.provider);
+          if (aggregator.add(record) && record.sessionId.length > 0) {
+            sessionIds.add(record.sessionId);
+          }
         }
       }
 
@@ -514,23 +504,6 @@ export const make = Effect.gen(function* () {
             ? `${unreadableFiles} transcript ${unreadableFiles === 1 ? "file" : "files"} could not be read; usage from ${unreadableFiles === 1 ? "it" : "them"} is missing.`
             : null,
       });
-
-      // Ownership bookkeeping for the reattributed buckets, not a second scan
-      // of the directory. Its counts stay zero deliberately: the entry above
-      // already describes this directory in full, and repeating the figures
-      // would double the reported session count and raise a second
-      // "usage is incomplete" warning naming the same path.
-      for (const gatewayProvider of gatewayProviders) {
-        sources.push({
-          fingerprint: { hostId, provider: gatewayProvider, resolvedHomePath: dir, volumeId },
-          status: "ok",
-          scannedFiles: 0,
-          skippedFiles: 0,
-          malformedRecords: 0,
-          distinctSessions: 0,
-          message: null,
-        });
-      }
     }
 
     const pruned = pruneScanCache(fileCache, {

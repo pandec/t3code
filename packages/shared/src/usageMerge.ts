@@ -14,6 +14,8 @@ import type {
   UsageSummary,
 } from "@t3tools/contracts";
 
+import { attributeGatewayBucket } from "./usageGatewayAttribution.ts";
+
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -122,10 +124,7 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly duplicates: readonly string[];
 } {
   const ownerByFingerprint = new Map<string, EnvironmentId>();
-  // By directory, not by fingerprint: one directory can report a source per
-  // provider it contributed usage for, and naming the same path once per
-  // provider would read as several distinct clashes.
-  const duplicates = new Set<string>();
+  const duplicates: string[] = [];
 
   const ordered = [...environments].sort((a, b) => a.environmentId.localeCompare(b.environmentId));
 
@@ -134,14 +133,14 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
       if (source.status === "missing") continue;
       const key = fingerprintKey(source.fingerprint);
       if (ownerByFingerprint.has(key)) {
-        duplicates.add(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+        duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
         continue;
       }
       ownerByFingerprint.set(key, environment.environmentId);
     }
   }
 
-  return { ownerByFingerprint, duplicates: [...duplicates] };
+  return { ownerByFingerprint, duplicates };
 }
 
 /** Sources this environment owns after fingerprint claims, plus their buckets. */
@@ -162,7 +161,13 @@ function ownedContribution(
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    // Ownership is settled against the provider each bucket was scanned under,
+    // and only then is a gateway-routed bucket credited to the pool it really
+    // spends. Correcting earlier would break the claim that decides whether
+    // this environment may contribute it at all.
+    buckets: environment.summary.buckets
+      .filter((bucket) => ownedProviders.has(bucket.provider))
+      .map(attributeGatewayBucket),
     sessions,
   };
 }

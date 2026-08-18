@@ -317,21 +317,20 @@ describe("mergeUsage", () => {
     expect(merged.daily[0]?.costUsd).toBe(10);
   });
 
-  it("keeps buckets a directory reports under a second provider", () => {
-    // A gateway can route a Claude Code session to an OpenAI model, so one
-    // directory yields buckets for both providers and reports a source for
-    // each. Ownership is per source, so the second one has to be claimed too
-    // or its buckets are dropped and their tokens disappear.
+  it("credits a gateway-routed model to the pool it spends", () => {
+    // The transcript directory decides the provider a bucket is scanned under,
+    // so a Claude Code session a gateway routed to an OpenAI model arrives
+    // labelled "claude". Its tokens burn the Codex subscription.
     const merged = mergeUsage(
       [
         environment(
           "env-a",
           summary(
-            [bucket(), bucket({ provider: "codex", model: "gpt-5.6-sol", costUsd: 4 })],
+            [bucket(), bucket({ model: "gpt-5.6-sol", costUsd: 4 })],
+            // The machine reaches OpenAI models only through the gateway, so
+            // it has no Codex transcripts of its own.
             [
               { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
-              { provider: "codex", hostId: "mac", homePath: "/a/.claude", distinctSessions: 0 },
-              // The machine reaches OpenAI models only through the gateway.
               { provider: "codex", hostId: "mac", homePath: "/a/.codex", status: "missing" },
             ],
           ),
@@ -340,27 +339,70 @@ describe("mergeUsage", () => {
       USAGE_CONTRACT_VERSION,
     );
 
+    // Nothing is lost on the way: both buckets still count.
     expect(merged.costUsd).toBe(14);
-    expect(merged.providers.map((entry) => entry.provider)).toContain("codex");
-    expect(merged.models.map((entry) => entry.model)).toContain("gpt-5.6-sol");
-    // The paired source is bookkeeping for a directory already counted, so it
-    // must not add a session on top of the scan that produced it.
+    expect(merged.models.find((entry) => entry.model === "gpt-5.6-sol")?.provider).toBe("codex");
+    expect(merged.models.find((entry) => entry.model === "claude-fable-5")?.provider).toBe(
+      "claude",
+    );
+    const codex = merged.providers.find((entry) => entry.provider === "codex");
+    expect(codex?.costUsd).toBe(4);
+    // The directory was scanned once, so it contributes its sessions once.
     expect(merged.sessions).toBe(1);
   });
 
-  it("names a shared directory once when it reports several providers", () => {
-    const shared = [
-      { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" },
-      { provider: "codex" as const, hostId: "mac", homePath: "/home/theo/.claude" },
-    ];
+  it("merges a model reached both natively and through the gateway", () => {
     const merged = mergeUsage(
       [
-        environment("env-a", summary([bucket()], shared)),
-        environment("env-b", summary([bucket()], shared)),
+        environment(
+          "env-a",
+          summary(
+            [
+              // Same model, one from each directory.
+              bucket({ model: "gpt-5.6-sol", costUsd: 4 }),
+              bucket({ provider: "codex", model: "gpt-5.6-sol", costUsd: 6 }),
+            ],
+            [
+              { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
+              { provider: "codex", hostId: "mac", homePath: "/a/.codex" },
+            ],
+          ),
+        ),
       ],
       USAGE_CONTRACT_VERSION,
     );
 
-    expect(merged.duplicateSources).toEqual(["env-b: /home/theo/.claude"]);
+    // One row, not one per directory it was found in.
+    const rows = merged.models.filter((entry) => entry.model === "gpt-5.6-sol");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.costUsd).toBe(10);
+    expect(rows[0]?.provider).toBe("codex");
+  });
+
+  it("counts a directory once when environments scan overlapping sets", () => {
+    // env-a scans only the Claude directory, which a gateway routed to an
+    // OpenAI model. env-b scans that same directory and a Codex home of its
+    // own, so it loses the shared directory and keeps its Codex home. Crediting
+    // the gateway bucket before ownership is settled would let env-b's claim on
+    // its own Codex home pull in the shared directory's gateway bucket too.
+    const claudeDir = { provider: "claude" as const, hostId: "mac", homePath: "/h/.claude" };
+    const gatewayBucket = bucket({ model: "gpt-5.6-sol", costUsd: 4 });
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([bucket(), gatewayBucket], [claudeDir])),
+        environment(
+          "env-b",
+          summary(
+            [bucket(), gatewayBucket, bucket({ provider: "codex", model: "gpt-5.5", costUsd: 7 })],
+            [claudeDir, { provider: "codex", hostId: "mac", homePath: "/h/.codex" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // The shared directory's $14 once, plus env-b's own Codex home at $7.
+    expect(merged.costUsd).toBe(21);
+    expect(merged.models.find((entry) => entry.model === "gpt-5.6-sol")?.costUsd).toBe(4);
   });
 });

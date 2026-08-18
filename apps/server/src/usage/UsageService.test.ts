@@ -18,11 +18,7 @@ import { decodeScanCache } from "./usageScanCache.ts";
 const decodeScanCacheDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 /** Shaped after a real Claude Code assistant record. */
-function claudeAssistantLine(
-  messageId: string,
-  timestamp: string,
-  model = "claude-fable-5",
-): string {
+function claudeAssistantLine(messageId: string, timestamp: string): string {
   return JSON.stringify({
     type: "assistant",
     timestamp,
@@ -31,7 +27,7 @@ function claudeAssistantLine(
     message: {
       id: messageId,
       role: "assistant",
-      model,
+      model: "claude-fable-5",
       content: [{ type: "text" }],
       usage: {
         input_tokens: 2,
@@ -152,85 +148,6 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         Effect.provide(
           Layer.fresh(
             ServerConfig.layerTest(process.cwd(), { prefix: "t3code-usage-service-test-" }),
-          ),
-        ),
-      ),
-    );
-  });
-
-  describe("gateway attribution", () => {
-    it.effect("credits a gateway-routed model to its own provider, warm cache included", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const config = yield* ServerConfig.ServerConfig;
-
-        const claudeHome = path.join(config.baseDir, "claude-home");
-        const codexHome = path.join(config.baseDir, "codex-home");
-        const claudeTranscriptDir = path.join(claudeHome, "projects");
-        yield* fileSystem.makeDirectory(claudeTranscriptDir, { recursive: true });
-        // Deliberately absent: a machine that only reaches OpenAI models
-        // through the gateway has no Codex rollouts of its own, and the
-        // reattributed buckets have to survive on their own.
-
-        const scannedAt = DateTime.formatIso(yield* DateTime.now);
-        const today = UsageDay.make(scannedAt.slice(0, 10));
-        yield* fileSystem.writeFileString(
-          path.join(claudeTranscriptDir, "session.jsonl"),
-          `${claudeAssistantLine("msg_gateway", scannedAt, "gpt-5.6-sol")}\n${claudeAssistantLine("msg_native", scannedAt, "claude-fable-5")}\n`,
-        );
-
-        const usage = yield* makeUsageService.pipe(
-          Effect.provideService(HttpClient.HttpClient, httpClientStub),
-          Effect.provide(
-            ServerSettings.layerTest({
-              providers: {
-                claudeAgent: { homePath: claudeHome },
-                codex: { homePath: codexHome, shadowHomePath: "" },
-              },
-            }),
-          ),
-        );
-
-        const window = { sinceDay: today, untilDay: today, timeZone: "UTC" };
-        const cold = yield* usage.readSummary(window);
-
-        const gateway = cold.buckets.find((bucket) => bucket.model === "gpt-5.6-sol");
-        assert.isDefined(gateway);
-        assert.equal(gateway.provider, "codex");
-        // The Claude-named model in the same transcript is untouched, so the
-        // rule is reattributing rather than relabelling the whole directory.
-        const native = cold.buckets.find((bucket) => bucket.model === "claude-fable-5");
-        assert.isDefined(native);
-        assert.equal(native.provider, "claude");
-
-        // Clients claim buckets through the providers of the sources an
-        // environment owns. Without a Codex source for this directory the
-        // merge would drop the reattributed bucket and lose its tokens.
-        const codexSources = cold.sources.filter(
-          (source) =>
-            source.fingerprint.provider === "codex" &&
-            source.fingerprint.resolvedHomePath === claudeTranscriptDir,
-        );
-        assert.equal(codexSources.length, 1);
-        assert.notEqual(codexSources[0]?.status, "missing");
-
-        // The session is counted once, under the directory that was scanned,
-        // rather than once per provider its records were credited to.
-        assert.equal(
-          cold.sources.reduce((total, source) => total + source.distinctSessions, 0),
-          1,
-        );
-
-        // Attribution happens after the per-file cache, so a scan served
-        // entirely from warm entries reaches the same answer.
-        const warm = yield* usage.readSummary(window);
-        assert.deepEqual(warm.buckets, cold.buckets);
-        assert.deepEqual(warm.sources, cold.sources);
-      }).pipe(
-        Effect.provide(
-          Layer.fresh(
-            ServerConfig.layerTest(process.cwd(), { prefix: "t3code-usage-gateway-test-" }),
           ),
         ),
       ),
