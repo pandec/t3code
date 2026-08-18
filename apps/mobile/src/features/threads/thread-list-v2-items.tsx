@@ -3,6 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
@@ -114,6 +115,11 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
 
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
+
+// Leading-swipe hues. Archive keeps the panel's default blue; the actions
+// that precede it take the system tints their row menu icons already imply.
+const PIN_SWIPE_COLOR = "#ff9500";
+const FORK_SWIPE_COLOR = "#5856d6";
 
 /**
  * The project accent as a flat tint layered over the row's own background,
@@ -439,6 +445,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  /** Forks the conversation and opens the copy. Offered only where
+      {@link canForkConversation} allows it. */
+  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
   /** False on environments whose server predates thread.settle/unsettle:
@@ -485,6 +494,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onUnsnoozeThread,
     onUnsettleThread,
     onArchiveThread,
+    onForkThread,
     onPinThread,
     onUnpinThread,
     onMovePinnedThread,
@@ -537,6 +547,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [onMovePinnedThread, thread],
   );
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
 
   // Swipe: the v2 primary action is the lifecycle transition. Every settled
   // row can un-settle — explicit settles clear the override, auto-settled
@@ -552,12 +563,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     const id = setTimeout(() => bumpSnoozeGateTick((tick) => tick + 1), delayMs);
     return () => clearTimeout(id);
   }, [snoozeGateExpiryMs, snoozeGateTick]);
+  const forkable = canForkConversation(thread);
   const swipeActions = resolveThreadListV2SwipeActions({
     variant,
     settlementSupported: props.settlementSupported,
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: new Date().toISOString() }),
     snoozed: snoozedRow,
+    pinnable: props.pinningSupported,
+    pinned: pinnedRow,
+    forkable,
   });
   const snoozePresets = useMemo(
     () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
@@ -608,6 +623,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       props.pinningSupported,
     ],
   );
+  // Menu twin for the swipe-right Fork action, so the gesture keeps a
+  // long-press (and VoiceOver) equivalent wherever it is offered.
+  const forkMenuItem = useMemo<MenuAction[]>(
+    () =>
+      forkable ? [{ id: "fork", title: "Fork conversation", image: "arrow.triangle.branch" }] : [],
+    [forkable],
+  );
   const titleRegenerationMenuItems = useMemo<MenuAction[]>(
     () =>
       buildThreadTitleRegenerationMenuItems({
@@ -627,27 +649,30 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       },
       MENU_ACTION_BY_ID.archive,
       ...pinMenuItem,
+      ...forkMenuItem,
       ...titleRegenerationMenuItems,
       MENU_ACTION_BY_ID.delete,
     ],
-    [pinMenuItem, snoozePresetActions, titleRegenerationMenuItems],
+    [forkMenuItem, pinMenuItem, snoozePresetActions, titleRegenerationMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
       ...CARD_MENU_ACTIONS.slice(0, -1),
       ...pinMenuItem,
+      ...forkMenuItem,
       ...titleRegenerationMenuItems,
       CARD_MENU_ACTIONS[CARD_MENU_ACTIONS.length - 1]!,
     ],
-    [pinMenuItem, titleRegenerationMenuItems],
+    [forkMenuItem, pinMenuItem, titleRegenerationMenuItems],
   );
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
       ...SLIM_MENU_ACTIONS.slice(0, -1),
+      ...forkMenuItem,
       ...titleRegenerationMenuItems,
       SLIM_MENU_ACTIONS[SLIM_MENU_ACTIONS.length - 1]!,
     ],
-    [titleRegenerationMenuItems],
+    [forkMenuItem, titleRegenerationMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -675,6 +700,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-pin-up") handleMovePinnedUp();
       if (nativeEvent.event === "move-pin-down") handleMovePinnedDown();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "fork") handleFork();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
@@ -691,6 +717,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [
       handleArchive,
       handleDelete,
+      handleFork,
       handleRegenerateTitle,
       handleMovePinnedDown,
       handleMovePinnedUp,
@@ -761,23 +788,54 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  const archiveLeftAction = useMemo(
-    () =>
-      swipeActions.left === "archive"
-        ? {
-            accessibilityLabel: `Archive ${thread.title}`,
-            icon: "archivebox" as const,
-            label: "Archive",
-            onPress: handleArchive,
-          }
-        : undefined,
-    [handleArchive, swipeActions.left, thread.title],
-  );
+  // Leading panel, ordered from the screen edge inward. Archive stays last so
+  // it remains what a full swipe right commits, as it always has.
+  const leftActions = swipeActions.left.map((action) => {
+    if (action === "pin") {
+      return {
+        accessibilityLabel: `Pin ${thread.title}`,
+        backgroundColor: PIN_SWIPE_COLOR,
+        icon: "pin" as const,
+        label: "Pin",
+        onPress: handlePin,
+      };
+    }
+    if (action === "unpin") {
+      return {
+        accessibilityLabel: `Unpin ${thread.title}`,
+        backgroundColor: PIN_SWIPE_COLOR,
+        icon: "pin.slash" as const,
+        label: "Unpin",
+        onPress: handleUnpin,
+      };
+    }
+    if (action === "fork") {
+      return {
+        accessibilityLabel: `Fork ${thread.title}`,
+        backgroundColor: FORK_SWIPE_COLOR,
+        icon: "arrow.triangle.branch" as const,
+        label: "Fork",
+        onPress: handleFork,
+      };
+    }
+    return {
+      accessibilityLabel: `Archive ${thread.title}`,
+      icon: "archivebox" as const,
+      label: "Archive",
+      onPress: handleArchive,
+    };
+  });
   const swipeAccessibilityHint = [
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
       : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
-    ...(archiveLeftAction === undefined ? [] : ["Swipe right to archive."]),
+    ...(leftActions.length === 0
+      ? []
+      : leftActions.length === 1
+        ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
+        : [
+            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe archives.`,
+          ]),
   ].join(" ");
 
   // The sidebar pane fills selected rows with the theme's message surface, so
@@ -1053,7 +1111,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
-        leftAction={archiveLeftAction}
+        leftActions={leftActions}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}

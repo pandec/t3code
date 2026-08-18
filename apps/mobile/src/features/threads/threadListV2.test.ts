@@ -159,7 +159,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
       }),
-    ).toEqual({ primary: "settle", secondary: "snooze", left: "archive" });
+    ).toEqual({ primary: "settle", secondary: "snooze", left: ["archive"] });
   });
 
   it("offers un-settle and snooze for settled history", () => {
@@ -170,7 +170,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
       }),
-    ).toEqual({ primary: "unsettle", secondary: "snooze", left: "archive" });
+    ).toEqual({ primary: "unsettle", secondary: "snooze", left: ["archive"] });
   });
 
   it("omits snooze when the server or thread does not allow it", () => {
@@ -181,7 +181,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: false,
         snoozable: true,
       }),
-    ).toEqual({ primary: "settle", secondary: null, left: "archive" });
+    ).toEqual({ primary: "settle", secondary: null, left: ["archive"] });
     expect(
       resolveThreadListV2SwipeActions({
         variant: "card",
@@ -189,7 +189,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: false,
       }),
-    ).toEqual({ primary: "settle", secondary: null, left: "archive" });
+    ).toEqual({ primary: "settle", secondary: null, left: ["archive"] });
   });
 
   it("falls back to archive only for a pre-lifecycle server", () => {
@@ -200,7 +200,7 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: false,
         snoozable: true,
       }),
-    ).toEqual({ primary: "archive", secondary: null, left: null });
+    ).toEqual({ primary: "archive", secondary: null, left: [] });
   });
 
   it("offers wake and no snooze on a snoozed row", () => {
@@ -212,7 +212,84 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozable: true,
         snoozed: true,
       }),
-    ).toEqual({ primary: "unsnooze", secondary: null, left: "archive" });
+    ).toEqual({ primary: "unsnooze", secondary: null, left: ["archive"] });
+  });
+
+  it("orders the leading panel pin, fork, archive so a full swipe still archives", () => {
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        pinnable: true,
+        forkable: true,
+      }).left,
+    ).toEqual(["pin", "fork", "archive"]);
+  });
+
+  it("flips the leading pin action on a pinned row", () => {
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        pinnable: true,
+        pinned: true,
+        forkable: true,
+      }).left,
+    ).toEqual(["unpin", "fork", "archive"]);
+  });
+
+  it("drops pin where the row menu has none: unsupported servers and settled rows", () => {
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        pinnable: false,
+        forkable: true,
+      }).left,
+    ).toEqual(["fork", "archive"]);
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "slim",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        pinnable: true,
+        forkable: true,
+      }).left,
+    ).toEqual(["fork", "archive"]);
+  });
+
+  it("drops fork for threads that cannot be forked", () => {
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        pinnable: true,
+        forkable: false,
+      }).left,
+    ).toEqual(["pin", "archive"]);
+  });
+
+  it("keeps the snoozed shelf on archive alone", () => {
+    expect(
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: true,
+        snoozable: true,
+        snoozed: true,
+        pinnable: true,
+        forkable: true,
+      }).left,
+    ).toEqual(["archive"]);
   });
 });
 

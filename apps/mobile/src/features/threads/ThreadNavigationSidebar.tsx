@@ -221,6 +221,7 @@ function ThreadNavigationSidebarPane(
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
   const {
     archiveThread,
+    forkThread,
     confirmDeleteThread,
     settleThread,
     snoozeThread,
@@ -1161,6 +1162,7 @@ function ThreadNavigationSidebarPane(
               onSelectThread={handleSelectThread}
               onDeleteThread={confirmDeleteThread}
               onArchiveThread={archiveThread}
+              onForkThread={forkThread}
               onRegenerateThreadTitle={regenerateThreadTitle}
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
@@ -1310,6 +1312,7 @@ function ThreadNavigationSidebarPane(
       arrangedPinnedKeys,
       confirmDeletePendingTask,
       confirmDeleteThread,
+      forkThread,
       handleChangeRequestState,
       handleSelectThread,
       handleSwipeableClose,
