@@ -122,7 +122,10 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly duplicates: readonly string[];
 } {
   const ownerByFingerprint = new Map<string, EnvironmentId>();
-  const duplicates: string[] = [];
+  // By directory, not by fingerprint: one directory can report a source per
+  // provider it contributed usage for, and naming the same path once per
+  // provider would read as several distinct clashes.
+  const duplicates = new Set<string>();
 
   const ordered = [...environments].sort((a, b) => a.environmentId.localeCompare(b.environmentId));
 
@@ -131,14 +134,14 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
       if (source.status === "missing") continue;
       const key = fingerprintKey(source.fingerprint);
       if (ownerByFingerprint.has(key)) {
-        duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+        duplicates.add(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
         continue;
       }
       ownerByFingerprint.set(key, environment.environmentId);
     }
   }
 
-  return { ownerByFingerprint, duplicates };
+  return { ownerByFingerprint, duplicates: [...duplicates] };
 }
 
 /** Sources this environment owns after fingerprint claims, plus their buckets. */

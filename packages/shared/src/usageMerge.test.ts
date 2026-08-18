@@ -316,4 +316,51 @@ describe("mergeUsage", () => {
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
   });
+
+  it("keeps buckets a directory reports under a second provider", () => {
+    // A gateway can route a Claude Code session to an OpenAI model, so one
+    // directory yields buckets for both providers and reports a source for
+    // each. Ownership is per source, so the second one has to be claimed too
+    // or its buckets are dropped and their tokens disappear.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket(), bucket({ provider: "codex", model: "gpt-5.6-sol", costUsd: 4 })],
+            [
+              { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
+              { provider: "codex", hostId: "mac", homePath: "/a/.claude", distinctSessions: 0 },
+              // The machine reaches OpenAI models only through the gateway.
+              { provider: "codex", hostId: "mac", homePath: "/a/.codex", status: "missing" },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(14);
+    expect(merged.providers.map((entry) => entry.provider)).toContain("codex");
+    expect(merged.models.map((entry) => entry.model)).toContain("gpt-5.6-sol");
+    // The paired source is bookkeeping for a directory already counted, so it
+    // must not add a session on top of the scan that produced it.
+    expect(merged.sessions).toBe(1);
+  });
+
+  it("names a shared directory once when it reports several providers", () => {
+    const shared = [
+      { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" },
+      { provider: "codex" as const, hostId: "mac", homePath: "/home/theo/.claude" },
+    ];
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([bucket()], shared)),
+        environment("env-b", summary([bucket()], shared)),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.duplicateSources).toEqual(["env-b: /home/theo/.claude"]);
+  });
 });

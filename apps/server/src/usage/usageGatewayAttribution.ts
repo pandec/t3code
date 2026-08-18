@@ -5,33 +5,42 @@
  * scanned from, so a Claude Code session that reached an OpenAI model through
  * the CLIProxyAPI gateway is recorded as Claude usage. It is not: those tokens
  * burn the Codex subscription pool, and the panel folding them into Claude
- * Code makes the provider split wrong on both sides.
+ * Code makes the provider split wrong on both sides. The gateway is bound in
+ * both directions here, so the same happens in reverse when a Codex session
+ * reaches an Anthropic model.
  *
- * The model name is the reliable signal. Anthropic does not ship a `gpt-*`
- * model, so a `gpt-*` model in a Claude transcript can only have come from the
- * gateway routing the request to the OpenAI pool. Claude-named models stay with
- * Claude Code whether or not they went through the gateway, which is correct:
- * they bill against the Anthropic pool either way.
+ * The model name is the reliable signal. Neither vendor ships a model named
+ * after the other, so a `gpt-*` model in a Claude transcript, or a `claude-*`
+ * model in a Codex rollout, can only have come from the gateway routing that
+ * request to the other pool.
  *
  * @module usageGatewayAttribution
  */
+import type { UsageProviderKind } from "@t3tools/contracts";
+
 import type { UsageRecord } from "./usageTranscripts.ts";
 
 /**
- * Whether a model name belongs to OpenAI, tolerating a `vendor/` prefix some
- * gateway configurations expose.
+ * The pool a model name belongs to, or `null` when the name says nothing.
+ *
+ * A `vendor/` prefix is tolerated because some gateway configurations expose
+ * models that way.
  */
-function isOpenAiModel(model: string): boolean {
+function modelPool(model: string): UsageProviderKind | null {
   const name = model.toLowerCase();
   const bare = name.slice(name.lastIndexOf("/") + 1);
-  return bare.startsWith("gpt-");
+  if (bare.startsWith("gpt-")) return "codex";
+  if (bare.startsWith("claude-")) return "claude";
+  return null;
 }
 
 /**
  * Reassigns a gateway-routed record to the provider whose subscription it
- * actually spends. Every other record is returned unchanged, by identity.
+ * actually spends. Every other record is returned unchanged, by identity, so
+ * callers can compare references to detect a reassignment.
  */
 export function attributeGatewayUsage(record: UsageRecord): UsageRecord {
-  if (record.provider !== "claude" || !isOpenAiModel(record.model)) return record;
-  return { ...record, provider: "codex" };
+  const pool = modelPool(record.model);
+  if (pool === null || pool === record.provider) return record;
+  return { ...record, provider: pool };
 }
