@@ -54,6 +54,7 @@ export function HomeRouteScreen() {
 
   const {
     archiveThread,
+    forkThread,
     confirmDeleteThread,
     settleThread,
     snoozeThread,
@@ -209,6 +210,7 @@ export function HomeRouteScreen() {
             })
           }
           onArchiveThread={archiveThread}
+          onForkThread={forkThread}
           onDeleteArchivedThread={confirmDeleteArchivedThread}
           onClearAttentionFilter={attentionFilter.clear}
           onDeleteThread={confirmDeleteThread}

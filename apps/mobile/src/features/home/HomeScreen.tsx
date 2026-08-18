@@ -120,6 +120,7 @@ interface HomeScreenProps {
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteArchivedThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnarchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenAllArchivedThreads: () => void;
@@ -960,6 +961,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
+          onForkThread={props.onForkThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
@@ -1006,6 +1008,7 @@ export function HomeScreen(props: HomeScreenProps) {
       projectByKey,
       projectCwdByKey,
       props.onArchiveThread,
+      props.onForkThread,
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,

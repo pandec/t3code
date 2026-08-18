@@ -80,6 +80,8 @@ export function resolveThreadListV2SnoozeMenuSelection(input: {
   return { _tag: "expired" };
 }
 
+export type ThreadListV2LeftSwipeAction = "pin" | "unpin" | "fork" | "archive";
+
 export function resolveThreadListV2SwipeActions(input: {
   readonly variant: "card" | "slim";
   readonly settlementSupported: boolean;
@@ -87,15 +89,24 @@ export function resolveThreadListV2SwipeActions(input: {
   readonly snoozable: boolean;
   /** Row is on the snoozed shelf. */
   readonly snoozed?: boolean;
+  /** Server supports pinning. Pinned rows offer Unpin in its place. */
+  readonly pinnable?: boolean;
+  readonly pinned?: boolean;
+  /** Thread's provider and session state allow forking the conversation. */
+  readonly forkable?: boolean;
 }): {
   readonly primary: Exclude<ThreadListV2SwipeAction, "snooze">;
   readonly secondary: "snooze" | null;
-  /** Swipe right always archives, except where archive already owns the
-      swipe-left primary (pre-settlement servers). */
-  readonly left: "archive" | null;
+  /** Swipe-right actions, ordered from the screen's leading edge inward. The
+      last entry is what a full swipe commits, so archive always stays the
+      default. Empty where archive already owns the swipe-left primary
+      (pre-settlement servers). */
+  readonly left: readonly ThreadListV2LeftSwipeAction[];
 } {
+  // The snoozed shelf keeps its single archive action: pinning or forking a
+  // sleeping thread has no twin in its row menu and no meaning on the shelf.
   if (input.snoozed === true) {
-    return { primary: "unsnooze", secondary: null, left: "archive" };
+    return { primary: "unsnooze", secondary: null, left: ["archive"] };
   }
   const primary = input.settlementSupported
     ? input.variant === "slim"
@@ -105,7 +116,17 @@ export function resolveThreadListV2SwipeActions(input: {
   return {
     primary,
     secondary: input.snoozeSupported && input.snoozable ? "snooze" : null,
-    left: primary === "archive" ? null : "archive",
+    left:
+      primary === "archive"
+        ? []
+        : [
+            // Pin follows the row menu, which only offers it on card rows.
+            ...(input.pinnable === true && input.variant === "card"
+              ? [input.pinned === true ? ("unpin" as const) : ("pin" as const)]
+              : []),
+            ...(input.forkable === true ? (["fork"] as const) : []),
+            "archive" as const,
+          ],
   };
 }
 

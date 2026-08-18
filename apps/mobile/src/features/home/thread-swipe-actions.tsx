@@ -66,6 +66,14 @@ interface ThreadSwipeSecondaryAction extends ThreadSwipeAction {
   readonly backgroundColor: string;
 }
 
+interface ThreadSwipeLeftAction extends ThreadSwipeAction {
+  /** Defaults to the archive blue the single-action panel has always used. */
+  readonly backgroundColor?: string;
+}
+
+/** The archive blue every leading action fell back to before the panel grew. */
+const DEFAULT_LEFT_ACTION_COLOR = "#007aff";
+
 function swipeActionsWidth(hasSecondaryAction: boolean) {
   return hasSecondaryAction ? THREAD_SWIPE_ACTIONS_WIDTH : ACTION_ITEM_WIDTH;
 }
@@ -237,11 +245,12 @@ export function ThreadSwipeable(props: {
   readonly fullSwipeAction?: "delete" | "primary";
   readonly fullSwipeWidth: number;
   /**
-   * Single action revealed by swiping right (on the row's left side). Mirrors
-   * the primary right-side behavior: a partial swipe offers the button, a
-   * full swipe past the threshold commits it immediately.
+   * Actions revealed by swiping right (on the row's left side), ordered from
+   * the screen's leading edge inward: the first is uncovered by the shortest
+   * swipe, the last sits against the row and is what a full swipe past the
+   * threshold commits immediately.
    */
-  readonly leftAction?: ThreadSwipeAction;
+  readonly leftActions?: readonly ThreadSwipeLeftAction[];
   readonly onDelete: () => void;
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
   readonly onSwipeableWillOpen?: (methods: SwipeableMethods) => void;
@@ -266,11 +275,16 @@ export function ThreadSwipeable(props: {
   const swipeableRef = useRef<SwipeableMethods | null>(null);
   const fullSwipeArmedRef = useRef(false);
   const leftFullSwipeArmedRef = useRef(false);
-  const leftAction = props.leftAction;
+  const leftActions = props.leftActions ?? [];
+  const hasLeftActions = leftActions.length > 0;
+  const leftActionsWidth = leftActions.length * ACTION_ITEM_WIDTH;
+  // The innermost leading action owns the full swipe, so the panel keeps one
+  // advertised default no matter how many actions precede it.
+  const leftFullSwipeAction = leftActions[leftActions.length - 1];
   const hasSecondaryAction = props.secondaryAction !== null;
   const actionsWidth = swipeActionsWidth(hasSecondaryAction);
   const fullSwipeThreshold = Math.max(actionsWidth + 44, props.fullSwipeWidth * 0.58);
-  const leftFullSwipeThreshold = Math.max(ACTION_ITEM_WIDTH + 44, props.fullSwipeWidth * 0.58);
+  const leftFullSwipeThreshold = Math.max(leftActionsWidth + 44, props.fullSwipeWidth * 0.58);
   const fullSwipeAction =
     props.fullSwipeAction ?? (props.secondaryAction === undefined ? "delete" : "primary");
   const close = useCallback(() => swipeableRef.current?.close(), []);
@@ -305,7 +319,7 @@ export function ThreadSwipeable(props: {
       containerStyle={[{ backgroundColor: props.backgroundColor }, props.containerStyle]}
       // Rows without a left action keep the RNGH default so an inert pan
       // can't activate earlier than it used to.
-      dragOffsetFromLeftEdge={leftAction === undefined ? 10 : 8}
+      dragOffsetFromLeftEdge={hasLeftActions ? 8 : 10}
       dragOffsetFromRightEdge={8}
       enabled={props.enabled !== false && gateEnabled}
       enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
@@ -336,7 +350,7 @@ export function ThreadSwipeable(props: {
       onSwipeableWillClose={() => {
         if (leftFullSwipeArmedRef.current) {
           leftFullSwipeArmedRef.current = false;
-          leftAction?.onPress();
+          leftFullSwipeAction?.onPress();
           return;
         }
         if (fullSwipeArmedRef.current) {
@@ -361,7 +375,7 @@ export function ThreadSwipeable(props: {
           if (leftFullSwipeArmedRef.current) {
             leftFullSwipeArmedRef.current = false;
             methods.close();
-            leftAction?.onPress();
+            leftFullSwipeAction?.onPress();
           }
           return;
         }
@@ -376,21 +390,20 @@ export function ThreadSwipeable(props: {
         }
       }}
       overshootFriction={1}
-      overshootLeft={leftAction !== undefined}
+      overshootLeft={hasLeftActions}
       overshootRight
-      leftThreshold={ACTION_ITEM_WIDTH * 0.42}
+      leftThreshold={leftActionsWidth * 0.42}
       renderLeftActions={
-        leftAction === undefined
-          ? undefined
-          : (_progress, translation, methods) => (
-              <ThreadSwipeLeftAction
-                action={{
-                  ...leftAction,
+        hasLeftActions
+          ? (_progress, translation, methods) => (
+              <ThreadSwipeLeftActions
+                actions={leftActions.map((action) => ({
+                  ...action,
                   onPress: () => {
                     methods.close();
-                    leftAction.onPress();
+                    action.onPress();
                   },
-                }}
+                }))}
                 backgroundColor={props.backgroundColor}
                 compact={props.compactActions === true}
                 fullSwipeThreshold={leftFullSwipeThreshold}
@@ -398,6 +411,7 @@ export function ThreadSwipeable(props: {
                 translation={translation}
               />
             )
+          : undefined
       }
       renderRightActions={(_progress, translation, methods) => (
         <ThreadSwipeActions
@@ -445,6 +459,11 @@ function SwipeActionButton(props: {
    * motion: entry slides in from the left and the full-swipe stretch grows
    * toward the row's leading edge instead of away from it. */
   readonly side: "left" | "right";
+  /** Distance from the panel's leading edge to this button. A stretching
+   * left-panel button pulls its pill back over that gap so the fill starts at
+   * the screen edge rather than mid-panel. Right-panel buttons anchor to the
+   * screen edge already and always pass 0. */
+  readonly stretchAnchorOffset?: number;
   readonly stretchesOnFullSwipe: boolean;
   readonly translation: SharedValue<number>;
 }) {
@@ -476,15 +495,20 @@ function SwipeActionButton(props: {
       ],
     };
   });
+  const anchorOffset = props.side === "left" ? (props.stretchAnchorOffset ?? 0) : 0;
   const circleStyle = useAnimatedStyle(() => {
     const reveal = Math.max(revealSign * props.translation.value, 0);
     const stretch = props.stretchesOnFullSwipe ? Math.max(reveal - props.actionsWidth, 0) : 0;
+    // Reaches back to the panel's leading edge, then stops — the pill never
+    // slides past the screen edge it is filling toward.
+    const anchorPull = Math.min(stretch, anchorOffset);
 
     return {
       // The circle widens toward the row: leftward on the right panel, and on
-      // the left panel it simply grows rightward from its anchored left edge.
-      transform: [{ translateX: props.side === "left" ? 0 : -stretch }],
-      width: circleSize + stretch,
+      // the left panel it grows rightward from its anchored left edge while
+      // that edge settles onto the panel's start.
+      transform: [{ translateX: props.side === "left" ? -anchorPull : -stretch }],
+      width: circleSize + stretch + anchorPull,
     };
   });
   const iconStyle = useAnimatedStyle(() => {
@@ -605,16 +629,18 @@ function SwipeActionButton(props: {
   );
 }
 
-/** The left panel's single action. A full swipe always commits it, so it
- * always stretches — there is no secondary action on this side. */
-function ThreadSwipeLeftAction(props: {
-  readonly action: ThreadSwipeAction;
+/** The leading panel. Actions are laid out from the screen's leading edge
+ * inward, so each one enters as the row uncovers it; only the innermost —
+ * the full-swipe default — stretches, and the rest fade out under it. */
+function ThreadSwipeLeftActions(props: {
+  readonly actions: readonly ThreadSwipeLeftAction[];
   readonly backgroundColor: ColorValue;
   readonly compact: boolean;
   readonly fullSwipeThreshold: number;
   readonly onFullSwipeArmedChange: (armed: boolean) => void;
   readonly translation: SharedValue<number>;
 }) {
+  const actionsWidth = props.actions.length * ACTION_ITEM_WIDTH;
   useAnimatedReaction(
     () => props.translation.value >= props.fullSwipeThreshold,
     (armed, previous) => {
@@ -629,25 +655,35 @@ function ThreadSwipeLeftAction(props: {
     <View
       style={{
         backgroundColor: props.backgroundColor,
+        flexDirection: "row",
         height: "100%",
-        width: ACTION_ITEM_WIDTH,
+        width: actionsWidth,
       }}
     >
-      <SwipeActionButton
-        accessibilityLabel={props.action.accessibilityLabel}
-        actionsWidth={ACTION_ITEM_WIDTH}
-        backgroundColor="#007aff"
-        compact={props.compact}
-        entryRange={[8, ACTION_ITEM_WIDTH * 0.72]}
-        fullSwipeThreshold={props.fullSwipeThreshold}
-        icon={props.action.icon}
-        label={props.action.label}
-        menu={props.action.menu}
-        onPress={props.action.onPress}
-        side="left"
-        stretchesOnFullSwipe
-        translation={props.translation}
-      />
+      {props.actions.map((action, index) => {
+        const offset = index * ACTION_ITEM_WIDTH;
+        return (
+          <SwipeActionButton
+            // Positional: a slot whose action flips label (Pin -> Unpin while
+            // the panel slides shut) keeps its mounted button.
+            key={index}
+            accessibilityLabel={action.accessibilityLabel}
+            actionsWidth={actionsWidth}
+            backgroundColor={action.backgroundColor ?? DEFAULT_LEFT_ACTION_COLOR}
+            compact={props.compact}
+            entryRange={[offset + 8, offset + ACTION_ITEM_WIDTH * 0.72]}
+            fullSwipeThreshold={props.fullSwipeThreshold}
+            icon={action.icon}
+            label={action.label}
+            menu={action.menu}
+            onPress={action.onPress}
+            side="left"
+            stretchAnchorOffset={offset}
+            stretchesOnFullSwipe={index === props.actions.length - 1}
+            translation={props.translation}
+          />
+        );
+      })}
     </View>
   );
 }

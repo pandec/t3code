@@ -1,5 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
+import { useNavigation } from "@react-navigation/native";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -225,6 +227,7 @@ function useConfirmDeleteThread(
 
 export function useThreadListActions(): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly forkThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
@@ -239,6 +242,9 @@ export function useThreadListActions(): {
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
+  const navigation = useNavigation();
+  const forkMutation = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
+  const forkInFlightThreadKeys = useRef(new Set<string>());
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
@@ -254,6 +260,55 @@ export function useThreadListActions(): {
       void executeAction("archive", thread);
     },
     [executeAction],
+  );
+  // Forking replays the provider conversation into a new thread and opens it,
+  // matching the thread screen's fork button.
+  const forkThread = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (forkInFlightThreadKeys.current.has(key)) return;
+      if (!canForkConversation(thread)) {
+        Alert.alert(
+          "Could not fork conversation",
+          "This thread cannot be forked right now. Wait for its turn to finish, or use a Codex or Claude thread.",
+        );
+        return;
+      }
+      forkInFlightThreadKeys.current.add(key);
+      selectionHaptic();
+      void (async () => {
+        try {
+          const result = await forkMutation({
+            environmentId: thread.environmentId,
+            input: { sourceThreadId: thread.id },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not fork conversation",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The fork could not be created.",
+            );
+            return;
+          }
+          navigation.navigate("Thread", {
+            environmentId: String(thread.environmentId),
+            threadId: String(result.value.threadId),
+          });
+        } catch {
+          // forkMutation resolves to a Result even on defects, so only the
+          // navigate above can land here: the fork exists but did not open.
+          Alert.alert(
+            "Could not open the fork",
+            "The conversation was forked, but the copy could not be opened. It is in the thread list.",
+          );
+        } finally {
+          forkInFlightThreadKeys.current.delete(key);
+        }
+      })();
+    },
+    [forkMutation, navigation],
   );
   const settleThread = useCallback(
     async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,
@@ -544,6 +599,7 @@ export function useThreadListActions(): {
 
   return {
     archiveThread,
+    forkThread,
     confirmDeleteThread,
     settleThread,
     snoozeThread,
