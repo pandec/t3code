@@ -1,5 +1,9 @@
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import {
+  sortOlderThreadsForSidebar,
+  threadIsOlder,
+} from "@t3tools/client-runtime/state/thread-older";
+import {
   effectiveSettled,
   effectiveSnoozed,
   hasQueuedTurnStart,
@@ -278,6 +282,10 @@ export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
   /** Settled threads beyond the render limit (behind "Show more"). */
   readonly hiddenSettledCount: number;
+  /** Threads folded under the Older shelf, including rows hidden by collapse. */
+  readonly olderCount: number;
+  /** Index in `items` where the Older shelf header belongs. */
+  readonly olderShelfHeaderIndex: number | null;
   /** Snoozed threads matching the current filters. */
   readonly snoozedCount: number;
   /** Index in `items` where the Snoozed shelf header belongs. The header is
@@ -316,6 +324,14 @@ export interface ThreadListV2PinnedDividerListItem {
   readonly key: "v2-pinned-divider";
 }
 
+/** Fork addition: the shelf quiet-but-active threads fold behind. */
+export interface ThreadListV2OlderShelfListItem {
+  readonly type: "v2-older-shelf";
+  readonly key: "v2-older-shelf";
+  readonly count: number;
+  readonly expanded: boolean;
+}
+
 export interface ThreadListV2SnoozedShelfListItem {
   readonly type: "v2-snoozed-shelf";
   readonly key: "v2-snoozed-shelf";
@@ -334,18 +350,22 @@ export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2PinnedDividerListItem
+  | ThreadListV2OlderShelfListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
 
 /**
  * Builds the shared mobile order: pinned → pinned divider → active → pending →
- * snoozed shelf → settled.
+ * older shelf → snoozed shelf → settled.
  * Pending tasks are waiting rather than asking, and parked work remains
  * reachable without competing with either the inbox or settled history.
  */
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly olderCount?: number;
+  readonly olderShelfExpanded?: boolean;
+  readonly olderShelfHeaderIndex?: number | null;
   readonly snoozedCount?: number;
   readonly snoozedShelfExpanded?: boolean;
   readonly snoozedShelfHeaderIndex?: number | null;
@@ -373,11 +393,18 @@ export function buildThreadListV2ListItems(input: {
       showPendingDivider: index === 0,
     }),
   );
+  const olderCount = input.olderCount ?? 0;
+  const olderShelfHeaderIndex = input.olderShelfHeaderIndex ?? null;
   const snoozedCount = input.snoozedCount ?? 0;
   const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
   const settledCount = input.settledCount ?? 0;
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
-  const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
+  const activeEnd =
+    olderShelfHeaderIndex ??
+    snoozedShelfHeaderIndex ??
+    settledShelfHeaderIndex ??
+    threadItems.length;
+  const olderEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   // Pinned rows lead the list; close them with the same headerless rule the
   // web sidebar draws, so the inbox reads as its own block.
@@ -392,6 +419,15 @@ export function buildThreadListV2ListItems(input: {
     result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
   }
   result.push(...threadItems.slice(pinnedEnd, activeEnd), ...pendingItems);
+  if (olderShelfHeaderIndex !== null && olderCount > 0) {
+    result.push({
+      type: "v2-older-shelf",
+      key: "v2-older-shelf",
+      count: olderCount,
+      expanded: input.olderShelfExpanded === true,
+    });
+    result.push(...threadItems.slice(olderShelfHeaderIndex, olderEnd));
+  }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
@@ -417,8 +453,8 @@ export function buildThreadListV2ListItems(input: {
  * Partitions visible threads into the active card block (manual/creation
  * recency, or newest user message when `sortActiveByLatestUserMessage` is on)
  * and the settled recency tail, matching the web v2 list.
- * `autoSettleAfterDays` mirrors the web default of 3. Mobile always enables
- * automatic settling, while storing the merge-specific preference per device.
+ * `autoSettleAfterDays` mirrors the web default of 3; the fork's automatic
+ * settling gate and its merge-specific toggle are stored per device.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -446,8 +482,16 @@ export function buildThreadListV2Items(input: {
   /** Environments whose server supports thread.snooze/unsnooze. Same
       contract as settlementEnvironmentIds. */
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  /** Fork addition: master gate for automatic settling. Off settles by hand
+      only — neither inactivity nor a merged pull request files a thread away. */
+  readonly autoSettleEnabled?: boolean;
   readonly autoSettleAfterDays?: number;
   readonly autoSettleOnMerge?: boolean;
+  /** Fork addition: folds quiet-but-active threads under an Older shelf. */
+  readonly olderSectionEnabled?: boolean;
+  readonly olderSectionAfterDays?: number;
+  /** Expands the Older shelf into rows. Collapsed is the default. */
+  readonly olderShelfExpanded?: boolean;
   /** Max settled rows to render; the rest are counted, not built. */
   readonly settledLimit?: number;
   /** Injectable for tests; defaults to now. */
@@ -467,8 +511,14 @@ export function buildThreadListV2Items(input: {
 }): ThreadListV2Layout {
   const now = input.now ?? new Date().toISOString();
   const snoozeNow = input.snoozeNow ?? now;
+  const autoSettleEnabled = input.autoSettleEnabled !== false;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const autoSettleOnMerge = input.autoSettleOnMerge ?? true;
+  // The Attention filter already narrowed the list to rows the user asked to
+  // see; folding a subset of them away would answer a different question.
+  const olderSectionEnabled =
+    input.olderSectionEnabled === true && input.attentionMemberThreadKeys == null;
+  const olderSectionAfterDays = input.olderSectionAfterDays ?? 7;
   const query = input.searchQuery.trim().toLocaleLowerCase();
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
@@ -476,6 +526,7 @@ export function buildThreadListV2Items(input: {
 
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
+  const older: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
@@ -538,26 +589,50 @@ export function buildThreadListV2Items(input: {
       supportsSettlement &&
       effectiveSettled(thread, {
         now,
-        autoSettleEnabled: true,
+        autoSettleEnabled,
         autoSettleAfterDays,
         autoSettleOnMerge,
         changeRequest,
       })
     ) {
       settled.push(thread);
-    } else {
-      active.push(thread);
+      continue;
     }
+    // Older is a display grouping, not a lifecycle state: these threads are
+    // still active, nothing was settled or snoozed on the user's behalf, and
+    // any activity puts them straight back in the inbox. Checked last on
+    // purpose — pinned, snoozed, and settled threads already have a home.
+    //
+    // Classified with the second-precise clock for the same reason snoozing
+    // is: a wake counts as recency, and the quantized minute would leave a
+    // just-woken thread on the shelf until the minute ticks over.
+    if (
+      olderSectionEnabled &&
+      threadIsOlder(thread, { now: snoozeNow, afterDays: olderSectionAfterDays })
+    ) {
+      older.push(thread);
+      continue;
+    }
+    active.push(thread);
   }
 
   const orderedActive = sortThreadsForListV2(active, {
     sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
   });
+  // "What did I leave behind most recently", ordered by the same key that
+  // decided these rows belong here.
+  const orderedOlder = sortOlderThreadsForSidebar(older, { now: snoozeNow });
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
+  const visibleOlder =
+    input.olderShelfExpanded === true
+      ? orderedOlder
+      : orderedOlder.filter(
+          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+        );
   const visibleSnoozed =
     input.snoozedShelfExpanded === true
       ? orderedSnoozed
@@ -602,6 +677,18 @@ export function buildThreadListV2Items(input: {
       isLast: false,
     });
   }
+  // Older rows keep the card variant: they are ordinary active threads with
+  // their usual actions, filed under a header rather than demoted.
+  const olderShelfHeaderIndex = orderedOlder.length > 0 ? items.length : null;
+  for (const thread of visibleOlder) {
+    items.push({
+      thread,
+      variant: "card",
+      snoozed: false,
+      pinned: false,
+      isLast: false,
+    });
+  }
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {
     items.push({
@@ -629,6 +716,8 @@ export function buildThreadListV2Items(input: {
   return {
     items,
     hiddenSettledCount: orderedSettled.length - pagedSettled.length,
+    olderCount: orderedOlder.length,
+    olderShelfHeaderIndex,
     snoozedCount: orderedSnoozed.length,
     snoozedShelfHeaderIndex,
     settledCount: orderedSettled.length,

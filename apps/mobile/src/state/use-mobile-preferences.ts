@@ -2,15 +2,18 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
+  clampSidebarOlderSectionAfterDays,
   clampSteerGraceWindowMs,
   DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT,
   DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
+  DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   DEFAULT_STEER_GRACE_WINDOW_MS,
   type AccentTintIntensityPercent,
   type ArchivedSectionVisibleCount,
+  type SidebarOlderSectionAfterDays,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
@@ -59,6 +62,63 @@ export function useAlwaysShowPinnedInAttention(): boolean {
 export function useSortActiveByLatestUserMessage(): boolean {
   const { preferences } = useMobilePreferences();
   return preferences.sidebarV2SortActiveByLatestUserMessage ?? false;
+}
+
+/**
+ * Whether threads settle on their own. Off means inactivity and merged pull
+ * requests both stop filing threads away; explicit settling still works.
+ */
+export function useThreadAutoSettleEnabled(): boolean {
+  const { preferences } = useMobilePreferences();
+  return preferences.threadAutoSettleEnabled !== false;
+}
+
+export interface OlderSectionSettings {
+  readonly enabled: boolean;
+  readonly afterDays: SidebarOlderSectionAfterDays;
+  readonly collapsedByDefault: boolean;
+}
+
+/** The Older shelf's three settings, clamped on read like the rest. */
+export function useOlderSectionSettings(): OlderSectionSettings {
+  const { preferences } = useMobilePreferences();
+  const enabled = preferences.sidebarOlderSectionEnabled ?? false;
+  const afterDays = preferences.sidebarOlderSectionAfterDays;
+  // Folded by default, as on web: an unfolded shelf on first run would just
+  // be the list the user already had, with a header in the middle of it.
+  const collapsedByDefault = preferences.sidebarOlderSectionCollapsedByDefault ?? true;
+  return useMemo(
+    () => ({
+      enabled,
+      afterDays: clampSidebarOlderSectionAfterDays(
+        afterDays ?? DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+      ),
+      collapsedByDefault,
+    }),
+    [afterDays, collapsedByDefault, enabled],
+  );
+}
+
+/**
+ * The Older shelf's fold state for one list.
+ *
+ * The setting only seeds it, and only until the shelf is toggled by hand:
+ * preferences arrive asynchronously, so an unset local choice defers to
+ * whatever the stored setting turns out to be rather than latching the
+ * pre-hydration default.
+ */
+export function useOlderShelfExpansion(): {
+  readonly expanded: boolean;
+  readonly toggle: () => void;
+} {
+  const { collapsedByDefault } = useOlderSectionSettings();
+  const [manuallyExpanded, setManuallyExpanded] = useState<boolean | null>(null);
+  const expanded = manuallyExpanded ?? !collapsedByDefault;
+  const toggle = useCallback(
+    () => setManuallyExpanded((value) => !(value ?? !collapsedByDefault)),
+    [collapsedByDefault],
+  );
+  return { expanded, toggle };
 }
 
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {

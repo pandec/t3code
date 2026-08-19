@@ -39,7 +39,10 @@ import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useOlderSectionSettings,
+  useOlderShelfExpansion,
   useSortActiveByLatestUserMessage,
+  useThreadAutoSettleEnabled,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
@@ -59,6 +62,7 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
+import { ThreadListV2OlderShelfHeader } from "../threads/thread-list-v2-older-shelf";
 import { resolveThreadProviderDriver } from "../threads/thread-provider";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 import {
@@ -236,6 +240,9 @@ export function HomeScreen(props: HomeScreenProps) {
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
+  const autoSettleEnabled = useThreadAutoSettleEnabled();
+  const olderSection = useOlderSectionSettings();
+  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } = useOlderShelfExpansion();
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -761,6 +768,8 @@ export function HomeScreen(props: HomeScreenProps) {
       return {
         items: [],
         hiddenSettledCount: 0,
+        olderCount: 0,
+        olderShelfHeaderIndex: null,
         snoozedCount: 0,
         snoozedShelfHeaderIndex: null,
         settledCount: 0,
@@ -780,7 +789,11 @@ export function HomeScreen(props: HomeScreenProps) {
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestByKey,
+      autoSettleEnabled,
       autoSettleOnMerge,
+      olderSectionEnabled: olderSection.enabled,
+      olderSectionAfterDays: olderSection.afterDays,
+      olderShelfExpanded,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       settledLimit: settledVisibleCount,
@@ -794,7 +807,11 @@ export function HomeScreen(props: HomeScreenProps) {
     alwaysShowPinnedInAttention,
     sortActiveByLatestUserMessage,
     changeRequestByKey,
+    autoSettleEnabled,
     autoSettleOnMerge,
+    olderSection.enabled,
+    olderSection.afterDays,
+    olderShelfExpanded,
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,
@@ -869,6 +886,9 @@ export function HomeScreen(props: HomeScreenProps) {
       buildThreadListV2ListItems({
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
+        olderCount: threadListV2Layout.olderCount,
+        olderShelfExpanded,
+        olderShelfHeaderIndex: threadListV2Layout.olderShelfHeaderIndex,
         snoozedCount: threadListV2Layout.snoozedCount,
         snoozedShelfExpanded,
         snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
@@ -877,7 +897,13 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
       }),
-    [settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
+    [
+      olderShelfExpanded,
+      settledShelfExpanded,
+      snoozedShelfExpanded,
+      threadListV2Layout,
+      v2PendingTasks,
+    ],
   );
 
   const renderV2Item = useCallback(
@@ -912,6 +938,15 @@ export function HomeScreen(props: HomeScreenProps) {
       }
       if (item.type === "v2-pinned-divider") {
         return <ThreadListV2PinnedDivider />;
+      }
+      if (item.type === "v2-older-shelf") {
+        return (
+          <ThreadListV2OlderShelfHeader
+            count={item.count}
+            expanded={item.expanded}
+            onToggle={toggleOlderShelf}
+          />
+        );
       }
       if (item.type === "v2-snoozed-shelf") {
         return (
@@ -1027,6 +1062,7 @@ export function HomeScreen(props: HomeScreenProps) {
       threadListV2Items,
       threadSearchMatchByKey,
       titleRegenerationEnvironmentIds,
+      toggleOlderShelf,
       toggleSettledShelf,
       toggleSnoozedShelf,
       v2ProjectTitleByProjectKey,

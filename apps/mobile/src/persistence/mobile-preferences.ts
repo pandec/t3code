@@ -33,7 +33,22 @@ export interface Preferences {
   /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
+  /**
+   * Device-local mirror of the web fork's `threadAutoSettleEnabled` master
+   * gate. With it off nothing settles on its own — neither inactivity nor a
+   * merged pull request — and settling stays a manual action.
+   */
+  readonly threadAutoSettleEnabled?: boolean;
   readonly autoSettleOnMerge?: boolean;
+  /**
+   * Device-local mirrors of the web fork's Older section settings. The
+   * section is a display grouping for quiet-but-active threads, so nothing
+   * about it is persisted per thread; `sidebarOlderSectionCollapsedByDefault`
+   * only seeds the shelf's fold state, which a tap then owns.
+   */
+  readonly sidebarOlderSectionEnabled?: boolean;
+  readonly sidebarOlderSectionAfterDays?: number;
+  readonly sidebarOlderSectionCollapsedByDefault?: boolean;
   /**
    * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
    * no client-settings sync, so the legacy grouped thread list is opted into
@@ -119,7 +134,11 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
+    threadAutoSettleEnabled?: boolean;
     autoSettleOnMerge?: boolean;
+    sidebarOlderSectionEnabled?: boolean;
+    sidebarOlderSectionAfterDays?: number;
+    sidebarOlderSectionCollapsedByDefault?: boolean;
     legacyThreadListEnabled?: boolean;
     planModeEnabled?: boolean;
     steerGraceWindowMs?: number;
@@ -192,8 +211,21 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
+  if (typeof parsed.threadAutoSettleEnabled === "boolean") {
+    preferences.threadAutoSettleEnabled = parsed.threadAutoSettleEnabled;
+  }
   if (typeof parsed.autoSettleOnMerge === "boolean") {
     preferences.autoSettleOnMerge = parsed.autoSettleOnMerge;
+  }
+  if (typeof parsed.sidebarOlderSectionEnabled === "boolean") {
+    preferences.sidebarOlderSectionEnabled = parsed.sidebarOlderSectionEnabled;
+  }
+  if (typeof parsed.sidebarOlderSectionAfterDays === "number") {
+    preferences.sidebarOlderSectionAfterDays = parsed.sidebarOlderSectionAfterDays;
+  }
+  if (typeof parsed.sidebarOlderSectionCollapsedByDefault === "boolean") {
+    preferences.sidebarOlderSectionCollapsedByDefault =
+      parsed.sidebarOlderSectionCollapsedByDefault;
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;

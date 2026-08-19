@@ -38,7 +38,10 @@ import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useOlderSectionSettings,
+  useOlderShelfExpansion,
   useSortActiveByLatestUserMessage,
+  useThreadAutoSettleEnabled,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { useThreadAttentionFilter } from "./use-thread-attention-filter";
@@ -90,6 +93,7 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
+import { ThreadListV2OlderShelfHeader } from "./thread-list-v2-older-shelf";
 import { resolveThreadProviderDriver } from "./thread-provider";
 import { pendingTaskAttentionKey } from "./threadAttention";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -240,6 +244,9 @@ function ThreadNavigationSidebarPane(
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const autoSettleEnabled = useThreadAutoSettleEnabled();
+  const olderSection = useOlderSectionSettings();
+  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } = useOlderShelfExpansion();
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -654,6 +661,8 @@ function ThreadNavigationSidebarPane(
       return {
         items: [],
         hiddenSettledCount: 0,
+        olderCount: 0,
+        olderShelfHeaderIndex: null,
         snoozedCount: 0,
         snoozedShelfHeaderIndex: null,
         settledCount: 0,
@@ -671,7 +680,11 @@ function ThreadNavigationSidebarPane(
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestByKey,
+      autoSettleEnabled,
       autoSettleOnMerge,
+      olderSectionEnabled: olderSection.enabled,
+      olderSectionAfterDays: olderSection.afterDays,
+      olderShelfExpanded,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       settledLimit: settledVisibleCount,
@@ -686,7 +699,11 @@ function ThreadNavigationSidebarPane(
     sortActiveByLatestUserMessage,
     changeRequestByKey,
     attentionFilter.memberThreadKeys,
+    autoSettleEnabled,
     autoSettleOnMerge,
+    olderSection.enabled,
+    olderSection.afterDays,
+    olderShelfExpanded,
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,
@@ -748,6 +765,9 @@ function ThreadNavigationSidebarPane(
     const items: SidebarListItem[] = buildThreadListV2ListItems({
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
+      olderCount: threadListV2Layout.olderCount,
+      olderShelfExpanded,
+      olderShelfHeaderIndex: threadListV2Layout.olderShelfHeaderIndex,
       snoozedCount: threadListV2Layout.snoozedCount,
       snoozedShelfExpanded,
       snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
@@ -773,6 +793,7 @@ function ThreadNavigationSidebarPane(
     pendingTasks,
     props.searchQuery,
     selectedProjectRefs,
+    olderShelfExpanded,
     settledShelfExpanded,
     snoozedShelfExpanded,
     threadListV2Enabled,
@@ -1060,6 +1081,9 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-pinned-divider" || item.type === "v2-pinned-divider") {
         return previous.type === item.type;
       }
+      if (previous.type === "v2-older-shelf" && item.type === "v2-older-shelf") {
+        return previous.count === item.count && previous.expanded === item.expanded;
+      }
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
@@ -1070,11 +1094,13 @@ function ThreadNavigationSidebarPane(
         previous.type === "v2-thread" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
+        previous.type === "v2-older-shelf" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
+        item.type === "v2-older-shelf" ||
         item.type === "v2-snoozed-shelf" ||
         item.type === "v2-settled-shelf"
       ) {
@@ -1200,6 +1226,15 @@ function ThreadNavigationSidebarPane(
         }
         case "v2-pinned-divider":
           return <ThreadListV2PinnedDivider pane="sidebar" />;
+        case "v2-older-shelf":
+          return (
+            <ThreadListV2OlderShelfHeader
+              count={item.count}
+              expanded={item.expanded}
+              onToggle={toggleOlderShelf}
+              pane="sidebar"
+            />
+          );
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader
@@ -1351,6 +1386,7 @@ function ThreadNavigationSidebarPane(
       snoozeEnvironmentIds,
       snoozeThread,
       nowMinute,
+      toggleOlderShelf,
       toggleSettledShelf,
       toggleSnoozedShelf,
       unpinThread,

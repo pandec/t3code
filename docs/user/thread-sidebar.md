@@ -14,10 +14,10 @@ their pinned threads keep the default newest-first order below the ones you have
 
 ## Folding away older threads
 
-Some threads are worth keeping around without being worth looking at today. On web and desktop,
-turn on **Older section** in Settings → Extras → Sidebar and the thread list files anything that
-has gone quiet into a foldable **Older** section below your live threads, with a count on the
-header while it is folded.
+Some threads are worth keeping around without being worth looking at today. Turn on **Older
+section** — Settings → Extras → Sidebar on web and desktop, Settings → General on mobile — and the
+thread list files anything that has gone quiet into a foldable **Older** section below your live
+threads, with a count on the header while it is folded.
 
 Quiet means no messages and no agent turns for longer than the window you set — seven days by
 default, anywhere from one day to a year. Nothing is settled, snoozed, or archived on your behalf:
@@ -33,8 +33,12 @@ on the section steps aside entirely, since that filter has already narrowed the 
 asked to see.
 
 The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
-you fold or unfold the section yourself that choice sticks on that device. The thread you have open
-keeps its row even while the section is folded, so it never disappears out from under you.
+you fold or unfold the section yourself that choice wins — for good on web and desktop, and for as
+long as the thread list stays open on mobile. The thread you have open keeps its row even while the section is
+folded, so it never disappears out from under you.
+
+The window and the choices around it are set per device: mobile keeps its own copy of these
+settings rather than following the ones on your desktop.
 
 ## Filtering by environment
 
