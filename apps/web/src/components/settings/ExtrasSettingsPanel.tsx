@@ -675,7 +675,7 @@ function SidebarExtrasSection() {
                   settings.sidebarOlderSectionCollapsedByDefault !==
                   DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault ? (
                     <SettingResetButton
-                      label="older section fold state"
+                      label="older section starting fold"
                       onClick={() =>
                         updateSettings({
                           sidebarOlderSectionCollapsedByDefault:

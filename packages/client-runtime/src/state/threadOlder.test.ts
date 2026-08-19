@@ -13,13 +13,17 @@ const CREATED_AT = "2026-01-01T00:00:00.000Z";
 
 function thread(overrides: Partial<ThreadOlderSource> = {}): ThreadOlderSource {
   return {
+    backgroundLiveness: null,
     createdAt: CREATED_AT,
+    hasActionableProposedPlan: false,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     latestUserMessageAt: null,
     latestTurn: null,
     movedToTopAt: null,
     session: null,
+    snoozedAt: null,
+    snoozedUntil: null,
     ...overrides,
   } as ThreadOlderSource;
 }
@@ -57,6 +61,7 @@ describe("threadOlderRecencyAtMs", () => {
           latestUserMessageAt: "2026-04-02T00:00:00.000Z",
           movedToTopAt: "2026-04-09T00:00:00.000Z",
         }),
+        { now: NOW },
       ),
     ).toBe(Date.parse("2026-04-09T00:00:00.000Z"));
   });
@@ -65,12 +70,13 @@ describe("threadOlderRecencyAtMs", () => {
     expect(
       threadOlderRecencyAtMs(
         thread({ latestTurn: turn({ completedAt: "2026-04-08T00:00:00.000Z" }) }),
+        { now: NOW },
       ),
     ).toBe(Date.parse("2026-04-08T00:00:00.000Z"));
   });
 
   it("falls back to creation time for an untouched thread", () => {
-    expect(threadOlderRecencyAtMs(thread())).toBe(Date.parse(CREATED_AT));
+    expect(threadOlderRecencyAtMs(thread(), { now: NOW })).toBe(Date.parse(CREATED_AT));
   });
 });
 
@@ -121,8 +127,11 @@ describe("threadIsOlder", () => {
     for (const blocked of [
       { ...quiet, hasPendingApprovals: true },
       { ...quiet, hasPendingUserInput: true },
+      { ...quiet, hasActionableProposedPlan: true },
       { ...quiet, session: session("starting") },
       { ...quiet, session: session("running") },
+      { ...quiet, backgroundLiveness: "working" as const },
+      { ...quiet, backgroundLiveness: "monitoring" as const },
     ]) {
       expect(threadIsOlder(blocked, { now: NOW, afterDays: 7 })).toBe(false);
     }
@@ -130,6 +139,23 @@ describe("threadIsOlder", () => {
     expect(threadIsOlder({ ...quiet, session: session("error") }, { now: NOW, afterDays: 7 })).toBe(
       true,
     );
+  });
+
+  it("ages a woken thread from its wake, not from the work it was snoozed on top of", () => {
+    const wokeOnTimer = thread({
+      latestUserMessageAt: "2026-01-01T00:00:00.000Z",
+      snoozedAt: "2026-01-02T00:00:00.000Z",
+      // Elapsed, so the thread is no longer snoozed and reaches this branch.
+      snoozedUntil: "2026-04-09T00:00:00.000Z",
+    });
+    expect(threadIsOlder(wokeOnTimer, { now: NOW, afterDays: 7 })).toBe(false);
+    // A wake that is itself older than the window files away as normal.
+    expect(
+      threadIsOlder(
+        { ...wokeOnTimer, snoozedUntil: "2026-02-01T00:00:00.000Z" },
+        { now: NOW, afterDays: 7 },
+      ),
+    ).toBe(true);
   });
 
   it("never files away on unusable input", () => {
@@ -151,10 +177,8 @@ describe("sortOlderThreadsForSidebar", () => {
     const older = { ...thread({ latestUserMessageAt: "2026-03-01T00:00:00.000Z" }), id: "a" };
     const newer = { ...thread({ latestUserMessageAt: "2026-03-20T00:00:00.000Z" }), id: "b" };
     const tie = { ...thread({ latestUserMessageAt: "2026-03-20T00:00:00.000Z" }), id: "a0" };
-    expect(sortOlderThreadsForSidebar([older, newer, tie]).map((entry) => entry.id)).toEqual([
-      "a0",
-      "b",
-      "a",
-    ]);
+    expect(
+      sortOlderThreadsForSidebar([older, newer, tie], { now: NOW }).map((entry) => entry.id),
+    ).toEqual(["a0", "b", "a"]);
   });
 });

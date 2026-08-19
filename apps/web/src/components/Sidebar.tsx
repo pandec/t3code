@@ -2635,6 +2635,10 @@ export default function Sidebar() {
         // threads already have a home and are never filed away here.
       } else if (
         olderSectionEnabled &&
+        // The Attention filter already narrowed the list to rows the user
+        // asked to see; folding a subset of them away would answer a
+        // different question than the one they asked.
+        effectiveAttentionFilterState === null &&
         threadIsOlder(thread, { now, afterDays: olderSectionAfterDays })
       ) {
         older.push(thread);
@@ -2663,10 +2667,9 @@ export default function Sidebar() {
       activeThreads: sortActiveThreadsForSidebar(active, {
         sortByLatestUserMessage: sortActiveByLatestUserMessage,
       }),
-      // "What did I leave behind most recently" — the same key that decided
-      // these rows belong here, so the shelf can never order by one clock
-      // and classify by another.
-      olderThreads: sortOlderThreadsForSidebar(older),
+      // "What did I leave behind most recently", ordered by the same key
+      // that decided these rows belong here.
+      olderThreads: sortOlderThreadsForSidebar(older, { now }),
       // Soonest wake first: "what comes back next" is the shelf's question.
       // snoozeWakeSortMs parks indefinite snoozes (null wake time) last.
       snoozedThreads: snoozed.toSorted(
@@ -4511,6 +4514,10 @@ export default function Sidebar() {
                     const isCard =
                       section === "active" || section === "pinned" || section === "older";
                     const rowVariant = isCard ? "card" : "slim";
+                    // Older cards share the card variant but not its place in
+                    // the list, so they need their own key band for the same
+                    // reason the variant is in the key at all.
+                    const rowKeyBand = section === "older" ? "older" : rowVariant;
                     return (
                       <SidebarThreadRow
                         // Keyed per variant on purpose: when a thread settles,
@@ -4519,7 +4526,7 @@ export default function Sidebar() {
                         // FLIP-sliding through every row in between (rows here
                         // are translucent, so a crossing row reads as text
                         // painted over text).
-                        key={`${threadKey}:${rowVariant}`}
+                        key={`${threadKey}:${rowKeyBand}`}
                         thread={thread}
                         variant={rowVariant}
                         // Snoozed rows wake; settled rows un-settle (explicit

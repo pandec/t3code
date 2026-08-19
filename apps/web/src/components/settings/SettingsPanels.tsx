@@ -572,7 +572,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.sidebarOlderSectionCollapsedByDefault !==
       DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault
-        ? ["Older section fold state"]
+        ? ["Older section starting fold"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),

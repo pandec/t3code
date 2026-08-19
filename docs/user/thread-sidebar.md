@@ -14,16 +14,23 @@ their pinned threads keep the default newest-first order below the ones you have
 
 ## Folding away older threads
 
-Some threads are worth keeping around without being worth looking at today. Turn on **Older
-section** in Settings → Extras → Sidebar and the thread list files anything that has gone quiet
-into a foldable **Older** section below your live threads, with a count on the header while it is
-folded.
+Some threads are worth keeping around without being worth looking at today. On web and desktop,
+turn on **Older section** in Settings → Extras → Sidebar and the thread list files anything that
+has gone quiet into a foldable **Older** section below your live threads, with a count on the
+header while it is folded.
 
 Quiet means no messages and no agent turns for longer than the window you set — seven days by
 default, anywhere from one day to a year. Nothing is settled, snoozed, or archived on your behalf:
-an Older thread is an ordinary active thread that happens to be grouped, and it returns to the
-list the moment you message it or move it to the top. Pinned, snoozed, and settled threads stay in
-their own sections and are never filed here.
+an Older thread is an ordinary active thread that happens to be grouped, and it returns to the list
+the moment you message it (or move it to the top, on servers that support that). Pinned, snoozed,
+and settled threads stay in their own sections and are never filed here.
+
+Live and waiting work is never folded away, however long it has been sitting there: a thread with a
+running session, background work still going after its turn, an approval or input request, or a
+plan waiting on your decision stays in the list. So does a thread that has just come back from a
+snooze — waking it puts it in front of you, which is the whole point. While the Attention filter is
+on the section steps aside entirely, since that filter has already narrowed the list to what you
+asked to see.
 
 The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
 you fold or unfold the section yourself that choice sticks on that device. The thread you have open
