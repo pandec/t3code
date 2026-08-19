@@ -239,7 +239,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
-const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar:older-expanded";
+const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -2639,7 +2639,10 @@ export default function Sidebar() {
         // asked to see; folding a subset of them away would answer a
         // different question than the one they asked.
         effectiveAttentionFilterState === null &&
-        threadIsOlder(thread, { now, afterDays: olderSectionAfterDays })
+        // The precise clock, for the same reason snoozing uses it: a wake
+        // counts as recency, and the quantized minute would leave a
+        // just-woken thread classified Older until the minute ticks over.
+        threadIsOlder(thread, { now: preciseNow, afterDays: olderSectionAfterDays })
       ) {
         older.push(thread);
       } else {
@@ -2669,7 +2672,7 @@ export default function Sidebar() {
       }),
       // "What did I leave behind most recently", ordered by the same key
       // that decided these rows belong here.
-      olderThreads: sortOlderThreadsForSidebar(older, { now }),
+      olderThreads: sortOlderThreadsForSidebar(older, { now: preciseNow }),
       // Soonest wake first: "what comes back next" is the shelf's question.
       // snoozeWakeSortMs parks indefinite snoozes (null wake time) last.
       snoozedThreads: snoozed.toSorted(

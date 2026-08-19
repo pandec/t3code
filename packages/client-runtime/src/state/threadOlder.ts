@@ -93,11 +93,15 @@ export function sortOlderThreadsForSidebar<T extends ThreadOlderSource & { reado
   threads: readonly T[],
   options: { readonly now: string },
 ): T[] {
-  return threads
-    .map((thread) => ({ thread, recencyMs: threadOlderRecencyAtMs(thread, options) }))
-    .toSorted(
-      (left, right) =>
-        right.recencyMs - left.recencyMs || left.thread.id.localeCompare(right.thread.id),
-    )
-    .map((entry) => entry.thread);
+  // .sort() on the mapped copy, not .toSorted(): client-runtime state modules
+  // are bundled into the mobile app and Hermes lacks the ES2023 method.
+  const decorated = threads.map((thread) => ({
+    thread,
+    recencyMs: threadOlderRecencyAtMs(thread, options),
+  }));
+  decorated.sort(
+    (left, right) =>
+      right.recencyMs - left.recencyMs || left.thread.id.localeCompare(right.thread.id),
+  );
+  return decorated.map((entry) => entry.thread);
 }

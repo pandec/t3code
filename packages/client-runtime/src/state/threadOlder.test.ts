@@ -25,7 +25,7 @@ function thread(overrides: Partial<ThreadOlderSource> = {}): ThreadOlderSource {
     snoozedAt: null,
     snoozedUntil: null,
     ...overrides,
-  } as ThreadOlderSource;
+  };
 }
 
 function turn(overrides: { readonly completedAt: string }): ThreadOlderSource["latestTurn"] {
@@ -156,6 +156,15 @@ describe("threadIsOlder", () => {
         { now: NOW, afterDays: 7 },
       ),
     ).toBe(true);
+    // A wake seconds ago must count even against a mid-minute clock — the
+    // caller passes its precise clock, and a quantized one would leave the
+    // thread classified Older until the minute ticked over.
+    expect(
+      threadIsOlder(
+        { ...wokeOnTimer, snoozedUntil: "2026-04-10T00:00:30.000Z" },
+        { now: "2026-04-10T00:00:45.000Z", afterDays: 7 },
+      ),
+    ).toBe(false);
   });
 
   it("never files away on unusable input", () => {
