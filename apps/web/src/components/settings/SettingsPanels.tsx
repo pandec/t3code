@@ -562,6 +562,18 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
         : []),
+      ...(settings.sidebarOlderSectionEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled
+        ? ["Older section"]
+        : []),
+      ...(settings.sidebarOlderSectionAfterDays !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays
+        ? ["Older threshold"]
+        : []),
+      ...(settings.sidebarOlderSectionCollapsedByDefault !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault
+        ? ["Older section fold state"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
@@ -692,6 +704,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2SortActiveByLatestUserMessage,
       settings.sidebarV2NewThreadButtonInProjectRow,
+      settings.sidebarOlderSectionEnabled,
+      settings.sidebarOlderSectionAfterDays,
+      settings.sidebarOlderSectionCollapsedByDefault,
       settings.timestampFormat,
       settings.wordWrap,
       followSystem,
@@ -786,6 +801,10 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
+      sidebarOlderSectionEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled,
+      sidebarOlderSectionAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays,
+      sidebarOlderSectionCollapsedByDefault:
+        DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,

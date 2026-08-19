@@ -191,6 +191,10 @@
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
     },
+    "./state/thread-older": {
+      "types": "./src/state/threadOlder.ts",
+      "default": "./src/state/threadOlder.ts"
+    },
     "./state/thread-attention": {
       "types": "./src/state/threadAttention.ts",
       "default": "./src/state/threadAttention.ts"

@@ -82,6 +82,31 @@ export function clampArchivedSectionVisibleCount(value: number): ArchivedSection
     integer: true,
   }) as ArchivedSectionVisibleCount;
 }
+/**
+ * How long a thread must go without activity before the sidebar files it
+ * under "Older". Deliberately wider than the auto-settle window: Older is a
+ * display grouping for threads the user wants to keep indefinitely, not a
+ * lifecycle state, so a year-long threshold is a legitimate choice.
+ */
+export const MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS = 1;
+export const MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS = 365;
+export const SidebarOlderSectionAfterDays = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+    maximum: MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+  }),
+);
+export type SidebarOlderSectionAfterDays = typeof SidebarOlderSectionAfterDays.Type;
+export const DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS: SidebarOlderSectionAfterDays = 7;
+export function clampSidebarOlderSectionAfterDays(value: number): SidebarOlderSectionAfterDays {
+  return clampSettingNumber({
+    value,
+    minimum: MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+    maximum: MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+    fallback: DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
+    integer: true,
+  }) as SidebarOlderSectionAfterDays;
+}
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -433,6 +458,24 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  /**
+   * Files quiet-but-still-active threads under a foldable "Older" section
+   * instead of leaving them in the inbox. Opt-in: with it off the sidebar
+   * partitions exactly as before.
+   */
+  sidebarOlderSectionEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  sidebarOlderSectionAfterDays: SidebarOlderSectionAfterDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS)),
+  ),
+  /**
+   * The shelf's starting state. Only the default: once the shelf is toggled
+   * by hand, that per-device choice sticks until it is toggled again.
+   */
+  sidebarOlderSectionCollapsedByDefault: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   /**
    * How long a steer rests in the outbox before delivery. 0 sends immediately;
@@ -1291,6 +1334,9 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarAlwaysShowPinnedInAttention: Schema.optionalKey(Schema.Boolean),
   sidebarV2SortActiveByLatestUserMessage: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
+  sidebarOlderSectionEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarOlderSectionAfterDays: Schema.optionalKey(SidebarOlderSectionAfterDays),
+  sidebarOlderSectionCollapsedByDefault: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   turnCompletionMinDurationSeconds: Schema.optionalKey(TurnCompletionMinDurationSeconds),

@@ -12,6 +12,23 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Folding away older threads
+
+Some threads are worth keeping around without being worth looking at today. Turn on **Older
+section** in Settings → Extras → Sidebar and the thread list files anything that has gone quiet
+into a foldable **Older** section below your live threads, with a count on the header while it is
+folded.
+
+Quiet means no messages and no agent turns for longer than the window you set — seven days by
+default, anywhere from one day to a year. Nothing is settled, snoozed, or archived on your behalf:
+an Older thread is an ordinary active thread that happens to be grouped, and it returns to the
+list the moment you message it or move it to the top. Pinned, snoozed, and settled threads stay in
+their own sections and are never filed here.
+
+The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
+you fold or unfold the section yourself that choice sticks on that device. The thread you have open
+keeps its row even while the section is folded, so it never disappears out from under you.
+
 ## Filtering by environment
 
 When you are connected to more than one environment, a button beside the search box narrows the
