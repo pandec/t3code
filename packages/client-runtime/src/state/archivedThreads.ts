@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { scopedThreadKey, scopeThreadRef } from "../environment/scoped.ts";
 import { scopeThreadShell, type EnvironmentThreadShell } from "./models.ts";
 
 export interface ArchivedSnapshotEntry {
@@ -182,10 +183,17 @@ function archivedTimestamp(thread: OrchestrationShellSnapshot["threads"][number]
  * The newest archived threads across every environment, already scoped so
  * callers can render them like any other thread shell. `totalCount` is the
  * unclipped total, which is what the section header reports.
+ *
+ * `selectedThreadKey` names the open thread; when it is archived but falls
+ * beyond the clip, its row is appended anyway so navigation never loses the
+ * thread being read — the same pull the settled tail does. This only reaches
+ * as far as the snapshots do: an environment's recent-archived query is
+ * server-limited, so a selected thread outside that window stays absent.
  */
 export function selectRecentArchivedThreads(
   snapshots: ReadonlyArray<RecentArchivedSnapshotEntry>,
   visibleCount: number,
+  selectedThreadKey: string | null = null,
 ): {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly totalCount: number;
@@ -199,8 +207,19 @@ export function selectRecentArchivedThreads(
     (left, right) =>
       archivedTimestamp(right) - archivedTimestamp(left) || right.id.localeCompare(left.id),
   );
+  const clipCount = Math.max(0, visibleCount);
+  const visible = threads.slice(0, clipCount);
+  if (selectedThreadKey !== null) {
+    const selected = threads
+      .slice(clipCount)
+      .find(
+        (thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === selectedThreadKey,
+      );
+    if (selected !== undefined) visible.push(selected);
+  }
   return {
-    threads: threads.slice(0, Math.max(0, visibleCount)),
+    threads: visible,
     totalCount: snapshots.reduce((total, snapshot) => total + snapshot.totalArchivedCount, 0),
   };
 }

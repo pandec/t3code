@@ -40,9 +40,9 @@ import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
   useOlderSectionSettings,
-  useOlderShelfExpansion,
   useSortActiveByLatestUserMessage,
   useThreadAutoSettleEnabled,
+  useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
@@ -242,7 +242,10 @@ export function HomeScreen(props: HomeScreenProps) {
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const autoSettleEnabled = useThreadAutoSettleEnabled();
   const olderSection = useOlderSectionSettings();
-  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } = useOlderShelfExpansion();
+  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } =
+    useThreadShelfExpansion("older");
+  const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
+    useThreadShelfExpansion("archived");
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -680,10 +683,10 @@ export function HomeScreen(props: HomeScreenProps) {
     () => setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT),
     [],
   );
-  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
-  const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const { expanded: snoozedShelfExpanded, toggle: toggleSnoozedShelf } =
+    useThreadShelfExpansion("snoozed");
+  const { expanded: settledShelfExpanded, toggle: toggleSettledShelf } =
+    useThreadShelfExpansion("settled");
   // now is quantized to the minute and ticks so the inactivity auto-settle
   // boundary is actually crossed while the app stays open (mirrors web);
   // without a clock dependency the partition memoizes a frozen "now".
@@ -1360,6 +1363,9 @@ export function HomeScreen(props: HomeScreenProps) {
                   environmentLabels={archivedEnvironmentLabels}
                   projects={props.projects}
                   threads={displayedRecentArchive.threads}
+                  totalCount={displayedRecentArchive.totalCount}
+                  expanded={archivedShelfExpanded}
+                  onToggle={toggleArchivedShelf}
                   onDelete={props.onDeleteArchivedThread}
                   onOpen={props.onSelectThread}
                   onOpenAll={props.onOpenAllArchivedThreads}

@@ -13,7 +13,6 @@ import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { ThreadListV2SectionDivider } from "./thread-list-v2-items";
 
 const ARCHIVED_MENU_ACTIONS: MenuAction[] = [
   { id: "unarchive", title: "Unarchive", image: "arrow.uturn.backward" },
@@ -119,25 +118,82 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
   );
 });
 
+/**
+ * Header for the archived shelf, in the settled shelf's muted idiom — archived
+ * threads are the quietest thing in the list, and the fold state persists per
+ * device (see `useThreadShelfExpansion`).
+ */
+const ArchivedShelfHeader = memo(function ArchivedShelfHeader(props: {
+  readonly count: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly pane?: "screen" | "sidebar";
+}) {
+  const mutedColor = useThemeColor("--color-foreground-muted");
+  return (
+    <Pressable
+      accessibilityHint={
+        props.expanded ? "Collapses the archived threads." : "Expands the archived threads."
+      }
+      accessibilityLabel={
+        props.count === 1 ? "1 archived thread" : `${props.count} archived threads`
+      }
+      accessibilityRole="button"
+      accessibilityState={{ expanded: props.expanded }}
+      className={`mb-1.5 mt-4 flex-row items-center gap-2.5 ${props.pane === "sidebar" ? "px-3" : "px-5"}`}
+      onPress={props.onToggle}
+      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+    >
+      <Text className="text-xs font-t3-medium text-foreground-tertiary">
+        {props.expanded ? "Archived" : `Archived (${props.count})`}
+      </Text>
+      <View className="h-px flex-1 bg-border" />
+      <SymbolView
+        name="chevron.down"
+        size={10}
+        tintColor={mutedColor}
+        type="monochrome"
+        style={{ transform: [{ rotate: props.expanded ? "180deg" : "0deg" }] }}
+      />
+    </Pressable>
+  );
+});
+
 export function RecentArchivedThreadSection(props: {
   readonly environmentLabels: Readonly<Record<string, string>>;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  /** Unclipped archived total, which is what the folded header reports. */
+  readonly totalCount?: number;
   readonly onDelete: (thread: EnvironmentThreadShell) => void;
   readonly onOpen: (thread: EnvironmentThreadShell) => void;
   readonly onOpenAll: () => void;
   readonly onUnarchive: (thread: EnvironmentThreadShell) => void;
   readonly selectedThreadKey?: string | null;
   readonly pane?: "screen" | "sidebar";
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
 }) {
   if (props.threads.length === 0) return null;
   const projectByKey = new Map(
     props.projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
   );
+  // The open thread keeps its row on a folded shelf, the same exception every
+  // other shelf makes: a split-view detail must never lose its navigation row.
+  const visibleThreads = props.expanded
+    ? props.threads
+    : props.threads.filter(
+        (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
+      );
   return (
     <View>
-      <ThreadListV2SectionDivider label="Archived" pane={props.pane} />
-      {props.threads.map((thread) => (
+      <ArchivedShelfHeader
+        count={props.totalCount ?? props.threads.length}
+        expanded={props.expanded}
+        onToggle={props.onToggle}
+        pane={props.pane}
+      />
+      {visibleThreads.map((thread) => (
         <RecentArchivedThreadRow
           key={`${thread.environmentId}:${thread.id}`}
           environmentLabel={props.environmentLabels[thread.environmentId] ?? null}
@@ -152,21 +208,23 @@ export function RecentArchivedThreadSection(props: {
           pane={props.pane}
         />
       ))}
-      <Pressable
-        accessibilityLabel="View all archived threads"
-        accessibilityRole="button"
-        onPress={props.onOpenAll}
-        className={
-          props.pane === "sidebar"
-            ? "mx-3 mt-2 h-10 items-center justify-center rounded-lg border border-dashed border-border"
-            : "mx-5 mt-2 h-10 items-center justify-center rounded-lg border border-dashed border-border"
-        }
-        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-      >
-        <Text className="text-xs font-t3-medium text-foreground-muted">
-          View all archived threads
-        </Text>
-      </Pressable>
+      {props.expanded ? (
+        <Pressable
+          accessibilityLabel="View all archived threads"
+          accessibilityRole="button"
+          onPress={props.onOpenAll}
+          className={
+            props.pane === "sidebar"
+              ? "mx-3 mt-2 h-10 items-center justify-center rounded-lg border border-dashed border-border"
+              : "mx-5 mt-2 h-10 items-center justify-center rounded-lg border border-dashed border-border"
+          }
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Text className="text-xs font-t3-medium text-foreground-muted">
+            View all archived threads
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

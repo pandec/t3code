@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -13,12 +13,17 @@ import {
   type SidebarOlderSectionAfterDays,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
 import type { Preferences } from "../persistence/mobile-preferences";
-import { mobilePreferencesAtom } from "./preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preferences";
+import {
+  resolveThreadShelfExpanded,
+  threadShelfExpandedPatch,
+  type ThreadShelfId,
+} from "./thread-shelf-expansion";
 
 const EMPTY_PREFERENCES: Preferences = {};
 
@@ -100,25 +105,30 @@ export function useOlderSectionSettings(): OlderSectionSettings {
 }
 
 /**
- * The Older shelf's fold state for one list.
+ * One shelf's fold state, remembered per device.
  *
- * The setting only seeds it, and only until the shelf is toggled by hand:
- * preferences arrive asynchronously, so an unset local choice defers to
- * whatever the stored setting turns out to be rather than latching the
- * pre-hydration default.
+ * A tap writes the choice through, so shelves stay where the user left them
+ * across launches — the same thing the web sidebar's local-storage keys do.
+ * For the Older shelf the Extras setting only seeds the shelf, and only until
+ * that first tap.
  */
-export function useOlderShelfExpansion(): {
+export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   readonly expanded: boolean;
   readonly toggle: () => void;
 } {
+  const { preferences } = useMobilePreferences();
   const { collapsedByDefault } = useOlderSectionSettings();
-  const [manuallyExpanded, setManuallyExpanded] = useState<boolean | null>(null);
-  const expanded = manuallyExpanded ?? !collapsedByDefault;
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const expanded = resolveThreadShelfExpanded({
+    shelf,
+    preferences,
+    olderCollapsedByDefault: collapsedByDefault,
+  });
   const toggle = useCallback(
-    () => setManuallyExpanded((value) => !(value ?? !collapsedByDefault)),
-    [collapsedByDefault],
+    () => savePreferences(threadShelfExpandedPatch(shelf, !expanded)),
+    [expanded, savePreferences, shelf],
   );
-  return { expanded, toggle };
+  return useMemo(() => ({ expanded, toggle }), [expanded, toggle]);
 }
 
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {

@@ -50,6 +50,16 @@ export interface Preferences {
   readonly sidebarOlderSectionAfterDays?: number;
   readonly sidebarOlderSectionCollapsedByDefault?: boolean;
   /**
+   * Fold state of the thread list's shelves, remembered per device the way the
+   * web sidebar remembers its own. One key per shelf so a patch can never
+   * clobber a sibling's state, and absence genuinely means "never toggled" —
+   * see `resolveThreadShelfExpanded` for the defaults each shelf falls back to.
+   */
+  readonly sidebarOlderShelfExpanded?: boolean;
+  readonly sidebarSnoozedShelfExpanded?: boolean;
+  readonly sidebarSettledShelfExpanded?: boolean;
+  readonly sidebarArchivedShelfExpanded?: boolean;
+  /**
    * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
    * no client-settings sync, so the legacy grouped thread list is opted into
    * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
@@ -139,6 +149,10 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarOlderSectionEnabled?: boolean;
     sidebarOlderSectionAfterDays?: number;
     sidebarOlderSectionCollapsedByDefault?: boolean;
+    sidebarOlderShelfExpanded?: boolean;
+    sidebarSnoozedShelfExpanded?: boolean;
+    sidebarSettledShelfExpanded?: boolean;
+    sidebarArchivedShelfExpanded?: boolean;
     legacyThreadListEnabled?: boolean;
     planModeEnabled?: boolean;
     steerGraceWindowMs?: number;
@@ -226,6 +240,18 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.sidebarOlderSectionCollapsedByDefault === "boolean") {
     preferences.sidebarOlderSectionCollapsedByDefault =
       parsed.sidebarOlderSectionCollapsedByDefault;
+  }
+  if (typeof parsed.sidebarOlderShelfExpanded === "boolean") {
+    preferences.sidebarOlderShelfExpanded = parsed.sidebarOlderShelfExpanded;
+  }
+  if (typeof parsed.sidebarSnoozedShelfExpanded === "boolean") {
+    preferences.sidebarSnoozedShelfExpanded = parsed.sidebarSnoozedShelfExpanded;
+  }
+  if (typeof parsed.sidebarSettledShelfExpanded === "boolean") {
+    preferences.sidebarSettledShelfExpanded = parsed.sidebarSettledShelfExpanded;
+  }
+  if (typeof parsed.sidebarArchivedShelfExpanded === "boolean") {
+    preferences.sidebarArchivedShelfExpanded = parsed.sidebarArchivedShelfExpanded;
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;

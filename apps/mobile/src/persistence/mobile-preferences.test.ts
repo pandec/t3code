@@ -70,6 +70,30 @@ describe("mobile preferences persistence", () => {
     ).toEqual({});
   });
 
+  it("keeps valid shelf fold states", () => {
+    expect(
+      sanitizePreferences({
+        sidebarOlderShelfExpanded: true,
+        sidebarSnoozedShelfExpanded: true,
+        sidebarSettledShelfExpanded: false,
+        sidebarArchivedShelfExpanded: true,
+      }),
+    ).toMatchObject({
+      sidebarOlderShelfExpanded: true,
+      sidebarSnoozedShelfExpanded: true,
+      sidebarSettledShelfExpanded: false,
+      sidebarArchivedShelfExpanded: true,
+    });
+    expect(
+      sanitizePreferences({
+        sidebarOlderShelfExpanded: 1 as unknown as boolean,
+        sidebarSnoozedShelfExpanded: "true" as unknown as boolean,
+        sidebarSettledShelfExpanded: null as unknown as boolean,
+        sidebarArchivedShelfExpanded: "yes" as unknown as boolean,
+      }),
+    ).toEqual({});
+  });
+
   it("keeps only valid persisted thread visit timestamps", () => {
     expect(
       sanitizePreferences({
