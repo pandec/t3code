@@ -240,6 +240,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
+const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -2825,8 +2826,30 @@ export default function Sidebar() {
     () => setSnoozedShelfExpanded((value) => !value),
     [setSnoozedShelfExpanded],
   );
-  const [archivedShelfExpanded, setArchivedShelfExpanded] = useState(true);
-  const toggleArchivedShelf = useCallback(() => setArchivedShelfExpanded((value) => !value), []);
+  // Folded by default and remembered per device, like the snoozed shelf:
+  // archived threads are the ones deliberately put away, so they stay a
+  // header until asked for.
+  const [archivedShelfExpanded, setArchivedShelfExpanded] = useLocalStorage(
+    ARCHIVED_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
+  const toggleArchivedShelf = useCallback(
+    () => setArchivedShelfExpanded((value) => !value),
+    [setArchivedShelfExpanded],
+  );
+  // Same exception the snoozed shelf and the settled tail make: the thread
+  // being read keeps its row, so a folded archive never hides the open thread.
+  const visibleArchivedThreads = useMemo(
+    () =>
+      archivedShelfExpanded
+        ? displayedRecentArchive.threads
+        : displayedRecentArchive.threads.filter(
+            (thread) =>
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+          ),
+    [archivedShelfExpanded, displayedRecentArchive.threads, routeThreadKey],
+  );
   // The Older shelf's starting state comes from Extras; toggling it writes a
   // per-device preference that outranks the setting from then on.
   const [olderShelfExpanded, setOlderShelfExpanded] = useLocalStorage(
@@ -4835,35 +4858,32 @@ export default function Sidebar() {
                         />
                       </button>
                     </li>
-                    {archivedShelfExpanded
-                      ? displayedRecentArchive.threads.map((thread) => (
-                          <SidebarV2ArchivedRow
-                            key={`archived:${thread.environmentId}:${thread.id}`}
-                            thread={thread}
-                            projectCwd={
-                              projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
-                            }
-                            projectFaviconPath={
-                              projectFaviconPathByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
-                            }
-                            projectTitle={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
-                            }
-                            isActive={
-                              routeThreadKey ===
-                              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
-                            }
-                            onOpen={navigateToThread}
-                            onUnarchive={attemptUnarchive}
-                            onContextMenu={handleArchivedThreadContextMenu}
-                          />
-                        ))
-                      : null}
+                    {visibleArchivedThreads.map((thread) => (
+                      <SidebarV2ArchivedRow
+                        key={`archived:${thread.environmentId}:${thread.id}`}
+                        thread={thread}
+                        projectCwd={
+                          projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                        }
+                        projectFaviconPath={
+                          projectFaviconPathByKey.get(
+                            `${thread.environmentId}:${thread.projectId}`,
+                          ) ?? null
+                        }
+                        projectTitle={
+                          projectDisplayNameByKey.get(
+                            `${thread.environmentId}:${thread.projectId}`,
+                          ) ?? null
+                        }
+                        isActive={
+                          routeThreadKey ===
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+                        }
+                        onOpen={navigateToThread}
+                        onUnarchive={attemptUnarchive}
+                        onContextMenu={handleArchivedThreadContextMenu}
+                      />
+                    ))}
                     {archivedShelfExpanded ? (
                       <li className="list-none">
                         <button

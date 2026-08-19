@@ -39,9 +39,9 @@ import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
   useOlderSectionSettings,
-  useOlderShelfExpansion,
   useSortActiveByLatestUserMessage,
   useThreadAutoSettleEnabled,
+  useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { useThreadAttentionFilter } from "./use-thread-attention-filter";
@@ -246,7 +246,10 @@ function ThreadNavigationSidebarPane(
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const autoSettleEnabled = useThreadAutoSettleEnabled();
   const olderSection = useOlderSectionSettings();
-  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } = useOlderShelfExpansion();
+  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } =
+    useThreadShelfExpansion("older");
+  const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
+    useThreadShelfExpansion("archived");
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -577,10 +580,10 @@ function ThreadNavigationSidebarPane(
     () => setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT),
     [],
   );
-  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
-  const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const { expanded: snoozedShelfExpanded, toggle: toggleSnoozedShelf } =
+    useThreadShelfExpansion("snoozed");
+  const { expanded: settledShelfExpanded, toggle: toggleSettledShelf } =
+    useThreadShelfExpansion("settled");
   // now ticks per minute so the inactivity auto-settle boundary is actually
   // crossed while the pane stays open; without a clock dependency the
   // partition memoizes a frozen "now".
@@ -1004,6 +1007,9 @@ function ThreadNavigationSidebarPane(
         environmentLabels={archivedEnvironmentLabels}
         projects={projects}
         threads={displayedRecentArchive.threads}
+        totalCount={displayedRecentArchive.totalCount}
+        expanded={archivedShelfExpanded}
+        onToggle={toggleArchivedShelf}
         onDelete={confirmDeleteArchivedThread}
         onOpen={handleSelectThread}
         onOpenAll={props.onOpenArchivedThreads}
