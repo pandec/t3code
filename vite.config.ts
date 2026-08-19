@@ -14,6 +14,9 @@ export default defineConfig({
     environment: "node",
     exclude: [
       "**/.repos/**",
+      // Vitest does not read .gitignore, so a checked-out worktree would double
+      // discovery with a stale copy of every test in the repo.
+      "**/.claude/worktrees/**",
       "**/node_modules/**",
       "**/dist/**",
       "**/dist-electron/**",
