@@ -373,7 +373,9 @@ export function hasPendingClaudeWork(input: {
   return (input.background_tasks?.length ?? 0) > 0 || (input.session_crons?.length ?? 0) > 0;
 }
 
-function isUuid(value: string): boolean {
+// Exported for the thread-gateway-account reader, whose resume-cursor read
+// must accept exactly the session ids this adapter would resume.
+export function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 

@@ -73,6 +73,8 @@ import {
   ProviderUsageRefreshInput,
   ProviderUsageRefreshResult,
   ProviderUsageSnapshotsResult,
+  ProviderUsageThreadAccountInput,
+  ProviderUsageThreadAccountResult,
 } from "./providerUsage.ts";
 import {
   PullRequestActionInput,
@@ -274,6 +276,7 @@ export const WS_METHODS = {
   serverRefreshProviders: "server.refreshProviders",
   providerUsageRead: "providerUsage.read",
   providerUsageRefresh: "providerUsage.refresh",
+  providerUsageThreadAccount: "providerUsage.threadAccount",
   serverListProviderSkills: "server.listProviderSkills",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -387,6 +390,12 @@ export const WsProviderUsageReadRpc = Rpc.make(WS_METHODS.providerUsageRead, {
 export const WsProviderUsageRefreshRpc = Rpc.make(WS_METHODS.providerUsageRefresh, {
   payload: ProviderUsageRefreshInput,
   success: ProviderUsageRefreshResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsProviderUsageThreadAccountRpc = Rpc.make(WS_METHODS.providerUsageThreadAccount, {
+  payload: ProviderUsageThreadAccountInput,
+  success: ProviderUsageThreadAccountResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1052,6 +1061,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsProviderUsageReadRpc,
   WsProviderUsageRefreshRpc,
+  WsProviderUsageThreadAccountRpc,
   WsServerListProviderSkillsRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,

@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
@@ -40,6 +40,32 @@ export const ProviderUsageRefreshFailure = Schema.Struct({
   reason: Schema.String,
 });
 export type ProviderUsageRefreshFailure = typeof ProviderUsageRefreshFailure.Type;
+
+/**
+ * Ask which pooled gateway account a thread's live provider session is bound
+ * to. The gateway keeps that binding per (session, model), so the caller names
+ * the model the thread's session last ran — its persisted model selection, not
+ * a merely staged composer choice, which has no binding yet and would make the
+ * probe create one. The server supplies the session id from the thread's
+ * persisted provider binding.
+ */
+export const ProviderUsageThreadAccountInput = Schema.Struct({
+  threadId: ThreadId,
+  model: TrimmedNonEmptyString,
+});
+export type ProviderUsageThreadAccountInput = typeof ProviderUsageThreadAccountInput.Type;
+
+export const ProviderUsageThreadAccountResult = Schema.Struct({
+  /**
+   * The gateway `auth_index` of the account serving the thread's session, or
+   * null when it cannot be determined (no session yet, a non-gateway thread, a
+   * provider without session identity, or a probe failure). Clients join it
+   * against the `authIndex` each pooled account row carries in the usage
+   * snapshot.
+   */
+  authIndex: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProviderUsageThreadAccountResult = typeof ProviderUsageThreadAccountResult.Type;
 
 export const ProviderUsageRefreshResult = Schema.Struct({
   snapshots: ProviderInstanceUsageSnapshots,

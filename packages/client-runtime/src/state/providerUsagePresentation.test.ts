@@ -9,6 +9,8 @@ import {
   isProviderUsageSnapshotStale,
   oldestProviderUsageObservedAt,
   providerUsageBarPercent,
+  resolveProviderUsageBoundAuthIndex,
+  shouldProbeProviderUsageThreadAccount,
   shouldRefreshProviderUsageOnOpen,
 } from "./providerUsagePresentation.js";
 
@@ -167,5 +169,49 @@ describe("shouldRefreshProviderUsageOnOpen", () => {
     expect(shouldRefreshProviderUsageOnOpen(never, NOW_MS, NOW_MS - 90_000)).toBe(true);
     // 0 means this surface has never asked, so the first open always reads.
     expect(shouldRefreshProviderUsageOnOpen(never, NOW_MS, 0)).toBe(true);
+  });
+});
+
+describe("shouldProbeProviderUsageThreadAccount", () => {
+  const last = { key: "thread-1:claude-opus-5", askedAtMs: NOW_MS - 10_000 };
+
+  it("waits out the cadence cap for the same thread and model", () => {
+    expect(shouldProbeProviderUsageThreadAccount(last, last.key, NOW_MS)).toBe(false);
+    expect(shouldProbeProviderUsageThreadAccount(last, last.key, last.askedAtMs + 60_000)).toBe(
+      true,
+    );
+  });
+
+  it("re-asks immediately for another thread or model", () => {
+    expect(shouldProbeProviderUsageThreadAccount(last, "thread-2:claude-opus-5", NOW_MS)).toBe(
+      true,
+    );
+    expect(shouldProbeProviderUsageThreadAccount(last, "thread-1:claude-fable-5", NOW_MS)).toBe(
+      true,
+    );
+  });
+
+  it("lets an explicit force past the cadence cap but not the spam floor", () => {
+    expect(shouldProbeProviderUsageThreadAccount(last, last.key, NOW_MS, true)).toBe(true);
+    // One second after the last ask, even a forced probe waits: every probe
+    // renews the gateway's session-affinity TTL.
+    expect(
+      shouldProbeProviderUsageThreadAccount(last, last.key, last.askedAtMs + 1_000, true),
+    ).toBe(false);
+    expect(
+      shouldProbeProviderUsageThreadAccount(last, last.key, last.askedAtMs + 5_000, true),
+    ).toBe(true);
+  });
+});
+
+describe("resolveProviderUsageBoundAuthIndex", () => {
+  const state = { threadId: "thread-1", model: "claude-opus-5", authIndex: "af6a" };
+
+  it("answers only for the exact thread and model the probe was asked about", () => {
+    expect(resolveProviderUsageBoundAuthIndex(state, "thread-1", "claude-opus-5")).toBe("af6a");
+    expect(resolveProviderUsageBoundAuthIndex(state, "thread-2", "claude-opus-5")).toBeNull();
+    expect(resolveProviderUsageBoundAuthIndex(state, "thread-1", "claude-fable-5")).toBeNull();
+    expect(resolveProviderUsageBoundAuthIndex(state, undefined, "claude-opus-5")).toBeNull();
+    expect(resolveProviderUsageBoundAuthIndex(null, "thread-1", "claude-opus-5")).toBeNull();
   });
 });

@@ -58,7 +58,12 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+import {
+  HttpClient,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerRespondable,
+} from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -88,6 +93,8 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHealth.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
 import type { ProviderInstance } from "./provider/ProviderDriver.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -388,6 +395,11 @@ const makeWsRpcLayer = (
         return Array.from(roots);
       });
       const providerUsageRefresh = yield* ProviderUsageRefresh.ProviderUsageRefresh;
+      const readThreadGatewayAccount = makeThreadGatewayAccountReader({
+        sessionDirectory: yield* ProviderSessionDirectory.ProviderSessionDirectory,
+        instanceRegistry: providerInstanceRegistry,
+        httpClient: yield* HttpClient.HttpClient,
+      });
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1297,6 +1309,10 @@ const makeWsRpcLayer = (
               ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.providerUsageThreadAccount]: (input) =>
+          observeRpcEffect(WS_METHODS.providerUsageThreadAccount, readThreadGatewayAccount(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverListProviderSkills]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverListProviderSkills,

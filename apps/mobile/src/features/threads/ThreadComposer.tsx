@@ -81,7 +81,11 @@ import {
 } from "../../lib/providerUsagePill";
 import {
   oldestProviderUsageObservedAt,
+  resolveProviderUsageBoundAuthIndex,
+  shouldProbeProviderUsageThreadAccount,
   shouldRefreshProviderUsageOnOpen,
+  type ProviderUsageThreadAccountProbe,
+  type ProviderUsageThreadAccountState,
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import { flushComposerDrafts } from "../../state/use-composer-drafts";
 import type { SendMessageOptions } from "../../state/use-thread-composer-state";
@@ -498,13 +502,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         : null,
     [gatewayUsageByInstance, providerUsageInstanceId],
   );
+  const activeProviderUsageModel = resolveProviderUsageModel({
+    liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
+    persistedModel: props.persistedModel,
+    selectedModel: props.selectedThread.modelSelection.model,
+  });
   /** Which upstream of a gateway pool serves this thread's active model. */
   const activeUpstreamProvider = useMemo<string | null>(() => {
-    const model = resolveProviderUsageModel({
-      liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
-      persistedModel: props.persistedModel,
-      selectedModel: props.selectedThread.modelSelection.model,
-    });
+    const model = activeProviderUsageModel;
     return resolveProviderUsageUpstreamProvider({
       payload:
         providerUsageInstanceId === null
@@ -516,9 +521,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       driver: selectedProviderStatus?.driver ?? null,
     });
   }, [
-    props.persistedModel,
-    props.selectedThread.modelSelection.model,
-    props.selectedThread.session?.providerInstanceId,
+    activeProviderUsageModel,
     providerUsageInstanceId,
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
@@ -542,18 +545,110 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   ]);
   const providerUsage =
     serverProviderUsage ?? (activeGatewayPool === null ? activityProviderUsage : null);
+  const readThreadGatewayAccountCommand = useAtomCommand(
+    serverEnvironment.readProviderUsageThreadAccount,
+    // Best-effort marker: a failed probe just leaves the badge off.
+    { reportFailure: false },
+  );
+  // The pooled account the thread's live session is bound to, read from the
+  // gateway when the usage sheet opens. Kept with the thread and model it was
+  // probed for, so an answer landing after a switch cannot mislabel the new
+  // context; a mismatch just means "unknown", which renders as no badge.
+  const [threadGatewayAccount, setThreadGatewayAccount] =
+    useState<ProviderUsageThreadAccountState | null>(null);
+  const lastThreadAccountProbeRef = useRef<ProviderUsageThreadAccountProbe>({
+    key: "",
+    askedAtMs: 0,
+  });
+  const probeThreadGatewayAccount = useCallback(
+    (options?: { readonly force?: boolean }) => {
+      const threadId = props.selectedThread.id;
+      // Only a Claude session has a binding the server can read. Mobile has
+      // no settings mirror to tell a gateway instance from a direct one, so a
+      // direct-instance thread costs one RPC the server answers null — that
+      // beats gating on the usage snapshot, which would skip the probe on the
+      // first open after a launch, before any snapshot has arrived.
+      if (
+        selectedProviderStatus?.driver !== "claudeAgent" ||
+        props.selectedThread.session == null
+      ) {
+        return;
+      }
+      const model = activeProviderUsageModel;
+      const probeKey = `${threadId}:${model}`;
+      const nowMs = Date.now();
+      if (
+        !shouldProbeProviderUsageThreadAccount(
+          lastThreadAccountProbeRef.current,
+          probeKey,
+          nowMs,
+          options?.force === true,
+        )
+      ) {
+        return;
+      }
+      lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
+      void (async () => {
+        const result = await readThreadGatewayAccountCommand({
+          environmentId: props.environmentId,
+          input: { threadId, model },
+        });
+        if (result._tag === "Failure") return;
+        // A newer thread or model claimed the slot while this probe was in
+        // flight; its answer must not be evicted by this stale one.
+        if (lastThreadAccountProbeRef.current.key !== probeKey) return;
+        const authIndex = result.value.authIndex;
+        setThreadGatewayAccount(authIndex === null ? null : { threadId, model, authIndex });
+      })();
+    },
+    [
+      activeProviderUsageModel,
+      props.environmentId,
+      props.selectedThread.id,
+      props.selectedThread.session,
+      readThreadGatewayAccountCommand,
+      selectedProviderStatus?.driver,
+    ],
+  );
   const providerUsageAccounts = useMemo(() => {
     if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
       const featuredId =
         featuredProviderUsageAccount(activeGatewayPool.accounts, activeUpstreamProvider)?.id ??
         null;
+      // The verified-binding badges only apply where the server can read a
+      // binding (Claude sessions). Elsewhere the featured account keeps the
+      // legacy "current" so e.g. a Codex thread does not lose its badge.
+      const bindingSupported = selectedProviderStatus?.driver === "claudeAgent";
+      const boundAuthIndex = bindingSupported
+        ? resolveProviderUsageBoundAuthIndex(
+            threadGatewayAccount,
+            props.selectedThread.id,
+            activeProviderUsageModel,
+          )
+        : null;
+      const displayAccounts = listProviderUsageAccountsForDisplay(activeGatewayPool.accounts);
+      // A binding to an account no row shows (disabled since the session
+      // bound) would leave "next" pointing at an account that is not in
+      // play; better to show nothing than the wrong badge.
+      const boundRowVisible =
+        boundAuthIndex !== null &&
+        displayAccounts.some(
+          (account) => account.authIndex !== null && account.authIndex === boundAuthIndex,
+        );
       const observedAt =
         providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
-      return listProviderUsageAccountsForDisplay(activeGatewayPool.accounts).map((account) => ({
+      return displayAccounts.map((account) => ({
         instanceId: providerUsageInstanceId,
         accountKey: `${providerUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
-        isCurrent: account.id === featuredId,
+        isCurrent: bindingSupported
+          ? boundRowVisible && account.authIndex === boundAuthIndex
+          : account.id === featuredId,
+        ...(bindingSupported
+          ? {
+              isNext: (boundAuthIndex === null || boundRowVisible) && account.id === featuredId,
+            }
+          : {}),
         snapshot: account.usage,
         observedAt,
       }));
@@ -592,13 +687,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       });
   }, [
     activeGatewayPool,
+    activeProviderUsageModel,
     activeUpstreamProvider,
     gatewayUsageByInstance,
+    props.selectedThread.id,
     props.serverConfig?.providers,
     providerUsageInstanceId,
     providerUsageNowMs,
     providerUsageSnapshotByInstance,
     selectedProviderStatus,
+    threadGatewayAccount,
   ]);
   const fableUsageSelection = useMemo(
     () =>
@@ -631,6 +729,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [],
   );
   const handleRefreshProviderUsage = useCallback(() => {
+    // An explicit refresh ask re-reads the binding past its cadence cap; a
+    // concurrent identical ask joins the same RPC via single-flight.
+    probeThreadGatewayAccount({ force: true });
     const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
     if (instanceIds.length === 0) return;
     // Same 5s debounce the web meter uses: each refresh can spawn a CLI
@@ -663,6 +764,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     // loop that starves the sheet's own presentation frame: the panel never
     // opens. `refresh` alone is atom-keyed and stable, so it is safe to depend on.
   }, [
+    probeThreadGatewayAccount,
     props.environmentId,
     providerUsageAccounts,
     providerUsageQuery.refresh,
@@ -714,6 +816,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     overlaySheetOwnerRef.current = "usage";
     usageRoutePresentation.present(usageRouteSession);
     usageSheetPresentation.open();
+    // Unlike the staleness-gated pool refresh below, the thread-account probe
+    // runs on every open: the binding is one cheap request and can change
+    // independently of the pool's quota data. It throttles itself.
+    probeThreadGatewayAccount();
     // Opening the sheet is the read: refresh a snapshot older than a minute so
     // it can't show yesterday's quota, exactly as the web popover does. The
     // last attempt caps the cadence — an account that never reports would
@@ -729,6 +835,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
   }, [
     handleRefreshProviderUsage,
+    probeThreadGatewayAccount,
     providerUsageAccounts,
     usageRoutePresentation.present,
     usageRouteSession,
