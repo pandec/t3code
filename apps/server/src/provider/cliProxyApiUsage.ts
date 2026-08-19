@@ -89,25 +89,27 @@ const gatewayAuthReservations = new Map<string, number>();
  * gateway's per-IP rejection budget is only documented for management keys,
  * but nothing guarantees it is endpoint-scoped, and this machine's live agent
  * traffic rides the same IP. One 401/403 permanently suppresses that exact
- * origin/key pairing; a corrected key can still probe immediately.
+ * origin/key pairing; a corrected key can still probe immediately. Shared by
+ * every client-key request this module makes (the model catalog and the
+ * session-account probe), so one rejection silences them all.
  */
-interface ModelCatalogState {
+interface ClientKeyState {
   readonly lock: Semaphore.Semaphore;
   rejected: boolean;
 }
 
 // Bounded by one entry per (origin, key) ever configured in this process.
-const modelCatalogStates = new Map<string, ModelCatalogState>();
+const clientKeyStates = new Map<string, ClientKeyState>();
 
-function modelCatalogState(origin: string, key: string): ModelCatalogState {
+function clientKeyState(origin: string, key: string): ClientKeyState {
   const id = `${origin}\0${key}`;
-  const existing = modelCatalogStates.get(id);
+  const existing = clientKeyStates.get(id);
   if (existing !== undefined) return existing;
-  const created: ModelCatalogState = {
+  const created: ClientKeyState = {
     lock: Semaphore.makeUnsafe(1),
     rejected: false,
   };
-  modelCatalogStates.set(id, created);
+  clientKeyStates.set(id, created);
   return created;
 }
 
@@ -115,7 +117,7 @@ function modelCatalogState(origin: string, key: string): ModelCatalogState {
 export function resetCliProxyApiAuthFailuresForTest(): void {
   gatewayAuthFailures.clear();
   gatewayAuthReservations.clear();
-  modelCatalogStates.clear();
+  clientKeyStates.clear();
 }
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -150,6 +152,12 @@ export interface CliProxyApiUsageAccount {
   readonly provider: string;
   readonly priority: number | null;
   readonly state: CliProxyApiAccountState;
+  /**
+   * The gateway's stable per-credential identifier, when reported. Joins the
+   * account against a thread-account probe's answer, which names accounts by
+   * `auth_index` only.
+   */
+  readonly authIndex?: string;
   readonly planType?: string;
   /**
    * Account usage in the same payload shape the matching direct provider
@@ -273,6 +281,7 @@ function parseAuthFiles(payload: unknown): AuthFileEntry[] {
         id: name ?? authIndex ?? `account-${index}`,
         label,
         provider: asString(file.provider) ?? "unknown",
+        ...(authIndex !== undefined ? { authIndex } : {}),
         priority: asFiniteNumber(file.priority),
         state:
           file.disabled === true
@@ -490,7 +499,7 @@ export function makeCliProxyApiUsageProbe(
   const modelProvidersEffect = (() => {
     const { clientUrl, clientKey } = target;
     if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
-    const state = modelCatalogState(clientUrl, clientKey);
+    const state = clientKeyState(clientUrl, clientKey);
     return state.lock.withPermits(1)(
       Effect.suspend(() => {
         if (state.rejected) return Effect.succeed(null);
@@ -644,4 +653,78 @@ export function makeCliProxyApiUsageProbe(
   );
 
   return () => probe;
+}
+
+/**
+ * `X-CPA-TRACE-ID` is `<yyyymmddhhmmss>-<auth_index>-<request id>`; the middle
+ * segment names the credential the gateway selected for the request. The
+ * greedy group keeps a hyphenated auth index intact because the request id
+ * carries no hyphens.
+ */
+export function parseCliProxyApiTraceAuthIndex(value: string): string | null {
+  const match = /^\d{14}-(.+)-[^-]+$/.exec(value.trim());
+  return match?.[1] ?? null;
+}
+
+export interface CliProxyApiSessionAccountProbeInput {
+  /** The provider session id the gateway keys affinity on (a Claude session UUID). */
+  readonly sessionId: string;
+  /** Bindings are per (session, model); probe the model the thread runs. */
+  readonly model: string;
+}
+
+const SESSION_ACCOUNT_REQUEST_TIMEOUT_MS = 5_000;
+
+/**
+ * Read which pooled account the gateway's session-affinity table binds a
+ * session to, via `count_tokens`: it runs the same credential selector as real
+ * traffic, spends no subscription quota, and reports the selected credential's
+ * `auth_index` in the `X-CPA-TRACE-ID` response header.
+ *
+ * The read is not entirely passive. A session with no live binding gets one
+ * created — to exactly the account a real turn would have bound, so the answer
+ * is still right — and a hit refreshes the binding's sliding TTL. Callers
+ * therefore probe on demand (a popover opening), never on a timer, or an idle
+ * session stays pinned to an account the gateway would otherwise release.
+ *
+ * Fail-soft by design: every failure mode answers null, because the caller
+ * renders "unknown" identically for all of them.
+ */
+export function probeCliProxyApiSessionAccount(
+  target: CliProxyApiUsageProbeTarget,
+  input: CliProxyApiSessionAccountProbeInput,
+): Effect.Effect<string | null, never, HttpClient.HttpClient> {
+  const { clientUrl, clientKey } = target;
+  if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
+  const state = clientKeyState(clientUrl, clientKey);
+  return Effect.suspend(() => {
+    if (state.rejected) return Effect.succeed(null);
+    return Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.post(`${clientUrl}/v1/messages/count_tokens`).pipe(
+          HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+          HttpClientRequest.setHeader("anthropic-version", "2023-06-01"),
+          HttpClientRequest.bodyJsonUnsafe({
+            model: input.model,
+            messages: [{ role: "user", content: "." }],
+            // Claude Code carries its session id as a `_session_<uuid>` suffix
+            // in `metadata.user_id`; the gateway extracts that suffix as its
+            // affinity key, so this probe lands on the session's binding.
+            metadata: { user_id: `t3_session_${input.sessionId}` },
+          }),
+        ),
+      );
+      if (response.status === 401 || response.status === 403) {
+        state.rejected = true;
+        return null;
+      }
+      if (response.status < 200 || response.status >= 300) return null;
+      const trace = response.headers["x-cpa-trace-id"];
+      return typeof trace === "string" ? parseCliProxyApiTraceAuthIndex(trace) : null;
+    }).pipe(
+      Effect.timeout(SESSION_ACCOUNT_REQUEST_TIMEOUT_MS),
+      Effect.orElseSucceed(() => null),
+    );
+  });
 }

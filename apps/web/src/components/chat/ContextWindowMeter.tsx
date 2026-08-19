@@ -152,8 +152,19 @@ export interface ProviderUsageAccountRow {
   readonly accountKey?: string;
   readonly displayName: string;
   readonly email: string | undefined;
-  /** Whether the thread's live session is currently spending this account. */
+  /**
+   * Whether this account serves the active thread. For a direct instance that
+   * is the instance the thread runs on; for a pooled gateway account it is set
+   * only once the gateway confirmed the session's sticky binding — the pool's
+   * priority order alone cannot tell, so unprobed pools mark no row current.
+   */
   readonly isCurrent: boolean;
+  /**
+   * Gateway pools only: the account the failover ladder would bind a *new*
+   * session to. Distinct from `isCurrent` because an existing session's
+   * binding outranks priority.
+   */
+  readonly isNext?: boolean;
   readonly usage: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
   /** Secondary metadata, e.g. a gateway account's tier and cooldown. */
@@ -181,6 +192,12 @@ export function ContextWindowMeter(props: {
   /** Selected model, named in the automatic-compaction note. */
   modelDisplayName?: string | null;
   onRefreshProviderUsage?: () => Promise<void> | void;
+  /**
+   * Called on every popover open, unlike the staleness-gated refresh: the
+   * thread-account binding is one cheap request and can change independently
+   * of the pool's quota data. The callback throttles itself.
+   */
+  onProbeThreadAccount?: () => void;
 }) {
   const { usage, modelDisplayName } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -270,6 +287,9 @@ export function ContextWindowMeter(props: {
   return (
     <Popover
       onOpenChange={(open) => {
+        if (open) {
+          props.onProbeThreadAccount?.();
+        }
         if (
           open &&
           props.onRefreshProviderUsage !== undefined &&
@@ -443,9 +463,12 @@ export function ContextWindowMeter(props: {
                                 · {account.detail}
                               </span>
                             ) : null}
-                            {account.isCurrent && providerUsageAccounts.length > 1 ? (
+                            {(account.isCurrent || account.isNext === true) &&
+                            providerUsageAccounts.length > 1 ? (
                               <span className="shrink-0 self-center rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                                current
+                                {/* One badge per row: a current account is next
+                                    for its own session by definition. */}
+                                {account.isCurrent ? "current" : "next"}
                               </span>
                             ) : null}
                           </span>

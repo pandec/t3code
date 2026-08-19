@@ -454,6 +454,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   maskProviderUsageEmails: boolean;
   providerUsageLabel: string | null;
   onRefreshProviderUsage: () => Promise<void>;
+  onProbeThreadAccount: () => void;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -493,6 +494,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           maskProviderUsageEmails={props.maskProviderUsageEmails}
           providerUsageLabel={props.providerUsageLabel}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
+          onProbeThreadAccount={props.onProbeThreadAccount}
           modelDisplayName={props.activeThreadModelDisplayName}
         />
       ) : null}
@@ -955,6 +957,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Refresh failures are handled with a user-visible toast below.
     reportFailure: false,
   });
+  const readThreadGatewayAccountCommand = useAtomCommand(
+    serverEnvironment.readProviderUsageThreadAccount,
+    // Best-effort marker: a failed probe just leaves the badge off.
+    { reportFailure: false },
+  );
   const effectiveProviderSkills = resolveEffectiveProviderSkills(
     providerSkillsQuery.data?.skills,
     selectedProviderStatus?.skills,
@@ -1210,18 +1217,61 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerUsageLabel,
   ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
+  // The pooled account the thread's live session is bound to, read from the
+  // gateway when the usage popover opens. Keyed by thread and model so a probe
+  // answering after a switch cannot mislabel the new context; a mismatch just
+  // means "unknown", which renders as no badge.
+  const [threadGatewayAccount, setThreadGatewayAccount] = useState<{
+    readonly threadId: string;
+    readonly model: string;
+    readonly authIndex: string;
+  } | null>(null);
+  const lastThreadAccountProbeRef = useRef({ key: "", askedAtMs: 0 });
+  const probeThreadGatewayAccount = useCallback(async () => {
+    const threadId = activeThread?.id;
+    if (threadId === undefined || activeGatewayUsage === null) return;
+    const model = activeProviderUsageModel;
+    // Same 5s cadence cap as the pool refresh, but per thread+model: opening
+    // the popover twice must not probe twice, while switching threads or
+    // models re-asks immediately.
+    const probeKey = `${threadId}:${model}`;
+    const nowMs = Date.now();
+    const last = lastThreadAccountProbeRef.current;
+    if (last.key === probeKey && nowMs - last.askedAtMs < 5_000) return;
+    lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
+    const result = await readThreadGatewayAccountCommand({
+      environmentId,
+      input: { threadId, model },
+    });
+    if (result._tag === "Failure") return;
+    const authIndex = result.value.authIndex;
+    setThreadGatewayAccount(authIndex === null ? null : { threadId, model, authIndex });
+  }, [
+    activeGatewayUsage,
+    activeProviderUsageModel,
+    activeThread?.id,
+    environmentId,
+    readThreadGatewayAccountCommand,
+  ]);
   const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(() => {
     if (activeGatewayUsage !== null && activeProviderUsageInstanceId !== null) {
       const featuredId =
         featuredProviderUsageAccount(activeGatewayUsage.accounts, activeUpstreamProvider)?.id ??
         null;
+      const boundAuthIndex =
+        threadGatewayAccount !== null &&
+        threadGatewayAccount.threadId === activeThread?.id &&
+        threadGatewayAccount.model === activeProviderUsageModel
+          ? threadGatewayAccount.authIndex
+          : null;
       const observedAt =
         providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
       return listProviderUsageAccountsForDisplay(activeGatewayUsage.accounts).map((account) => ({
         instanceId: activeProviderUsageInstanceId,
         accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
-        isCurrent: account.id === featuredId,
+        isCurrent: boundAuthIndex !== null && account.authIndex === boundAuthIndex,
+        isNext: account.id === featuredId,
         usage: account.usage,
         observedAt,
       }));
@@ -1245,13 +1295,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     activeGatewayUsage,
     activeProviderUsageInstanceId,
+    activeProviderUsageModel,
+    activeThread?.id,
     activeUpstreamProvider,
     providerUsageNowMinute,
     providerUsageSnapshotByInstance,
+    threadGatewayAccount,
     usageProviders,
   ]);
   const lastProviderUsageRefreshAtRef = useRef(0);
   const refreshProviderUsage = useCallback(async () => {
+    // The thread-account probe rides every refresh ask (its own throttle caps
+    // the cadence), so the manual refresh button also re-reads the binding.
+    void probeThreadGatewayAccount();
     const refreshAt = Date.now();
     if (refreshAt - lastProviderUsageRefreshAtRef.current < 5_000) return;
     const instanceIds = usageProviders.map((provider) => provider.instanceId);
@@ -1308,7 +1364,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     } finally {
       setIsRefreshingProviderUsage(false);
     }
-  }, [environmentId, providerUsageQuery, refreshProviderUsageCommand, usageProviders]);
+  }, [
+    environmentId,
+    probeThreadGatewayAccount,
+    providerUsageQuery,
+    refreshProviderUsageCommand,
+    usageProviders,
+  ]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
@@ -3851,6 +3913,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   providerUsageLabel={effectiveProviderUsageLabel}
                   onRefreshProviderUsage={refreshProviderUsage}
+                  onProbeThreadAccount={probeThreadGatewayAccount}
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={composerHasRunningActions}

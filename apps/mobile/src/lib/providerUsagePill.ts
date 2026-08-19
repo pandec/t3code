@@ -27,8 +27,19 @@ export interface ProviderUsageSheetAccount {
   readonly accountKey?: string;
   readonly displayName: string;
   readonly email: string | undefined;
-  /** Whether the thread's live session is currently spending this account. */
+  /**
+   * Whether this account serves the active thread. For a direct instance that
+   * is the instance the thread runs on; for a pooled gateway account it is set
+   * only once the gateway confirmed the session's sticky binding — the pool's
+   * priority order alone cannot tell, so unprobed pools mark no row current.
+   */
   readonly isCurrent: boolean;
+  /**
+   * Gateway pools only: the account the failover ladder would bind a *new*
+   * session to. Distinct from `isCurrent` because an existing session's
+   * binding outranks priority.
+   */
+  readonly isNext?: boolean;
   readonly snapshot: ProviderUsageSnapshot | null;
   readonly observedAt: number | null;
   /** Secondary metadata, e.g. a gateway account's tier and cooldown. */

@@ -1079,6 +1079,7 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
       accounts: [
         {
           id: "claude-tier2.json",
+          authIndex: "af6a89f7d2dec068",
           label: "second@example.com",
           provider: "claude",
           priority: 75,
@@ -1134,6 +1135,9 @@ describe("CLIProxyAPI gateway pool snapshots", () => {
     expect(pool?.accounts).toHaveLength(4);
     const byId = new Map(pool?.accounts.map((account) => [account.id, account]));
     expect(byId.get("claude-tier2.json")?.usage?.windows[0]?.usedPercent).toBe(12);
+    // The auth index joins a thread-account probe's answer; absence is null.
+    expect(byId.get("claude-tier2.json")?.authIndex).toBe("af6a89f7d2dec068");
+    expect(byId.get("claude-tier1.json")?.authIndex).toBeNull();
     expect(byId.get("claude-tier1.json")?.state).toBe("cooldown");
     expect(byId.get("codex.json")?.usage?.providerLabel).toBe("Codex");
     expect(byId.get("codex.json")?.planType).toBe("pro");
@@ -1679,6 +1683,7 @@ describe("provider usage thresholds", () => {
 describe("presentProviderUsageAccount", () => {
   const account = {
     id: "codex-6c16ddf1-bbdecyk@gmail.com-pro.json",
+    authIndex: null,
     label: "bbdecyk@gmail.com",
     provider: "codex",
     priority: 50,

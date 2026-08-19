@@ -788,6 +788,16 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${[...(input.instanceIds ?? [])].sort().join(",")}`,
       },
     }),
+    readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:read-provider-usage-thread-account",
+      tag: WS_METHODS.providerUsageThreadAccount,
+      concurrency: {
+        mode: "singleFlight",
+        // The gateway binding is per (session, model), so a model switch must
+        // not join a probe that asked about the previous model.
+        key: ({ environmentId, input }) => `${environmentId}:${input.threadId}:${input.model}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

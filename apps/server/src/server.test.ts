@@ -124,6 +124,7 @@ import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderInstanceHealthLive } from "./provider/Layers/ProviderInstanceHealthLive.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -661,6 +662,9 @@ const buildAppUnderTest = (options?: {
             listUnavailable: Effect.succeed([]),
             streamChanges: Stream.empty,
             subscribeChanges: Effect.die("unused provider instance registry subscription"),
+          }),
+          Layer.mock(ProviderSessionDirectory.ProviderSessionDirectory)({
+            getBinding: () => Effect.succeedNone,
           }),
         ),
       ),

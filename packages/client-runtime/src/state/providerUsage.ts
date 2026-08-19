@@ -744,6 +744,11 @@ export type ProviderUsageAccountState = "available" | "disabled" | "cooldown";
 export type ProviderUsageAccount = {
   /** Stable identity within the pool (the gateway's auth-file name). */
   readonly id: string;
+  /**
+   * The gateway's per-credential `auth_index`, when the server reported one.
+   * A thread-account probe names the serving account by this value alone.
+   */
+  readonly authIndex: string | null;
   readonly label: string;
   /** Upstream provider slug as the gateway reports it ("claude", "codex"). */
   readonly provider: string;
@@ -787,6 +792,7 @@ export function deriveProviderUsageAccountsFromServerSnapshot(
     if (!account) continue;
     accounts.push({
       id: asString(account.id) ?? `account-${index}`,
+      authIndex: asString(account.authIndex),
       label: asString(account.label) ?? `Account ${index + 1}`,
       provider: asString(account.provider) ?? "unknown",
       priority: asFiniteNumber(account.priority),
@@ -837,7 +843,10 @@ export function listProviderUsageAccountsForDisplay(
 /**
  * The pooled account a compact single-account surface (ring, alerts) should
  * represent: the highest-priority account of `preferredUpstreamProvider` that
- * the gateway can still serve — the one the next turn will actually spend.
+ * the gateway can still serve — the one a *new* session's first turn would
+ * bind to. An existing session can be spending a different account: the
+ * gateway's session-affinity binding is sticky and outranks priority, which is
+ * what the server-side thread-account probe reads.
  *
  * Two deliberate choices:
  *   - An account whose own usage read failed is still featured. Substituting a

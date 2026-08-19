@@ -127,9 +127,13 @@ function AccountCard(props: {
               · {account.detail}
             </Text>
           ) : null}
-          {props.showCurrentBadge && account.isCurrent ? (
+          {props.showCurrentBadge && (account.isCurrent || account.isNext === true) ? (
             <View className="rounded-md bg-subtle-strong px-1.5 py-0.5">
-              <Text className="text-3xs font-t3-bold uppercase text-foreground-muted">Current</Text>
+              <Text className="text-3xs font-t3-bold uppercase text-foreground-muted">
+                {/* One badge per row: a current account is next for its own
+                    session by definition. */}
+                {account.isCurrent ? "Current" : "Next"}
+              </Text>
             </View>
           ) : null}
         </View>
