@@ -340,8 +340,12 @@ export function ContextWindowMeter(props: {
             cap is always valid, so the height the positioner commits is bounded
             even during measurement; the inner cap then trims to the room
             actually available. The outer element scrolls as a last resort, so a
-            viewport too short even for the pinned rows stays reachable. */}
-        <div className="flex max-h-[70vh] flex-col overflow-y-auto overscroll-contain">
+            viewport too short even for the pinned rows stays reachable.
+
+            The outer cap is deliberately generous: on a full desktop window the
+            inner cap is the smaller of the two, so the panel uses the room that
+            actually exists instead of scrolling a list that would have fit. */}
+        <div className="flex max-h-[85vh] flex-col overflow-y-auto overscroll-contain">
           <div className="flex max-h-(--available-height) min-h-0 flex-col gap-3 p-[var(--floating-content-inset)]">
             {providerUsageAccounts.length > 0 ? (
               <div className="flex shrink-0 items-center justify-between gap-3">

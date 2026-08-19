@@ -2,17 +2,20 @@ import { useCallback, useState, type CSSProperties } from "react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
+  clampSidebarOlderSectionAfterDays,
   clampSteerGraceWindowMs,
   clampTurnCompletionMinDurationSeconds,
   DEFAULT_UNIFIED_SETTINGS,
   MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
   MAX_PROVIDER_USAGE_ALERT_PERCENT,
+  MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MAX_STEER_GRACE_WINDOW_MS,
   MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
+  MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MIN_STEER_GRACE_WINDOW_MS,
   MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
   type SidebarThreadProviderIconVisibility,
@@ -418,6 +421,9 @@ function SidebarExtrasSection() {
   const archivedSectionVisibleCount = clampArchivedSectionVisibleCount(
     settings.archivedSectionVisibleCount,
   );
+  const olderSectionAfterDays = clampSidebarOlderSectionAfterDays(
+    settings.sidebarOlderSectionAfterDays,
+  );
 
   return (
     <SettingsSection {...searchableSetting("extras-sidebar")}>
@@ -600,6 +606,99 @@ function SidebarExtrasSection() {
               />
             }
           />
+          <SettingsRow
+            title="Older section"
+            description="Move threads that have gone quiet into a foldable Older section instead of leaving them in the thread list. They stay active — nothing is settled, snoozed, or archived — and any activity brings them straight back."
+            resetAction={
+              settings.sidebarOlderSectionEnabled !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled ? (
+                <SettingResetButton
+                  label="older section"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarOlderSectionEnabled:
+                        DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarOlderSectionEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarOlderSectionEnabled: Boolean(checked) })
+                }
+                aria-label="Group older threads in their own section"
+              />
+            }
+          />
+          {settings.sidebarOlderSectionEnabled ? (
+            <>
+              <SettingsRow
+                title="Older after"
+                description="How long a thread must go without activity before it moves to Older."
+                resetAction={
+                  olderSectionAfterDays !==
+                  DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays ? (
+                    <SettingResetButton
+                      label="older threshold"
+                      onClick={() =>
+                        updateSettings({
+                          sidebarOlderSectionAfterDays:
+                            DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <SettingsNumberField
+                    ariaLabel="Older after"
+                    max={MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS}
+                    min={MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS}
+                    onCommit={(next) => {
+                      if (next === null) return;
+                      updateSettings({
+                        sidebarOlderSectionAfterDays: clampSidebarOlderSectionAfterDays(next),
+                      });
+                    }}
+                    suffix="days"
+                    value={olderSectionAfterDays}
+                  />
+                }
+              />
+              <SettingsRow
+                title="Start Older collapsed"
+                description="Whether the Older section starts folded. Once you fold or unfold it yourself, that choice sticks on this device."
+                resetAction={
+                  settings.sidebarOlderSectionCollapsedByDefault !==
+                  DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault ? (
+                    <SettingResetButton
+                      label="older section starting fold"
+                      onClick={() =>
+                        updateSettings({
+                          sidebarOlderSectionCollapsedByDefault:
+                            DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <Switch
+                    checked={settings.sidebarOlderSectionCollapsedByDefault}
+                    onCheckedChange={(checked) =>
+                      updateSettings({
+                        sidebarOlderSectionCollapsedByDefault: Boolean(checked),
+                      })
+                    }
+                    aria-label="Start the older section collapsed"
+                  />
+                }
+              />
+            </>
+          ) : null}
           <SettingsRow
             title="Recent archived threads"
             description="Choose how many recently archived threads appear at the end of Sidebar V2."

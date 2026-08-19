@@ -25,6 +25,10 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  sortOlderThreadsForSidebar,
+  threadIsOlder,
+} from "@t3tools/client-runtime/state/thread-older";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
@@ -43,6 +47,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   clampArchivedSectionVisibleCount,
+  clampSidebarOlderSectionAfterDays,
   type TimestampFormat,
 } from "@t3tools/contracts/settings";
 import {
@@ -234,6 +239,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
+const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -1986,6 +1992,13 @@ export default function Sidebar() {
   const newThreadButtonInProjectRow = useClientSettings(
     (s) => s.sidebarV2NewThreadButtonInProjectRow,
   );
+  const olderSectionEnabled = useClientSettings((s) => s.sidebarOlderSectionEnabled);
+  const olderSectionAfterDays = useClientSettings((s) =>
+    clampSidebarOlderSectionAfterDays(s.sidebarOlderSectionAfterDays),
+  );
+  const olderSectionCollapsedByDefault = useClientSettings(
+    (s) => s.sidebarOlderSectionCollapsedByDefault,
+  );
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const archivedSectionVisibleCount = useClientSettings((s) =>
     clampArchivedSectionVisibleCount(s.archivedSectionVisibleCount),
@@ -2530,6 +2543,7 @@ export default function Sidebar() {
     pinnedThreads,
     reorderablePinnedKeys,
     activeThreads,
+    olderThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -2571,6 +2585,7 @@ export default function Sidebar() {
     });
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
+    const older: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     for (const thread of visible) {
@@ -2613,6 +2628,23 @@ export default function Sidebar() {
         })
       ) {
         settled.push(thread);
+        // Older is a display grouping, not a lifecycle state: these threads
+        // are still active, nothing was settled or snoozed on the user's
+        // behalf, and any activity puts them straight back in the inbox.
+        // It is checked last on purpose — pinned, snoozed, and settled
+        // threads already have a home and are never filed away here.
+      } else if (
+        olderSectionEnabled &&
+        // The Attention filter already narrowed the list to rows the user
+        // asked to see; folding a subset of them away would answer a
+        // different question than the one they asked.
+        effectiveAttentionFilterState === null &&
+        // The precise clock, for the same reason snoozing uses it: a wake
+        // counts as recency, and the quantized minute would leave a
+        // just-woken thread classified Older until the minute ticks over.
+        threadIsOlder(thread, { now: preciseNow, afterDays: olderSectionAfterDays })
+      ) {
+        older.push(thread);
       } else {
         active.push(thread);
       }
@@ -2638,6 +2670,9 @@ export default function Sidebar() {
       activeThreads: sortActiveThreadsForSidebar(active, {
         sortByLatestUserMessage: sortActiveByLatestUserMessage,
       }),
+      // "What did I leave behind most recently", ordered by the same key
+      // that decided these rows belong here.
+      olderThreads: sortOlderThreadsForSidebar(older, { now: preciseNow }),
       // Soonest wake first: "what comes back next" is the shelf's question.
       // snoozeWakeSortMs parks indefinite snoozes (null wake time) last.
       snoozedThreads: snoozed.toSorted(
@@ -2664,6 +2699,8 @@ export default function Sidebar() {
     hiddenPhysicalProjectKeys,
     nowMinute,
     environmentFilter.resolvedScope,
+    olderSectionAfterDays,
+    olderSectionEnabled,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -2676,8 +2713,14 @@ export default function Sidebar() {
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...olderThreads,
+      ...snoozedThreads,
+      ...settledThreads,
+    ],
+    [activeThreads, olderThreads, pinnedThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
@@ -2784,6 +2827,29 @@ export default function Sidebar() {
   );
   const [archivedShelfExpanded, setArchivedShelfExpanded] = useState(true);
   const toggleArchivedShelf = useCallback(() => setArchivedShelfExpanded((value) => !value), []);
+  // The Older shelf's starting state comes from Extras; toggling it writes a
+  // per-device preference that outranks the setting from then on.
+  const [olderShelfExpanded, setOlderShelfExpanded] = useLocalStorage(
+    OLDER_SHELF_EXPANDED_KEY,
+    !olderSectionCollapsedByDefault,
+    Schema.Boolean,
+  );
+  const toggleOlderShelf = useCallback(
+    () => setOlderShelfExpanded((value) => !value),
+    [setOlderShelfExpanded],
+  );
+  const visibleOlderThreads = useMemo(() => {
+    if (olderShelfExpanded) return olderThreads;
+    // Same exception the snoozed shelf and the settled tail make: the thread
+    // you are reading keeps its row, so the highlight never disappears from
+    // under the route.
+    if (routeThreadKey === null) return [];
+    const routeThread = olderThreads.find(
+      (thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+    );
+    return routeThread === undefined ? [] : [routeThread];
+  }, [olderShelfExpanded, olderThreads, routeThreadKey]);
   const visibleSnoozedThreads = useMemo(() => {
     if (snoozedShelfExpanded) return snoozedThreads;
     // The open thread must never vanish behind the collapsed shelf: a
@@ -2799,8 +2865,20 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...visibleOlderThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [
+      pinnedThreads,
+      activeThreads,
+      visibleOlderThreads,
+      visibleSnoozedThreads,
+      renderedSettledThreads,
+    ],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -4424,7 +4502,7 @@ export default function Sidebar() {
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
-                    section: "pinned" | "active" | "snoozed" | "settled",
+                    section: "pinned" | "active" | "older" | "snoozed" | "settled",
                     sortable?: SortablePinnedRowBag,
                   ) => {
                     const threadKey = scopedThreadKey(
@@ -4434,8 +4512,15 @@ export default function Sidebar() {
                     // row: every other thread is a full card. Density comes
                     // from users (or the auto rules) actually parking work,
                     // not from the sidebar second-guessing what still matters.
-                    const isCard = section === "active" || section === "pinned";
+                    // Older rows stay cards for exactly that reason — the
+                    // shelf hides them wholesale, it doesn't demote them.
+                    const isCard =
+                      section === "active" || section === "pinned" || section === "older";
                     const rowVariant = isCard ? "card" : "slim";
+                    // Older cards share the card variant but not its place in
+                    // the list, so they need their own key band for the same
+                    // reason the variant is in the key at all.
+                    const rowKeyBand = section === "older" ? "older" : rowVariant;
                     return (
                       <SidebarThreadRow
                         // Keyed per variant on purpose: when a thread settles,
@@ -4444,7 +4529,7 @@ export default function Sidebar() {
                         // FLIP-sliding through every row in between (rows here
                         // are translucent, so a crossing row reads as text
                         // painted over text).
-                        key={`${threadKey}:${rowVariant}`}
+                        key={`${threadKey}:${rowKeyBand}`}
                         thread={thread}
                         variant={rowVariant}
                         // Snoozed rows wake; settled rows un-settle (explicit
@@ -4601,6 +4686,38 @@ export default function Sidebar() {
                   }
                   for (const thread of activeThreads) {
                     items.push(renderThreadRow(thread, "active"));
+                  }
+                  // Older shelf: the tail of the inbox, folded away. The
+                  // header always renders while anything is filed here (the
+                  // count is the whole footprint when collapsed); rows only
+                  // when expanded, or for the thread currently open.
+                  if (olderThreads.length > 0) {
+                    items.push(
+                      <li key="older-shelf-header" data-thread-selection-safe className="list-none">
+                        <button
+                          type="button"
+                          onClick={toggleOlderShelf}
+                          aria-expanded={olderShelfExpanded}
+                          data-testid="sidebar-older-shelf-toggle"
+                          className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                        >
+                          <span className="text-xs font-medium text-muted-foreground/50">
+                            {olderShelfExpanded ? "Older" : `Older (${olderThreads.length})`}
+                          </span>
+                          <span className="h-px flex-1 bg-sidebar-border/60" />
+                          <ChevronDownIcon
+                            aria-hidden
+                            className={cn(
+                              "size-3 text-muted-foreground/50 transition-transform",
+                              olderShelfExpanded && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </li>,
+                    );
+                    for (const thread of visibleOlderThreads) {
+                      items.push(renderThreadRow(thread, "older"));
+                    }
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
@@ -4768,6 +4885,7 @@ export default function Sidebar() {
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
+            olderThreads.length +
             snoozedThreads.length +
             settledThreads.length ===
             0 &&
