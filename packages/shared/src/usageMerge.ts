@@ -14,6 +14,8 @@ import type {
   UsageSummary,
 } from "@t3tools/contracts";
 
+import { attributeGatewayBucket } from "./usageGatewayAttribution.ts";
+
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -159,7 +161,13 @@ function ownedContribution(
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    // Ownership is settled against the provider each bucket was scanned under,
+    // and only then is a gateway-routed bucket credited to the pool it really
+    // spends. Correcting earlier would break the claim that decides whether
+    // this environment may contribute it at all.
+    buckets: environment.summary.buckets
+      .filter((bucket) => ownedProviders.has(bucket.provider))
+      .map(attributeGatewayBucket),
     sessions,
   };
 }
