@@ -94,6 +94,8 @@ If completion is uncertain, keep the environment alive and mention that it is re
 ## Troubleshoot predictably
 
 - If the browser shows an unauthenticated pairing screen, issue a new token instead of retrying the consumed URL.
+- If pairing appears to succeed but the WebSocket fails with "HTTP Authentication failed; no valid credentials available", the browser is replaying stored credentials from a previous environment on the same origin. Pair in a fresh browser context (or clear the origin's site storage first) with a new token; retrying in the stale context keeps failing the same way.
+- Treat a `$0.00` Usage page in a fresh base directory as correct, not broken. Usage is scanned from the provider instances registered in that home, and a fresh home has none — copy real state into the base directory (see Test data in AGENTS.md) when the test needs usage numbers.
 - If the pairing URL is no longer visible, create a replacement token with both `--dev-url` and `--base-url`.
 - If the replacement token is rejected, verify that the CLI and server use the identical absolute base directory and web URL.
 - If the UI shows unexpected data, verify that every command uses the identical explicit base directory before editing anything.
