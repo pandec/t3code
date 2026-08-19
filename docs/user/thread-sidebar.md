@@ -29,8 +29,8 @@ Live and waiting work is never folded away, however long it has been sitting the
 running session, background work still going after its turn, an approval or input request, or a
 plan waiting on your decision stays in the list. So does a thread that has just come back from a
 snooze — waking it puts it in front of you, which is the whole point. While the Attention filter is
-on the section steps aside entirely, since that filter has already narrowed the list to what you
-asked to see.
+on, or while you are searching, the section steps aside entirely: both have already narrowed the
+list to what you asked to see, and a search match should never sit behind a fold.
 
 The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
 you fold or unfold the section yourself that choice wins — for good on web and desktop, and for as

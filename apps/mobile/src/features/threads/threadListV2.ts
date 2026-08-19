@@ -514,12 +514,16 @@ export function buildThreadListV2Items(input: {
   const autoSettleEnabled = input.autoSettleEnabled !== false;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const autoSettleOnMerge = input.autoSettleOnMerge ?? true;
-  // The Attention filter already narrowed the list to rows the user asked to
-  // see; folding a subset of them away would answer a different question.
-  const olderSectionEnabled =
-    input.olderSectionEnabled === true && input.attentionMemberThreadKeys == null;
-  const olderSectionAfterDays = input.olderSectionAfterDays ?? 7;
   const query = input.searchQuery.trim().toLocaleLowerCase();
+  // The Attention filter and an active search have both already narrowed the
+  // list to rows the user asked for; folding a subset of them away would
+  // answer a different question. Web reaches the same end by rendering search
+  // results as their own flat list, outside the sectioned sidebar.
+  const olderSectionEnabled =
+    input.olderSectionEnabled === true &&
+    input.attentionMemberThreadKeys == null &&
+    query.length === 0;
+  const olderSectionAfterDays = input.olderSectionAfterDays ?? 7;
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;

@@ -1346,6 +1346,18 @@ describe("buildThreadListV2Items older section", () => {
     expect(layout.olderCount).toBe(0);
   });
 
+  it("steps aside while a search is active, so a match can never hide behind the fold", () => {
+    const layout = buildThreadListV2Items({
+      ...olderInput,
+      olderShelfExpanded: false,
+      searchQuery: "quiet",
+      threads: [quietThread()],
+    });
+
+    expect(layout.olderCount).toBe(0);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["quiet"]);
+  });
+
   it("keeps the open thread's row on a folded shelf", () => {
     const layout = buildThreadListV2Items({
       ...olderInput,
