@@ -9,7 +9,7 @@ import {
   canSnooze,
   effectiveSettled,
   effectiveSnoozed,
-  type ChangeRequestStateLike,
+  type ChangeRequestSettleSource,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
@@ -63,11 +63,11 @@ export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
   /** Fallback for "Copy path" when the thread has no worktree. */
   readonly projectCwd: string | null;
-  /** PR state feeding auto-settle classification, as resolved by the caller. */
-  readonly changeRequestState: ChangeRequestStateLike | null;
+  /** PR feeding auto-settle classification, as resolved by the caller. */
+  readonly changeRequest: ChangeRequestSettleSource | null;
   readonly onStartRename: () => void;
 }) {
-  const { threadRef, projectCwd, changeRequestState, onStartRename } = input;
+  const { threadRef, projectCwd, changeRequest, onStartRename } = input;
   const {
     settleThread,
     unsettleThread,
@@ -146,7 +146,7 @@ export function useThreadActionMenu(input: {
               autoSettleEnabled,
               autoSettleAfterDays,
               autoSettleOnMerge,
-              changeRequestState,
+              changeRequest,
             }),
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
@@ -322,7 +322,7 @@ export function useThreadActionMenu(input: {
       autoSettleAfterDays,
       autoSettleEnabled,
       autoSettleOnMerge,
-      changeRequestState,
+      changeRequest,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,

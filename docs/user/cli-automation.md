@@ -301,3 +301,29 @@ Status reports whether the selected local server is running, its origin and proc
 thread counts, running-thread count, and pending approval or user-input counts.
 
 Use `--base-dir <path>` consistently when managing a non-default T3 installation.
+
+## Triage — not an automation command
+
+`t3 triage` investigates a broken installation by handing a written problem report to a coding agent
+on this machine. It is listed here so scripts do not mistake it for part of the contract above: it is
+interactive, has **no `--json` mode and no structured output**, and needs no running server.
+
+```bash
+t3 triage [--agent claude|codex] [--model <model>] [--base-dir <path>]
+```
+
+It writes `context.md` and `prompt.md` under `<state-dir>/triage/<timestamp>/`, then launches the
+chosen agent on them. `--base-dir` wins over `T3CODE_HOME`, the same precedence `t3 pair` uses, and
+triage always reads the `userdata` state rather than a dev state directory.
+
+Three behaviors differ from the automation commands and matter when scripting around it:
+
+- The agent is discovered on `PATH` by name. It does **not** use the binary path, Claude home, or
+  provider instance configured in T3, so it can pick a different account than the app runs, or report
+  an agent missing that T3 itself can start.
+- `--model` is passed straight through to the agent CLI. It is not a T3 model slug, and there is no
+  `--instance` or effort flag.
+- With both agents installed and no `--agent`, it needs an interactive terminal to ask which to use.
+  With neither installed it writes the two files, prints their location, and exits without launching.
+
+Filing an issue and applying any fix both require explicit confirmation inside the agent session.

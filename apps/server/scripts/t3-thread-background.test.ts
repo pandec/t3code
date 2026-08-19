@@ -212,12 +212,15 @@ describe("collectLiveTasks", () => {
     assert.deepEqual(live, []);
   });
 
-  it("replays a usage tick like the registry does, rather than hiding it", () => {
-    // A usage row carries no `status`, so the registry's drop-then-re-add makes
-    // a trailing one revive a task a terminal row had retired — and when
-    // `typedUsage` is the only state, the usage row is the only row persisted.
-    // Filtering it out here would report "nothing running" for a thread whose
-    // pill is still lit, which is the exact question this tool answers.
+  it("replays a usage tick like the registry does, rather than second-guessing it", () => {
+    // A usage row carries no `status`. The registry used to drop-then-re-add on
+    // every progress row, so a trailing usage tick revived a task a terminal row
+    // had already retired; this tool mirrored that so it never claimed "nothing
+    // running" for a thread whose pill was still lit. The registry now refuses to
+    // revive a task that is not already live, so the pill goes dark too and the
+    // honest answer here is an empty list. The point of this case is unchanged —
+    // whatever the registry does, this tool does, because it replays through the
+    // registry itself rather than reimplementing the rule.
     const live = collectLiveTasks(
       rows(
         started({ taskId: "b1", taskType: "local_bash" }),
@@ -232,6 +235,21 @@ describe("collectLiveTasks", () => {
           payload: { taskId: "b1", taskType: "local_bash", usageSnapshot: true },
         },
       ),
+    );
+
+    assert.deepEqual(live, []);
+  });
+
+  it("keeps a still-running task live across a usage tick", () => {
+    // The other side of the same rule: a status-free usage row must not RETIRE a
+    // task either. Only an already-retired task stays retired, so a long bash
+    // step that emits nothing but usage snapshots keeps reporting as live.
+    const live = collectLiveTasks(
+      rows(started({ taskId: "b1", taskType: "local_bash" }), {
+        kind: "task.progress",
+        at: "2026-08-13T12:10:01.000Z",
+        payload: { taskId: "b1", taskType: "local_bash", usageSnapshot: true },
+      }),
     );
 
     assert.deepEqual(

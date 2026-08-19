@@ -54,6 +54,7 @@ import {
   PaletteIcon,
   PinIcon,
   PinOffIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -164,7 +165,11 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
+import {
+  COMMAND_PALETTE_META_ICON_CLASS,
+  CommandPaletteMetaDot,
+  ThreadCommandSubtitle,
+} from "./ThreadCommandSubtitle";
 import {
   resolveThreadPr,
   ThreadRowLeadingStatus,
@@ -759,6 +764,27 @@ function OpenCommandPaletteDialog(props: {
       ),
     [environments],
   );
+  const projectEnvironmentLocationById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => {
+          const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+          const isLocal = isPrimary || isDesktopLocalConnectionTarget(environment.entry.target);
+          return [
+            environment.environmentId,
+            {
+              kind: isLocal ? "local" : "remote",
+              label: isPrimary
+                ? "Local"
+                : isLocal
+                  ? `${environment.label} (Local)`
+                  : environment.label,
+            },
+          ] as const;
+        }),
+      ),
+    [environments],
+  );
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1129,8 +1155,29 @@ function OpenCommandPaletteDialog(props: {
           valuePrefix: "new-thread-in",
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            const location = projectEnvironmentLocationById.get(project.environmentId);
+            return [
+              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
+                []),
+              ...(location ? [location.label] : []),
+            ];
+          },
+          renderDescription: (project) => {
+            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+              kind: "remote",
+              label: "Remote",
+            };
             return (
-              group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  {location.kind === "remote" ? (
+                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  ) : null}
+                  <span className="truncate">{location.label}</span>
+                </span>
+                <CommandPaletteMetaDot />
+                <span className="truncate">{project.workspaceRoot}</span>
+              </span>
             );
           },
           projectAccentColor: (project) =>
@@ -1158,6 +1205,7 @@ function OpenCommandPaletteDialog(props: {
       handleNewThread,
       pickerProjects,
       projectAccentColorByTargetKey,
+      projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],
   );
@@ -1707,11 +1755,10 @@ function OpenCommandPaletteDialog(props: {
           autoSettleEnabled: clientSettings.threadAutoSettleEnabled,
           autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
           autoSettleOnMerge: clientSettings.sidebarAutoSettleOnMerge,
-          changeRequestState:
-            resolveThreadPr({
-              threadBranch: openUnarchivedThread.branch ?? null,
-              gitStatus: openThreadGitStatus.data ?? null,
-            })?.state ?? null,
+          changeRequest: resolveThreadPr({
+            threadBranch: openUnarchivedThread.branch ?? null,
+            gitStatus: openThreadGitStatus.data ?? null,
+          }),
         }),
       canSettleNow:
         openUnarchivedThread !== null && canSettle(openUnarchivedThread, { now: quantizedNow }),

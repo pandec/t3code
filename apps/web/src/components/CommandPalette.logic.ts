@@ -158,6 +158,7 @@ export function buildProjectActionItems(input: {
   runProject: (project: Project) => Promise<void>;
   searchTerms?: (project: Project) => ReadonlyArray<string>;
   projectAccentColor?: (project: Project) => SidebarProjectAccentColor | null;
+  renderDescription?: (project: Project) => ReactNode;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => {
@@ -167,7 +168,7 @@ export function buildProjectActionItems(input: {
       value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
       searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
       title: project.title,
-      description: project.workspaceRoot,
+      description: input.renderDescription?.(project) ?? project.workspaceRoot,
       icon: input.icon(project),
       ...(projectAccentColor !== null ? { projectAccentColor } : {}),
       ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),

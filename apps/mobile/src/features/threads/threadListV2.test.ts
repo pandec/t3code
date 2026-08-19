@@ -501,7 +501,9 @@ describe("buildThreadListV2Items", () => {
       threads: [merged],
       environmentId: null,
       searchQuery: "",
-      changeRequestStateByKey: new Map([[`${environmentId}:${merged.id}`, "merged"]]),
+      changeRequestByKey: new Map([
+        [`${environmentId}:${merged.id}`, { state: "merged" as const }],
+      ]),
       autoSettleOnMerge: false,
       now: NOW,
     });
