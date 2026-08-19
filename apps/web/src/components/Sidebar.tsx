@@ -2328,8 +2328,9 @@ export default function Sidebar() {
     archivedSectionVisibleCount,
   );
   const recentArchive = useMemo(
-    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
-    [archivedSectionVisibleCount, archivedSnapshots],
+    () =>
+      selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount, routeThreadKey),
+    [archivedSectionVisibleCount, archivedSnapshots, routeThreadKey],
   );
   const selectProjectScope = useCallback(
     (scopeKey: string) => {

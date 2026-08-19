@@ -85,7 +85,12 @@ describe("mobile preferences persistence", () => {
       sidebarArchivedShelfExpanded: true,
     });
     expect(
-      sanitizePreferences({ sidebarArchivedShelfExpanded: "yes" as unknown as boolean }),
+      sanitizePreferences({
+        sidebarOlderShelfExpanded: 1 as unknown as boolean,
+        sidebarSnoozedShelfExpanded: "true" as unknown as boolean,
+        sidebarSettledShelfExpanded: null as unknown as boolean,
+        sidebarArchivedShelfExpanded: "yes" as unknown as boolean,
+      }),
     ).toEqual({});
   });
 

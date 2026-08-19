@@ -285,8 +285,13 @@ function ThreadNavigationSidebarPane(
     archivedSectionVisibleCount,
   );
   const recentArchive = useMemo(
-    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
-    [archivedSectionVisibleCount, archivedSnapshots],
+    () =>
+      selectRecentArchivedThreads(
+        archivedSnapshots,
+        archivedSectionVisibleCount,
+        props.selectedThreadKey,
+      ),
+    [archivedSectionVisibleCount, archivedSnapshots, props.selectedThreadKey],
   );
   const archivedEnvironmentLabels = useMemo(
     () =>

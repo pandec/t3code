@@ -42,14 +42,5 @@ export function threadShelfExpandedPatch(
   shelf: ThreadShelfId,
   expanded: boolean,
 ): Partial<Preferences> {
-  switch (shelf) {
-    case "older":
-      return { sidebarOlderShelfExpanded: expanded };
-    case "snoozed":
-      return { sidebarSnoozedShelfExpanded: expanded };
-    case "settled":
-      return { sidebarSettledShelfExpanded: expanded };
-    case "archived":
-      return { sidebarArchivedShelfExpanded: expanded };
-  }
+  return { [SHELF_PREFERENCE_KEYS[shelf]]: expanded };
 }

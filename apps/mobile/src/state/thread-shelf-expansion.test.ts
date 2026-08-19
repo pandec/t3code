@@ -30,7 +30,7 @@ describe("resolveThreadShelfExpanded", () => {
 });
 
 describe("threadShelfExpandedPatch", () => {
-  it("writes one key per shelf so a toggle cannot clobber a sibling", () => {
+  it("writes exactly the toggled shelf's key", () => {
     expect(threadShelfExpandedPatch("older", true)).toEqual({ sidebarOlderShelfExpanded: true });
     expect(threadShelfExpandedPatch("snoozed", true)).toEqual({
       sidebarSnoozedShelfExpanded: true,
@@ -41,5 +41,13 @@ describe("threadShelfExpandedPatch", () => {
     expect(threadShelfExpandedPatch("archived", true)).toEqual({
       sidebarArchivedShelfExpanded: true,
     });
+  });
+
+  it("round-trips through resolveThreadShelfExpanded for every shelf", () => {
+    for (const shelf of ["older", "snoozed", "settled", "archived"] as const) {
+      for (const expanded of [true, false]) {
+        expect(resolve(shelf, threadShelfExpandedPatch(shelf, expanded))).toBe(expanded);
+      }
+    }
   });
 });
