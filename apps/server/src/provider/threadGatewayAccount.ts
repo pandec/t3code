@@ -22,6 +22,7 @@ import type {
   ProviderUsageThreadAccountInput,
   ProviderUsageThreadAccountResult,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
@@ -30,16 +31,23 @@ import {
   probeCliProxyApiSessionAccount,
   resolveCliProxyApiUsageProbeTarget,
 } from "./cliProxyApiUsage.ts";
+import { isUuid } from "./Layers/ClaudeAdapter.ts";
 import type { ProviderInstanceRegistryShape } from "./Services/ProviderInstanceRegistry.ts";
 import type { ProviderSessionDirectoryShape } from "./Services/ProviderSessionDirectory.ts";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * A binding row idle longer than this is treated as absent. The gateway's
+ * session-affinity TTL (an hour, sliding) has certainly lapsed by then, so a
+ * probe would not read an existing binding — it would create a fresh one for
+ * a session that may never run again, and report the cold pick as "current".
+ */
+const BINDING_FRESHNESS_MS = 60 * 60 * 1_000;
 
 /**
  * The Claude session UUID out of a persisted resume cursor, mirroring the
  * adapter's own resume-state read: `resume` wins over the legacy `sessionId`
- * slot, and anything that is not a UUID is treated as absent rather than sent
- * to the gateway.
+ * slot, and anything the adapter's `isUuid` would refuse to resume is treated
+ * as absent rather than sent to the gateway.
  */
 export function claudeSessionIdFromResumeCursor(resumeCursor: unknown): string | null {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
@@ -52,7 +60,7 @@ export function claudeSessionIdFromResumeCursor(resumeCursor: unknown): string |
       : typeof cursor.sessionId === "string"
         ? cursor.sessionId
         : null;
-  return candidate !== null && UUID_PATTERN.test(candidate) ? candidate : null;
+  return candidate !== null && isUuid(candidate) ? candidate : null;
 }
 
 export interface ThreadGatewayAccountDependencies {
@@ -78,6 +86,12 @@ export function makeThreadGatewayAccountReader(dependencies: ThreadGatewayAccoun
           .pipe(Effect.orElseSucceed(() => Option.none())),
       );
       if (binding === undefined || binding.provider !== "claudeAgent") return none;
+      // A long-idle binding's gateway entry has expired, so probing would not
+      // read anything — it would bind a dead session and mislabel the pool's
+      // cold pick as "current". Unparseable timestamps count as idle.
+      const nowMs = yield* Clock.currentTimeMillis;
+      const idleMs = nowMs - Date.parse(binding.lastSeenAt);
+      if (!Number.isFinite(idleMs) || idleMs > BINDING_FRESHNESS_MS) return none;
       const sessionId = claudeSessionIdFromResumeCursor(binding.resumeCursor);
       if (sessionId === null || binding.providerInstanceId === undefined) return none;
       const envelope = yield* (

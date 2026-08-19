@@ -44,8 +44,10 @@ export type ProviderUsageRefreshFailure = typeof ProviderUsageRefreshFailure.Typ
 /**
  * Ask which pooled gateway account a thread's live provider session is bound
  * to. The gateway keeps that binding per (session, model), so the caller names
- * the model the thread currently runs; the server supplies the session id from
- * the thread's persisted provider binding.
+ * the model the thread's session last ran — its persisted model selection, not
+ * a merely staged composer choice, which has no binding yet and would make the
+ * probe create one. The server supplies the session id from the thread's
+ * persisted provider binding.
  */
 export const ProviderUsageThreadAccountInput = Schema.Struct({
   threadId: ThreadId,

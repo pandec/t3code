@@ -269,6 +269,12 @@ import {
   resolveProviderUsageInstanceId,
   type ProviderUsageWindow,
 } from "@t3tools/client-runtime/state/provider-usage";
+import {
+  resolveProviderUsageBoundAuthIndex,
+  shouldProbeProviderUsageThreadAccount,
+  type ProviderUsageThreadAccountProbe,
+  type ProviderUsageThreadAccountState,
+} from "@t3tools/client-runtime/state/provider-usage-presentation";
 import { useProviderUsageAlerts } from "../../notifications/providerUsageAlerts";
 import {
   formatProviderSkillDisplayName,
@@ -454,7 +460,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   maskProviderUsageEmails: boolean;
   providerUsageLabel: string | null;
   onRefreshProviderUsage: () => Promise<void>;
-  onProbeThreadAccount: () => void;
+  onProbeThreadAccount: (options?: { readonly force?: boolean }) => void;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -1218,60 +1224,105 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
   const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
   // The pooled account the thread's live session is bound to, read from the
-  // gateway when the usage popover opens. Keyed by thread and model so a probe
-  // answering after a switch cannot mislabel the new context; a mismatch just
-  // means "unknown", which renders as no badge.
-  const [threadGatewayAccount, setThreadGatewayAccount] = useState<{
-    readonly threadId: string;
-    readonly model: string;
-    readonly authIndex: string;
-  } | null>(null);
-  const lastThreadAccountProbeRef = useRef({ key: "", askedAtMs: 0 });
-  const probeThreadGatewayAccount = useCallback(async () => {
-    const threadId = activeThread?.id;
-    if (threadId === undefined || activeGatewayUsage === null) return;
-    const model = activeProviderUsageModel;
-    // Same 5s cadence cap as the pool refresh, but per thread+model: opening
-    // the popover twice must not probe twice, while switching threads or
-    // models re-asks immediately.
-    const probeKey = `${threadId}:${model}`;
-    const nowMs = Date.now();
-    const last = lastThreadAccountProbeRef.current;
-    if (last.key === probeKey && nowMs - last.askedAtMs < 5_000) return;
-    lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
-    const result = await readThreadGatewayAccountCommand({
+  // gateway when the usage popover opens. Kept with the thread and model it
+  // was probed for, so an answer landing after a switch cannot mislabel the
+  // new context; a mismatch just means "unknown", which renders as no badge.
+  const [threadGatewayAccount, setThreadGatewayAccount] =
+    useState<ProviderUsageThreadAccountState | null>(null);
+  const lastThreadAccountProbeRef = useRef<ProviderUsageThreadAccountProbe>({
+    key: "",
+    askedAtMs: 0,
+  });
+  const probeThreadGatewayAccount = useCallback(
+    (options?: { readonly force?: boolean }) => {
+      const threadId = activeThread?.id;
+      // Only a Claude session on a gateway-metered instance has a binding the
+      // server can read; the settings mirror knows gateway-ness before any
+      // usage snapshot arrives, so the first open after a reload probes too.
+      if (
+        threadId === undefined ||
+        activeThreadProviderDriver !== "claudeAgent" ||
+        activeThread?.session == null ||
+        !activeUsageSourceOwned
+      ) {
+        return;
+      }
+      const model = activeProviderUsageModel;
+      const probeKey = `${threadId}:${model}`;
+      const nowMs = Date.now();
+      if (
+        !shouldProbeProviderUsageThreadAccount(
+          lastThreadAccountProbeRef.current,
+          probeKey,
+          nowMs,
+          options?.force === true,
+        )
+      ) {
+        return;
+      }
+      lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
+      void (async () => {
+        const result = await readThreadGatewayAccountCommand({
+          environmentId,
+          input: { threadId, model },
+        });
+        if (result._tag === "Failure") return;
+        // A newer thread or model claimed the slot while this probe was in
+        // flight; its answer must not be evicted by this stale one.
+        if (lastThreadAccountProbeRef.current.key !== probeKey) return;
+        const authIndex = result.value.authIndex;
+        setThreadGatewayAccount(authIndex === null ? null : { threadId, model, authIndex });
+      })();
+    },
+    [
+      activeProviderUsageModel,
+      activeThread?.id,
+      activeThread?.session,
+      activeThreadProviderDriver,
+      activeUsageSourceOwned,
       environmentId,
-      input: { threadId, model },
-    });
-    if (result._tag === "Failure") return;
-    const authIndex = result.value.authIndex;
-    setThreadGatewayAccount(authIndex === null ? null : { threadId, model, authIndex });
-  }, [
-    activeGatewayUsage,
-    activeProviderUsageModel,
-    activeThread?.id,
-    environmentId,
-    readThreadGatewayAccountCommand,
-  ]);
+      readThreadGatewayAccountCommand,
+    ],
+  );
   const providerUsageAccounts = useMemo<ReadonlyArray<ProviderUsageAccountRow>>(() => {
     if (activeGatewayUsage !== null && activeProviderUsageInstanceId !== null) {
       const featuredId =
         featuredProviderUsageAccount(activeGatewayUsage.accounts, activeUpstreamProvider)?.id ??
         null;
-      const boundAuthIndex =
-        threadGatewayAccount !== null &&
-        threadGatewayAccount.threadId === activeThread?.id &&
-        threadGatewayAccount.model === activeProviderUsageModel
-          ? threadGatewayAccount.authIndex
-          : null;
+      // The verified-binding badges only apply where the server can read a
+      // binding (Claude sessions). Elsewhere the featured account keeps the
+      // legacy "current" so e.g. a Codex thread does not lose its badge.
+      const bindingSupported = activeThreadProviderDriver === "claudeAgent";
+      const boundAuthIndex = bindingSupported
+        ? resolveProviderUsageBoundAuthIndex(
+            threadGatewayAccount,
+            activeThread?.id,
+            activeProviderUsageModel,
+          )
+        : null;
+      const displayAccounts = listProviderUsageAccountsForDisplay(activeGatewayUsage.accounts);
+      // A binding to an account no row shows (disabled since the session
+      // bound) would leave "next" pointing at an account that is not in
+      // play; better to show nothing than the wrong badge.
+      const boundRowVisible =
+        boundAuthIndex !== null &&
+        displayAccounts.some(
+          (account) => account.authIndex !== null && account.authIndex === boundAuthIndex,
+        );
       const observedAt =
         providerUsageSnapshotByInstance.get(activeProviderUsageInstanceId)?.observedAt ?? null;
-      return listProviderUsageAccountsForDisplay(activeGatewayUsage.accounts).map((account) => ({
+      return displayAccounts.map((account) => ({
         instanceId: activeProviderUsageInstanceId,
         accountKey: `${activeProviderUsageInstanceId}:${account.id}`,
         ...presentProviderUsageAccount(account),
-        isCurrent: boundAuthIndex !== null && account.authIndex === boundAuthIndex,
-        isNext: account.id === featuredId,
+        isCurrent: bindingSupported
+          ? boundRowVisible && account.authIndex === boundAuthIndex
+          : account.id === featuredId,
+        ...(bindingSupported
+          ? {
+              isNext: (boundAuthIndex === null || boundRowVisible) && account.id === featuredId,
+            }
+          : {}),
         usage: account.usage,
         observedAt,
       }));
@@ -1297,6 +1348,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProviderUsageInstanceId,
     activeProviderUsageModel,
     activeThread?.id,
+    activeThreadProviderDriver,
     activeUpstreamProvider,
     providerUsageNowMinute,
     providerUsageSnapshotByInstance,
@@ -1305,9 +1357,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
   const lastProviderUsageRefreshAtRef = useRef(0);
   const refreshProviderUsage = useCallback(async () => {
-    // The thread-account probe rides every refresh ask (its own throttle caps
-    // the cadence), so the manual refresh button also re-reads the binding.
-    void probeThreadGatewayAccount();
     const refreshAt = Date.now();
     if (refreshAt - lastProviderUsageRefreshAtRef.current < 5_000) return;
     const instanceIds = usageProviders.map((provider) => provider.instanceId);
@@ -1364,13 +1413,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     } finally {
       setIsRefreshingProviderUsage(false);
     }
-  }, [
-    environmentId,
-    probeThreadGatewayAccount,
-    providerUsageQuery,
-    refreshProviderUsageCommand,
-    usageProviders,
-  ]);
+  }, [environmentId, providerUsageQuery, refreshProviderUsageCommand, usageProviders]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),

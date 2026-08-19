@@ -697,34 +697,46 @@ export function probeCliProxyApiSessionAccount(
   const { clientUrl, clientKey } = target;
   if (clientUrl === undefined || clientKey === undefined) return Effect.succeed(null);
   const state = clientKeyState(clientUrl, clientKey);
-  return Effect.suspend(() => {
-    if (state.rejected) return Effect.succeed(null);
-    return Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.post(`${clientUrl}/v1/messages/count_tokens`).pipe(
-          HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
-          HttpClientRequest.setHeader("anthropic-version", "2023-06-01"),
-          HttpClientRequest.bodyJsonUnsafe({
-            model: input.model,
-            messages: [{ role: "user", content: "." }],
-            // Claude Code carries its session id as a `_session_<uuid>` suffix
-            // in `metadata.user_id`; the gateway extracts that suffix as its
-            // affinity key, so this probe lands on the session's binding.
-            metadata: { user_id: `t3_session_${input.sessionId}` },
-          }),
-        ),
+  // The lock is the same single-flight the catalog fetch takes: without it,
+  // concurrent probes for different threads could each spend a gateway
+  // rejection strike before the first one latches `rejected`.
+  return state.lock.withPermits(1)(
+    Effect.suspend(() => {
+      if (state.rejected) return Effect.succeed(null);
+      return Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        const response = yield* client.execute(
+          HttpClientRequest.post(`${clientUrl}/v1/messages/count_tokens`).pipe(
+            HttpClientRequest.setHeader("Authorization", `Bearer ${clientKey}`),
+            HttpClientRequest.setHeader("anthropic-version", "2023-06-01"),
+            HttpClientRequest.bodyJsonUnsafe({
+              model: input.model,
+              messages: [{ role: "user", content: "." }],
+              // Claude Code carries its session id as a `_session_<uuid>` suffix
+              // in `metadata.user_id`; the gateway extracts that suffix as its
+              // affinity key, so this probe lands on the session's binding.
+              metadata: { user_id: `t3_session_${input.sessionId}` },
+            }),
+          ),
+        );
+        const trace = response.headers["x-cpa-trace-id"];
+        if (response.status === 401 || response.status === 403) {
+          // A trace id proves the gateway selected a credential, so the
+          // rejection came from the upstream provider — pooled tokens gone
+          // stale must not permanently silence this client key (and with it
+          // the model catalog). No trace id means the gateway itself refused
+          // the key, which is the case the latch exists for.
+          if (typeof trace !== "string") {
+            state.rejected = true;
+          }
+          return null;
+        }
+        if (response.status < 200 || response.status >= 300) return null;
+        return typeof trace === "string" ? parseCliProxyApiTraceAuthIndex(trace) : null;
+      }).pipe(
+        Effect.timeout(SESSION_ACCOUNT_REQUEST_TIMEOUT_MS),
+        Effect.orElseSucceed(() => null),
       );
-      if (response.status === 401 || response.status === 403) {
-        state.rejected = true;
-        return null;
-      }
-      if (response.status < 200 || response.status >= 300) return null;
-      const trace = response.headers["x-cpa-trace-id"];
-      return typeof trace === "string" ? parseCliProxyApiTraceAuthIndex(trace) : null;
-    }).pipe(
-      Effect.timeout(SESSION_ACCOUNT_REQUEST_TIMEOUT_MS),
-      Effect.orElseSucceed(() => null),
-    );
-  });
+    }),
+  );
 }

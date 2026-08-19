@@ -13,6 +13,59 @@ export const PROVIDER_USAGE_STALE_AFTER_MS = 5 * 60_000;
 /** Opening a usage surface re-reads anything older than this. */
 export const PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS = 60_000;
 
+/**
+ * Minimum gap between gateway thread-account probes for one thread+model.
+ * Deliberately wider than the pool-refresh debounce: the server-side probe
+ * refreshes the gateway binding's sliding TTL, and the web popover opens on
+ * hover, so a tight cadence would keep an idle session pinned to its account
+ * just from the cursor grazing the meter.
+ */
+export const PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS = 60_000;
+
+/** The last thread-account probe a usage surface issued; key is thread+model. */
+export interface ProviderUsageThreadAccountProbe {
+  readonly key: string;
+  readonly askedAtMs: number;
+}
+
+/**
+ * Whether a thread-account probe may go out now. A changed key (another
+ * thread or model) always re-asks; the same key waits out the cadence cap
+ * unless the user explicitly asked (the refresh button), which is exactly
+ * when bypassing a cap is justified.
+ */
+export function shouldProbeProviderUsageThreadAccount(
+  last: ProviderUsageThreadAccountProbe,
+  key: string,
+  nowMs: number,
+  force = false,
+): boolean {
+  if (force) return true;
+  if (last.key !== key) return true;
+  return nowMs - last.askedAtMs >= PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS;
+}
+
+/** A probe answer, kept only with the context it was asked for. */
+export interface ProviderUsageThreadAccountState {
+  readonly threadId: string;
+  readonly model: string;
+  readonly authIndex: string;
+}
+
+/**
+ * The bound account's auth index, but only when the stored answer was probed
+ * for exactly this thread and model — the gateway keys bindings per
+ * (session, model), so an answer for any other context says nothing here.
+ */
+export function resolveProviderUsageBoundAuthIndex(
+  state: ProviderUsageThreadAccountState | null,
+  threadId: string | undefined,
+  model: string,
+): string | null {
+  if (state === null || threadId === undefined) return null;
+  return state.threadId === threadId && state.model === model ? state.authIndex : null;
+}
+
 // Constructing an Intl formatter is expensive and these run once per window
 // per account per render, so both shapes are built once at module scope.
 const RESET_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {

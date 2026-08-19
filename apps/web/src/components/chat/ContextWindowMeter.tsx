@@ -195,9 +195,10 @@ export function ContextWindowMeter(props: {
   /**
    * Called on every popover open, unlike the staleness-gated refresh: the
    * thread-account binding is one cheap request and can change independently
-   * of the pool's quota data. The callback throttles itself.
+   * of the pool's quota data. The callback throttles itself; the refresh
+   * button passes `force` because an explicit ask outranks the cadence cap.
    */
-  onProbeThreadAccount?: () => void;
+  onProbeThreadAccount?: (options?: { readonly force?: boolean }) => void;
 }) {
   const { usage, modelDisplayName } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -387,6 +388,7 @@ export function ContextWindowMeter(props: {
                       className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => {
                         lastRefreshAskedAtRef.current = Date.now();
+                        props.onProbeThreadAccount?.({ force: true });
                         void props.onRefreshProviderUsage?.();
                       }}
                       disabled={props.providerUsageRefreshing}
