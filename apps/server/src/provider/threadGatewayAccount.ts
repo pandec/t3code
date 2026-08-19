@@ -86,6 +86,10 @@ export function makeThreadGatewayAccountReader(dependencies: ThreadGatewayAccoun
           .pipe(Effect.orElseSucceed(() => Option.none())),
       );
       if (binding === undefined || binding.provider !== "claudeAgent") return none;
+      // A stopped or errored runtime has no live session to read a binding
+      // for — the reaper stops sessions well inside the freshness window, and
+      // probing one would bind a dead session to a pooled account.
+      if (binding.status === "stopped" || binding.status === "error") return none;
       // A long-idle binding's gateway entry has expired, so probing would not
       // read anything — it would bind a dead session and mislabel the pool's
       // cold pick as "current". Unparseable timestamps count as idle.

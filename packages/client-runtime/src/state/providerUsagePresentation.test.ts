@@ -191,8 +191,16 @@ describe("shouldProbeProviderUsageThreadAccount", () => {
     );
   });
 
-  it("always allows an explicit force", () => {
+  it("lets an explicit force past the cadence cap but not the spam floor", () => {
     expect(shouldProbeProviderUsageThreadAccount(last, last.key, NOW_MS, true)).toBe(true);
+    // One second after the last ask, even a forced probe waits: every probe
+    // renews the gateway's session-affinity TTL.
+    expect(
+      shouldProbeProviderUsageThreadAccount(last, last.key, last.askedAtMs + 1_000, true),
+    ).toBe(false);
+    expect(
+      shouldProbeProviderUsageThreadAccount(last, last.key, last.askedAtMs + 5_000, true),
+    ).toBe(true);
   });
 });
 

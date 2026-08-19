@@ -30,9 +30,10 @@ export interface ProviderUsageThreadAccountProbe {
 
 /**
  * Whether a thread-account probe may go out now. A changed key (another
- * thread or model) always re-asks; the same key waits out the cadence cap
- * unless the user explicitly asked (the refresh button), which is exactly
- * when bypassing a cap is justified.
+ * thread or model) always re-asks; the same key waits out the cadence cap.
+ * An explicit ask (the refresh button) outranks the hover cadence but not
+ * the spam floor — the probe renews the gateway's session-affinity TTL on
+ * every call, so button-mashing must not turn into a request per click.
  */
 export function shouldProbeProviderUsageThreadAccount(
   last: ProviderUsageThreadAccountProbe,
@@ -40,9 +41,9 @@ export function shouldProbeProviderUsageThreadAccount(
   nowMs: number,
   force = false,
 ): boolean {
-  if (force) return true;
   if (last.key !== key) return true;
-  return nowMs - last.askedAtMs >= PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS;
+  const elapsed = nowMs - last.askedAtMs;
+  return elapsed >= (force ? 5_000 : PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS);
 }
 
 /** A probe answer, kept only with the context it was asked for. */

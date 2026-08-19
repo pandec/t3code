@@ -5,6 +5,7 @@ import {
   ThreadId,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -190,6 +191,27 @@ describe("makeThreadGatewayAccountReader", () => {
     });
   });
 
+  it.effect("answers null for a stopped or errored session without probing", () => {
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    return Effect.gen(function* () {
+      const stopped = makeReader({
+        bindingResult: Option.some(binding({ status: "stopped" })),
+        requests,
+      });
+      expect(yield* stopped({ threadId: THREAD_ID, model: "claude-opus-5" })).toEqual({
+        authIndex: null,
+      });
+      const errored = makeReader({
+        bindingResult: Option.some(binding({ status: "error" })),
+        requests,
+      });
+      expect(yield* errored({ threadId: THREAD_ID, model: "claude-opus-5" })).toEqual({
+        authIndex: null,
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
   it.effect("answers null for a long-idle or unparseable binding without probing", () => {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
     return Effect.gen(function* () {
@@ -296,6 +318,38 @@ describe("makeThreadGatewayAccountReader", () => {
         authIndex: null,
       });
       // The second call short-circuits: one rejection suppresses the pairing.
+      expect(requests).toHaveLength(1);
+    });
+  });
+
+  it.effect("single-flights concurrent probes so one rejection spends one strike", () => {
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    return Effect.gen(function* () {
+      const firstRequestStarted = yield* Deferred.make<void>();
+      const releaseFirstRequest = yield* Deferred.make<void>();
+      const read = makeReader({
+        requests,
+        respond: (request) =>
+          Deferred.succeed(firstRequestStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirstRequest)),
+            Effect.map(() =>
+              HttpClientResponse.fromWeb(request, new Response(null, { status: 401 })),
+            ),
+          ),
+      });
+      const first = yield* read({ threadId: THREAD_ID, model: "claude-opus-5" }).pipe(
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstRequestStarted);
+      // The second probe must queue on the client-key lock rather than spend
+      // another rejection strike while the first is still in flight.
+      const second = yield* read({ threadId: THREAD_ID, model: "claude-fable-5" }).pipe(
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseFirstRequest, undefined);
+      expect(yield* Fiber.join(first)).toEqual({ authIndex: null });
+      expect(yield* Fiber.join(second)).toEqual({ authIndex: null });
       expect(requests).toHaveLength(1);
     });
   });
