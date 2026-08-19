@@ -59,8 +59,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
+  useOlderSectionSettings,
   useSortActiveByLatestUserMessage,
   useSteerGraceWindowMs,
+  useThreadAutoSettleEnabled,
 } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
@@ -75,7 +77,11 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSliderRow } from "./components/SettingsSliderRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
+  formatOlderSectionAfterDays,
   formatSteerGraceWindowSeconds,
+  OLDER_SECTION_AFTER_DAY_STOPS,
+  olderSectionAfterDaysAtStop,
+  olderSectionAfterDaysStopIndex,
   STEER_GRACE_WINDOW_STEP_MS,
   toStoredArchivedSectionVisibleCount,
   toStoredSteerGraceWindowMs,
@@ -570,6 +576,8 @@ function GeneralSettingsSection() {
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const threadListV2Enabled = useThreadListV2Enabled();
+  const autoSettleEnabled = useThreadAutoSettleEnabled();
+  const olderSection = useOlderSectionSettings();
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -578,11 +586,21 @@ function GeneralSettingsSection() {
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsSwitchRow
-        icon="arrow.triangle.branch"
-        label="Auto-settle merged threads"
-        value={autoSettleOnMerge}
-        onValueChange={(value) => savePreferences({ autoSettleOnMerge: value })}
+        disabled={!hydrated}
+        icon="checkmark.circle"
+        label="Settle threads automatically"
+        subtitle="Settle threads after inactivity or when their pull request is merged or closed. Settling by hand still works when this is off."
+        value={autoSettleEnabled}
+        onValueChange={(value) => savePreferences({ threadAutoSettleEnabled: value })}
       />
+      {autoSettleEnabled ? (
+        <SettingsSwitchRow
+          icon="arrow.triangle.branch"
+          label="Auto-settle merged threads"
+          value={autoSettleOnMerge}
+          onValueChange={(value) => savePreferences({ autoSettleOnMerge: value })}
+        />
+      ) : null}
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
       <SettingsSliderRow
         description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
@@ -618,6 +636,44 @@ function GeneralSettingsSection() {
               savePreferences({ sidebarV2SortActiveByLatestUserMessage: value })
             }
           />
+          <SettingsSwitchRow
+            disabled={!hydrated}
+            icon="line.3.horizontal.decrease"
+            label="Older section"
+            subtitle="Fold threads that have gone quiet into their own section. They stay active — nothing is settled, snoozed, or archived — and any activity brings them straight back."
+            value={olderSection.enabled}
+            onValueChange={(value) => savePreferences({ sidebarOlderSectionEnabled: value })}
+          />
+          {olderSection.enabled ? (
+            <>
+              <SettingsSliderRow
+                description="How long a thread must go without activity before it moves to Older."
+                disabled={!hydrated}
+                icon="clock"
+                label="Older after"
+                max={OLDER_SECTION_AFTER_DAY_STOPS.length - 1}
+                min={0}
+                onChange={(value) =>
+                  savePreferences({
+                    sidebarOlderSectionAfterDays: olderSectionAfterDaysAtStop(value),
+                  })
+                }
+                step={1}
+                value={olderSectionAfterDaysStopIndex(olderSection.afterDays)}
+                valueLabel={formatOlderSectionAfterDays(olderSection.afterDays)}
+              />
+              <SettingsSwitchRow
+                disabled={!hydrated}
+                icon="chevron.down"
+                label="Start Older folded"
+                subtitle="Once you fold or unfold the section yourself, that choice wins for as long as the thread list stays open."
+                value={olderSection.collapsedByDefault}
+                onValueChange={(value) =>
+                  savePreferences({ sidebarOlderSectionCollapsedByDefault: value })
+                }
+              />
+            </>
+          ) : null}
           <SettingsSliderRow
             description="How many recently archived threads appear at the end of the thread list."
             disabled={!hydrated}

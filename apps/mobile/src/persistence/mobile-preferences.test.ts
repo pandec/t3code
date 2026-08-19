@@ -48,6 +48,28 @@ describe("mobile preferences persistence", () => {
     ).toBeUndefined();
   });
 
+  it("keeps valid settling and Older section preferences", () => {
+    expect(
+      sanitizePreferences({
+        threadAutoSettleEnabled: false,
+        sidebarOlderSectionEnabled: true,
+        sidebarOlderSectionAfterDays: 30,
+        sidebarOlderSectionCollapsedByDefault: true,
+      }),
+    ).toMatchObject({
+      threadAutoSettleEnabled: false,
+      sidebarOlderSectionEnabled: true,
+      sidebarOlderSectionAfterDays: 30,
+      sidebarOlderSectionCollapsedByDefault: true,
+    });
+    expect(
+      sanitizePreferences({
+        threadAutoSettleEnabled: "no" as unknown as boolean,
+        sidebarOlderSectionAfterDays: "30" as unknown as number,
+      }),
+    ).toEqual({});
+  });
+
   it("keeps only valid persisted thread visit timestamps", () => {
     expect(
       sanitizePreferences({
