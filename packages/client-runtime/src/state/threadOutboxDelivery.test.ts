@@ -121,7 +121,7 @@ describe("thread outbox delivery", () => {
     });
     // The send-time turn reaches the callback so a steer that joined a running
     // turn can be told apart from one that started its own.
-    expect(onStartTurnAccepted).toHaveBeenCalledWith(message, deliveryContext);
+    expect(onStartTurnAccepted).toHaveBeenCalledWith(message, threadSettings, deliveryContext);
     expect(onDelivered).toHaveBeenCalledWith(message, threadSettings, deliveryContext);
     expect(calls).toEqual([
       "metadata",

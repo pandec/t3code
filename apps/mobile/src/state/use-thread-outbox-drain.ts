@@ -46,6 +46,10 @@ import {
   threadDetailToShell,
   threadEnvironment,
 } from "./threads";
+import {
+  resolveThreadOutboxHydrationAction,
+  THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+} from "./thread-outbox-hydration";
 import { noteThreadSteerDispatch } from "./thread-steer-pending";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
@@ -148,6 +152,7 @@ export function useThreadOutboxDrain(): void {
   const projects = useProjects();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
+  const [hydrationDegraded, setHydrationDegraded] = useState(false);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const hydrationRetryAttemptRef = useRef(0);
   const hydrationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -184,25 +189,38 @@ export function useThreadOutboxDrain(): void {
   }, [connectedEnvironments, dispatchingQueuedMessageId, queuedMessagesByThreadKey]);
 
   useEffect(() => {
-    let next = projectionHolds;
-    for (const [threadKey, hold] of Object.entries(projectionHolds)) {
+    const nowMs = Date.now();
+    const retained = Object.entries(projectionHolds).filter(([, hold]) => {
       const thread = threads.find(
         (candidate) =>
           candidate.environmentId === hold.environmentId && candidate.id === hold.threadId,
       );
-      if (
-        threadOutboxProjectionCaughtUp(
-          hold,
-          thread,
-          shellStatuses.get(hold.environmentId) ?? "empty",
-        )
-      ) {
-        if (next === projectionHolds) next = { ...projectionHolds };
-        delete (next as Record<string, typeof hold>)[threadKey];
-      }
+      return !threadOutboxProjectionCaughtUp(
+        hold,
+        thread,
+        shellStatuses.get(hold.environmentId) ?? "empty",
+        nowMs,
+      );
+    });
+    if (retained.length !== Object.keys(projectionHolds).length) {
+      appAtomRegistry.set(threadOutboxProjectionHoldsAtom, Object.fromEntries(retained));
+      return;
     }
-    if (next !== projectionHolds) appAtomRegistry.set(threadOutboxProjectionHoldsAtom, next);
-  }, [projectionHolds, shellStatuses, threads]);
+
+    const soonestExpiry = retained.reduce<number | null>(
+      (soonest, [, hold]) =>
+        soonest === null ? hold.expiresAt : Math.min(soonest, hold.expiresAt),
+      null,
+    );
+    if (soonestExpiry === null) return;
+    const timer = setTimeout(
+      () => {
+        setRetryTick((current) => current + 1);
+      },
+      Math.max(0, soonestExpiry - nowMs),
+    );
+    return () => clearTimeout(timer);
+  }, [projectionHolds, retryTick, shellStatuses, threads]);
 
   // Keep expedite state only while its row is queued or owned by an in-flight
   // edit/removal. The ownership checks avoid pruning during the manager's
@@ -252,15 +270,28 @@ export function useThreadOutboxDrain(): void {
   }, [preferencesHydrated, queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
 
   useEffect(() => {
-    if (outboxLoadState.status === "ready") {
-      hydrationRetryAttemptRef.current = 0;
+    const hydrationAction = resolveThreadOutboxHydrationAction(
+      outboxLoadState,
+      hydrationRetryAttemptRef.current,
+    );
+    if (hydrationAction === "deliver") {
+      const degraded = outboxLoadState.status !== "ready";
+      if (degraded && !hydrationDegraded) {
+        console.warn("[thread-outbox] storage hydration failed; delivering in-memory queue", {
+          attempts: THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+        });
+      }
+      setHydrationDegraded(degraded);
+      if (!degraded) hydrationRetryAttemptRef.current = 0;
       return;
     }
-    if (outboxLoadState.status === "loading") return;
-    if (outboxLoadState.status === "idle") {
+    setHydrationDegraded(false);
+    if (hydrationAction === "wait") return;
+    if (hydrationAction === "load") {
       void ensureThreadOutboxLoaded();
       return;
     }
+
     hydrationRetryAttemptRef.current += 1;
     const delay = threadOutboxRetryDelayMs(hydrationRetryAttemptRef.current);
     hydrationRetryTimerRef.current = setTimeout(() => {
@@ -273,7 +304,7 @@ export function useThreadOutboxDrain(): void {
         hydrationRetryTimerRef.current = null;
       }
     };
-  }, [outboxLoadState]);
+  }, [hydrationDegraded, outboxLoadState]);
 
   useEffect(
     () => () => {
@@ -349,7 +380,10 @@ export function useThreadOutboxDrain(): void {
   );
 
   useEffect(() => {
-    if (outboxLoadState.status !== "ready" || dispatchingQueuedMessageId !== null) {
+    if (
+      (outboxLoadState.status !== "ready" && !hydrationDegraded) ||
+      dispatchingQueuedMessageId !== null
+    ) {
       return;
     }
 
@@ -534,6 +568,7 @@ export function useThreadOutboxDrain(): void {
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     expeditedMessageIds,
+    hydrationDegraded,
     outboxLoadState,
     preferencesHydrated,
     projectionHolds,

@@ -23,17 +23,22 @@ import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
+import { useThreadListV2State } from "../threads/use-thread-list-v2-enabled";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
+
+const EMPTY_THREAD_KEYS: ReadonlySet<string> = new Set();
 
 export function HomeRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const canonicalThreads = useThreadShells();
+  const threadListV2 = useThreadListV2State();
   const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
-  const threads = threadLifecyclePresentation.activeThreads;
+  const threads = threadListV2.enabled
+    ? threadLifecyclePresentation.activeThreads
+    : canonicalThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -50,7 +55,6 @@ export function HomeRouteScreen() {
     [pendingTasks],
   );
   const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
-  const threadListV2Enabled = useThreadListV2Enabled();
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -69,7 +73,9 @@ export function HomeRouteScreen() {
     movePinnedThread,
     regenerateThreadTitle,
     unsettleThread,
-  } = useThreadListActions({ offlineArchiveEnabled: threadListV2Enabled });
+  } = useThreadListActions({
+    offlineArchiveEnabled: threadListV2.archiveQueueEnabled,
+  });
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
@@ -271,8 +277,14 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
           onUnarchiveThread={unarchiveThread}
-          pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
-          pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
+          pendingArchivedThreads={
+            threadListV2.enabled ? threadLifecyclePresentation.pendingArchivedThreads : []
+          }
+          pendingArchivedThreadKeys={
+            threadListV2.enabled
+              ? threadLifecyclePresentation.pendingArchivedThreadKeys
+              : EMPTY_THREAD_KEYS
+          }
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}

@@ -26,7 +26,12 @@ import {
   removeThreadLifecycleIntentIfCurrent,
   threadLifecycleOutboxManager,
   useThreadLifecycleIntents,
+  useThreadLifecycleOutboxLoadState,
 } from "./thread-lifecycle-outbox";
+import {
+  prepareThreadLifecycleDispatch,
+  type PreparedThreadLifecycleDispatch,
+} from "./thread-lifecycle-dispatch";
 import { threadOutboxManager } from "./thread-outbox";
 import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -66,10 +71,34 @@ function findThread(
   );
 }
 
+function readCurrentThreadLifecycleAction(intent: ThreadLifecycleIntent, threadKey: string) {
+  const thread = findThread(appAtomRegistry.get(environmentThreadShells.threadShellsAtom), intent);
+  const messages = appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom);
+  return resolveThreadLifecycleOutboxAction({
+    environmentConnected:
+      appAtomRegistry.get(environmentPresentations.presentationsAtom).get(intent.environmentId)
+        ?.connection.phase === "connected",
+    shellStatus: appAtomRegistry.get(environmentShell.stateValueAtom(intent.environmentId)).status,
+    messageOutboxReady: appAtomRegistry.get(threadOutboxManager.loadStateAtom).status === "ready",
+    threadExists: thread !== undefined,
+    threadArchived: thread?.archivedAt != null,
+    desiredArchived: intent.desiredArchived,
+    requiresDispatch: intent.requiresDispatch,
+    hasQueuedMessages: (messages[threadKey]?.length ?? 0) > 0,
+    messageDispatching: appAtomRegistry.get(dispatchingQueuedMessageThreadKeyAtom) === threadKey,
+    messageProjectionPending:
+      appAtomRegistry.get(threadOutboxProjectionHoldsAtom)[threadKey] !== undefined,
+    threadBusy:
+      thread?.session?.status === "starting" ||
+      (thread?.session?.status === "running" && thread.session.activeTurnId != null),
+  });
+}
+
 export function useThreadLifecycleOutboxDrain(): void {
   const archiveThread = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
   const unarchiveThread = useAtomCommand(threadEnvironment.unarchive, { reportFailure: false });
   const intents = useThreadLifecycleIntents();
+  const lifecycleLoadState = useThreadLifecycleOutboxLoadState();
   const shellStates = useAtomValue(threadLifecycleOutboxShellStatusesAtom);
   const threads = useThreadShells();
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
@@ -80,16 +109,44 @@ export function useThreadLifecycleOutboxDrain(): void {
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<CommandId, number>());
+  const hydrationRetryAttemptRef = useRef(0);
+  const hydrationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryNotBeforeRef = useRef(new Map<CommandId, number>());
   const retryTimersRef = useRef(new Map<CommandId, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
-    ensureThreadLifecycleOutboxLoaded();
+    if (lifecycleLoadState.status === "ready") {
+      hydrationRetryAttemptRef.current = 0;
+      return;
+    }
+    if (lifecycleLoadState.status === "loading") return;
+    if (lifecycleLoadState.status === "idle") {
+      void ensureThreadLifecycleOutboxLoaded();
+      return;
+    }
+
+    hydrationRetryAttemptRef.current += 1;
+    const delay = threadLifecycleOutboxRetryDelayMs(hydrationRetryAttemptRef.current);
+    hydrationRetryTimerRef.current = setTimeout(() => {
+      hydrationRetryTimerRef.current = null;
+      void ensureThreadLifecycleOutboxLoaded();
+    }, delay);
     return () => {
+      if (hydrationRetryTimerRef.current !== null) {
+        clearTimeout(hydrationRetryTimerRef.current);
+        hydrationRetryTimerRef.current = null;
+      }
+    };
+  }, [lifecycleLoadState]);
+
+  useEffect(
+    () => () => {
+      if (hydrationRetryTimerRef.current !== null) clearTimeout(hydrationRetryTimerRef.current);
       for (const timer of retryTimersRef.current.values()) clearTimeout(timer);
       retryTimersRef.current.clear();
-    };
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (dispatchingCommandId !== null) return;
@@ -137,46 +194,24 @@ export function useThreadLifecycleOutboxDrain(): void {
       };
       const dispatch = confirmThreadLifecycleIntentCurrent(intent).then(async (current) => {
         if (!current) return true;
-        if (action === "remove") return removeCurrent();
 
         // Canonical shells only: optimistic lifecycle presentation must not
-        // affect ordering or active-turn guards.
-        const freshThread = findThread(
-          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
-          intent,
-        );
-        const freshMessages = appAtomRegistry.get(
-          threadOutboxManager.queuedMessagesByThreadKeyAtom,
-        );
-        const freshAction = resolveThreadLifecycleOutboxAction({
-          environmentConnected:
-            appAtomRegistry
-              .get(environmentPresentations.presentationsAtom)
-              .get(intent.environmentId)?.connection.phase === "connected",
-          shellStatus: appAtomRegistry.get(environmentShell.stateValueAtom(intent.environmentId))
-            .status,
-          messageOutboxReady:
-            appAtomRegistry.get(threadOutboxManager.loadStateAtom).status === "ready",
-          threadExists: freshThread !== undefined,
-          threadArchived: freshThread?.archivedAt != null,
-          desiredArchived: intent.desiredArchived,
-          requiresDispatch: intent.requiresDispatch,
-          hasQueuedMessages: (freshMessages[threadKey]?.length ?? 0) > 0,
-          messageDispatching:
-            appAtomRegistry.get(dispatchingQueuedMessageThreadKeyAtom) === threadKey,
-          messageProjectionPending:
-            appAtomRegistry.get(threadOutboxProjectionHoldsAtom)[threadKey] !== undefined,
-          threadBusy:
-            freshThread?.session?.status === "starting" ||
-            (freshThread?.session?.status === "running" &&
-              freshThread.session.activeTurnId != null),
-        });
+        // affect ordering or active-turn guards. Check once before the durable
+        // attempt marker to avoid unnecessary compensation, then check again
+        // after every await immediately before issuing the command.
+        const freshAction = readCurrentThreadLifecycleAction(intent, threadKey);
         if (freshAction === "wait") return true;
         if (freshAction === "remove") return removeCurrent();
 
-        let attempted: ThreadLifecycleIntent | null;
+        let prepared: PreparedThreadLifecycleDispatch | null;
         try {
-          attempted = await markThreadLifecycleIntentDispatchAttempted(intent);
+          prepared = await prepareThreadLifecycleDispatch({
+            intent,
+            markDispatchAttempted: markThreadLifecycleIntentDispatchAttempted,
+            confirmCurrent: confirmThreadLifecycleIntentCurrent,
+            readCurrentAction: (attempted) =>
+              readCurrentThreadLifecycleAction(attempted, threadKey),
+          });
         } catch (error) {
           console.warn("[thread-lifecycle-outbox] failed to persist dispatch attempt", {
             environmentId: intent.environmentId,
@@ -186,13 +221,14 @@ export function useThreadLifecycleOutboxDrain(): void {
           });
           return false;
         }
-        if (attempted === null || !(await confirmThreadLifecycleIntentCurrent(attempted))) {
-          return true;
-        }
+        if (prepared === null) return true;
+        const attempted = prepared.intent;
+        if (prepared.action === "wait") return true;
+        if (prepared.action === "remove") return removeCurrent(attempted);
 
-        const result = await (freshAction === "archive" ? archiveThread : unarchiveThread)({
-          environmentId: intent.environmentId,
-          input: { threadId: intent.threadId, commandId: intent.commandId },
+        const result = await (prepared.action === "archive" ? archiveThread : unarchiveThread)({
+          environmentId: attempted.environmentId,
+          input: { threadId: attempted.threadId, commandId: attempted.commandId },
         });
         if (AsyncResult.isSuccess(result)) {
           refreshArchivedThreadsForEnvironment(intent.environmentId);

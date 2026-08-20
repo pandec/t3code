@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
-import { createThreadLifecycleOutboxManager } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-manager";
+import {
+  createThreadLifecycleOutboxManager,
+  ThreadLifecycleOutboxManagerError,
+} from "@t3tools/client-runtime/state/thread-lifecycle-outbox-manager";
 import {
   decodeThreadLifecycleIntent,
   encodeThreadLifecycleIntent,
@@ -24,6 +27,7 @@ import {
   deriveThreadLifecyclePresentation,
   mergePendingArchivedThreads,
 } from "./thread-lifecycle-outbox";
+import { prepareThreadLifecycleDispatch } from "./thread-lifecycle-dispatch";
 import { threadOutboxProjectionCaughtUp } from "./thread-outbox-projection";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -115,6 +119,51 @@ describe("thread lifecycle outbox", () => {
     secondRegistry.dispose();
   });
 
+  it("reports lifecycle hydration failures and permits a retry", async () => {
+    const registry = AtomRegistry.make();
+    const loadCause = new Error("storage unavailable");
+    let loadCalls = 0;
+    const manager = createThreadLifecycleOutboxManager({
+      registry,
+      storage: {
+        load: async () => {
+          loadCalls += 1;
+          if (loadCalls === 1) throw loadCause;
+          return [];
+        },
+        write: async () => undefined,
+        remove: async () => undefined,
+      },
+    });
+
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "idle" });
+    await manager.load();
+    expect(registry.get(manager.loadStateAtom)).toEqual({
+      status: "failed",
+      error: new ThreadLifecycleOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        cause: loadCause,
+      }),
+    });
+    await manager.load();
+    expect(loadCalls).toBe(2);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
+    registry.dispose();
+  });
+
+  it("decodes pre-dispatch-attempt rows with a safe default", () => {
+    const queued = intent();
+    const encoded = encodeThreadLifecycleIntent(queued) as Record<string, unknown>;
+    const { dispatchAttempted: _, ...legacyRow } = encoded;
+
+    expect(decodeThreadLifecycleIntent(legacyRow)).toEqual({
+      ...queued,
+      dispatchAttempted: false,
+    });
+  });
+
   it("restores presentation state when persistence fails", async () => {
     const registry = AtomRegistry.make();
     const manager = createThreadLifecycleOutboxManager({
@@ -155,6 +204,16 @@ describe("thread lifecycle outbox", () => {
     ).toBe("fulfilled");
     expect(
       resolveThreadLifecycleOutboxFailureAction({
+        error: {
+          message: "Lifecycle command failed",
+          cause: { detail: "Socket is not connected" },
+        },
+        desiredArchived: true,
+        interrupted: false,
+      }),
+    ).toBe("retry");
+    expect(
+      resolveThreadLifecycleOutboxFailureAction({
         error: new Error("Permission denied"),
         desiredArchived: true,
         interrupted: false,
@@ -187,24 +246,47 @@ describe("thread lifecycle outbox", () => {
     expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
   });
 
-  it("holds the post-delivery projection gap and still treats starting as busy", () => {
-    const hold = { environmentId, threadId, previousTurnId: null };
-    const unchanged = { ...thread(), environmentId };
-    const starting = {
-      ...unchanged,
-      session: {
-        threadId,
-        status: "starting" as const,
-        providerName: null,
-        runtimeMode: "full-access" as const,
-        activeTurnId: null,
-        lastError: null,
-        updatedAt: "2026-08-20T10:03:00.000Z",
-      },
+  it("holds archived-thread absence until auto-unarchive projects", () => {
+    const hold = {
+      environmentId,
+      threadId,
+      previousTurnId: null,
+      threadWasArchived: true,
+      expiresAt: 60_000,
     };
+    const stillArchived = { ...thread({ archivedAt: "2026-08-20T09:00:00.000Z" }), environmentId };
+    const unarchived = { ...stillArchived, archivedAt: null };
 
-    expect(threadOutboxProjectionCaughtUp(hold, unchanged, "live")).toBe(false);
-    expect(threadOutboxProjectionCaughtUp(hold, starting, "live")).toBe(true);
+    expect(threadOutboxProjectionCaughtUp(hold, undefined, "live", 0)).toBe(false);
+    expect(threadOutboxProjectionCaughtUp(hold, stillArchived, "live", 0)).toBe(false);
+    expect(threadOutboxProjectionCaughtUp(hold, unarchived, "live", 0)).toBe(false);
+    expect(threadOutboxProjectionCaughtUp(hold, undefined, "live", 60_000)).toBe(true);
+  });
+
+  it("clears terminal projection holds and still treats starting as busy", () => {
+    const hold = {
+      environmentId,
+      threadId,
+      previousTurnId: null,
+      threadWasArchived: false,
+      expiresAt: 60_000,
+    };
+    const unchanged = { ...thread(), environmentId };
+    const session = (status: "starting" | "error") => ({
+      threadId,
+      status,
+      providerName: null,
+      runtimeMode: "full-access" as const,
+      activeTurnId: null,
+      lastError: status === "error" ? "Turn failed" : null,
+      updatedAt: "2026-08-20T10:03:00.000Z",
+    });
+    const starting = { ...unchanged, session: session("starting") };
+    const failed = { ...unchanged, session: session("error") };
+
+    expect(threadOutboxProjectionCaughtUp(hold, unchanged, "live", 0)).toBe(false);
+    expect(threadOutboxProjectionCaughtUp(hold, starting, "live", 0)).toBe(true);
+    expect(threadOutboxProjectionCaughtUp(hold, failed, "live", 0)).toBe(true);
     expect(
       resolveThreadLifecycleOutboxAction({
         environmentConnected: true,
@@ -261,6 +343,51 @@ describe("thread lifecycle outbox", () => {
     expect(threadLifecycleRevisionRequiresDispatch(attempted ?? undefined)).toBe(true);
     expect([...storage.rows.values()].map(decodeThreadLifecycleIntent)).toEqual([attempted]);
     registry.dispose();
+  });
+
+  it("rechecks same-thread messages after persisting the dispatch attempt", async () => {
+    let releaseWrite!: () => void;
+    let markWriteStarted!: () => void;
+    const writeBlocked = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    let sameThreadMessageQueued = false;
+    const archive = intent();
+    const preparing = prepareThreadLifecycleDispatch({
+      intent: archive,
+      markDispatchAttempted: async (candidate) => {
+        markWriteStarted();
+        await writeBlocked;
+        return { ...candidate, dispatchAttempted: true };
+      },
+      confirmCurrent: async () => true,
+      readCurrentAction: (attempted) =>
+        resolveThreadLifecycleOutboxAction({
+          environmentConnected: true,
+          shellStatus: "live",
+          messageOutboxReady: true,
+          threadExists: true,
+          threadArchived: false,
+          desiredArchived: attempted.desiredArchived,
+          requiresDispatch: attempted.requiresDispatch,
+          hasQueuedMessages: sameThreadMessageQueued,
+          messageDispatching: false,
+          messageProjectionPending: false,
+          threadBusy: false,
+        }),
+    });
+
+    await writeStarted;
+    sameThreadMessageQueued = true;
+    releaseWrite();
+
+    await expect(preparing).resolves.toEqual({
+      intent: { ...archive, dispatchAttempted: true },
+      action: "wait",
+    });
   });
 
   it("preserves an optimistic enqueue that overlaps environment clearing", async () => {
@@ -349,6 +476,14 @@ describe("thread lifecycle outbox", () => {
         ...base,
         threadExists: false,
         threadArchived: false,
+        messageProjectionPending: true,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        ...base,
+        threadExists: false,
+        threadArchived: false,
       }),
     ).toBe("remove");
     expect(
@@ -364,6 +499,15 @@ describe("thread lifecycle outbox", () => {
         desiredArchived: false,
         requiresDispatch: true,
         threadExists: true,
+        threadArchived: false,
+      }),
+    ).toBe("unarchive");
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        ...base,
+        desiredArchived: false,
+        requiresDispatch: false,
+        threadExists: false,
         threadArchived: false,
       }),
     ).toBe("unarchive");

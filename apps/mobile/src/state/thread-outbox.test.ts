@@ -25,6 +25,10 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { isThreadOutboxMessageWaitingForPreferences } from "./thread-outbox";
+import {
+  resolveThreadOutboxHydrationAction,
+  THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+} from "./thread-outbox-hydration";
 import { createThreadOutboxManager, ThreadOutboxManagerError } from "./thread-outbox-manager";
 import type { ThreadOutboxStorage } from "./thread-outbox-storage";
 
@@ -264,6 +268,27 @@ describe("thread outbox", () => {
     expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     registry.dispose();
+  });
+
+  it("degrades to in-memory delivery after bounded hydration retries", () => {
+    const failure = {
+      status: "failed" as const,
+      error: new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause: new Error("storage unavailable"),
+      }),
+    };
+
+    expect(resolveThreadOutboxHydrationAction({ status: "idle" }, 0)).toBe("load");
+    expect(resolveThreadOutboxHydrationAction({ status: "loading" }, 0)).toBe("wait");
+    expect(resolveThreadOutboxHydrationAction(failure, 0)).toBe("retry");
+    expect(resolveThreadOutboxHydrationAction(failure, THREAD_OUTBOX_HYDRATION_MAX_RETRIES)).toBe(
+      "deliver",
+    );
+    expect(resolveThreadOutboxHydrationAction({ status: "ready" }, 0)).toBe("deliver");
   });
 
   it("reports structured load failures and permits a retry", async () => {
@@ -712,6 +737,12 @@ describe("thread outbox", () => {
       }),
     ).toBe(true);
     expect(shouldRetryThreadOutboxDelivery(new Error("Thread no longer exists"))).toBe(false);
+    expect(
+      shouldRetryThreadOutboxDelivery({
+        message: "Permission denied",
+        cause: { message: "Socket is not connected" },
+      }),
+    ).toBe(false);
   });
 
   it("retains queued messages when settings synchronization fails before startTurn", () => {

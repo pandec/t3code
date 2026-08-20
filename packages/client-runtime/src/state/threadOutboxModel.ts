@@ -487,7 +487,20 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
   ) {
     return true;
   }
-  return outboxDeliveryErrorMessages(error).some(isTransportConnectionErrorMessage);
+  if (error instanceof Error) {
+    return isTransportConnectionErrorMessage(error.message);
+  }
+  if (typeof error !== "object" || error === null) {
+    return typeof error === "string" && isTransportConnectionErrorMessage(error);
+  }
+  const record = error as Record<string, unknown>;
+  const detail =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.detail === "string"
+        ? record.detail
+        : "";
+  return isTransportConnectionErrorMessage(detail);
 }
 
 export type ThreadOutboxCommandStage = "settings-sync" | "start-turn";

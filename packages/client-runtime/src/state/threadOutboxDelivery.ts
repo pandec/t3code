@@ -59,6 +59,7 @@ export interface ThreadOutboxDeliveryOptions {
   /** Fires after startTurn is accepted, before queue cleanup or projection catch-up. */
   readonly onStartTurnAccepted?: (
     message: QueuedThreadMessage,
+    thread: ThreadSettingsSnapshot,
     context: ThreadOutboxDeliveryContext,
   ) => void;
   /**
@@ -232,7 +233,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     });
     if (AsyncResult.isSuccess(deliveryResult)) {
       try {
-        options.onStartTurnAccepted?.(queuedMessage, context);
+        options.onStartTurnAccepted?.(queuedMessage, thread, context);
       } catch (error) {
         warn("[thread-outbox] start-accepted callback failed", {
           environmentId: queuedMessage.environmentId,

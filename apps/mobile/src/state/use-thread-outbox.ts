@@ -1,6 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ThreadOutboxDeliveryContext } from "@t3tools/client-runtime/state/thread-outbox-delivery";
-import type { QueuedThreadMessage } from "@t3tools/client-runtime/state/thread-outbox-model";
+import type {
+  QueuedThreadMessage,
+  ThreadSettingsSnapshot,
+} from "@t3tools/client-runtime/state/thread-outbox-model";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, MessageId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -9,32 +12,42 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
-import type { ThreadOutboxProjectionHold } from "./thread-outbox-projection";
+import {
+  THREAD_OUTBOX_PROJECTION_HOLD_TIMEOUT_MS,
+  type ThreadOutboxProjectionHold,
+} from "./thread-outbox-projection";
 
 export {
   threadOutboxProjectionCaughtUp,
   type ThreadOutboxProjectionHold,
 } from "./thread-outbox-projection";
 
-const threadOutboxShellStatusesAtom = Atom.make(
-  (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
-    const statuses = new Map<EnvironmentId, EnvironmentShellStatus>();
-    for (const queue of Object.values(get(threadOutboxManager.queuedMessagesByThreadKeyAtom))) {
-      const environmentId = queue[0]?.environmentId;
-      if (environmentId !== undefined && !statuses.has(environmentId)) {
-        statuses.set(environmentId, get(environmentShell.stateValueAtom(environmentId)).status);
-      }
-    }
-    return statuses;
-  },
-).pipe(Atom.withLabel("mobile:thread-outbox:shell-statuses"));
-
 export const threadOutboxProjectionHoldsAtom = Atom.make<
   Readonly<Record<string, ThreadOutboxProjectionHold>>
 >({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:thread-outbox:projection-holds"));
 
+const threadOutboxShellStatusesAtom = Atom.make(
+  (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
+    const environmentIds = new Set<EnvironmentId>();
+    for (const queue of Object.values(get(threadOutboxManager.queuedMessagesByThreadKeyAtom))) {
+      const environmentId = queue[0]?.environmentId;
+      if (environmentId !== undefined) environmentIds.add(environmentId);
+    }
+    for (const hold of Object.values(get(threadOutboxProjectionHoldsAtom))) {
+      environmentIds.add(hold.environmentId);
+    }
+    return new Map(
+      [...environmentIds].map((environmentId) => [
+        environmentId,
+        get(environmentShell.stateValueAtom(environmentId)).status,
+      ]),
+    );
+  },
+).pipe(Atom.withLabel("mobile:thread-outbox:shell-statuses"));
+
 export function noteThreadOutboxStartAccepted(
   message: QueuedThreadMessage,
+  thread: ThreadSettingsSnapshot,
   context: ThreadOutboxDeliveryContext,
 ): void {
   if (context.sessionStatus === "running") return;
@@ -45,6 +58,8 @@ export function noteThreadOutboxStartAccepted(
       environmentId: message.environmentId,
       threadId: message.threadId,
       previousTurnId: context.latestTurnId,
+      threadWasArchived: thread.archivedAt != null,
+      expiresAt: Date.now() + THREAD_OUTBOX_PROJECTION_HOLD_TIMEOUT_MS,
     },
   });
 }

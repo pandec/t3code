@@ -72,13 +72,6 @@ function environmentSupportsTitleRegeneration(
 
 type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
 
-interface ThreadActionExecutionResult {
-  readonly succeeded: boolean;
-}
-
-const ACTION_FAILED: ThreadActionExecutionResult = { succeeded: false };
-const ACTION_COMPLETED: ThreadActionExecutionResult = { succeeded: true };
-
 const ACTION_VERBS: Record<ThreadListAction, string> = {
   archive: "archived",
   unarchive: "unarchived",
@@ -124,7 +117,7 @@ function useThreadActionExecutor(
     async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (inFlightThreadKeys.current.has(key)) {
-        return ACTION_FAILED;
+        return false;
       }
 
       inFlightThreadKeys.current.add(key);
@@ -138,7 +131,7 @@ function useThreadActionExecutor(
             actionFailureTitle(action),
             "This environment's server does not support settling yet. Update the server to use Settle.",
           );
-          return ACTION_FAILED;
+          return false;
         }
         // Settle may only target what effectiveSettled could classify as
         // settled: not starting/running sessions, not threads waiting on
@@ -148,7 +141,7 @@ function useThreadActionExecutor(
             actionFailureTitle(action),
             "This thread still needs attention. Resolve or interrupt it first, then try again.",
           );
-          return ACTION_FAILED;
+          return false;
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
@@ -161,7 +154,7 @@ function useThreadActionExecutor(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
           );
-          return ACTION_FAILED;
+          return false;
         }
 
         const existingIntent = appAtomRegistry.get(
@@ -177,7 +170,7 @@ function useThreadActionExecutor(
           (action === "archive" && !environmentConnected && offlineArchiveEnabled) ||
           (action === "unarchive" && existingIntent !== undefined);
         if (shouldQueueLifecycleIntent) {
-          if (existingIntent?.desiredArchived === desiredArchived) return ACTION_COMPLETED;
+          if (existingIntent?.desiredArchived === desiredArchived) return true;
           const threadSnapshot = unScopeThreadShell(thread);
           try {
             await enqueueThreadLifecycleIntent({
@@ -198,10 +191,10 @@ function useThreadActionExecutor(
                 ? error.message
                 : `The thread could not be ${ACTION_VERBS[action]}.`,
             );
-            return ACTION_FAILED;
+            return false;
           }
           onCompleted?.(action, thread);
-          return ACTION_COMPLETED;
+          return true;
         }
 
         const result =
@@ -226,7 +219,7 @@ function useThreadActionExecutor(
               });
         if (result._tag === "Failure") {
           Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
-          return ACTION_FAILED;
+          return false;
         }
         // Settled threads stay in the live shell stream; only the archive
         // lifecycle still feeds the archived-snapshot surface.
@@ -234,7 +227,7 @@ function useThreadActionExecutor(
           refreshArchivedThreadsForEnvironment(thread.environmentId);
         }
         onCompleted?.(action, thread);
-        return ACTION_COMPLETED;
+        return true;
       } finally {
         inFlightThreadKeys.current.delete(key);
       }
@@ -255,10 +248,7 @@ function useThreadActionExecutor(
 }
 
 function useConfirmDeleteThread(
-  executeAction: (
-    action: ThreadListAction,
-    thread: EnvironmentThreadShell,
-  ) => Promise<ThreadActionExecutionResult>,
+  executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
   onDeleted?: (thread: EnvironmentThreadShell) => void,
 ) {
   return useCallback(
@@ -273,7 +263,7 @@ function useConfirmDeleteThread(
             style: "destructive",
             onPress: () => {
               void executeAction("delete", thread).then((result) => {
-                if (result.succeeded) onDeleted?.(thread);
+                if (result) onDeleted?.(thread);
               });
             },
           },
@@ -287,7 +277,7 @@ function useConfirmDeleteThread(
         destructive: true,
         onConfirm: () => {
           void executeAction("delete", thread).then((result) => {
-            if (result.succeeded) onDeleted?.(thread);
+            if (result) onDeleted?.(thread);
           });
         },
       });
@@ -341,7 +331,7 @@ export function useThreadListActions(options: {
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       void executeAction("archive", thread).then((result) => {
-        if (result.succeeded) handleSelectedThreadRemoved(thread);
+        if (result) handleSelectedThreadRemoved(thread);
       });
     },
     [executeAction, handleSelectedThreadRemoved],
@@ -396,7 +386,7 @@ export function useThreadListActions(options: {
     [forkMutation, navigation],
   );
   const settleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)).succeeded,
+    async (thread: EnvironmentThreadShell) => executeAction("settle", thread),
     [executeAction],
   );
   const snoozeThread = useCallback(
@@ -488,7 +478,7 @@ export function useThreadListActions(options: {
     [unsnoozeMutation],
   );
   const unsettleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)).succeeded,
+    async (thread: EnvironmentThreadShell) => executeAction("unsettle", thread),
     [executeAction],
   );
   const pinThread = useCallback(

@@ -26,8 +26,8 @@ export async function flushThreadLifecycleOutbox(): Promise<void> {
   await flushThreadLifecycleOutboxWrites();
 }
 
-export function ensureThreadLifecycleOutboxLoaded(): void {
-  void threadLifecycleOutboxManager.load();
+export function ensureThreadLifecycleOutboxLoaded(): Promise<void> {
+  return threadLifecycleOutboxManager.load();
 }
 
 export function enqueueThreadLifecycleIntent(intent: ThreadLifecycleIntent): Promise<void> {
@@ -58,6 +58,10 @@ export function clearThreadLifecycleOutboxEnvironment(environmentId: Environment
 
 export function useThreadLifecycleIntents(): Readonly<Record<string, ThreadLifecycleIntent>> {
   return useAtomValue(threadLifecycleOutboxManager.intentsByThreadKeyAtom);
+}
+
+export function useThreadLifecycleOutboxLoadState() {
+  return useAtomValue(threadLifecycleOutboxManager.loadStateAtom);
 }
 
 export interface ThreadLifecyclePresentation {

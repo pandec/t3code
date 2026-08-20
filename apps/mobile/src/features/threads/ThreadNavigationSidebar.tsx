@@ -38,7 +38,7 @@ import {
   mergePendingArchivedThreads,
   useThreadLifecyclePresentation,
 } from "../../state/thread-lifecycle-outbox";
-import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import { useThreadListV2State } from "./use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
@@ -221,8 +221,11 @@ function ThreadNavigationSidebarPane(
   const { themeAppearance: colorScheme } = useAppearancePreferences();
   const projects = useProjects();
   const canonicalThreads = useThreadShells();
+  const threadListV2 = useThreadListV2State();
   const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
-  const threads = threadLifecyclePresentation.activeThreads;
+  const threads = threadListV2.enabled
+    ? threadLifecyclePresentation.activeThreads
+    : canonicalThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [headerIsOverContent, setHeaderIsOverContent] = useState(false);
@@ -231,7 +234,7 @@ function ThreadNavigationSidebarPane(
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const headerIsOverContentRef = useRef(false);
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
-  const threadListV2Enabled = useThreadListV2Enabled();
+  const threadListV2Enabled = threadListV2.enabled;
   const {
     archiveThread,
     forkThread,
@@ -245,7 +248,7 @@ function ThreadNavigationSidebarPane(
     movePinnedThread,
     regenerateThreadTitle,
   } = useThreadListActions({
-    offlineArchiveEnabled: threadListV2Enabled,
+    offlineArchiveEnabled: threadListV2.archiveQueueEnabled,
     selectedThreadKey: props.selectedThreadKey,
     onSelectedThreadRemoved: props.onSelectedThreadRemoved,
   });

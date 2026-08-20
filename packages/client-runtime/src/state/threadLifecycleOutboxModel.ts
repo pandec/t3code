@@ -6,13 +6,14 @@ import {
   ThreadId,
   type OrchestrationThreadShell as OrchestrationThreadShellType,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { isTransportConnectionErrorMessage } from "../errors/index.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 import {
   outboxDeliveryErrorMessages,
   scopedThreadKey,
-  shouldRetryThreadOutboxDelivery,
   threadOutboxRetryDelayMs,
 } from "./threadOutboxModel.ts";
 
@@ -24,7 +25,7 @@ export const ThreadLifecycleIntentSchema = Schema.Struct({
   threadId: ThreadId,
   desiredArchived: Schema.Boolean,
   requiresDispatch: Schema.Boolean,
-  dispatchAttempted: Schema.Boolean,
+  dispatchAttempted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   commandId: CommandId,
   createdAt: IsoDateTime,
   baselineArchivedAt: Schema.NullOr(IsoDateTime),
@@ -105,8 +106,8 @@ export function resolveThreadLifecycleOutboxAction(input: {
   ) {
     return "wait";
   }
-  if (!input.threadExists && (input.desiredArchived || !input.requiresDispatch)) {
-    return "remove";
+  if (!input.threadExists) {
+    return input.desiredArchived ? "remove" : "unarchive";
   }
   if (input.threadArchived === input.desiredArchived && !input.requiresDispatch) {
     return "remove";
@@ -121,7 +122,17 @@ function lifecycleIntentAlreadyFulfilled(error: unknown, desiredArchived: boolea
     : detail.includes("is not archived") || detail.includes("does not exist");
 }
 
-export const shouldRetryThreadLifecycleOutboxDelivery = shouldRetryThreadOutboxDelivery;
+export function shouldRetryThreadLifecycleOutboxDelivery(error: unknown): boolean {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    error._tag === "ConnectionTransientError"
+  ) {
+    return true;
+  }
+  return outboxDeliveryErrorMessages(error).some(isTransportConnectionErrorMessage);
+}
 
 export type ThreadLifecycleOutboxFailureAction = "retry" | "fulfilled" | "discard";
 

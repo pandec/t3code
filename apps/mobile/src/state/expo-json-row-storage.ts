@@ -18,6 +18,10 @@ export interface ExpoJsonRowStorageOptions<Row> {
   readonly removeError: (row: Row, fileName: string, cause: unknown) => unknown;
 }
 
+/**
+ * Tracks row writes so app-update restarts can wait for every atomic rename,
+ * including writes that callers intentionally started without awaiting.
+ */
 export function createExpoJsonRowStorage<Row>(options: ExpoJsonRowStorageOptions<Row>): {
   readonly storage: ExpoJsonRowStorage<Row>;
   readonly flushWrites: () => Promise<void>;

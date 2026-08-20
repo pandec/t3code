@@ -17,6 +17,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  resolveThreadListV2ArchiveQueueEnabled,
   resolveThreadListV2MenuActionIds,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
@@ -134,10 +135,22 @@ describe("resolveThreadListV2Enabled", () => {
     );
   });
 
-  it("holds the default while preferences are still loading so the list does not remount", () => {
+  it("holds the default UI but disables offline archive while preferences load", () => {
+    const loading = { legacyPreference: undefined, preferencesLoaded: false };
+    expect(resolveThreadListV2Enabled(loading)).toBe(true);
+    expect(resolveThreadListV2ArchiveQueueEnabled(loading)).toBe(false);
     expect(
-      resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: false }),
+      resolveThreadListV2ArchiveQueueEnabled({
+        legacyPreference: undefined,
+        preferencesLoaded: true,
+      }),
     ).toBe(true);
+    expect(
+      resolveThreadListV2ArchiveQueueEnabled({
+        legacyPreference: true,
+        preferencesLoaded: true,
+      }),
+    ).toBe(false);
   });
 });
 

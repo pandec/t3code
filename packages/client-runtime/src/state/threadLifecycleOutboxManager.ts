@@ -30,6 +30,12 @@ export class ThreadLifecycleOutboxManagerError extends Schema.TaggedErrorClass<T
   }
 }
 
+export type ThreadLifecycleOutboxLoadState =
+  | { readonly status: "idle" }
+  | { readonly status: "loading" }
+  | { readonly status: "ready" }
+  | { readonly status: "failed"; readonly error: ThreadLifecycleOutboxManagerError };
+
 export interface ThreadLifecycleOutboxManagerOptions {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly storage: ThreadLifecycleOutboxStorage;
@@ -43,6 +49,10 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
   const intentsByThreadKeyAtom = Atom.make<Readonly<Record<string, ThreadLifecycleIntent>>>(
     {},
   ).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-lifecycle-outbox:intents"));
+  const loadStateAtom = Atom.make<ThreadLifecycleOutboxLoadState>({ status: "idle" }).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`${options.atomLabel ?? "thread-lifecycle-outbox"}:load-state`),
+  );
   const warn = options.warn ?? (() => undefined);
   let loadPromise: Promise<void> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
@@ -65,20 +75,21 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
 
   const load = (): Promise<void> => {
     if (loadPromise !== null) return loadPromise;
+    options.registry.set(loadStateAtom, { status: "loading" });
     loadPromise = serialize(async () => {
       const persisted = groupThreadLifecycleIntents(await options.storage.load());
       setIntents({ ...persisted, ...currentIntents() });
+      options.registry.set(loadStateAtom, { status: "ready" });
     }).catch((cause) => {
+      const error = new ThreadLifecycleOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        cause,
+      });
       loadPromise = null;
-      warn(
-        "[thread-lifecycle-outbox] failed to load persisted intents",
-        new ThreadLifecycleOutboxManagerError({
-          operation: "load",
-          environmentId: null,
-          threadId: null,
-          cause,
-        }),
-      );
+      options.registry.set(loadStateAtom, { status: "failed", error });
+      warn("[thread-lifecycle-outbox] failed to load persisted intents", error);
     });
     return loadPromise;
   };
@@ -213,6 +224,7 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
 
   return {
     intentsByThreadKeyAtom,
+    loadStateAtom,
     serialize,
     load,
     enqueue,
