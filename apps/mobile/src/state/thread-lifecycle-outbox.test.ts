@@ -254,6 +254,7 @@ describe("thread lifecycle outbox", () => {
       environmentId,
       threadId,
       previousTurnId: null,
+      sessionBaselineKnown: false,
       previousSessionStatus: null,
       previousSessionUpdatedAt: null,
       threadWasArchived: true,
@@ -270,11 +271,49 @@ describe("thread lifecycle outbox", () => {
     expect(threadOutboxProjectionWakeDelayMs([hold], 300_000)).toBeNull();
   });
 
+  it("keeps an unknown-baseline hold through a stale terminal session", () => {
+    const hold = {
+      environmentId,
+      threadId,
+      previousTurnId: null,
+      sessionBaselineKnown: false,
+      previousSessionStatus: null,
+      previousSessionUpdatedAt: null,
+      threadWasArchived: true,
+      expiresAt: 300_000,
+    };
+    const reappeared = {
+      ...thread(),
+      environmentId,
+      archivedAt: null,
+      session: {
+        threadId,
+        status: "error" as const,
+        providerName: null,
+        runtimeMode: "full-access" as const,
+        activeTurnId: null,
+        lastError: "Old failure",
+        updatedAt: "2026-08-20T09:00:00.000Z",
+      },
+    };
+
+    expect(threadOutboxProjectionCaughtUp(hold, reappeared, "live", 0)).toBe(false);
+    expect(
+      threadOutboxProjectionCaughtUp(
+        hold,
+        { ...reappeared, session: { ...reappeared.session, status: "starting" } },
+        "live",
+        0,
+      ),
+    ).toBe(true);
+  });
+
   it("clears terminal projection holds and still treats starting as busy", () => {
     const hold = {
       environmentId,
       threadId,
       previousTurnId: null,
+      sessionBaselineKnown: true,
       previousSessionStatus: null,
       previousSessionUpdatedAt: null,
       threadWasArchived: false,

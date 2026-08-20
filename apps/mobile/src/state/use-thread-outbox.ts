@@ -59,6 +59,7 @@ export function noteThreadOutboxStartAccepted(
       environmentId: message.environmentId,
       threadId: message.threadId,
       previousTurnId: context.latestTurnId,
+      sessionBaselineKnown: context.sessionBaselineKnown,
       previousSessionStatus: context.sessionStatus,
       previousSessionUpdatedAt: context.sessionUpdatedAt,
       threadWasArchived: thread.archivedAt != null,

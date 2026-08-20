@@ -43,12 +43,14 @@ export interface ThreadOutboxDeliveryCommands {
  * was already in flight rather than starting one of its own.
  */
 export interface ThreadOutboxDeliveryContext {
+  readonly sessionBaselineKnown: boolean;
   readonly sessionStatus: OrchestrationSessionStatus | null;
   readonly sessionUpdatedAt: string | null;
   readonly latestTurnId: TurnId | null;
 }
 
 const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
+  sessionBaselineKnown: false,
   sessionStatus: null,
   sessionUpdatedAt: null,
   latestTurnId: null,

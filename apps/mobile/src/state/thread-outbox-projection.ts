@@ -18,6 +18,7 @@ export interface ThreadOutboxProjectionHold {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly previousTurnId: TurnId | null;
+  readonly sessionBaselineKnown: boolean;
   readonly previousSessionStatus: OrchestrationSessionStatus | null;
   readonly previousSessionUpdatedAt: string | null;
   readonly threadWasArchived: boolean;
@@ -59,7 +60,10 @@ export function threadOutboxProjectionCaughtUp(
   ) {
     return true;
   }
-  if (sessionStatus === "interrupted" || sessionStatus === "stopped" || sessionStatus === "error") {
+  if (
+    hold.sessionBaselineKnown &&
+    (sessionStatus === "interrupted" || sessionStatus === "stopped" || sessionStatus === "error")
+  ) {
     return (
       sessionStatus !== hold.previousSessionStatus ||
       (thread.session?.updatedAt ?? null) !== hold.previousSessionUpdatedAt

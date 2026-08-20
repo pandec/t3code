@@ -528,6 +528,7 @@ export function useThreadOutboxDrain(): void {
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
             : freshThreadSettings !== undefined
               ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
+                  sessionBaselineKnown: freshThread !== undefined,
                   sessionStatus: freshThread?.session?.status ?? null,
                   sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
                   latestTurnId: freshThread?.latestTurn?.turnId ?? null,
