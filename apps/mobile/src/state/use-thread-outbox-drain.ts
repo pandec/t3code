@@ -49,6 +49,7 @@ import {
 import {
   resolveThreadOutboxHydrationAction,
   THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+  THREAD_OUTBOX_HYDRATION_RECOVERY_RETRY_MS,
 } from "./thread-outbox-hydration";
 import { noteThreadSteerDispatch } from "./thread-steer-pending";
 import { useAtomCommand } from "./use-atom-command";
@@ -59,6 +60,7 @@ import {
   noteThreadOutboxStartAccepted,
   threadOutboxProjectionCaughtUp,
   threadOutboxProjectionHoldsAtom,
+  threadOutboxProjectionWakeDelayMs,
   useThreadOutboxLoadState,
   useThreadOutboxMessages,
   useThreadOutboxProjectionHolds,
@@ -207,18 +209,16 @@ export function useThreadOutboxDrain(): void {
       return;
     }
 
-    const soonestExpiry = retained.reduce<number | null>(
-      (soonest, [, hold]) =>
-        soonest === null ? hold.expiresAt : Math.min(soonest, hold.expiresAt),
-      null,
+    // An expired hold in a non-live shell waits for the next shell transition;
+    // repeatedly scheduling a zero-delay wake would spin until reconnect.
+    const wakeDelayMs = threadOutboxProjectionWakeDelayMs(
+      retained.map(([, hold]) => hold),
+      nowMs,
     );
-    if (soonestExpiry === null) return;
-    const timer = setTimeout(
-      () => {
-        setRetryTick((current) => current + 1);
-      },
-      Math.max(0, soonestExpiry - nowMs),
-    );
+    if (wakeDelayMs === null) return;
+    const timer = setTimeout(() => {
+      setRetryTick((current) => current + 1);
+    }, wakeDelayMs);
     return () => clearTimeout(timer);
   }, [projectionHolds, retryTick, shellStatuses, threads]);
 
@@ -275,23 +275,36 @@ export function useThreadOutboxDrain(): void {
       hydrationRetryAttemptRef.current,
     );
     if (hydrationAction === "deliver") {
-      const degraded = outboxLoadState.status !== "ready";
-      if (degraded && !hydrationDegraded) {
+      setHydrationDegraded(false);
+      hydrationRetryAttemptRef.current = 0;
+      return;
+    }
+    if (hydrationAction === "wait") return;
+    if (hydrationAction === "load") {
+      setHydrationDegraded(false);
+      void ensureThreadOutboxLoaded();
+      return;
+    }
+    if (hydrationAction === "recover") {
+      if (!hydrationDegraded) {
         console.warn("[thread-outbox] storage hydration failed; delivering in-memory queue", {
           attempts: THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
         });
       }
-      setHydrationDegraded(degraded);
-      if (!degraded) hydrationRetryAttemptRef.current = 0;
-      return;
-    }
-    setHydrationDegraded(false);
-    if (hydrationAction === "wait") return;
-    if (hydrationAction === "load") {
-      void ensureThreadOutboxLoaded();
-      return;
+      setHydrationDegraded(true);
+      hydrationRetryTimerRef.current = setTimeout(() => {
+        hydrationRetryTimerRef.current = null;
+        void ensureThreadOutboxLoaded();
+      }, THREAD_OUTBOX_HYDRATION_RECOVERY_RETRY_MS);
+      return () => {
+        if (hydrationRetryTimerRef.current !== null) {
+          clearTimeout(hydrationRetryTimerRef.current);
+          hydrationRetryTimerRef.current = null;
+        }
+      };
     }
 
+    setHydrationDegraded(false);
     hydrationRetryAttemptRef.current += 1;
     const delay = threadOutboxRetryDelayMs(hydrationRetryAttemptRef.current);
     hydrationRetryTimerRef.current = setTimeout(() => {
@@ -516,6 +529,7 @@ export function useThreadOutboxDrain(): void {
             : freshThreadSettings !== undefined
               ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
                   sessionStatus: freshThread?.session?.status ?? null,
+                  sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
                   latestTurnId: freshThread?.latestTurn?.turnId ?? null,
                 })
               : Promise.resolve(false);

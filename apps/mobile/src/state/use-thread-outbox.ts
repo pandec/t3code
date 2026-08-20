@@ -19,6 +19,7 @@ import {
 
 export {
   threadOutboxProjectionCaughtUp,
+  threadOutboxProjectionWakeDelayMs,
   type ThreadOutboxProjectionHold,
 } from "./thread-outbox-projection";
 
@@ -58,6 +59,8 @@ export function noteThreadOutboxStartAccepted(
       environmentId: message.environmentId,
       threadId: message.threadId,
       previousTurnId: context.latestTurnId,
+      previousSessionStatus: context.sessionStatus,
+      previousSessionUpdatedAt: context.sessionUpdatedAt,
       threadWasArchived: thread.archivedAt != null,
       expiresAt: Date.now() + THREAD_OUTBOX_PROJECTION_HOLD_TIMEOUT_MS,
     },

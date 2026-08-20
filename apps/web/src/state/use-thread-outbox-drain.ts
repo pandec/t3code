@@ -322,6 +322,7 @@ export function useThreadOutboxDrain(): void {
           : freshThreadSettings !== undefined
             ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
                 sessionStatus: freshThread?.session?.status ?? null,
+                sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
                 latestTurnId: freshThread?.latestTurn?.turnId ?? null,
               })
             : Promise.resolve(false);

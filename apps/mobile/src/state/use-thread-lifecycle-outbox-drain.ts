@@ -28,10 +28,7 @@ import {
   useThreadLifecycleIntents,
   useThreadLifecycleOutboxLoadState,
 } from "./thread-lifecycle-outbox";
-import {
-  prepareThreadLifecycleDispatch,
-  type PreparedThreadLifecycleDispatch,
-} from "./thread-lifecycle-dispatch";
+import { prepareThreadLifecycleDispatch } from "./thread-lifecycle-dispatch";
 import { threadOutboxManager } from "./thread-outbox";
 import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -203,14 +200,12 @@ export function useThreadLifecycleOutboxDrain(): void {
         if (freshAction === "wait") return true;
         if (freshAction === "remove") return removeCurrent();
 
-        let prepared: PreparedThreadLifecycleDispatch | null;
+        let attempted: ThreadLifecycleIntent | null;
         try {
-          prepared = await prepareThreadLifecycleDispatch({
+          attempted = await prepareThreadLifecycleDispatch({
             intent,
             markDispatchAttempted: markThreadLifecycleIntentDispatchAttempted,
             confirmCurrent: confirmThreadLifecycleIntentCurrent,
-            readCurrentAction: (attempted) =>
-              readCurrentThreadLifecycleAction(attempted, threadKey),
           });
         } catch (error) {
           console.warn("[thread-lifecycle-outbox] failed to persist dispatch attempt", {
@@ -221,12 +216,13 @@ export function useThreadLifecycleOutboxDrain(): void {
           });
           return false;
         }
-        if (prepared === null) return true;
-        const attempted = prepared.intent;
-        if (prepared.action === "wait") return true;
-        if (prepared.action === "remove") return removeCurrent(attempted);
+        if (attempted === null) return true;
 
-        const result = await (prepared.action === "archive" ? archiveThread : unarchiveThread)({
+        const finalAction = readCurrentThreadLifecycleAction(attempted, threadKey);
+        if (finalAction === "wait") return true;
+        if (finalAction === "remove") return removeCurrent(attempted);
+
+        const result = await (finalAction === "archive" ? archiveThread : unarchiveThread)({
           environmentId: attempted.environmentId,
           input: { threadId: attempted.threadId, commandId: attempted.commandId },
         });

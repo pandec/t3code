@@ -2,18 +2,42 @@ import type {
   EnvironmentShellStatus,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationSessionStatus,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 
-// Projection normally lands immediately. The bounded fallback prevents a lost
-// shell event from permanently parking lifecycle and same-thread message queues.
-export const THREAD_OUTBOX_PROJECTION_HOLD_TIMEOUT_MS = 60_000;
+// Projection normally lands immediately. Five minutes is a conservative escape
+// hatch for a lost shell event; a genuinely backlogged projection beyond this
+// window can still trade ordering correctness for queue availability.
+export const THREAD_OUTBOX_PROJECTION_HOLD_TIMEOUT_MS = 5 * 60_000;
 
 export interface ThreadOutboxProjectionHold {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly previousTurnId: TurnId | null;
+  readonly previousSessionStatus: OrchestrationSessionStatus | null;
+  readonly previousSessionUpdatedAt: string | null;
   readonly threadWasArchived: boolean;
   readonly expiresAt: number;
+}
+
+export function threadOutboxProjectionWakeDelayMs(
+  holds: ReadonlyArray<ThreadOutboxProjectionHold>,
+  nowMs = Date.now(),
+): number | null {
+  const nextExpiry = holds.reduce<number | null>(
+    (soonest, hold) =>
+      hold.expiresAt <= nowMs
+        ? soonest
+        : soonest === null
+          ? hold.expiresAt
+          : Math.min(soonest, hold.expiresAt),
+    null,
+  );
+  return nextExpiry === null ? null : nextExpiry - nowMs;
 }
 
 export function threadOutboxProjectionCaughtUp(
@@ -28,12 +52,18 @@ export function threadOutboxProjectionCaughtUp(
   if (hold.threadWasArchived && thread.archivedAt != null) return false;
 
   const sessionStatus = thread.session?.status ?? null;
-  return (
+  if (
     sessionStatus === "starting" ||
     sessionStatus === "running" ||
-    sessionStatus === "interrupted" ||
-    sessionStatus === "stopped" ||
-    sessionStatus === "error" ||
     (thread.latestTurn?.turnId ?? null) !== hold.previousTurnId
-  );
+  ) {
+    return true;
+  }
+  if (sessionStatus === "interrupted" || sessionStatus === "stopped" || sessionStatus === "error") {
+    return (
+      sessionStatus !== hold.previousSessionStatus ||
+      (thread.session?.updatedAt ?? null) !== hold.previousSessionUpdatedAt
+    );
+  }
+  return false;
 }

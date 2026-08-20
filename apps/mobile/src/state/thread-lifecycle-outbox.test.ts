@@ -28,7 +28,10 @@ import {
   mergePendingArchivedThreads,
 } from "./thread-lifecycle-outbox";
 import { prepareThreadLifecycleDispatch } from "./thread-lifecycle-dispatch";
-import { threadOutboxProjectionCaughtUp } from "./thread-outbox-projection";
+import {
+  threadOutboxProjectionCaughtUp,
+  threadOutboxProjectionWakeDelayMs,
+} from "./thread-outbox-projection";
 
 const environmentId = EnvironmentId.make("environment-1");
 const threadId = ThreadId.make("thread-1");
@@ -251,16 +254,20 @@ describe("thread lifecycle outbox", () => {
       environmentId,
       threadId,
       previousTurnId: null,
+      previousSessionStatus: null,
+      previousSessionUpdatedAt: null,
       threadWasArchived: true,
-      expiresAt: 60_000,
+      expiresAt: 300_000,
     };
     const stillArchived = { ...thread({ archivedAt: "2026-08-20T09:00:00.000Z" }), environmentId };
     const unarchived = { ...stillArchived, archivedAt: null };
 
     expect(threadOutboxProjectionCaughtUp(hold, undefined, "live", 0)).toBe(false);
+    expect(threadOutboxProjectionWakeDelayMs([hold], 0)).toBe(300_000);
     expect(threadOutboxProjectionCaughtUp(hold, stillArchived, "live", 0)).toBe(false);
     expect(threadOutboxProjectionCaughtUp(hold, unarchived, "live", 0)).toBe(false);
-    expect(threadOutboxProjectionCaughtUp(hold, undefined, "live", 60_000)).toBe(true);
+    expect(threadOutboxProjectionCaughtUp(hold, undefined, "live", 300_000)).toBe(true);
+    expect(threadOutboxProjectionWakeDelayMs([hold], 300_000)).toBeNull();
   });
 
   it("clears terminal projection holds and still treats starting as busy", () => {
@@ -268,8 +275,10 @@ describe("thread lifecycle outbox", () => {
       environmentId,
       threadId,
       previousTurnId: null,
+      previousSessionStatus: null,
+      previousSessionUpdatedAt: null,
       threadWasArchived: false,
-      expiresAt: 60_000,
+      expiresAt: 300_000,
     };
     const unchanged = { ...thread(), environmentId };
     const session = (status: "starting" | "error") => ({
@@ -287,6 +296,24 @@ describe("thread lifecycle outbox", () => {
     expect(threadOutboxProjectionCaughtUp(hold, unchanged, "live", 0)).toBe(false);
     expect(threadOutboxProjectionCaughtUp(hold, starting, "live", 0)).toBe(true);
     expect(threadOutboxProjectionCaughtUp(hold, failed, "live", 0)).toBe(true);
+
+    const existingFailureHold = {
+      ...hold,
+      previousSessionStatus: "error" as const,
+      previousSessionUpdatedAt: failed.session.updatedAt,
+    };
+    expect(threadOutboxProjectionCaughtUp(existingFailureHold, failed, "live", 0)).toBe(false);
+    expect(
+      threadOutboxProjectionCaughtUp(
+        existingFailureHold,
+        {
+          ...failed,
+          session: { ...failed.session, updatedAt: "2026-08-20T10:04:00.000Z" },
+        },
+        "live",
+        0,
+      ),
+    ).toBe(true);
     expect(
       resolveThreadLifecycleOutboxAction({
         environmentConnected: true,
@@ -364,30 +391,30 @@ describe("thread lifecycle outbox", () => {
         return { ...candidate, dispatchAttempted: true };
       },
       confirmCurrent: async () => true,
-      readCurrentAction: (attempted) =>
-        resolveThreadLifecycleOutboxAction({
-          environmentConnected: true,
-          shellStatus: "live",
-          messageOutboxReady: true,
-          threadExists: true,
-          threadArchived: false,
-          desiredArchived: attempted.desiredArchived,
-          requiresDispatch: attempted.requiresDispatch,
-          hasQueuedMessages: sameThreadMessageQueued,
-          messageDispatching: false,
-          messageProjectionPending: false,
-          threadBusy: false,
-        }),
     });
 
     await writeStarted;
     sameThreadMessageQueued = true;
     releaseWrite();
 
-    await expect(preparing).resolves.toEqual({
-      intent: { ...archive, dispatchAttempted: true },
-      action: "wait",
-    });
+    const attempted = await preparing;
+    expect(attempted).toEqual({ ...archive, dispatchAttempted: true });
+    if (attempted === null) throw new Error("expected a prepared lifecycle intent");
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        environmentConnected: true,
+        shellStatus: "live",
+        messageOutboxReady: true,
+        threadExists: true,
+        threadArchived: false,
+        desiredArchived: attempted.desiredArchived,
+        requiresDispatch: attempted.requiresDispatch,
+        hasQueuedMessages: sameThreadMessageQueued,
+        messageDispatching: false,
+        messageProjectionPending: false,
+        threadBusy: false,
+      }),
+    ).toBe("wait");
   });
 
   it("preserves an optimistic enqueue that overlaps environment clearing", async () => {

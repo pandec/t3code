@@ -44,11 +44,13 @@ export interface ThreadOutboxDeliveryCommands {
  */
 export interface ThreadOutboxDeliveryContext {
   readonly sessionStatus: OrchestrationSessionStatus | null;
+  readonly sessionUpdatedAt: string | null;
   readonly latestTurnId: TurnId | null;
 }
 
 const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
   sessionStatus: null,
+  sessionUpdatedAt: null,
   latestTurnId: null,
 };
 

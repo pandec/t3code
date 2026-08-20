@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { resolveThreadLifecycleOutboxAction } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
 import {
   CommandId,
   EnvironmentId,
@@ -270,7 +271,7 @@ describe("thread outbox", () => {
     registry.dispose();
   });
 
-  it("degrades to in-memory delivery after bounded hydration retries", () => {
+  it("degrades to in-memory delivery while keeping recovery armed", () => {
     const failure = {
       status: "failed" as const,
       error: new ThreadOutboxManagerError({
@@ -286,9 +287,63 @@ describe("thread outbox", () => {
     expect(resolveThreadOutboxHydrationAction({ status: "loading" }, 0)).toBe("wait");
     expect(resolveThreadOutboxHydrationAction(failure, 0)).toBe("retry");
     expect(resolveThreadOutboxHydrationAction(failure, THREAD_OUTBOX_HYDRATION_MAX_RETRIES)).toBe(
-      "deliver",
+      "recover",
     );
     expect(resolveThreadOutboxHydrationAction({ status: "ready" }, 0)).toBe("deliver");
+  });
+
+  it("hydrates persisted rows after degraded storage recovers", async () => {
+    const registry = AtomRegistry.make();
+    const persisted = queuedMessage({
+      messageId: "persisted-message",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    let storageRecovered = false;
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: {
+        load: async () => {
+          if (!storageRecovered) throw new Error("storage unavailable");
+          return [persisted];
+        },
+        write: async () => undefined,
+        remove: async () => undefined,
+      },
+    });
+
+    await manager.load();
+    expect(
+      resolveThreadOutboxHydrationAction(
+        registry.get(manager.loadStateAtom),
+        THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+      ),
+    ).toBe("recover");
+
+    storageRecovered = true;
+    await manager.load();
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [persisted],
+    });
+
+    const lifecycleInput = {
+      environmentConnected: true,
+      shellStatus: "live" as const,
+      messageOutboxReady: registry.get(manager.loadStateAtom).status === "ready",
+      threadExists: true,
+      threadArchived: false,
+      desiredArchived: true,
+      requiresDispatch: false,
+      hasQueuedMessages: true,
+      messageDispatching: false,
+      messageProjectionPending: false,
+      threadBusy: false,
+    };
+    expect(resolveThreadLifecycleOutboxAction(lifecycleInput)).toBe("wait");
+    expect(
+      resolveThreadLifecycleOutboxAction({ ...lifecycleInput, hasQueuedMessages: false }),
+    ).toBe("archive");
+    registry.dispose();
   });
 
   it("reports structured load failures and permits a retry", async () => {

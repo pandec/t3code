@@ -96,6 +96,7 @@ describe("thread outbox delivery", () => {
 
     const deliveryContext: ThreadOutboxDeliveryContext = {
       sessionStatus: "running",
+      sessionUpdatedAt: "2026-07-24T10:01:00.000Z",
       latestTurnId: TurnId.make("turn-1"),
     };
     await expect(
