@@ -67,6 +67,9 @@ describe("thread outbox delivery", () => {
     const removeQueuedMessage = vi.fn(async () => {
       calls.push("remove");
     });
+    const onStartTurnAccepted = vi.fn(() => {
+      calls.push("start-accepted");
+    });
     const onDelivered = vi.fn(() => {
       calls.push("delivered");
     });
@@ -78,6 +81,7 @@ describe("thread outbox delivery", () => {
         setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
       },
       removeQueuedMessage,
+      onStartTurnAccepted,
       onDelivered,
       warn: () => undefined,
     });
@@ -91,7 +95,9 @@ describe("thread outbox delivery", () => {
     });
 
     const deliveryContext: ThreadOutboxDeliveryContext = {
+      sessionBaselineKnown: true,
       sessionStatus: "running",
+      sessionUpdatedAt: "2026-07-24T10:01:00.000Z",
       latestTurnId: TurnId.make("turn-1"),
     };
     await expect(
@@ -117,8 +123,16 @@ describe("thread outbox delivery", () => {
     });
     // The send-time turn reaches the callback so a steer that joined a running
     // turn can be told apart from one that started its own.
+    expect(onStartTurnAccepted).toHaveBeenCalledWith(message, threadSettings, deliveryContext);
     expect(onDelivered).toHaveBeenCalledWith(message, threadSettings, deliveryContext);
-    expect(calls).toEqual(["metadata", "metadata", "start-turn", "remove", "delivered"]);
+    expect(calls).toEqual([
+      "metadata",
+      "metadata",
+      "start-turn",
+      "start-accepted",
+      "remove",
+      "delivered",
+    ]);
   });
 
   it("does not update branch metadata for legacy messages without a snapshot", async () => {

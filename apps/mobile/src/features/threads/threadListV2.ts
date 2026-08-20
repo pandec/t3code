@@ -183,6 +183,13 @@ export function resolveThreadListV2Enabled(input: {
   return input.legacyPreference !== true;
 }
 
+export function resolveThreadListV2ArchiveQueueEnabled(input: {
+  readonly legacyPreference: boolean | undefined;
+  readonly preferencesLoaded: boolean;
+}): boolean {
+  return input.preferencesLoaded && resolveThreadListV2Enabled(input);
+}
+
 export function resolveThreadListV2Status(
   thread: Pick<
     EnvironmentThreadShell,

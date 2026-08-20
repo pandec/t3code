@@ -4,7 +4,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-outbox-storage";
 import type { MessageId } from "@t3tools/contracts";
 
-import { writeFileAtomically } from "../lib/atomic-file";
+import { createExpoJsonRowStorage } from "./expo-json-row-storage";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
@@ -13,117 +13,53 @@ import {
 
 export { ThreadOutboxStorageError, type ThreadOutboxStorage };
 
-const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
-
-const inFlightWrites = new Set<Promise<void>>();
-
-function trackInFlightWrite(operation: Promise<void>): Promise<void> {
-  inFlightWrites.add(operation);
-  void operation.catch(() => undefined).finally(() => inFlightWrites.delete(operation));
-  return operation;
-}
-
-/**
- * Awaits queued-message writes so an app update restart cannot tear down the
- * runtime while one is mid-file.
- */
-export async function flushThreadOutboxWrites(): Promise<void> {
-  while (inFlightWrites.size > 0) {
-    await Promise.allSettled(inFlightWrites);
-  }
-}
-
 function messageFileName(messageId: MessageId): string {
   return `${encodeURIComponent(messageId)}.json`;
 }
 
-async function getOutboxDirectory() {
-  const { Directory, Paths } = await import("expo-file-system");
-  const directory = new Directory(Paths.document, THREAD_OUTBOX_DIRECTORY);
-  directory.create({ idempotent: true, intermediates: true });
-  return directory;
-}
+const threadOutboxStore = createExpoJsonRowStorage<QueuedThreadMessage>({
+  directoryName: "thread-outbox",
+  fileName: (message) => messageFileName(message.messageId),
+  decode: decodeQueuedThreadMessage,
+  encode: encodeQueuedThreadMessage,
+  invalidRowWarning: "[thread-outbox] ignored invalid persisted message",
+  loadError: (cause) =>
+    new ThreadOutboxStorageError({
+      operation: "load",
+      environmentId: null,
+      threadId: null,
+      messageId: null,
+      fileName: null,
+      cause,
+    }),
+  readError: (fileName, cause) =>
+    new ThreadOutboxStorageError({
+      operation: "read-message",
+      environmentId: null,
+      threadId: null,
+      messageId: null,
+      fileName,
+      cause,
+    }),
+  writeError: (message, fileName, cause) =>
+    new ThreadOutboxStorageError({
+      operation: "write",
+      environmentId: message.environmentId,
+      threadId: message.threadId,
+      messageId: message.messageId,
+      fileName,
+      cause,
+    }),
+  removeError: (message, fileName, cause) =>
+    new ThreadOutboxStorageError({
+      operation: "remove",
+      environmentId: message.environmentId,
+      threadId: message.threadId,
+      messageId: message.messageId,
+      fileName,
+      cause,
+    }),
+});
 
-async function getMessageFile(messageId: MessageId) {
-  const { File } = await import("expo-file-system");
-  return new File(await getOutboxDirectory(), messageFileName(messageId));
-}
-
-export const expoThreadOutboxStorage: ThreadOutboxStorage = {
-  load: async () => {
-    const messages: QueuedThreadMessage[] = [];
-    try {
-      const { File } = await import("expo-file-system");
-      const directory = await getOutboxDirectory();
-
-      for (const entry of directory.list()) {
-        if (!(entry instanceof File) || !entry.name.endsWith(".json")) {
-          continue;
-        }
-        try {
-          messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
-        } catch (cause) {
-          console.warn(
-            "[thread-outbox] ignored invalid persisted message",
-            new ThreadOutboxStorageError({
-              operation: "read-message",
-              environmentId: null,
-              threadId: null,
-              messageId: null,
-              fileName: entry.name,
-              cause,
-            }),
-          );
-        }
-      }
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "load",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        fileName: null,
-        cause,
-      });
-    }
-    return messages;
-  },
-  write: async (message) => {
-    const fileName = messageFileName(message.messageId);
-    try {
-      await trackInFlightWrite(
-        (async () => {
-          const file = await getMessageFile(message.messageId);
-          await writeFileAtomically(file, JSON.stringify(encodeQueuedThreadMessage(message)));
-        })(),
-      );
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "write",
-        environmentId: message.environmentId,
-        threadId: message.threadId,
-        messageId: message.messageId,
-        fileName,
-        cause,
-      });
-    }
-  },
-  remove: async (message) => {
-    const fileName = messageFileName(message.messageId);
-    try {
-      const file = await getMessageFile(message.messageId);
-      if (file.exists) {
-        file.delete();
-      }
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "remove",
-        environmentId: message.environmentId,
-        threadId: message.threadId,
-        messageId: message.messageId,
-        fileName,
-        cause,
-      });
-    }
-  },
-};
+export const expoThreadOutboxStorage: ThreadOutboxStorage = threadOutboxStore.storage;
+export const flushThreadOutboxWrites = threadOutboxStore.flushWrites;

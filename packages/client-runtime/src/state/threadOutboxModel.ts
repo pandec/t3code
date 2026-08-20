@@ -456,14 +456,26 @@ export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): bo
   return message.creation.workspaceMode !== "worktree" || Boolean(message.creation.branch);
 }
 
-function errorMessage(error: unknown): string | null {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "object" && error !== null && "message" in error) {
-    return typeof error.message === "string" ? error.message : null;
-  }
-  return typeof error === "string" ? error : null;
+export function outboxDeliveryErrorMessages(error: unknown): ReadonlyArray<string> {
+  const messages: string[] = [];
+  const visited = new Set<object>();
+
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 5) return;
+    if (typeof value === "string") {
+      messages.push(value);
+      return;
+    }
+    if (typeof value !== "object" || value === null || visited.has(value)) return;
+    visited.add(value);
+    const record = value as Record<string, unknown>;
+    for (const key of ["message", "detail", "cause", "error"] as const) {
+      if (key in record) visit(record[key], depth + 1);
+    }
+  };
+
+  visit(error, 0);
+  return messages;
 }
 
 export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
@@ -475,7 +487,20 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
   ) {
     return true;
   }
-  return isTransportConnectionErrorMessage(errorMessage(error));
+  if (error instanceof Error) {
+    return isTransportConnectionErrorMessage(error.message);
+  }
+  if (typeof error !== "object" || error === null) {
+    return typeof error === "string" && isTransportConnectionErrorMessage(error);
+  }
+  const record = error as Record<string, unknown>;
+  const detail =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.detail === "string"
+        ? record.detail
+        : "";
+  return isTransportConnectionErrorMessage(detail);
 }
 
 export type ThreadOutboxCommandStage = "settings-sync" | "start-turn";

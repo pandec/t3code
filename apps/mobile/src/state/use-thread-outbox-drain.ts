@@ -46,13 +46,24 @@ import {
   threadDetailToShell,
   threadEnvironment,
 } from "./threads";
+import {
+  resolveThreadOutboxHydrationAction,
+  THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+  THREAD_OUTBOX_HYDRATION_RECOVERY_RETRY_MS,
+} from "./thread-outbox-hydration";
 import { noteThreadSteerDispatch } from "./thread-steer-pending";
 import { useAtomCommand } from "./use-atom-command";
 import { useMobilePreferencesHydrated, useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
   editingQueuedMessageIdsAtom,
   expeditedQueuedMessageIdsAtom,
+  noteThreadOutboxStartAccepted,
+  threadOutboxProjectionCaughtUp,
+  threadOutboxProjectionHoldsAtom,
+  threadOutboxProjectionWakeDelayMs,
+  useThreadOutboxLoadState,
   useThreadOutboxMessages,
+  useThreadOutboxProjectionHolds,
   useThreadOutboxShellStatuses,
 } from "./use-thread-outbox";
 import { useRemoteConnectionStatus } from "./use-remote-environment-registry";
@@ -62,13 +73,21 @@ export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).
   Atom.withLabel("mobile:thread-outbox:dispatching-message-id"),
 );
 
-function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
+export const dispatchingQueuedMessageThreadKeyAtom = Atom.make<string | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-outbox:dispatching-message-thread-key"),
+);
+
+function beginDispatchingQueuedMessage(queuedMessageId: MessageId, threadKey: string): void {
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
+  appAtomRegistry.set(dispatchingQueuedMessageThreadKeyAtom, threadKey);
 }
 
 function finishDispatchingQueuedMessage(queuedMessageId: MessageId): void {
   const current = appAtomRegistry.get(dispatchingQueuedMessageIdAtom);
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, current === queuedMessageId ? null : current);
+  if (current !== queuedMessageId) return;
+  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, null);
+  appAtomRegistry.set(dispatchingQueuedMessageThreadKeyAtom, null);
 }
 
 function findThread(
@@ -124,6 +143,8 @@ export function useThreadOutboxDrain(): void {
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const expeditedMessageIds = useAtomValue(expeditedQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const outboxLoadState = useThreadOutboxLoadState();
+  const projectionHolds = useThreadOutboxProjectionHolds();
   // Read live: a changed grace window applies to steers that are still waiting,
   // and to every subsequent send, without a relaunch.
   const steerGraceWindowMs = useSteerGraceWindowMs();
@@ -133,7 +154,10 @@ export function useThreadOutboxDrain(): void {
   const projects = useProjects();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
+  const [hydrationDegraded, setHydrationDegraded] = useState(false);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
+  const hydrationRetryAttemptRef = useRef(0);
+  const hydrationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
   // Threads whose queue is being released as one batch, and the ids that batch
@@ -165,6 +189,38 @@ export function useThreadOutboxDrain(): void {
       }
     }
   }, [connectedEnvironments, dispatchingQueuedMessageId, queuedMessagesByThreadKey]);
+
+  useEffect(() => {
+    const nowMs = Date.now();
+    const retained = Object.entries(projectionHolds).filter(([, hold]) => {
+      const thread = threads.find(
+        (candidate) =>
+          candidate.environmentId === hold.environmentId && candidate.id === hold.threadId,
+      );
+      return !threadOutboxProjectionCaughtUp(
+        hold,
+        thread,
+        shellStatuses.get(hold.environmentId) ?? "empty",
+        nowMs,
+      );
+    });
+    if (retained.length !== Object.keys(projectionHolds).length) {
+      appAtomRegistry.set(threadOutboxProjectionHoldsAtom, Object.fromEntries(retained));
+      return;
+    }
+
+    // An expired hold in a non-live shell waits for the next shell transition;
+    // repeatedly scheduling a zero-delay wake would spin until reconnect.
+    const wakeDelayMs = threadOutboxProjectionWakeDelayMs(
+      retained.map(([, hold]) => hold),
+      nowMs,
+    );
+    if (wakeDelayMs === null) return;
+    const timer = setTimeout(() => {
+      setRetryTick((current) => current + 1);
+    }, wakeDelayMs);
+    return () => clearTimeout(timer);
+  }, [projectionHolds, retryTick, shellStatuses, threads]);
 
   // Keep expedite state only while its row is queued or owned by an in-flight
   // edit/removal. The ownership checks avoid pruning during the manager's
@@ -214,14 +270,63 @@ export function useThreadOutboxDrain(): void {
   }, [preferencesHydrated, queuedMessagesByThreadKey, retryTick, steerGraceWindowMs]);
 
   useEffect(() => {
-    ensureThreadOutboxLoaded();
-    return () => {
-      for (const timer of retryTimersRef.current.values()) {
-        clearTimeout(timer);
+    const hydrationAction = resolveThreadOutboxHydrationAction(
+      outboxLoadState,
+      hydrationRetryAttemptRef.current,
+    );
+    if (hydrationAction === "deliver") {
+      setHydrationDegraded(false);
+      hydrationRetryAttemptRef.current = 0;
+      return;
+    }
+    if (hydrationAction === "wait") return;
+    if (hydrationAction === "load") {
+      setHydrationDegraded(false);
+      void ensureThreadOutboxLoaded();
+      return;
+    }
+    if (hydrationAction === "recover") {
+      if (!hydrationDegraded) {
+        console.warn("[thread-outbox] storage hydration failed; delivering in-memory queue", {
+          attempts: THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+        });
       }
-      retryTimersRef.current.clear();
+      setHydrationDegraded(true);
+      hydrationRetryTimerRef.current = setTimeout(() => {
+        hydrationRetryTimerRef.current = null;
+        void ensureThreadOutboxLoaded();
+      }, THREAD_OUTBOX_HYDRATION_RECOVERY_RETRY_MS);
+      return () => {
+        if (hydrationRetryTimerRef.current !== null) {
+          clearTimeout(hydrationRetryTimerRef.current);
+          hydrationRetryTimerRef.current = null;
+        }
+      };
+    }
+
+    setHydrationDegraded(false);
+    hydrationRetryAttemptRef.current += 1;
+    const delay = threadOutboxRetryDelayMs(hydrationRetryAttemptRef.current);
+    hydrationRetryTimerRef.current = setTimeout(() => {
+      hydrationRetryTimerRef.current = null;
+      void ensureThreadOutboxLoaded();
+    }, delay);
+    return () => {
+      if (hydrationRetryTimerRef.current !== null) {
+        clearTimeout(hydrationRetryTimerRef.current);
+        hydrationRetryTimerRef.current = null;
+      }
     };
-  }, []);
+  }, [hydrationDegraded, outboxLoadState]);
+
+  useEffect(
+    () => () => {
+      if (hydrationRetryTimerRef.current !== null) clearTimeout(hydrationRetryTimerRef.current);
+      for (const timer of retryTimersRef.current.values()) clearTimeout(timer);
+      retryTimersRef.current.clear();
+    },
+    [],
+  );
 
   const delivery = useMemo(
     () =>
@@ -233,6 +338,7 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
+        onStartTurnAccepted: noteThreadOutboxStartAccepted,
         onDelivered: (message, thread, context) => {
           if (thread.archivedAt != null) {
             refreshArchivedThreadsForEnvironment(message.environmentId);
@@ -287,13 +393,17 @@ export function useThreadOutboxDrain(): void {
   );
 
   useEffect(() => {
-    if (dispatchingQueuedMessageId !== null) {
+    if (
+      (outboxLoadState.status !== "ready" && !hydrationDegraded) ||
+      dispatchingQueuedMessageId !== null
+    ) {
       return;
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
       const candidate = selectNextQueuedThreadDispatch(queuedMessages, {
         isHeld: (message) =>
+          Boolean(projectionHolds[threadKey]) ||
           isThreadOutboxMessageWaitingForPreferences(
             message,
             preferencesHydrated,
@@ -362,7 +472,7 @@ export function useThreadOutboxDrain(): void {
             null)
           : null;
 
-      beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+      beginDispatchingQueuedMessage(nextQueuedMessage.messageId, threadKey);
       const removeQueuedMessage = (warning: string) =>
         removeThreadOutboxMessage(nextQueuedMessage).then(
           () => true,
@@ -389,7 +499,10 @@ export function useThreadOutboxDrain(): void {
         // the user may have opened this message in the editor. Re-read that
         // guard and defer to the next drain pass (returning true skips the
         // failure/backoff path) rather than sending a payload being edited.
-        if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
+        if (
+          appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId] ||
+          appAtomRegistry.get(threadOutboxProjectionHoldsAtom)[threadKey]
+        ) {
           return true;
         }
         const freshThread = findThreadIncludingLoadedDetail(
@@ -415,7 +528,9 @@ export function useThreadOutboxDrain(): void {
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
             : freshThreadSettings !== undefined
               ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
+                  sessionBaselineKnown: freshThread !== undefined,
                   sessionStatus: freshThread?.session?.status ?? null,
+                  sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
                   latestTurnId: freshThread?.latestTurn?.turnId ?? null,
                 })
               : Promise.resolve(false);
@@ -468,7 +583,10 @@ export function useThreadOutboxDrain(): void {
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     expeditedMessageIds,
+    hydrationDegraded,
+    outboxLoadState,
     preferencesHydrated,
+    projectionHolds,
     projects,
     queuedMessagesByThreadKey,
     retryTick,

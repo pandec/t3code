@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { resolveThreadLifecycleOutboxAction } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
 import {
   CommandId,
   EnvironmentId,
@@ -25,6 +26,10 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { isThreadOutboxMessageWaitingForPreferences } from "./thread-outbox";
+import {
+  resolveThreadOutboxHydrationAction,
+  THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+} from "./thread-outbox-hydration";
 import { createThreadOutboxManager, ThreadOutboxManagerError } from "./thread-outbox-manager";
 import type { ThreadOutboxStorage } from "./thread-outbox-storage";
 
@@ -257,10 +262,87 @@ describe("thread outbox", () => {
 
     expect(loadCalls).toBe(1);
     expect(removeCalls).toBe(0);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "loading" });
 
     releaseInitialLoad();
     await Promise.all([loading, clearing]);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
+    registry.dispose();
+  });
+
+  it("degrades to in-memory delivery while keeping recovery armed", () => {
+    const failure = {
+      status: "failed" as const,
+      error: new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause: new Error("storage unavailable"),
+      }),
+    };
+
+    expect(resolveThreadOutboxHydrationAction({ status: "idle" }, 0)).toBe("load");
+    expect(resolveThreadOutboxHydrationAction({ status: "loading" }, 0)).toBe("wait");
+    expect(resolveThreadOutboxHydrationAction(failure, 0)).toBe("retry");
+    expect(resolveThreadOutboxHydrationAction(failure, THREAD_OUTBOX_HYDRATION_MAX_RETRIES)).toBe(
+      "recover",
+    );
+    expect(resolveThreadOutboxHydrationAction({ status: "ready" }, 0)).toBe("deliver");
+  });
+
+  it("hydrates persisted rows after degraded storage recovers", async () => {
+    const registry = AtomRegistry.make();
+    const persisted = queuedMessage({
+      messageId: "persisted-message",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    let storageRecovered = false;
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: {
+        load: async () => {
+          if (!storageRecovered) throw new Error("storage unavailable");
+          return [persisted];
+        },
+        write: async () => undefined,
+        remove: async () => undefined,
+      },
+    });
+
+    await manager.load();
+    expect(
+      resolveThreadOutboxHydrationAction(
+        registry.get(manager.loadStateAtom),
+        THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
+      ),
+    ).toBe("recover");
+
+    storageRecovered = true;
+    await manager.load();
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [persisted],
+    });
+
+    const lifecycleInput = {
+      environmentConnected: true,
+      shellStatus: "live" as const,
+      messageOutboxReady: registry.get(manager.loadStateAtom).status === "ready",
+      threadExists: true,
+      threadArchived: false,
+      desiredArchived: true,
+      requiresDispatch: false,
+      hasQueuedMessages: true,
+      messageDispatching: false,
+      messageProjectionPending: false,
+      threadBusy: false,
+    };
+    expect(resolveThreadLifecycleOutboxAction(lifecycleInput)).toBe("wait");
+    expect(
+      resolveThreadLifecycleOutboxAction({ ...lifecycleInput, hasQueuedMessages: false }),
+    ).toBe("archive");
     registry.dispose();
   });
 
@@ -283,7 +365,18 @@ describe("thread outbox", () => {
       warn: (message, error) => warnings.push({ message, error }),
     });
 
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "idle" });
     await manager.load();
+    expect(registry.get(manager.loadStateAtom)).toEqual({
+      status: "failed",
+      error: new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause: loadCause,
+      }),
+    });
     expect(warnings).toEqual([
       {
         message: "[thread-outbox] failed to load persisted messages",
@@ -299,6 +392,7 @@ describe("thread outbox", () => {
 
     await manager.load();
     expect(loadCalls).toBe(2);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     registry.dispose();
   });
 
@@ -698,6 +792,12 @@ describe("thread outbox", () => {
       }),
     ).toBe(true);
     expect(shouldRetryThreadOutboxDelivery(new Error("Thread no longer exists"))).toBe(false);
+    expect(
+      shouldRetryThreadOutboxDelivery({
+        message: "Permission denied",
+        cause: { message: "Socket is not connected" },
+      }),
+    ).toBe(false);
   });
 
   it("retains queued messages when settings synchronization fails before startTurn", () => {

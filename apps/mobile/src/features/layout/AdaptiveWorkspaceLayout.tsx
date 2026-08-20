@@ -492,6 +492,11 @@ function AdaptiveWorkspaceLayoutContent(
     ? Math.max(0, panes.contentPaneWidth - inspectorColumnTargetWidth)
     : null;
 
+  const handleSelectedThreadRemoved = useCallback(() => {
+    setFileInspectorPreferredVisible(false);
+    navigation.dispatch(StackActions.replace("Home"));
+  }, [navigation]);
+
   const handleSelectThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       const params = {
@@ -547,6 +552,7 @@ function AdaptiveWorkspaceLayoutContent(
                   onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                   onNewThreadInProject={handleNewThreadInProject}
                   onSelectThread={handleSelectThread}
+                  onSelectedThreadRemoved={handleSelectedThreadRemoved}
                   onSearchQueryChange={setPrimarySidebarSearchQuery}
                   searchQuery={primarySidebarSearchQuery}
                 />

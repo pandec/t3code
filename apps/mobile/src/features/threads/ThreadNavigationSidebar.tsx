@@ -34,7 +34,11 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
-import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import {
+  mergePendingArchivedThreads,
+  useThreadLifecyclePresentation,
+} from "../../state/thread-lifecycle-outbox";
+import { useThreadListV2State } from "./use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
@@ -167,6 +171,7 @@ interface ThreadNavigationSidebarProps {
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+  readonly onSelectedThreadRemoved: () => void;
   readonly onRequestVisibility: () => void;
   readonly searchQuery: string;
 }
@@ -215,7 +220,12 @@ function ThreadNavigationSidebarPane(
   const insets = useSafeAreaInsets();
   const { themeAppearance: colorScheme } = useAppearancePreferences();
   const projects = useProjects();
-  const threads = useThreadShells();
+  const canonicalThreads = useThreadShells();
+  const threadListV2 = useThreadListV2State();
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
+  const threads = threadListV2.enabled
+    ? threadLifecyclePresentation.activeThreads
+    : canonicalThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [headerIsOverContent, setHeaderIsOverContent] = useState(false);
@@ -224,6 +234,7 @@ function ThreadNavigationSidebarPane(
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const headerIsOverContentRef = useRef(false);
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
+  const threadListV2Enabled = threadListV2.enabled;
   const {
     archiveThread,
     forkThread,
@@ -236,10 +247,13 @@ function ThreadNavigationSidebarPane(
     unpinThread,
     movePinnedThread,
     regenerateThreadTitle,
-  } = useThreadListActions();
+  } = useThreadListActions({
+    offlineArchiveEnabled: threadListV2.archiveQueueEnabled,
+    selectedThreadKey: props.selectedThreadKey,
+    onSelectedThreadRemoved: props.onSelectedThreadRemoved,
+  });
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
-  const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
@@ -406,14 +420,31 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
-  const displayedRecentArchive =
+  const archiveShelfVisible =
     props.searchQuery.trim().length === 0 &&
     !attentionFilter.enabled &&
     options.selectedEnvironmentId === null &&
     options.selectedModel === null &&
-    selectedProjectScope === null
-      ? recentArchive
-      : { threads: [], totalCount: 0 };
+    selectedProjectScope === null;
+  const displayedServerArchive = archiveShelfVisible
+    ? recentArchive
+    : { threads: [], totalCount: 0 };
+  const displayedRecentArchive = useMemo(
+    () =>
+      mergePendingArchivedThreads(
+        displayedServerArchive,
+        archiveShelfVisible ? threadLifecyclePresentation.pendingArchivedThreads : [],
+        archivedSectionVisibleCount,
+        props.selectedThreadKey,
+      ),
+    [
+      archiveShelfVisible,
+      archivedSectionVisibleCount,
+      displayedServerArchive,
+      props.selectedThreadKey,
+      threadLifecyclePresentation.pendingArchivedThreads,
+    ],
+  );
   useEffect(() => {
     if (
       selectedProjectKey !== null &&
@@ -1020,6 +1051,7 @@ function ThreadNavigationSidebarPane(
         onOpenAll={props.onOpenArchivedThreads}
         onUnarchive={unarchiveThread}
         pane="sidebar"
+        pendingThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
         selectedThreadKey={props.selectedThreadKey}
       />
     ) : null;

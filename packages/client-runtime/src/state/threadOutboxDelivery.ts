@@ -43,12 +43,16 @@ export interface ThreadOutboxDeliveryCommands {
  * was already in flight rather than starting one of its own.
  */
 export interface ThreadOutboxDeliveryContext {
+  readonly sessionBaselineKnown: boolean;
   readonly sessionStatus: OrchestrationSessionStatus | null;
+  readonly sessionUpdatedAt: string | null;
   readonly latestTurnId: TurnId | null;
 }
 
 const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
+  sessionBaselineKnown: false,
   sessionStatus: null,
+  sessionUpdatedAt: null,
   latestTurnId: null,
 };
 
@@ -56,6 +60,12 @@ export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
   readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<unknown>;
+  /** Fires after startTurn is accepted, before queue cleanup or projection catch-up. */
+  readonly onStartTurnAccepted?: (
+    message: QueuedThreadMessage,
+    thread: ThreadSettingsSnapshot,
+    context: ThreadOutboxDeliveryContext,
+  ) => void;
   /**
    * Fires once a queued message is delivered and cleaned up, carrying the
    * thread as it looked at send time — that pre-send snapshot is how a caller
@@ -225,6 +235,18 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         createdAt: queuedMessage.createdAt,
       },
     });
+    if (AsyncResult.isSuccess(deliveryResult)) {
+      try {
+        options.onStartTurnAccepted?.(queuedMessage, thread, context);
+      } catch (error) {
+        warn("[thread-outbox] start-accepted callback failed", {
+          environmentId: queuedMessage.environmentId,
+          threadId: queuedMessage.threadId,
+          messageId: queuedMessage.messageId,
+          error,
+        });
+      }
+    }
     const delivered = await completeDelivery(deliveryResult);
     if (delivered) {
       try {

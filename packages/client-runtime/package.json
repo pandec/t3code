@@ -183,6 +183,18 @@
       "types": "./src/state/threadOutboxDelivery.ts",
       "default": "./src/state/threadOutboxDelivery.ts"
     },
+    "./state/thread-lifecycle-outbox-model": {
+      "types": "./src/state/threadLifecycleOutboxModel.ts",
+      "default": "./src/state/threadLifecycleOutboxModel.ts"
+    },
+    "./state/thread-lifecycle-outbox-manager": {
+      "types": "./src/state/threadLifecycleOutboxManager.ts",
+      "default": "./src/state/threadLifecycleOutboxManager.ts"
+    },
+    "./state/thread-lifecycle-outbox-storage": {
+      "types": "./src/state/threadLifecycleOutboxStorage.ts",
+      "default": "./src/state/threadLifecycleOutboxStorage.ts"
+    },
     "./state/thread-steer-pending": {
       "types": "./src/state/threadSteerPending.ts",
       "default": "./src/state/threadSteerPending.ts"
