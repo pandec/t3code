@@ -270,22 +270,28 @@ export function HomeScreen(props: HomeScreenProps) {
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
   );
-  const displayedServerArchive =
+  const archiveShelfVisible =
     props.searchQuery.trim().length === 0 &&
     props.attentionMemberThreadKeys === null &&
     props.selectedEnvironmentId === null &&
     props.selectedProjectKey === null &&
-    props.selectedModel === null
-      ? recentArchive
-      : { threads: [], totalCount: 0 };
+    props.selectedModel === null;
+  const displayedServerArchive = archiveShelfVisible
+    ? recentArchive
+    : { threads: [], totalCount: 0 };
   const displayedRecentArchive = useMemo(
     () =>
       mergePendingArchivedThreads(
         displayedServerArchive,
-        props.pendingArchivedThreads,
+        archiveShelfVisible ? props.pendingArchivedThreads : [],
         archivedSectionVisibleCount,
       ),
-    [archivedSectionVisibleCount, displayedServerArchive, props.pendingArchivedThreads],
+    [
+      archiveShelfVisible,
+      archivedSectionVisibleCount,
+      displayedServerArchive,
+      props.pendingArchivedThreads,
+    ],
   );
   const archivedEnvironmentLabels = useMemo(
     () =>
@@ -1243,6 +1249,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // so the v1 check already covers v2.
   const hasAnyThreads =
     recentArchive.totalCount > 0 ||
+    (threadListV2Enabled && props.pendingArchivedThreads.length > 0) ||
     hasHomeThreadListContent({
       threads: props.threads,
       pendingTaskCount: props.pendingTasks.length,

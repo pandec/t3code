@@ -6,6 +6,7 @@ import {
   resolveThreadLifecycleOutboxAction,
   resolveThreadLifecycleOutboxFailureAction,
   threadLifecycleIntentKey,
+  threadLifecycleRevisionRequiresDispatch,
   type ThreadLifecycleIntent,
 } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
 import type { ThreadLifecycleOutboxStorage } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-storage";
@@ -23,6 +24,7 @@ import {
   deriveThreadLifecyclePresentation,
   mergePendingArchivedThreads,
 } from "./thread-lifecycle-outbox";
+import { threadOutboxProjectionCaughtUp } from "./thread-outbox-projection";
 
 const environmentId = EnvironmentId.make("environment-1");
 const threadId = ThreadId.make("thread-1");
@@ -58,6 +60,7 @@ function intent(overrides: Partial<ThreadLifecycleIntent> = {}): ThreadLifecycle
     threadId,
     desiredArchived: true,
     requiresDispatch: false,
+    dispatchAttempted: false,
     commandId: CommandId.make("command-archive"),
     createdAt: "2026-08-20T10:02:00.000Z",
     baselineArchivedAt: null,
@@ -159,23 +162,64 @@ describe("thread lifecycle outbox", () => {
     ).toBe("discard");
   });
 
-  it("waits behind same-thread messages and active turns", () => {
+  it("waits for message hydration, same-thread delivery, projection, and active work", () => {
     const base = {
       environmentConnected: true,
       shellStatus: "live" as const,
+      messageOutboxReady: true,
       threadExists: true,
       threadArchived: false,
       desiredArchived: true,
       requiresDispatch: false,
       hasQueuedMessages: false,
       messageDispatching: false,
-      hasActiveTurn: false,
+      messageProjectionPending: false,
+      threadBusy: false,
     };
 
+    expect(resolveThreadLifecycleOutboxAction({ ...base, messageOutboxReady: false })).toBe("wait");
     expect(resolveThreadLifecycleOutboxAction({ ...base, hasQueuedMessages: true })).toBe("wait");
     expect(resolveThreadLifecycleOutboxAction({ ...base, messageDispatching: true })).toBe("wait");
-    expect(resolveThreadLifecycleOutboxAction({ ...base, hasActiveTurn: true })).toBe("wait");
+    expect(resolveThreadLifecycleOutboxAction({ ...base, messageProjectionPending: true })).toBe(
+      "wait",
+    );
+    expect(resolveThreadLifecycleOutboxAction({ ...base, threadBusy: true })).toBe("wait");
     expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
+  });
+
+  it("holds the post-delivery projection gap and still treats starting as busy", () => {
+    const hold = { environmentId, threadId, previousTurnId: null };
+    const unchanged = { ...thread(), environmentId };
+    const starting = {
+      ...unchanged,
+      session: {
+        threadId,
+        status: "starting" as const,
+        providerName: null,
+        runtimeMode: "full-access" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-08-20T10:03:00.000Z",
+      },
+    };
+
+    expect(threadOutboxProjectionCaughtUp(hold, unchanged, "live")).toBe(false);
+    expect(threadOutboxProjectionCaughtUp(hold, starting, "live")).toBe(true);
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        environmentConnected: true,
+        shellStatus: "live",
+        messageOutboxReady: true,
+        threadExists: true,
+        threadArchived: false,
+        desiredArchived: true,
+        requiresDispatch: false,
+        hasQueuedMessages: false,
+        messageDispatching: false,
+        messageProjectionPending: false,
+        threadBusy: true,
+      }),
+    ).toBe("wait");
   });
 
   it("keeps an Undo revision when stale archive dispatch cleanup arrives", async () => {
@@ -201,17 +245,105 @@ describe("thread lifecycle outbox", () => {
     registry.dispose();
   });
 
-  it("drops intents for deleted threads and already-desired server state", () => {
+  it("requires a compensating revision only after the prior command may have been sent", async () => {
+    const storage = memoryStorage();
+    const registry = AtomRegistry.make();
+    const manager = createThreadLifecycleOutboxManager({ registry, storage });
+    const archive = intent();
+
+    expect(threadLifecycleRevisionRequiresDispatch(undefined)).toBe(false);
+    expect(threadLifecycleRevisionRequiresDispatch(archive)).toBe(false);
+
+    await manager.enqueue(archive);
+    const attempted = await manager.markDispatchAttempted(archive);
+
+    expect(attempted?.dispatchAttempted).toBe(true);
+    expect(threadLifecycleRevisionRequiresDispatch(attempted ?? undefined)).toBe(true);
+    expect([...storage.rows.values()].map(decodeThreadLifecycleIntent)).toEqual([attempted]);
+    registry.dispose();
+  });
+
+  it("preserves an optimistic enqueue that overlaps environment clearing", async () => {
+    const registry = AtomRegistry.make();
+    const rows = new Map<string, unknown>();
+    let releaseRemove!: () => void;
+    let markRemoveStarted!: () => void;
+    const removeBlocked = new Promise<void>((resolve) => {
+      releaseRemove = resolve;
+    });
+    const removeStarted = new Promise<void>((resolve) => {
+      markRemoveStarted = resolve;
+    });
+    const storage: ThreadLifecycleOutboxStorage = {
+      load: async () => [...rows.values()].map(decodeThreadLifecycleIntent),
+      write: async (candidate) => {
+        rows.set(
+          threadLifecycleIntentKey(candidate.environmentId, candidate.threadId),
+          encodeThreadLifecycleIntent(candidate),
+        );
+      },
+      remove: async (candidate) => {
+        if (candidate.commandId === CommandId.make("command-archive")) {
+          markRemoveStarted();
+          await removeBlocked;
+        }
+        rows.delete(threadLifecycleIntentKey(candidate.environmentId, candidate.threadId));
+      },
+    };
+    const manager = createThreadLifecycleOutboxManager({ registry, storage });
+    const archive = intent();
+    const replacement = intent({
+      commandId: CommandId.make("command-replacement"),
+      createdAt: "2026-08-20T10:04:00.000Z",
+    });
+
+    await manager.enqueue(archive);
+    const clearing = manager.clearEnvironment(environmentId);
+    await removeStarted;
+    const enqueueing = manager.enqueue(replacement);
+
+    expect(registry.get(manager.intentsByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": replacement,
+    });
+    releaseRemove();
+    await Promise.all([clearing, enqueueing]);
+
+    expect(registry.get(manager.intentsByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": replacement,
+    });
+    expect([...rows.values()].map(decodeThreadLifecycleIntent)).toEqual([replacement]);
+    registry.dispose();
+  });
+
+  it("reconciles deleted and already-archived threads only after queued messages", () => {
     const base = {
       environmentConnected: true,
       shellStatus: "live" as const,
+      messageOutboxReady: true,
       desiredArchived: true,
       requiresDispatch: false,
       hasQueuedMessages: false,
       messageDispatching: false,
-      hasActiveTurn: false,
+      messageProjectionPending: false,
+      threadBusy: false,
     };
 
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        ...base,
+        threadExists: false,
+        threadArchived: false,
+        hasQueuedMessages: true,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        ...base,
+        threadExists: true,
+        threadArchived: true,
+        hasQueuedMessages: true,
+      }),
+    ).toBe("wait");
     expect(
       resolveThreadLifecycleOutboxAction({
         ...base,

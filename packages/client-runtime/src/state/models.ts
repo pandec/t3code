@@ -36,6 +36,11 @@ export function scopeThreadShell(
   return { ...thread, environmentId };
 }
 
+export function unScopeThreadShell(thread: EnvironmentThreadShell): OrchestrationThreadShell {
+  const { environmentId: _, ...shell } = thread;
+  return shell;
+}
+
 export function scopeThread(
   environmentId: EnvironmentId,
   thread: OrchestrationThread,

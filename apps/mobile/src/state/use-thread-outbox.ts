@@ -1,11 +1,20 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { ThreadOutboxDeliveryContext } from "@t3tools/client-runtime/state/thread-outbox-delivery";
+import type { QueuedThreadMessage } from "@t3tools/client-runtime/state/thread-outbox-model";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, MessageId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
+import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
+import type { ThreadOutboxProjectionHold } from "./thread-outbox-projection";
+
+export {
+  threadOutboxProjectionCaughtUp,
+  type ThreadOutboxProjectionHold,
+} from "./thread-outbox-projection";
 
 const threadOutboxShellStatusesAtom = Atom.make(
   (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
@@ -19,6 +28,26 @@ const threadOutboxShellStatusesAtom = Atom.make(
     return statuses;
   },
 ).pipe(Atom.withLabel("mobile:thread-outbox:shell-statuses"));
+
+export const threadOutboxProjectionHoldsAtom = Atom.make<
+  Readonly<Record<string, ThreadOutboxProjectionHold>>
+>({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:thread-outbox:projection-holds"));
+
+export function noteThreadOutboxStartAccepted(
+  message: QueuedThreadMessage,
+  context: ThreadOutboxDeliveryContext,
+): void {
+  if (context.sessionStatus === "running") return;
+  const key = scopedThreadKey(message.environmentId, message.threadId);
+  appAtomRegistry.set(threadOutboxProjectionHoldsAtom, {
+    ...appAtomRegistry.get(threadOutboxProjectionHoldsAtom),
+    [key]: {
+      environmentId: message.environmentId,
+      threadId: message.threadId,
+      previousTurnId: context.latestTurnId,
+    },
+  });
+}
 
 /**
  * Queued pending tasks the outbox drain must not deliver right now: the one
@@ -88,6 +117,14 @@ export function releaseEditingQueuedMessage(messageId: MessageId): void {
 
 export function useThreadOutboxMessages() {
   return useAtomValue(threadOutboxManager.queuedMessagesByThreadKeyAtom);
+}
+
+export function useThreadOutboxLoadState() {
+  return useAtomValue(threadOutboxManager.loadStateAtom);
+}
+
+export function useThreadOutboxProjectionHolds() {
+  return useAtomValue(threadOutboxProjectionHoldsAtom);
 }
 
 export function useThreadOutboxShellStatuses() {

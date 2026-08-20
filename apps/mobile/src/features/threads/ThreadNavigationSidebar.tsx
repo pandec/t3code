@@ -171,6 +171,7 @@ interface ThreadNavigationSidebarProps {
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+  readonly onSelectedThreadRemoved: () => void;
   readonly onRequestVisibility: () => void;
   readonly searchQuery: string;
 }
@@ -230,6 +231,7 @@ function ThreadNavigationSidebarPane(
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const headerIsOverContentRef = useRef(false);
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
+  const threadListV2Enabled = useThreadListV2Enabled();
   const {
     archiveThread,
     forkThread,
@@ -242,10 +244,13 @@ function ThreadNavigationSidebarPane(
     unpinThread,
     movePinnedThread,
     regenerateThreadTitle,
-  } = useThreadListActions();
+  } = useThreadListActions({
+    offlineArchiveEnabled: threadListV2Enabled,
+    selectedThreadKey: props.selectedThreadKey,
+    onSelectedThreadRemoved: props.onSelectedThreadRemoved,
+  });
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
-  const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
@@ -412,23 +417,25 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
-  const displayedServerArchive =
+  const archiveShelfVisible =
     props.searchQuery.trim().length === 0 &&
     !attentionFilter.enabled &&
     options.selectedEnvironmentId === null &&
     options.selectedModel === null &&
-    selectedProjectScope === null
-      ? recentArchive
-      : { threads: [], totalCount: 0 };
+    selectedProjectScope === null;
+  const displayedServerArchive = archiveShelfVisible
+    ? recentArchive
+    : { threads: [], totalCount: 0 };
   const displayedRecentArchive = useMemo(
     () =>
       mergePendingArchivedThreads(
         displayedServerArchive,
-        threadLifecyclePresentation.pendingArchivedThreads,
+        archiveShelfVisible ? threadLifecyclePresentation.pendingArchivedThreads : [],
         archivedSectionVisibleCount,
         props.selectedThreadKey,
       ),
     [
+      archiveShelfVisible,
       archivedSectionVisibleCount,
       displayedServerArchive,
       props.selectedThreadKey,

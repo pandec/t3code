@@ -4,7 +4,7 @@ import {
   threadLifecycleIntentKey,
   type ThreadLifecycleIntent,
 } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { scopeThreadShell, type EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo } from "react";
 
@@ -38,6 +38,12 @@ export function confirmThreadLifecycleIntentCurrent(
   intent: ThreadLifecycleIntent,
 ): Promise<boolean> {
   return threadLifecycleOutboxManager.confirmCurrent(intent);
+}
+
+export function markThreadLifecycleIntentDispatchAttempted(
+  intent: ThreadLifecycleIntent,
+): Promise<ThreadLifecycleIntent | null> {
+  return threadLifecycleOutboxManager.markDispatchAttempted(intent);
 }
 
 export function removeThreadLifecycleIntentIfCurrent(
@@ -75,10 +81,7 @@ export function deriveThreadLifecyclePresentation(
 
   for (const [key, intent] of Object.entries(intents)) {
     const canonical = activeByKey.get(key);
-    const snapshot: EnvironmentThreadShell = {
-      ...intent.thread,
-      environmentId: intent.environmentId,
-    };
+    const snapshot = scopeThreadShell(intent.environmentId, intent.thread);
     if (intent.desiredArchived) {
       activeByKey.delete(key);
       pendingArchivedThreadKeys.add(key);

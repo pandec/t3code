@@ -8,9 +8,13 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { isTransportConnectionErrorMessage } from "../errors/index.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
-import { threadOutboxRetryDelayMs } from "./threadOutboxModel.ts";
+import {
+  outboxDeliveryErrorMessages,
+  scopedThreadKey,
+  shouldRetryThreadOutboxDelivery,
+  threadOutboxRetryDelayMs,
+} from "./threadOutboxModel.ts";
 
 const THREAD_LIFECYCLE_OUTBOX_SCHEMA_VERSION = 1;
 
@@ -20,6 +24,7 @@ export const ThreadLifecycleIntentSchema = Schema.Struct({
   threadId: ThreadId,
   desiredArchived: Schema.Boolean,
   requiresDispatch: Schema.Boolean,
+  dispatchAttempted: Schema.Boolean,
   commandId: CommandId,
   createdAt: IsoDateTime,
   baselineArchivedAt: Schema.NullOr(IsoDateTime),
@@ -33,8 +38,10 @@ export interface ThreadLifecycleIntent {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly desiredArchived: boolean;
-  /** Reversals dispatch even when the live shell still shows the baseline state. */
+  /** Reversals dispatch when an earlier revision may have reached the server. */
   readonly requiresDispatch: boolean;
+  /** Persisted before this revision's command may be sent. */
+  readonly dispatchAttempted: boolean;
   readonly commandId: CommandId;
   readonly createdAt: string;
   readonly baselineArchivedAt: string | null;
@@ -53,8 +60,12 @@ export function decodeThreadLifecycleIntent(value: unknown): ThreadLifecycleInte
   return intent;
 }
 
-export function threadLifecycleIntentKey(environmentId: EnvironmentId, threadId: ThreadId): string {
-  return `${environmentId}:${threadId}`;
+export const threadLifecycleIntentKey = scopedThreadKey;
+
+export function threadLifecycleRevisionRequiresDispatch(
+  previous: ThreadLifecycleIntent | undefined,
+): boolean {
+  return previous?.dispatchAttempted === true;
 }
 
 export function groupThreadLifecycleIntents(
@@ -73,15 +84,25 @@ export type ThreadLifecycleOutboxAction = "wait" | "remove" | "archive" | "unarc
 export function resolveThreadLifecycleOutboxAction(input: {
   readonly environmentConnected: boolean;
   readonly shellStatus: EnvironmentShellStatus;
+  readonly messageOutboxReady: boolean;
   readonly threadExists: boolean;
   readonly threadArchived: boolean;
   readonly desiredArchived: boolean;
   readonly requiresDispatch: boolean;
   readonly hasQueuedMessages: boolean;
   readonly messageDispatching: boolean;
-  readonly hasActiveTurn: boolean;
+  readonly messageProjectionPending: boolean;
+  readonly threadBusy: boolean;
 }): ThreadLifecycleOutboxAction {
-  if (!input.environmentConnected || input.shellStatus !== "live") {
+  if (!input.environmentConnected || input.shellStatus !== "live" || !input.messageOutboxReady) {
+    return "wait";
+  }
+  if (
+    input.hasQueuedMessages ||
+    input.messageDispatching ||
+    input.messageProjectionPending ||
+    input.threadBusy
+  ) {
     return "wait";
   }
   if (!input.threadExists && (input.desiredArchived || !input.requiresDispatch)) {
@@ -90,54 +111,17 @@ export function resolveThreadLifecycleOutboxAction(input: {
   if (input.threadArchived === input.desiredArchived && !input.requiresDispatch) {
     return "remove";
   }
-  if (input.hasQueuedMessages || input.messageDispatching || input.hasActiveTurn) {
-    return "wait";
-  }
   return input.desiredArchived ? "archive" : "unarchive";
 }
 
-function errorMessages(error: unknown): ReadonlyArray<string> {
-  const messages: string[] = [];
-  const visited = new Set<object>();
-
-  const visit = (value: unknown, depth: number): void => {
-    if (depth > 5) return;
-    if (typeof value === "string") {
-      messages.push(value);
-      return;
-    }
-    if (typeof value !== "object" || value === null || visited.has(value)) {
-      return;
-    }
-    visited.add(value);
-    const record = value as Record<string, unknown>;
-    for (const key of ["message", "detail", "cause", "error"] as const) {
-      if (key in record) visit(record[key], depth + 1);
-    }
-  };
-
-  visit(error, 0);
-  return messages;
-}
-
 function lifecycleIntentAlreadyFulfilled(error: unknown, desiredArchived: boolean): boolean {
-  const detail = errorMessages(error).join("\n").toLocaleLowerCase();
+  const detail = outboxDeliveryErrorMessages(error).join("\n").toLocaleLowerCase();
   return desiredArchived
     ? detail.includes("already archived") || detail.includes("does not exist")
     : detail.includes("is not archived") || detail.includes("does not exist");
 }
 
-export function shouldRetryThreadLifecycleOutboxDelivery(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "ConnectionTransientError"
-  ) {
-    return true;
-  }
-  return errorMessages(error).some(isTransportConnectionErrorMessage);
-}
+export const shouldRetryThreadLifecycleOutboxDelivery = shouldRetryThreadOutboxDelivery;
 
 export type ThreadLifecycleOutboxFailureAction = "retry" | "fulfilled" | "discard";
 

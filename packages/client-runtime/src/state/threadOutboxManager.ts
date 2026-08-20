@@ -31,6 +31,12 @@ export class ThreadOutboxManagerError extends Schema.TaggedErrorClass<ThreadOutb
   }
 }
 
+export type ThreadOutboxLoadState =
+  | { readonly status: "idle" }
+  | { readonly status: "loading" }
+  | { readonly status: "ready" }
+  | { readonly status: "failed"; readonly error: ThreadOutboxManagerError };
+
 export interface ThreadOutboxManagerOptions {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly storage: ThreadOutboxStorage;
@@ -44,6 +50,10 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
   >({}).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-outbox:queued-messages"));
+  const loadStateAtom = Atom.make<ThreadOutboxLoadState>({ status: "idle" }).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`${options.atomLabel ?? "thread-outbox"}:load-state`),
+  );
   const warn = options.warn ?? (() => undefined);
   let loadPromise: Promise<void> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
@@ -65,24 +75,23 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   };
 
   const load = (): Promise<void> => {
-    if (loadPromise !== null) {
-      return loadPromise;
-    }
+    if (loadPromise !== null) return loadPromise;
+    options.registry.set(loadStateAtom, { status: "loading" });
     loadPromise = serialize(async () => {
       const persistedMessages = await options.storage.load();
       setMessages([...persistedMessages, ...currentMessages()]);
+      options.registry.set(loadStateAtom, { status: "ready" });
     }).catch((cause) => {
+      const error = new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause,
+      });
       loadPromise = null;
-      warn(
-        "[thread-outbox] failed to load persisted messages",
-        new ThreadOutboxManagerError({
-          operation: "load",
-          environmentId: null,
-          threadId: null,
-          messageId: null,
-          cause,
-        }),
-      );
+      options.registry.set(loadStateAtom, { status: "failed", error });
+      warn("[thread-outbox] failed to load persisted messages", error);
     });
     return loadPromise;
   };
@@ -223,6 +232,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
 
   return {
     queuedMessagesByThreadKeyAtom,
+    loadStateAtom,
     serialize,
     load,
     enqueue,

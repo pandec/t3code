@@ -15,6 +15,7 @@ export class ThreadLifecycleOutboxManagerError extends Schema.TaggedErrorClass<T
     operation: Schema.Literals([
       "load",
       "enqueue",
+      "mark-dispatch-attempted",
       "remove",
       "clear-environment-load",
       "clear-environment-remove",
@@ -114,6 +115,30 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
       ),
     );
 
+  const markDispatchAttempted = (
+    intent: ThreadLifecycleIntent,
+  ): Promise<ThreadLifecycleIntent | null> =>
+    serialize(async () => {
+      const key = threadLifecycleIntentKey(intent.environmentId, intent.threadId);
+      const current = currentIntents()[key];
+      if (current?.commandId !== intent.commandId) return null;
+      if (current.dispatchAttempted) return current;
+      const attempted = { ...current, dispatchAttempted: true };
+      try {
+        await options.storage.write(attempted);
+      } catch (cause) {
+        throw new ThreadLifecycleOutboxManagerError({
+          operation: "mark-dispatch-attempted",
+          environmentId: intent.environmentId,
+          threadId: intent.threadId,
+          cause,
+        });
+      }
+      if (currentIntents()[key]?.commandId !== intent.commandId) return null;
+      setIntents({ ...currentIntents(), [key]: attempted });
+      return attempted;
+    });
+
   const removeIfCurrent = (intent: ThreadLifecycleIntent): Promise<boolean> =>
     serialize(async () => {
       const key = threadLifecycleIntentKey(intent.environmentId, intent.threadId);
@@ -124,10 +149,10 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
       delete next[key];
       setIntents(next);
       try {
-        await options.storage.remove(intent);
+        await options.storage.remove(current);
       } catch (cause) {
         if (currentIntents()[key] === undefined) {
-          setIntents({ ...currentIntents(), [key]: intent });
+          setIntents({ ...currentIntents(), [key]: current });
         }
         throw new ThreadLifecycleOutboxManagerError({
           operation: "remove",
@@ -154,14 +179,14 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
         return [];
       });
       const all = groupThreadLifecycleIntents([...persisted, ...Object.values(currentIntents())]);
-      const removedKeys = new Set<string>();
+      const removedCommandIdsByKey = new Map<string, ThreadLifecycleIntent["commandId"]>();
       await Promise.all(
         Object.entries(all)
           .filter(([, intent]) => intent.environmentId === environmentId)
           .map(async ([key, intent]) => {
             try {
               await options.storage.remove(intent);
-              removedKeys.add(key);
+              removedCommandIdsByKey.set(key, intent.commandId);
             } catch (cause) {
               warn(
                 "[thread-lifecycle-outbox] failed to clear persisted intent",
@@ -175,7 +200,15 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
             }
           }),
       );
-      setIntents(Object.fromEntries(Object.entries(all).filter(([key]) => !removedKeys.has(key))));
+      const next = Object.fromEntries(
+        Object.entries(all).filter(
+          ([key, intent]) => removedCommandIdsByKey.get(key) !== intent.commandId,
+        ),
+      );
+      for (const [key, current] of Object.entries(currentIntents())) {
+        if (removedCommandIdsByKey.get(key) !== current.commandId) next[key] = current;
+      }
+      setIntents(next);
     });
 
   return {
@@ -184,6 +217,7 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
     load,
     enqueue,
     confirmCurrent,
+    markDispatchAttempted,
     removeIfCurrent,
     clearEnvironment,
   };

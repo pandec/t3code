@@ -1,8 +1,12 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  unScopeThreadShell,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import { threadLifecycleRevisionRequiresDispatch } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { CommandId } from "@t3tools/contracts";
-import { StackActions, useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -26,8 +30,6 @@ import {
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
-import { useThreadSelection } from "../../state/use-thread-selection";
-import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -70,6 +72,13 @@ function environmentSupportsTitleRegeneration(
 
 type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
 
+interface ThreadActionExecutionResult {
+  readonly succeeded: boolean;
+}
+
+const ACTION_FAILED: ThreadActionExecutionResult = { succeeded: false };
+const ACTION_COMPLETED: ThreadActionExecutionResult = { succeeded: true };
+
 const ACTION_VERBS: Record<ThreadListAction, string> = {
   archive: "archived",
   unarchive: "unarchived",
@@ -98,8 +107,9 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
-/** Resolves to true iff the action was dispatched and succeeded. */
+/** Reports whether the action was dispatched and succeeded. */
 function useThreadActionExecutor(
+  offlineArchiveEnabled: boolean,
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
 ) {
   const archiveMutation = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
@@ -114,7 +124,7 @@ function useThreadActionExecutor(
     async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (inFlightThreadKeys.current.has(key)) {
-        return false;
+        return ACTION_FAILED;
       }
 
       inFlightThreadKeys.current.add(key);
@@ -128,7 +138,7 @@ function useThreadActionExecutor(
             actionFailureTitle(action),
             "This environment's server does not support settling yet. Update the server to use Settle.",
           );
-          return false;
+          return ACTION_FAILED;
         }
         // Settle may only target what effectiveSettled could classify as
         // settled: not starting/running sessions, not threads waiting on
@@ -138,20 +148,20 @@ function useThreadActionExecutor(
             actionFailureTitle(action),
             "This thread still needs attention. Resolve or interrupt it first, then try again.",
           );
-          return false;
+          return ACTION_FAILED;
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
         if (
           action === "archive" &&
-          thread.session?.status === "running" &&
-          thread.session.activeTurnId != null
+          (thread.session?.status === "starting" ||
+            (thread.session?.status === "running" && thread.session.activeTurnId != null))
         ) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
           );
-          return false;
+          return ACTION_FAILED;
         }
 
         const existingIntent = appAtomRegistry.get(
@@ -164,17 +174,18 @@ function useThreadActionExecutor(
         );
         const desiredArchived = action === "archive";
         const shouldQueueLifecycleIntent =
-          (action === "archive" && !environmentConnected) ||
+          (action === "archive" && !environmentConnected && offlineArchiveEnabled) ||
           (action === "unarchive" && existingIntent !== undefined);
         if (shouldQueueLifecycleIntent) {
-          if (existingIntent?.desiredArchived === desiredArchived) return true;
-          const { environmentId: _, ...threadSnapshot } = thread;
+          if (existingIntent?.desiredArchived === desiredArchived) return ACTION_COMPLETED;
+          const threadSnapshot = unScopeThreadShell(thread);
           try {
             await enqueueThreadLifecycleIntent({
               environmentId: thread.environmentId,
               threadId: thread.id,
               desiredArchived,
-              requiresDispatch: existingIntent !== undefined,
+              requiresDispatch: threadLifecycleRevisionRequiresDispatch(existingIntent),
+              dispatchAttempted: false,
               commandId: CommandId.make(uuidv4()),
               createdAt: new Date().toISOString(),
               baselineArchivedAt: existingIntent?.baselineArchivedAt ?? thread.archivedAt,
@@ -187,10 +198,10 @@ function useThreadActionExecutor(
                 ? error.message
                 : `The thread could not be ${ACTION_VERBS[action]}.`,
             );
-            return false;
+            return ACTION_FAILED;
           }
           onCompleted?.(action, thread);
-          return true;
+          return ACTION_COMPLETED;
         }
 
         const result =
@@ -215,7 +226,7 @@ function useThreadActionExecutor(
               });
         if (result._tag === "Failure") {
           Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
-          return false;
+          return ACTION_FAILED;
         }
         // Settled threads stay in the live shell stream; only the archive
         // lifecycle still feeds the archived-snapshot surface.
@@ -223,7 +234,7 @@ function useThreadActionExecutor(
           refreshArchivedThreadsForEnvironment(thread.environmentId);
         }
         onCompleted?.(action, thread);
-        return true;
+        return ACTION_COMPLETED;
       } finally {
         inFlightThreadKeys.current.delete(key);
       }
@@ -232,6 +243,7 @@ function useThreadActionExecutor(
       archiveMutation,
       connectedEnvironments,
       deleteMutation,
+      offlineArchiveEnabled,
       onCompleted,
       settleMutation,
       unarchiveMutation,
@@ -243,7 +255,11 @@ function useThreadActionExecutor(
 }
 
 function useConfirmDeleteThread(
-  executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
+  executeAction: (
+    action: ThreadListAction,
+    thread: EnvironmentThreadShell,
+  ) => Promise<ThreadActionExecutionResult>,
+  onDeleted?: (thread: EnvironmentThreadShell) => void,
 ) {
   return useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -256,7 +272,9 @@ function useConfirmDeleteThread(
             text: "Delete",
             style: "destructive",
             onPress: () => {
-              void executeAction("delete", thread);
+              void executeAction("delete", thread).then((result) => {
+                if (result.succeeded) onDeleted?.(thread);
+              });
             },
           },
         ]);
@@ -268,15 +286,21 @@ function useConfirmDeleteThread(
         confirmText: "Delete",
         destructive: true,
         onConfirm: () => {
-          void executeAction("delete", thread);
+          void executeAction("delete", thread).then((result) => {
+            if (result.succeeded) onDeleted?.(thread);
+          });
         },
       });
     },
-    [executeAction],
+    [executeAction, onDeleted],
   );
 }
 
-export function useThreadListActions(): {
+export function useThreadListActions(options: {
+  readonly offlineArchiveEnabled: boolean;
+  readonly selectedThreadKey?: string | null;
+  readonly onSelectedThreadRemoved?: () => void;
+}): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly forkThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
@@ -292,10 +316,8 @@ export function useThreadListActions(): {
   ) => Promise<boolean>;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
-  const executeAction = useThreadActionExecutor();
+  const executeAction = useThreadActionExecutor(options.offlineArchiveEnabled);
   const navigation = useNavigation();
-  const { layout } = useAdaptiveWorkspaceLayout();
-  const { selectedThread } = useThreadSelection();
   const forkMutation = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
   const forkInFlightThreadKeys = useRef(new Set<string>());
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
@@ -307,24 +329,22 @@ export function useThreadListActions(): {
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
+  const handleSelectedThreadRemoved = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      if (scopedThreadKey(thread.environmentId, thread.id) === options.selectedThreadKey) {
+        options.onSelectedThreadRemoved?.();
+      }
+    },
+    [options.onSelectedThreadRemoved, options.selectedThreadKey],
+  );
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void executeAction("archive", thread).then((succeeded) => {
-        if (!succeeded || !layout.usesSplitView) return;
-        const key = scopedThreadKey(thread.environmentId, thread.id);
-        const queued = appAtomRegistry.get(threadLifecycleOutboxManager.intentsByThreadKeyAtom)[key]
-          ?.desiredArchived;
-        if (
-          queued === true &&
-          selectedThread?.environmentId === thread.environmentId &&
-          selectedThread.id === thread.id
-        ) {
-          navigation.dispatch(StackActions.replace("Home"));
-        }
+      void executeAction("archive", thread).then((result) => {
+        if (result.succeeded) handleSelectedThreadRemoved(thread);
       });
     },
-    [executeAction, layout.usesSplitView, navigation, selectedThread],
+    [executeAction, handleSelectedThreadRemoved],
   );
   // Forking replays the provider conversation into a new thread and opens it,
   // matching the thread screen's fork button.
@@ -376,7 +396,7 @@ export function useThreadListActions(): {
     [forkMutation, navigation],
   );
   const settleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,
+    async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)).succeeded,
     [executeAction],
   );
   const snoozeThread = useCallback(
@@ -468,7 +488,7 @@ export function useThreadListActions(): {
     [unsnoozeMutation],
   );
   const unsettleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)) === true,
+    async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)).succeeded,
     [executeAction],
   );
   const pinThread = useCallback(
@@ -660,7 +680,7 @@ export function useThreadListActions(): {
     [reorderPinnedMutation],
   );
 
-  const confirmDeleteThread = useConfirmDeleteThread(executeAction);
+  const confirmDeleteThread = useConfirmDeleteThread(executeAction, handleSelectedThreadRemoved);
 
   return {
     archiveThread,
@@ -689,7 +709,7 @@ export function useArchivedThreadListActions(
     },
     [onCompleted],
   );
-  const executeAction = useThreadActionExecutor(handleCompleted);
+  const executeAction = useThreadActionExecutor(true, handleCompleted);
   const unarchiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       void executeAction("unarchive", thread);

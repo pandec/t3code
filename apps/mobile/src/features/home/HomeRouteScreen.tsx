@@ -23,6 +23,7 @@ import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
+import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
@@ -49,6 +50,7 @@ export function HomeRouteScreen() {
     [pendingTasks],
   );
   const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
+  const threadListV2Enabled = useThreadListV2Enabled();
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -67,7 +69,7 @@ export function HomeRouteScreen() {
     movePinnedThread,
     regenerateThreadTitle,
     unsettleThread,
-  } = useThreadListActions();
+  } = useThreadListActions({ offlineArchiveEnabled: threadListV2Enabled });
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();

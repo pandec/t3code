@@ -90,6 +90,7 @@ function intent(): ThreadLifecycleIntent {
     threadId,
     desiredArchived: true,
     requiresDispatch: false,
+    dispatchAttempted: false,
     commandId: CommandId.make("command-archive"),
     createdAt: "2026-08-20T10:02:00.000Z",
     baselineArchivedAt: null,

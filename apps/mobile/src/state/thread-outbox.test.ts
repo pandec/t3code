@@ -257,9 +257,11 @@ describe("thread outbox", () => {
 
     expect(loadCalls).toBe(1);
     expect(removeCalls).toBe(0);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "loading" });
 
     releaseInitialLoad();
     await Promise.all([loading, clearing]);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     registry.dispose();
   });
@@ -283,7 +285,18 @@ describe("thread outbox", () => {
       warn: (message, error) => warnings.push({ message, error }),
     });
 
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "idle" });
     await manager.load();
+    expect(registry.get(manager.loadStateAtom)).toEqual({
+      status: "failed",
+      error: new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause: loadCause,
+      }),
+    });
     expect(warnings).toEqual([
       {
         message: "[thread-outbox] failed to load persisted messages",
@@ -299,6 +312,7 @@ describe("thread outbox", () => {
 
     await manager.load();
     expect(loadCalls).toBe(2);
+    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     registry.dispose();
   });
 
