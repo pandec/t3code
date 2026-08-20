@@ -22,11 +22,25 @@ export interface EnvironmentUsage {
   readonly summary: UsageSummary;
 }
 
+/**
+ * How buckets are credited to a provider row.
+ *
+ * `"pool"` credits each bucket to the subscription pool its model spends, so a
+ * gateway-routed request counts against the vendor that billed it. `"source"`
+ * keeps upstream's semantics: each bucket stays with the harness whose
+ * transcript directory it was scanned under.
+ *
+ * Grouping is all that changes — every bucket lands in exactly one row either
+ * way, so the two views sum to the same totals.
+ */
+export type UsageAttribution = "pool" | "source";
+
 export interface ProviderTotals {
   readonly provider: UsageProviderKind;
   readonly costUsd: number;
   readonly totalTokens: number;
   readonly records: number;
+  readonly sessions: number;
   readonly costShare: number;
   readonly tokenShare: number;
 }
@@ -147,28 +161,29 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
-): { readonly buckets: readonly UsageBucket[]; readonly sessions: number } {
+): {
+  readonly buckets: readonly UsageBucket[];
+  readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
+} {
   const ownedProviders = new Set<UsageProviderKind>();
-  let sessions = 0;
+  const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
     const key = fingerprintKey(source.fingerprint);
     if (ownerByFingerprint.get(key) === environment.environmentId) {
-      ownedProviders.add(source.fingerprint.provider);
+      const provider = source.fingerprint.provider;
+      ownedProviders.add(provider);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
-      sessions += source.distinctSessions;
+      sessionsByProvider.set(
+        provider,
+        (sessionsByProvider.get(provider) ?? 0) + source.distinctSessions,
+      );
     }
   }
   return {
-    // Ownership is settled against the provider each bucket was scanned under,
-    // and only then is a gateway-routed bucket credited to the pool it really
-    // spends. Correcting earlier would break the claim that decides whether
-    // this environment may contribute it at all.
-    buckets: environment.summary.buckets
-      .filter((bucket) => ownedProviders.has(bucket.provider))
-      .map(attributeGatewayBucket),
-    sessions,
+    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    sessionsByProvider,
   };
 }
 
@@ -218,7 +233,9 @@ const EMPTY_MERGED: MergedUsage = {
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
+  options?: { readonly attribution?: UsageAttribution },
 ): MergedUsage {
+  const attribution = options?.attribution ?? "pool";
   if (environments.length === 0) return EMPTY_MERGED;
 
   const current: EnvironmentUsage[] = [];
@@ -265,7 +282,7 @@ export function mergeUsage(
 
   const providerAccumulator = new Map<
     UsageProviderKind,
-    { costUsd: number; totalTokens: number; records: number }
+    { costUsd: number; totalTokens: number; records: number; sessions: number }
   >();
   const modelAccumulator = new Map<
     string,
@@ -292,12 +309,34 @@ export function mergeUsage(
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessions: environmentSessions } = ownedContribution(
+    const { buckets: ownedBuckets, sessionsByProvider } = ownedContribution(
       environment,
       ownerByFingerprint,
     );
+    // Ownership is settled against the provider each bucket was scanned under,
+    // and only then is a gateway-routed bucket credited to the pool it really
+    // spends. Correcting earlier would break the claim that decides whether
+    // this environment may contribute it at all.
+    const buckets =
+      attribution === "pool" ? ownedBuckets.map(attributeGatewayBucket) : ownedBuckets;
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
-    sessions += environmentSessions;
+
+    for (const [providerKind, providerSessions] of sessionsByProvider) {
+      sessions += providerSessions;
+      // A session lives in one transcript directory but can spend from both
+      // pools, so a pool row cannot claim it without double counting. Pool
+      // rows carry no session count; the grand total above stays exact.
+      if (attribution === "pool") continue;
+      if (providerSessions === 0) continue;
+      const provider = providerAccumulator.get(providerKind) ?? {
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+        sessions: 0,
+      };
+      provider.sessions += providerSessions;
+      providerAccumulator.set(providerKind, provider);
+    }
 
     for (const bucket of buckets) {
       const tokens = bucketTokens(bucket);
@@ -317,6 +356,7 @@ export function mergeUsage(
         costUsd: 0,
         totalTokens: 0,
         records: 0,
+        sessions: 0,
       };
       provider.costUsd += bucket.costUsd;
       provider.totalTokens += tokens;
@@ -378,6 +418,7 @@ export function mergeUsage(
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       records: totals.records,
+      sessions: totals.sessions,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
     }))

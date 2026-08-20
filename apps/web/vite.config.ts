@@ -114,6 +114,7 @@ const ISOLATED_TEST_FILES = [
   "src/components/Sidebar.logic.test.ts",
   "src/composerDraftStore.test.ts",
   "src/hooks/useTheme.test.ts",
+  "src/lib/terminalCloseConfirm.test.ts",
   "src/localApi.test.ts",
   "src/notifications/turnCompletion.test.ts",
   "src/rpc/requestLatencyState.test.ts",

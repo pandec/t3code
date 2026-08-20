@@ -32,6 +32,7 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useSavedPromptLibrarySync } from "../hooks/useSavedPrompts";
 import { useClientSettings } from "../hooks/useSettings";
+import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -125,6 +126,7 @@ function RootRouteView() {
             <SlowRpcRequestToastCoordinator />
             <HostedStaticEnvironmentBootstrap />
             {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+            {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
             {/* Also under hosted-static: any connected capable environment
                 can go stale and needs the reconnect repair. */}
             <SavedPromptLibrarySync />

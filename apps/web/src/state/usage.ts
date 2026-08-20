@@ -16,7 +16,12 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import {
+  mergeUsage,
+  type EnvironmentUsage,
+  type MergedUsage,
+  type UsageAttribution,
+} from "@t3tools/shared/usageMerge";
 import {
   classifyEnvironmentUsage,
   usageProgress,
@@ -81,7 +86,7 @@ export interface UsageView {
   readonly refresh: () => void;
 }
 
-export function useUsage(input: UsageSummaryInput): UsageView {
+export function useUsage(input: UsageSummaryInput, attribution?: UsageAttribution): UsageView {
   const windowKey = useMemo(
     () =>
       JSON.stringify({
@@ -128,8 +133,8 @@ export function useUsage(input: UsageSummaryInput): UsageView {
           ]
         : [],
     );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments]);
+    return mergeUsage(answered, USAGE_CONTRACT_VERSION, { attribution: attribution ?? "pool" });
+  }, [environments, attribution]);
 
   const progress = usageProgress(environments.map((environment) => environment.state));
 

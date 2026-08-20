@@ -179,11 +179,12 @@ function parseTaskPayload(raw: string): TaskPayload | null {
  *
  * Usage-snapshot rows are deliberately NOT filtered out here. They look inert —
  * ingestion strips `status` from them — but the registry is fed from the
- * underlying runtime event, which it records as a status-less progress that
- * drops and re-adds the task. When `typedUsage` is the only state on the event,
- * the usage row is the *only* row persisted, so skipping it would hide a task
- * the pill is still showing. Replaying it keeps the two in step; they retain
- * `taskType` and `agentId`, so classification is unaffected.
+ * underlying runtime event, which it records as a status-less progress on the
+ * already-live task (it refuses to revive one that is not live). When
+ * `typedUsage` is the only state on the event, the usage row is the *only* row
+ * persisted, so skipping it would hide a task the pill is still showing.
+ * Replaying it keeps the two in step; they retain `taskType` and `agentId`, so
+ * classification is unaffected.
  */
 function livenessKind(
   activityKind: string,

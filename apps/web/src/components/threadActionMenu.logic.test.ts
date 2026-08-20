@@ -18,6 +18,12 @@ function ids(state: ThreadActionMenuState): string[] {
   return buildThreadActionMenuItems(state).map((item) => item.id);
 }
 
+function allIds(state: ThreadActionMenuState): string[] {
+  const flatten = (items: ReturnType<typeof buildThreadActionMenuItems>): string[] =>
+    items.flatMap((item) => [item.id, ...(item.children ? flatten(item.children) : [])]);
+  return flatten(buildThreadActionMenuItems(state));
+}
+
 describe("buildThreadActionMenuItems", () => {
   it("hides lifecycle items when the environment lacks the capabilities", () => {
     expect(
@@ -25,15 +31,15 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "archive", "delete"]);
+    ).toEqual(["rename", "mark-unread", "copy", "archive", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
-    const withBranch = ids({ ...baseState, branch: "feat/menu" });
+    const withBranch = allIds({ ...baseState, branch: "feat/menu" });
     expect(withBranch).toContain("new-thread-on-branch");
     expect(withBranch).toContain("copy-branch");
-    expect(ids(baseState)).not.toContain("new-thread-on-branch");
-    expect(ids(baseState)).not.toContain("copy-branch");
+    expect(allIds(baseState)).not.toContain("new-thread-on-branch");
+    expect(allIds(baseState)).not.toContain("copy-branch");
   });
 
   it("flips lifecycle labels with thread state", () => {
@@ -71,7 +77,7 @@ describe("buildThreadActionMenuItems", () => {
   it("omits the fork-only entries for surfaces that pass no extras", () => {
     expect(ids(baseState)).not.toContain("move-to-top");
     expect(ids(baseState)).not.toContain("fork");
-    expect(ids(baseState).filter((id) => id === "copy-thread-id")).toHaveLength(1);
+    expect(allIds(baseState).filter((id) => id === "copy-thread-id")).toHaveLength(1);
   });
 
   it("adds the fork-only entries when extras are supplied", () => {
@@ -84,20 +90,22 @@ describe("buildThreadActionMenuItems", () => {
       "mark-unread",
       "move-to-top",
       "fork",
-      "copy-path",
-      "copy-thread-id",
+      "copy",
       "archive",
       "delete",
     ]);
   });
 
   it("keeps branch copy before the single upstream-owned thread ID copy", () => {
-    expect(ids({ ...baseState, branch: "main", forkExtras }).slice(-5)).toEqual([
+    const copyItem = buildThreadActionMenuItems({
+      ...baseState,
+      branch: "main",
+      forkExtras,
+    }).find((item) => item.id === "copy");
+    expect(copyItem?.children?.map((child) => child.id)).toEqual([
       "copy-path",
       "copy-branch",
       "copy-thread-id",
-      "archive",
-      "delete",
     ]);
   });
 
@@ -115,6 +123,8 @@ describe("buildThreadActionMenuItems", () => {
     const items = buildThreadActionMenuItems(baseState);
     const archiveItem = items.at(-2);
     expect(archiveItem?.id).toBe("archive");
+    expect(archiveItem?.icon).toBe("archive");
+    expect(archiveItem?.separatorBefore).toBe(true);
     expect(archiveItem?.destructive).toBeFalsy();
     expect(items.at(-1)?.id).toBe("delete");
   });

@@ -1279,7 +1279,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
         // initial run's single call has a guaranteed position.
         const loaderCalls = yield* Ref.get(harness.loaderCalls);
         expect(loaderCalls[0]).toBe("stale");
-        expect([...loaderCalls.slice(1)].sort()).toEqual(["current", "stale"]);
+        expect(loaderCalls.slice(1).sort()).toEqual(["current", "stale"]);
       }),
     ),
   );

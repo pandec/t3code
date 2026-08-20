@@ -132,6 +132,8 @@ describe("mergeUsage", () => {
         ),
       ],
       USAGE_CONTRACT_VERSION,
+      // Per-provider session counts are a source-view concept; see below.
+      { attribution: "source" },
     );
 
     // env-b's claude bucket is dropped, its codex bucket survives.
@@ -140,6 +142,12 @@ describe("mergeUsage", () => {
       "claude",
       "codex",
     ]);
+    expect(merged.sessions).toBe(2);
+    expect(
+      Object.fromEntries(
+        merged.providers.map((provider) => [provider.provider, provider.sessions]),
+      ),
+    ).toEqual({ claude: 1, codex: 1 });
   });
 
   it("excludes an environment reporting an older contract version", () => {
@@ -280,9 +288,44 @@ describe("mergeUsage", () => {
         ),
       ],
       USAGE_CONTRACT_VERSION,
+      { attribution: "source" },
     );
 
     expect(merged.sessions).toBe(1);
+    expect(merged.providers[0]?.sessions).toBe(1);
+  });
+
+  it("keeps sessions off pool rows, where a mixed session cannot be split", () => {
+    // One Claude Code session that reached both model families through the
+    // gateway: the spend splits exactly by bucket, the session does not.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket(), bucket({ model: "gpt-5.6-sol", costUsd: 4 })],
+            [
+              {
+                provider: "claude",
+                hostId: "mac",
+                homePath: "/a/.claude",
+                distinctSessions: 1,
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.sessions).toBe(1);
+    const byProvider = Object.fromEntries(
+      merged.providers.map((provider) => [provider.provider, provider]),
+    );
+    expect(byProvider.claude?.costUsd).toBe(10);
+    expect(byProvider.codex?.costUsd).toBe(4);
+    expect(byProvider.claude?.sessions).toBe(0);
+    expect(byProvider.codex?.sessions).toBe(0);
   });
 
   it("returns empty totals with no environments", () => {
@@ -290,6 +333,30 @@ describe("mergeUsage", () => {
     expect(merged.costUsd).toBe(0);
     expect(merged.daily).toHaveLength(0);
     expect(merged.hourly).toHaveLength(0);
+  });
+
+  it("omits providers with no sessions or usage", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [],
+            [
+              {
+                provider: "claude",
+                hostId: "mac",
+                homePath: "/a/.claude",
+                distinctSessions: 0,
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.providers).toEqual([]);
   });
 
   it("derives hourly totals without losing the daily rollup", () => {
