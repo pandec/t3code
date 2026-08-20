@@ -62,13 +62,21 @@ export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).
   Atom.withLabel("mobile:thread-outbox:dispatching-message-id"),
 );
 
-function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
+export const dispatchingQueuedMessageThreadKeyAtom = Atom.make<string | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-outbox:dispatching-message-thread-key"),
+);
+
+function beginDispatchingQueuedMessage(queuedMessageId: MessageId, threadKey: string): void {
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
+  appAtomRegistry.set(dispatchingQueuedMessageThreadKeyAtom, threadKey);
 }
 
 function finishDispatchingQueuedMessage(queuedMessageId: MessageId): void {
   const current = appAtomRegistry.get(dispatchingQueuedMessageIdAtom);
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, current === queuedMessageId ? null : current);
+  if (current !== queuedMessageId) return;
+  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, null);
+  appAtomRegistry.set(dispatchingQueuedMessageThreadKeyAtom, null);
 }
 
 function findThread(
@@ -362,7 +370,7 @@ export function useThreadOutboxDrain(): void {
             null)
           : null;
 
-      beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+      beginDispatchingQueuedMessage(nextQueuedMessage.messageId, threadKey);
       const removeQueuedMessage = (warning: string) =>
         removeThreadOutboxMessage(nextQueuedMessage).then(
           () => true,

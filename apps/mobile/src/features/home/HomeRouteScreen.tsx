@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
+import { useThreadLifecyclePresentation } from "../../state/thread-lifecycle-outbox";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -29,7 +30,9 @@ import { pendingTaskAttentionKey } from "../threads/threadAttention";
 export function HomeRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
-  const threads = useThreadShells();
+  const canonicalThreads = useThreadShells();
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
+  const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -266,6 +269,8 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
           onUnarchiveThread={unarchiveThread}
+          pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
+          pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}

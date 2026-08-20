@@ -35,6 +35,7 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
+import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
@@ -96,6 +97,8 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingArchivedThreadKeys: ReadonlySet<string>;
   readonly attentionMemberPendingTaskKeys: ReadonlySet<string> | null;
   readonly attentionMemberThreadKeys: ReadonlySet<string> | null;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -267,7 +270,7 @@ export function HomeScreen(props: HomeScreenProps) {
     () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
     [archivedSectionVisibleCount, archivedSnapshots],
   );
-  const displayedRecentArchive =
+  const displayedServerArchive =
     props.searchQuery.trim().length === 0 &&
     props.attentionMemberThreadKeys === null &&
     props.selectedEnvironmentId === null &&
@@ -275,6 +278,15 @@ export function HomeScreen(props: HomeScreenProps) {
     props.selectedModel === null
       ? recentArchive
       : { threads: [], totalCount: 0 };
+  const displayedRecentArchive = useMemo(
+    () =>
+      mergePendingArchivedThreads(
+        displayedServerArchive,
+        props.pendingArchivedThreads,
+        archivedSectionVisibleCount,
+      ),
+    [archivedSectionVisibleCount, displayedServerArchive, props.pendingArchivedThreads],
+  );
   const archivedEnvironmentLabels = useMemo(
     () =>
       Object.fromEntries(
@@ -1370,6 +1382,7 @@ export function HomeScreen(props: HomeScreenProps) {
                   onOpen={props.onSelectThread}
                   onOpenAll={props.onOpenAllArchivedThreads}
                   onUnarchive={props.onUnarchiveThread}
+                  pendingThreadKeys={props.pendingArchivedThreadKeys}
                 />
               </View>
             }

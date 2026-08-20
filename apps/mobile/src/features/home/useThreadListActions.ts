@@ -1,7 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
-import { useNavigation } from "@react-navigation/native";
+import { CommandId } from "@t3tools/contracts";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -9,6 +10,7 @@ import { Alert } from "react-native";
 
 import { showConfirmDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { uuidv4 } from "../../lib/uuid";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import {
   pinOrderKeyBetween,
@@ -17,8 +19,15 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import {
+  enqueueThreadLifecycleIntent,
+  threadLifecycleOutboxManager,
+} from "../../state/thread-lifecycle-outbox";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
+import { useThreadSelection } from "../../state/use-thread-selection";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -98,6 +107,7 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const { connectedEnvironments } = useRemoteConnectionStatus();
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -143,6 +153,46 @@ function useThreadActionExecutor(
           );
           return false;
         }
+
+        const existingIntent = appAtomRegistry.get(
+          threadLifecycleOutboxManager.intentsByThreadKeyAtom,
+        )[key];
+        const environmentConnected = connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === thread.environmentId &&
+            environment.connectionState === "connected",
+        );
+        const desiredArchived = action === "archive";
+        const shouldQueueLifecycleIntent =
+          (action === "archive" && !environmentConnected) ||
+          (action === "unarchive" && existingIntent !== undefined);
+        if (shouldQueueLifecycleIntent) {
+          if (existingIntent?.desiredArchived === desiredArchived) return true;
+          const { environmentId: _, ...threadSnapshot } = thread;
+          try {
+            await enqueueThreadLifecycleIntent({
+              environmentId: thread.environmentId,
+              threadId: thread.id,
+              desiredArchived,
+              requiresDispatch: existingIntent !== undefined,
+              commandId: CommandId.make(uuidv4()),
+              createdAt: new Date().toISOString(),
+              baselineArchivedAt: existingIntent?.baselineArchivedAt ?? thread.archivedAt,
+              thread: existingIntent?.thread ?? threadSnapshot,
+            });
+          } catch (error) {
+            Alert.alert(
+              actionFailureTitle(action),
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : `The thread could not be ${ACTION_VERBS[action]}.`,
+            );
+            return false;
+          }
+          onCompleted?.(action, thread);
+          return true;
+        }
+
         const result =
           action === "unsettle"
             ? // reason "user" pins the thread active: auto-settle stays
@@ -180,6 +230,7 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
+      connectedEnvironments,
       deleteMutation,
       onCompleted,
       settleMutation,
@@ -243,6 +294,8 @@ export function useThreadListActions(): {
 } {
   const executeAction = useThreadActionExecutor();
   const navigation = useNavigation();
+  const { layout } = useAdaptiveWorkspaceLayout();
+  const { selectedThread } = useThreadSelection();
   const forkMutation = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
   const forkInFlightThreadKeys = useRef(new Set<string>());
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
@@ -257,9 +310,21 @@ export function useThreadListActions(): {
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void executeAction("archive", thread);
+      void executeAction("archive", thread).then((succeeded) => {
+        if (!succeeded || !layout.usesSplitView) return;
+        const key = scopedThreadKey(thread.environmentId, thread.id);
+        const queued = appAtomRegistry.get(threadLifecycleOutboxManager.intentsByThreadKeyAtom)[key]
+          ?.desiredArchived;
+        if (
+          queued === true &&
+          selectedThread?.environmentId === thread.environmentId &&
+          selectedThread.id === thread.id
+        ) {
+          navigation.dispatch(StackActions.replace("Home"));
+        }
+      });
     },
-    [executeAction],
+    [executeAction, layout.usesSplitView, navigation, selectedThread],
   );
   // Forking replays the provider conversation into a new thread and opens it,
   // matching the thread screen's fork button.

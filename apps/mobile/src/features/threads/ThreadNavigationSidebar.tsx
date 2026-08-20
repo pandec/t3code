@@ -34,6 +34,10 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
+import {
+  mergePendingArchivedThreads,
+  useThreadLifecyclePresentation,
+} from "../../state/thread-lifecycle-outbox";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
@@ -215,7 +219,9 @@ function ThreadNavigationSidebarPane(
   const insets = useSafeAreaInsets();
   const { themeAppearance: colorScheme } = useAppearancePreferences();
   const projects = useProjects();
-  const threads = useThreadShells();
+  const canonicalThreads = useThreadShells();
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
+  const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [headerIsOverContent, setHeaderIsOverContent] = useState(false);
@@ -406,7 +412,7 @@ function ThreadNavigationSidebarPane(
         : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
     [projectScopes, selectedProjectKey],
   );
-  const displayedRecentArchive =
+  const displayedServerArchive =
     props.searchQuery.trim().length === 0 &&
     !attentionFilter.enabled &&
     options.selectedEnvironmentId === null &&
@@ -414,6 +420,21 @@ function ThreadNavigationSidebarPane(
     selectedProjectScope === null
       ? recentArchive
       : { threads: [], totalCount: 0 };
+  const displayedRecentArchive = useMemo(
+    () =>
+      mergePendingArchivedThreads(
+        displayedServerArchive,
+        threadLifecyclePresentation.pendingArchivedThreads,
+        archivedSectionVisibleCount,
+        props.selectedThreadKey,
+      ),
+    [
+      archivedSectionVisibleCount,
+      displayedServerArchive,
+      props.selectedThreadKey,
+      threadLifecyclePresentation.pendingArchivedThreads,
+    ],
+  );
   useEffect(() => {
     if (
       selectedProjectKey !== null &&
@@ -1020,6 +1041,7 @@ function ThreadNavigationSidebarPane(
         onOpenAll={props.onOpenArchivedThreads}
         onUnarchive={unarchiveThread}
         pane="sidebar"
+        pendingThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
         selectedThreadKey={props.selectedThreadKey}
       />
     ) : null;

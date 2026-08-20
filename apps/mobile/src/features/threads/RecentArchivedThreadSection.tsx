@@ -23,11 +23,15 @@ const ARCHIVED_MENU_ACTIONS: MenuAction[] = [
     attributes: { destructive: true },
   },
 ];
+const PENDING_ARCHIVE_MENU_ACTIONS: MenuAction[] = [
+  { id: "unarchive", title: "Undo archive", image: "arrow.uturn.backward" },
+];
 
 const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
   readonly environmentLabel: string | null;
   readonly project: EnvironmentProject | null;
   readonly thread: EnvironmentThreadShell;
+  readonly isPending: boolean;
   readonly isSelected: boolean;
   readonly onDelete: (thread: EnvironmentThreadShell) => void;
   readonly onOpen: (thread: EnvironmentThreadShell) => void;
@@ -44,12 +48,16 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
   );
   return (
     <ControlPillMenu
-      actions={ARCHIVED_MENU_ACTIONS}
+      actions={props.isPending ? PENDING_ARCHIVE_MENU_ACTIONS : ARCHIVED_MENU_ACTIONS}
       onPressAction={handleMenuAction}
       shouldOpenOnLongPress
     >
       <Pressable
-        accessibilityHint="Opens the archived thread. Sending a message unarchives it."
+        accessibilityHint={
+          props.isPending
+            ? "Opens the thread while its archive is waiting to sync."
+            : "Opens the archived thread. Sending a message unarchives it."
+        }
         accessibilityLabel={props.thread.title}
         accessibilityRole="button"
         accessibilityState={{ selected: props.isSelected }}
@@ -89,13 +97,21 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
               {[props.project?.title, props.environmentLabel].filter(Boolean).join(" · ")}
             </Text>
           </View>
-          <Text className="text-xs tabular-nums text-foreground-tertiary">
-            {relativeTime(
-              props.thread.archivedAt ?? props.thread.updatedAt ?? props.thread.createdAt,
-            )}
+          <Text
+            className={
+              props.isPending
+                ? "text-xs font-t3-medium text-foreground-muted"
+                : "text-xs tabular-nums text-foreground-tertiary"
+            }
+          >
+            {props.isPending
+              ? "Pending"
+              : relativeTime(
+                  props.thread.archivedAt ?? props.thread.updatedAt ?? props.thread.createdAt,
+                )}
           </Text>
           <Pressable
-            accessibilityLabel={`Unarchive ${props.thread.title}`}
+            accessibilityLabel={`${props.isPending ? "Undo archive" : "Unarchive"} ${props.thread.title}`}
             accessibilityRole="button"
             hitSlop={8}
             onPress={(event) => {
@@ -169,6 +185,7 @@ export function RecentArchivedThreadSection(props: {
   readonly onOpen: (thread: EnvironmentThreadShell) => void;
   readonly onOpenAll: () => void;
   readonly onUnarchive: (thread: EnvironmentThreadShell) => void;
+  readonly pendingThreadKeys?: ReadonlySet<string>;
   readonly selectedThreadKey?: string | null;
   readonly pane?: "screen" | "sidebar";
   readonly expanded: boolean;
@@ -178,13 +195,14 @@ export function RecentArchivedThreadSection(props: {
   const projectByKey = new Map(
     props.projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
   );
-  // The open thread keeps its row on a folded shelf, the same exception every
-  // other shelf makes: a split-view detail must never lose its navigation row.
+  // The open thread and pending archives keep their rows on a folded shelf:
+  // split-view navigation stays stable, and offline work remains visible.
   const visibleThreads = props.expanded
     ? props.threads
-    : props.threads.filter(
-        (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
-      );
+    : props.threads.filter((thread) => {
+        const threadKey = scopedThreadKey(thread.environmentId, thread.id);
+        return threadKey === props.selectedThreadKey || props.pendingThreadKeys?.has(threadKey);
+      });
   return (
     <View>
       <ArchivedShelfHeader
@@ -201,6 +219,9 @@ export function RecentArchivedThreadSection(props: {
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
           }
           thread={thread}
+          isPending={
+            props.pendingThreadKeys?.has(scopedThreadKey(thread.environmentId, thread.id)) ?? false
+          }
           isSelected={props.selectedThreadKey === scopedThreadKey(thread.environmentId, thread.id)}
           onDelete={props.onDelete}
           onOpen={props.onOpen}
