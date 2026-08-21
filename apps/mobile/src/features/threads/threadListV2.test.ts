@@ -1248,7 +1248,7 @@ describe("buildThreadListV2ListItems", () => {
       pinnedShelfExpanded: false,
     });
     expect(searched.items.map((item) => item.thread.id)).toEqual(["pinned"]);
-    expect(searched.pinnedShelfHeaderIndex).toBeNull();
+    expect(searched.pinnedShelfHeaderVisible).toBe(false);
 
     const attention = buildThreadListV2Items({
       threads,
@@ -1259,14 +1259,14 @@ describe("buildThreadListV2ListItems", () => {
       attentionMemberThreadKeys: new Set([`${environmentId}:pinned`]),
     });
     expect(attention.items.map((item) => item.thread.id)).toEqual(["pinned"]);
-    expect(attention.pinnedShelfHeaderIndex).toBeNull();
+    expect(attention.pinnedShelfHeaderVisible).toBe(false);
 
     const items = buildThreadListV2ListItems({
       items: searched.items,
       pendingTasks: [],
       pinnedCount: searched.pinnedCount,
       pinnedShelfExpanded: false,
-      pinnedShelfHeaderIndex: searched.pinnedShelfHeaderIndex,
+      pinnedShelfHeaderVisible: searched.pinnedShelfHeaderVisible,
     });
     expect(items.map((item) => item.key)).toEqual([
       `v2-thread:${environmentId}:pinned`,

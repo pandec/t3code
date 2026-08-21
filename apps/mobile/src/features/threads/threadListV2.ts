@@ -292,11 +292,13 @@ export interface ThreadListV2Layout {
   /** Pinned threads matching the current filters, including rows hidden by
       collapse. */
   readonly pinnedCount: number;
-  /** 0 when the pinned shelf header should render, null otherwise. The header
-      steps aside (and the collapse stops applying) while the Attention filter
-      or a search is active — folding rows those modes asked for would answer
-      a different question, the same contract the Older shelf follows. */
-  readonly pinnedShelfHeaderIndex: number | null;
+  /** Whether the pinned shelf header should render. Unlike the other
+      shelves, pinned is structurally always the leading block, so it needs a
+      visibility flag rather than a header index. The header steps aside (and
+      the collapse stops applying) while the Attention filter or a search is
+      active — folding rows those modes asked for would answer a different
+      question, the same contract the Older shelf follows. */
+  readonly pinnedShelfHeaderVisible: boolean;
   /** Threads folded under the Older shelf, including rows hidden by collapse. */
   readonly olderCount: number;
   /** Index in `items` where the Older shelf header belongs. */
@@ -390,9 +392,11 @@ export function buildThreadListV2ListItems(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly pinnedCount?: number;
   readonly pinnedShelfExpanded?: boolean;
-  /** Null hides the pinned shelf header (Attention filter or search active)
-      while its rows still render. Absent = header whenever rows exist. */
-  readonly pinnedShelfHeaderIndex?: number | null;
+  /** False hides the pinned shelf header (Attention filter or search active)
+      while its rows still render. Absent = header whenever anything is
+      pinned; callers building from a real layout should always pass the
+      layout's flag, or a collapsed shelf leaks into those modes. */
+  readonly pinnedShelfHeaderVisible?: boolean;
   readonly olderCount?: number;
   readonly olderShelfExpanded?: boolean;
   readonly olderShelfHeaderIndex?: number | null;
@@ -438,9 +442,10 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   // Pinned rows lead the list under their own collapsible shelf header;
   // close them with the same rule the web sidebar draws, so the inbox reads
-  // as its own block. The header renders whenever anything is pinned (the
-  // count is the whole footprint when collapsed); rows only when expanded,
-  // or for the thread currently open.
+  // as its own block. While the header shows, the count is the whole
+  // footprint when collapsed and rows render only when expanded (or for the
+  // thread currently open); under the Attention filter or a search the
+  // layout hides the header and the rows render unconditionally.
   let pinnedEnd = 0;
   while (pinnedEnd < activeEnd) {
     const item = threadItems[pinnedEnd];
@@ -448,14 +453,9 @@ export function buildThreadListV2ListItems(input: {
     pinnedEnd += 1;
   }
   const pinnedCount = input.pinnedCount ?? pinnedEnd;
-  const pinnedShelfHeaderIndex =
-    input.pinnedShelfHeaderIndex !== undefined
-      ? input.pinnedShelfHeaderIndex
-      : pinnedCount > 0
-        ? 0
-        : null;
+  const pinnedShelfHeaderVisible = input.pinnedShelfHeaderVisible ?? true;
   const result: ThreadListV2ListItem[] = [];
-  if (pinnedShelfHeaderIndex !== null && pinnedCount > 0) {
+  if (pinnedShelfHeaderVisible && pinnedCount > 0) {
     result.push({
       type: "v2-pinned-shelf",
       key: "v2-pinned-shelf",
@@ -784,7 +784,7 @@ export function buildThreadListV2Items(input: {
     items,
     hiddenSettledCount: orderedSettled.length - pagedSettled.length,
     pinnedCount: orderedPinned.length,
-    pinnedShelfHeaderIndex: orderedPinned.length > 0 && pinnedShelfCollapsible ? 0 : null,
+    pinnedShelfHeaderVisible: orderedPinned.length > 0 && pinnedShelfCollapsible,
     olderCount: orderedOlder.length,
     olderShelfHeaderIndex,
     snoozedCount: orderedSnoozed.length,

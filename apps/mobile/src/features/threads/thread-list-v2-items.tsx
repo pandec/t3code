@@ -211,6 +211,8 @@ export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShe
       accessibilityRole="button"
       accessibilityState={{ expanded: props.expanded }}
       className={cn(
+        // mt-2 rather than the sibling headers' mt-4: this header leads the
+        // list, so it only needs breathing room from the list edge.
         "mb-1.5 mt-2 flex-row items-center gap-2.5",
         props.pane === "sidebar" ? "px-3" : "px-5",
       )}
