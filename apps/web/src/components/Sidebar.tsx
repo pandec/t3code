@@ -2899,16 +2899,20 @@ export default function Sidebar() {
     [setPinnedShelfExpanded],
   );
   // Same exception every other shelf makes: the open thread keeps its row,
-  // so a folded pinned block never hides the thread being read.
+  // so a folded pinned block never hides the thread being read. The collapse
+  // also stops applying (and the header steps aside) while the Attention
+  // filter is on: it already narrowed the list to rows the user asked to
+  // see, and folding a subset of them away would answer a different
+  // question — the same contract the Older shelf follows.
   const visiblePinnedThreads = useMemo(() => {
-    if (pinnedShelfExpanded) return pinnedThreads;
+    if (pinnedShelfExpanded || attentionFilterEnabled) return pinnedThreads;
     if (routeThreadKey === null) return [];
     const routeThread = pinnedThreads.find(
       (thread) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
     );
     return routeThread === undefined ? [] : [routeThread];
-  }, [pinnedShelfExpanded, pinnedThreads, routeThreadKey]);
+  }, [attentionFilterEnabled, pinnedShelfExpanded, pinnedThreads, routeThreadKey]);
   // The Older shelf's starting state comes from Extras; toggling it writes a
   // per-device preference that outranks the setting from then on.
   const [olderShelfExpanded, setOlderShelfExpanded] = useLocalStorage(
@@ -4725,13 +4729,14 @@ export default function Sidebar() {
                   // Pinned rows render in the one shared pinned order; only
                   // reorder-capable rows register as sortable (legacy-server
                   // pins render in place as plain rows).
-                  const renderedPinnedThreads = pinnedShelfExpanded
-                    ? orderedPinnedThreads
-                    : orderedPinnedThreads.filter(
-                        (thread) =>
-                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                          routeThreadKey,
-                      );
+                  const renderedPinnedThreads =
+                    pinnedShelfExpanded || attentionFilterEnabled
+                      ? orderedPinnedThreads
+                      : orderedPinnedThreads.filter(
+                          (thread) =>
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                            routeThreadKey,
+                        );
                   const items: ReactNode[] = [
                     <SidebarDraftBlock
                       key="draft-sessions"
@@ -4744,7 +4749,7 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
-                    pinnedThreads.length > 0 ? (
+                    pinnedThreads.length > 0 && !attentionFilterEnabled ? (
                       <li
                         key="pinned-shelf-header"
                         data-thread-selection-safe

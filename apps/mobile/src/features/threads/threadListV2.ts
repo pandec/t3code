@@ -292,6 +292,11 @@ export interface ThreadListV2Layout {
   /** Pinned threads matching the current filters, including rows hidden by
       collapse. */
   readonly pinnedCount: number;
+  /** 0 when the pinned shelf header should render, null otherwise. The header
+      steps aside (and the collapse stops applying) while the Attention filter
+      or a search is active — folding rows those modes asked for would answer
+      a different question, the same contract the Older shelf follows. */
+  readonly pinnedShelfHeaderIndex: number | null;
   /** Threads folded under the Older shelf, including rows hidden by collapse. */
   readonly olderCount: number;
   /** Index in `items` where the Older shelf header belongs. */
@@ -385,6 +390,9 @@ export function buildThreadListV2ListItems(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly pinnedCount?: number;
   readonly pinnedShelfExpanded?: boolean;
+  /** Null hides the pinned shelf header (Attention filter or search active)
+      while its rows still render. Absent = header whenever rows exist. */
+  readonly pinnedShelfHeaderIndex?: number | null;
   readonly olderCount?: number;
   readonly olderShelfExpanded?: boolean;
   readonly olderShelfHeaderIndex?: number | null;
@@ -440,8 +448,14 @@ export function buildThreadListV2ListItems(input: {
     pinnedEnd += 1;
   }
   const pinnedCount = input.pinnedCount ?? pinnedEnd;
+  const pinnedShelfHeaderIndex =
+    input.pinnedShelfHeaderIndex !== undefined
+      ? input.pinnedShelfHeaderIndex
+      : pinnedCount > 0
+        ? 0
+        : null;
   const result: ThreadListV2ListItem[] = [];
-  if (pinnedCount > 0) {
+  if (pinnedShelfHeaderIndex !== null && pinnedCount > 0) {
     result.push({
       type: "v2-pinned-shelf",
       key: "v2-pinned-shelf",
@@ -700,8 +714,12 @@ export function buildThreadListV2Items(input: {
         );
 
   const orderedPinned = sortPinnedThreadsByOrderKey(pinned);
+  // The collapse must never hide rows the Attention filter or a search asked
+  // for, so the shelf only folds (and only draws its header) outside those
+  // modes — the same contract the Older shelf follows.
+  const pinnedShelfCollapsible = input.attentionMemberThreadKeys == null && query.length === 0;
   const visiblePinned =
-    input.pinnedShelfExpanded !== false
+    !pinnedShelfCollapsible || input.pinnedShelfExpanded !== false
       ? orderedPinned
       : orderedPinned.filter(
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
@@ -766,6 +784,7 @@ export function buildThreadListV2Items(input: {
     items,
     hiddenSettledCount: orderedSettled.length - pagedSettled.length,
     pinnedCount: orderedPinned.length,
+    pinnedShelfHeaderIndex: orderedPinned.length > 0 && pinnedShelfCollapsible ? 0 : null,
     olderCount: orderedOlder.length,
     olderShelfHeaderIndex,
     snoozedCount: orderedSnoozed.length,

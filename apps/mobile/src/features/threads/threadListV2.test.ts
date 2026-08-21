@@ -1232,6 +1232,48 @@ describe("buildThreadListV2ListItems", () => {
     expect(header?.type === "v2-pinned-shelf" && header.count).toBe(2);
   });
 
+  it("ignores the pinned collapse while searching or the Attention filter is on", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("pinned"),
+        title: "pinned needle",
+        pinnedAt: "2026-06-01T10:00:00.000Z",
+      }),
+    ];
+    const searched = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "needle",
+      now: NOW,
+      pinnedShelfExpanded: false,
+    });
+    expect(searched.items.map((item) => item.thread.id)).toEqual(["pinned"]);
+    expect(searched.pinnedShelfHeaderIndex).toBeNull();
+
+    const attention = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      attentionMemberThreadKeys: new Set([`${environmentId}:pinned`]),
+    });
+    expect(attention.items.map((item) => item.thread.id)).toEqual(["pinned"]);
+    expect(attention.pinnedShelfHeaderIndex).toBeNull();
+
+    const items = buildThreadListV2ListItems({
+      items: searched.items,
+      pendingTasks: [],
+      pinnedCount: searched.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: searched.pinnedShelfHeaderIndex,
+    });
+    expect(items.map((item) => item.key)).toEqual([
+      `v2-thread:${environmentId}:pinned`,
+      "v2-pinned-divider",
+    ]);
+  });
+
   it("omits the pinned divider when nothing is pinned", () => {
     const items = buildThreadListV2ListItems({
       items: layout.items,
