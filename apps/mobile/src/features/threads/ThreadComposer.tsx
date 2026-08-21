@@ -107,6 +107,7 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
 import { RUNTIME_MODE_CHOICES } from "./thread-settings-options";
 import { threadComposerSendLabel } from "./threadComposerSendLabel";
 import {
@@ -952,7 +953,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         });
       }
 
-      return [...builtIn, ...providerCommands];
+      const skillItems = providerSkills
+        .filter((skill) => matchesSlashSkillQuery(skill, q))
+        .map((skill) => ({
+          id: `skill:${skill.name}`,
+          type: "skill" as const,
+          skill,
+          label: `skill:${skill.name}`,
+          description: skill.shortDescription ?? skill.description ?? "",
+        }));
+
+      return [...builtIn, ...providerCommands, ...skillItems];
     }
 
     if (composerTrigger.kind === "skill") {

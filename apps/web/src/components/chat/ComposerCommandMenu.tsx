@@ -100,6 +100,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                 <ComposerCommandMenuItem
                   key={item.id}
                   item={item}
+                  triggerKind={props.triggerKind}
                   resolvedTheme={props.resolvedTheme}
                   isActive={props.activeItemId === item.id}
                   onHighlight={props.onHighlightedItemChange}
@@ -131,6 +132,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   item: ComposerCommandItem;
+  triggerKind: ComposerTriggerKind | null;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
   onHighlight: (itemId: string | null) => void;
@@ -142,6 +144,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   // inserted reference is a pointer for the user rather than a trigger. The
   // source itself is the leading icon.
   const isManualSkill = props.item.type === "skill" && isProviderSkillManualOnly(props.item.skill);
+  const slashSkill =
+    props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
 
   return (
     <CommandItem
@@ -167,11 +171,20 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           kind={props.item.pathKind}
           theme={props.resolvedTheme}
         />
-      ) : skillSourceKind ? (
+      ) : skillSourceKind && !slashSkill ? (
         <SkillSourceIcon kind={skillSourceKind} />
       ) : null}
       <span className="flex min-w-0 flex-1 items-baseline gap-3">
-        <span className="shrink-0 font-sans text-xs font-medium">{props.item.label}</span>
+        <span className="shrink-0 font-sans text-xs font-medium">
+          {slashSkill ? (
+            <>
+              <span className="text-secondary-label">skill:</span>
+              {slashSkill.name}
+            </>
+          ) : (
+            props.item.label
+          )}
+        </span>
         <span className="min-w-0 flex-1 truncate text-right text-secondary-label text-xs">
           {props.item.description}
         </span>

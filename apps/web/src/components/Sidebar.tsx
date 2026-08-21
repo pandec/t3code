@@ -105,6 +105,7 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { useShortcutModifierState } from "../shortcutModifierState";
+import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -154,6 +155,7 @@ import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
 import {
+  animatePinnedLayoutChanges,
   canArchiveThreadNow,
   admitNewSidebarV2AttentionThreads,
   createSidebarV2AttentionFilter,
@@ -209,11 +211,10 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
-  deriveProviderInstanceEntries,
+  deriveProviderEntriesByEnvironment,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
-import { primaryServerProvidersAtom } from "../state/server";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
@@ -301,6 +302,8 @@ function WorkingDuration(props: { startedAt: string | null }) {
     </span>
   );
 }
+
+const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new Map();
 
 function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
@@ -546,6 +549,7 @@ function SortablePinnedThreadRow(props: {
 }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
+    animateLayoutChanges: animatePinnedLayoutChanges,
   });
   return props.children({ listeners, setNodeRef, transform, transition, isDragging });
 }
@@ -840,7 +844,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   accentTintIntensityPercent: AccentTintIntensityPercent;
   compactCards: boolean;
   providerIconVisibility: SidebarThreadProviderIconVisibility;
-  providerEntriesByEnvironmentId: ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>;
+  providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -1045,15 +1049,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   ]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const environmentProviderEntries = props.providerEntriesByEnvironmentId.get(thread.environmentId);
-  const providerEntry = environmentProviderEntries?.get(modelInstanceId) ?? null;
+  const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
   // Peers come from this row's own environment: "is this account one of
   // several?" is a per-environment question, and a flat registry would badge
   // by an unrelated environment's instance list.
   const showInstanceBadge =
     providerEntry !== null &&
-    shouldShowInstanceBadge(providerEntry, (environmentProviderEntries ?? new Map()).values());
+    shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1853,8 +1856,6 @@ function latestTurnDiff(
   return null;
 }
 
-const EMPTY_PROVIDER_INSTANCE_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new Map();
-
 const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   thread: SidebarThreadSummary;
   projectCwd: string | null;
@@ -2162,22 +2163,18 @@ export default function Sidebar() {
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const providerEntriesByEnvironmentId = useMemo<
-    ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>>
-  >(() => {
-    const entriesByEnvironmentId = new Map<string, ReadonlyMap<string, ProviderInstanceEntry>>();
-    for (const [environmentId, config] of serverConfigs) {
-      entriesByEnvironmentId.set(
-        environmentId,
-        new Map(
-          deriveProviderInstanceEntries(config.providers).map(
-            (entry) => [entry.instanceId as string, entry] as const,
-          ),
+  // Threads on non-primary environments (T3 Connect, hosted) resolve their
+  // provider entry from their own environment's config: default instance ids
+  // are driver slugs, so a flat map would collide across environments.
+  const providerEntriesByEnvironment = useMemo(
+    () =>
+      deriveProviderEntriesByEnvironment(
+        [...serverConfigs].map(
+          ([environmentId, config]) => [environmentId, config.providers] as const,
         ),
-      );
-    }
-    return entriesByEnvironmentId;
-  }, [serverConfigs]);
+      ),
+    [serverConfigs],
+  );
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -4068,10 +4065,18 @@ export default function Sidebar() {
   // match a thread-jump binding. Adding Shift (screenshots) or Alt no
   // longer matches ⌘1..9, so the overlay hides for chords like ⌘⇧4.
   const shortcutModifiers = useShortcutModifierState();
+  const terminalFocused = useTerminalFocus();
   const shouldShowJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
     shortcutModifiers,
     keybindings,
-    { platform: navigator.platform },
+    {
+      platform: navigator.platform,
+      context: {
+        terminalFocus: terminalFocused,
+        terminalOpen: routeTerminalOpen,
+        modelPickerOpen: isModelPickerOpen(),
+      },
+    },
   );
   useEffect(() => {
     setShowJumpHints(shouldShowJumpHintsNow);
@@ -4493,8 +4498,8 @@ export default function Sidebar() {
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         providerEntryByInstanceId={
-                          providerEntriesByEnvironmentId.get(thread.environmentId) ??
-                          EMPTY_PROVIDER_INSTANCE_ENTRIES
+                          providerEntriesByEnvironment.get(thread.environmentId) ??
+                          EMPTY_PROVIDER_ENTRIES
                         }
                         isHighlighted={activeSearchResultIndex === index}
                         isRouteActive={routeThreadKey === threadKey}
@@ -4625,7 +4630,10 @@ export default function Sidebar() {
                         accentTintIntensityPercent={accentTint.intensityPercent}
                         compactCards={compactCards}
                         providerIconVisibility={providerIconVisibility}
-                        providerEntriesByEnvironmentId={providerEntriesByEnvironmentId}
+                        providerEntryByInstanceId={
+                          providerEntriesByEnvironment.get(thread.environmentId) ??
+                          EMPTY_PROVIDER_ENTRIES
+                        }
                         timestampFormat={timestampFormat}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}
@@ -4667,36 +4675,45 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
-                    <DndContext
-                      key="pinned-dnd"
-                      sensors={pinnedDndSensors}
-                      collisionDetection={closestCenter}
-                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                      onDragEnd={handlePinnedDragEnd}
-                    >
-                      <SortableContext
-                        items={orderedPinnedThreads
-                          .map((thread) =>
-                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                          )
-                          .filter((threadKey) => reorderablePinnedKeys.has(threadKey))}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {orderedPinnedThreads.map((thread) => {
-                          const threadKey = scopedThreadKey(
-                            scopeThreadRef(thread.environmentId, thread.id),
-                          );
-                          if (!reorderablePinnedKeys.has(threadKey)) {
-                            return renderThreadRow(thread, "pinned");
-                          }
-                          return (
-                            <SortablePinnedThreadRow key={threadKey} id={threadKey}>
-                              {(bag) => renderThreadRow(thread, "pinned", bag)}
-                            </SortablePinnedThreadRow>
-                          );
-                        })}
-                      </SortableContext>
-                    </DndContext>,
+                    pinnedThreads.length > 0 ? (
+                      <li key="pinned-dnd" className="list-none">
+                        <DndContext
+                          sensors={pinnedDndSensors}
+                          collisionDetection={closestCenter}
+                          modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                          onDragEnd={handlePinnedDragEnd}
+                        >
+                          <SortableContext
+                            items={orderedPinnedThreads
+                              .map((thread) =>
+                                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                              )
+                              .filter((threadKey) => reorderablePinnedKeys.has(threadKey))}
+                            strategy={verticalListSortingStrategy}
+                          >
+                            <ul
+                              role="list"
+                              aria-label="Pinned threads"
+                              className="flex flex-col gap-px"
+                            >
+                              {orderedPinnedThreads.map((thread) => {
+                                const threadKey = scopedThreadKey(
+                                  scopeThreadRef(thread.environmentId, thread.id),
+                                );
+                                if (!reorderablePinnedKeys.has(threadKey)) {
+                                  return renderThreadRow(thread, "pinned");
+                                }
+                                return (
+                                  <SortablePinnedThreadRow key={threadKey} id={threadKey}>
+                                    {(bag) => renderThreadRow(thread, "pinned", bag)}
+                                  </SortablePinnedThreadRow>
+                                );
+                              })}
+                            </ul>
+                          </SortableContext>
+                        </DndContext>
+                      </li>
+                    ) : null,
                   ];
                   if (pinnedThreads.length > 0) {
                     items.push(
@@ -4936,7 +4953,7 @@ export default function Sidebar() {
                   <button
                     type="button"
                     onClick={openAddProjectCommandPalette}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project

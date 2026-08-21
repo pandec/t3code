@@ -112,6 +112,7 @@ const ISOLATED_TEST_FILES = [
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/Sidebar.logic.test.ts",
+  "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/terminalCloseConfirm.test.ts",

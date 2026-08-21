@@ -173,9 +173,9 @@ export const make = Effect.gen(function* () {
                   threadId: command.threadId,
                 }),
               ),
-              Effect.ignoreCause({ log: true }),
+              Effect.as(true),
             )
-          : Effect.void;
+          : Effect.succeed(false);
 
       // Only when this bootstrap also created the thread: a prepareWorktree-only
       // bootstrap runs against a pre-existing thread whose metadata may already
@@ -383,9 +383,38 @@ export const make = Effect.gen(function* () {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.fail(dispatchError);
           }
-          return cleanupCreatedThread().pipe(
-            Effect.flatMap(() => cleanupCreatedWorktree()),
-            Effect.flatMap(() => Effect.fail(dispatchError)),
+          // Uninterruptible so a client disconnect mid-cleanup cannot leave a
+          // half-deleted thread; a successful delete is reported to the client
+          // so it can retry the bootstrap with a fresh thread id.
+          return Effect.uninterruptible(
+            cleanupCreatedThread().pipe(
+              Effect.matchCauseEffect({
+                onFailure: (cleanupCause) =>
+                  Effect.logWarning("bootstrap thread cleanup failed", {
+                    threadId: command.threadId,
+                    detail: Cause.pretty(cleanupCause),
+                  }).pipe(
+                    Effect.flatMap(() => cleanupCreatedWorktree()),
+                    Effect.flatMap(() => Effect.fail(dispatchError)),
+                  ),
+                onSuccess: (threadDeleted) =>
+                  cleanupCreatedWorktree().pipe(
+                    Effect.flatMap(() =>
+                      Effect.fail(
+                        threadDeleted
+                          ? new OrchestrationDispatchCommandError({
+                              message: dispatchError.message,
+                              ...(dispatchError.cause !== undefined
+                                ? { cause: dispatchError.cause }
+                                : {}),
+                              bootstrapThreadDisposition: "deleted",
+                            })
+                          : dispatchError,
+                      ),
+                    ),
+                  ),
+              }),
+            ),
           );
         }),
       );

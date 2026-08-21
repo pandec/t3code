@@ -76,12 +76,16 @@ const makeLayer = (input: {
   readonly dispatched: Array<OrchestrationCommand>;
   readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   readonly failTurnStart?: boolean;
+  readonly failThreadDelete?: boolean;
 }) =>
   TurnStartBootstrap.layer.pipe(
     Layer.provide(
       Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
         dispatch: (command) => {
           input.dispatched.push(command);
+          if (input.failThreadDelete && command.type === "thread.delete") {
+            return Effect.die(new Error("thread cleanup exploded"));
+          }
           return input.failTurnStart && command.type === "thread.turn.start"
             ? Effect.die(new Error("turn start rejected"))
             : Effect.succeed({ sequence: input.dispatched.length });
@@ -272,6 +276,90 @@ describe("TurnStartBootstrap", () => {
       );
       assert.deepEqual(removedWorktrees, [
         { cwd: "/tmp/project", path: "/tmp/worktrees/t3code/test-branch", force: true },
+      ]);
+    }),
+  );
+
+  it.effect("reports the bootstrap thread as deleted when cleanup succeeds", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const result = yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        return yield* bootstrap.dispatchTurnStart(
+          makeTurnStartCommand({
+            createThread: createThreadBootstrap,
+            prepareWorktree: {
+              projectCwd: "/tmp/project",
+              baseBranch: "main",
+              branch: "t3code/test-branch",
+            },
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            gitWorkflow: {
+              createWorktree: () => Effect.die(new Error("worktree creation failed")),
+            },
+          }),
+        ),
+        Effect.flip,
+      );
+
+      assert.equal(result._tag, "OrchestrationDispatchCommandError");
+      assert.include(result.message, "worktree creation failed");
+      assert.strictEqual(result.bootstrapThreadDisposition, "deleted");
+      assert.deepEqual(
+        dispatched.map((command) => command.type),
+        ["thread.create", "thread.delete"],
+      );
+    }),
+  );
+
+  it.effect("does not report a deleted bootstrap thread when cleanup fails", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const removedWorktrees: Array<{ cwd: string; path: string }> = [];
+      const result = yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        return yield* bootstrap.dispatchTurnStart(
+          makeTurnStartCommand({
+            createThread: createThreadBootstrap,
+            prepareWorktree: {
+              projectCwd: "/tmp/project",
+              baseBranch: "main",
+              branch: "t3code/test-branch",
+            },
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            failTurnStart: true,
+            failThreadDelete: true,
+            gitWorkflow: {
+              removeWorktree: (request) => {
+                removedWorktrees.push({ cwd: request.cwd, path: request.path });
+                return Effect.void;
+              },
+            },
+          }),
+        ),
+        Effect.flip,
+      );
+
+      assert.equal(result._tag, "OrchestrationDispatchCommandError");
+      assert.include(result.message, "turn start rejected");
+      assert.strictEqual(result.bootstrapThreadDisposition, undefined);
+      assert.deepEqual(
+        dispatched.map((command) => command.type),
+        ["thread.create", "thread.meta.update", "thread.turn.start", "thread.delete"],
+      );
+      // The worktree cleanup must still run when thread deletion fails.
+      assert.deepEqual(removedWorktrees, [
+        { cwd: "/tmp/project", path: "/tmp/worktrees/t3code/test-branch" },
       ]);
     }),
   );

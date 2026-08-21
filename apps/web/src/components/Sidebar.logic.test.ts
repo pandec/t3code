@@ -1,6 +1,8 @@
 import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
+  animatePinnedLayoutChanges,
   archiveSelectedThreadEntries,
   admitNewSidebarV2AttentionThreads,
   buildBulkTitleRegenerationContextMenuItem,
@@ -66,6 +68,32 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("animatePinnedLayoutChanges", () => {
+  const baseArgs: Parameters<AnimateLayoutChanges>[0] = {
+    active: null,
+    containerId: "pinned-threads",
+    isDragging: false,
+    isSorting: false,
+    id: "thread-a",
+    index: 1,
+    items: ["thread-b", "thread-a"],
+    newIndex: 0,
+    previousItems: ["thread-a", "thread-b"],
+    previousContainerId: "pinned-threads",
+    transition: { duration: 200, easing: "ease" },
+    wasDragging: true,
+  };
+
+  it("does not replay layout movement after the pointer is released", () => {
+    expect(defaultAnimateLayoutChanges(baseArgs)).toBe(true);
+    expect(animatePinnedLayoutChanges(baseArgs)).toBe(false);
+  });
+
+  it("keeps layout movement while the user is sorting", () => {
+    expect(animatePinnedLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
 
 describe("Sidebar V2 project scope", () => {
   it("starts an explicit selection from All and returns to All after the last project is removed", () => {
