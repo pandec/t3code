@@ -55,6 +55,7 @@ export interface Preferences {
    * clobber a sibling's state, and absence genuinely means "never toggled" —
    * see `resolveThreadShelfExpanded` for the defaults each shelf falls back to.
    */
+  readonly sidebarPinnedShelfExpanded?: boolean;
   readonly sidebarOlderShelfExpanded?: boolean;
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
@@ -149,6 +150,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarOlderSectionEnabled?: boolean;
     sidebarOlderSectionAfterDays?: number;
     sidebarOlderSectionCollapsedByDefault?: boolean;
+    sidebarPinnedShelfExpanded?: boolean;
     sidebarOlderShelfExpanded?: boolean;
     sidebarSnoozedShelfExpanded?: boolean;
     sidebarSettledShelfExpanded?: boolean;
@@ -240,6 +242,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.sidebarOlderSectionCollapsedByDefault === "boolean") {
     preferences.sidebarOlderSectionCollapsedByDefault =
       parsed.sidebarOlderSectionCollapsedByDefault;
+  }
+  if (typeof parsed.sidebarPinnedShelfExpanded === "boolean") {
+    preferences.sidebarPinnedShelfExpanded = parsed.sidebarPinnedShelfExpanded;
   }
   if (typeof parsed.sidebarOlderShelfExpanded === "boolean") {
     preferences.sidebarOlderShelfExpanded = parsed.sidebarOlderShelfExpanded;

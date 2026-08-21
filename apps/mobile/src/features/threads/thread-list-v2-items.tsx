@@ -179,9 +179,9 @@ export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivid
 });
 
 /**
- * Closes the pinned block, matching the web sidebar: a headerless rule with
- * more breathing room than the hairline between rows. The pin glyphs already
- * say what the block is, so it carries no label.
+ * Closes the pinned block, matching the web sidebar: a rule with more
+ * breathing room than the hairline between rows. The shelf header above
+ * carries the label, so the divider stays unlabeled.
  */
 export const ThreadListV2PinnedDivider = memo(function ThreadListV2PinnedDivider(props: {
   readonly pane?: "screen" | "sidebar";
@@ -192,6 +192,45 @@ export const ThreadListV2PinnedDivider = memo(function ThreadListV2PinnedDivider
           to read stronger than the hairline between neighboring rows. */}
       <View className="h-px bg-border" />
     </View>
+  );
+});
+
+export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShelfHeader(props: {
+  readonly count: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly pane?: "screen" | "sidebar";
+}) {
+  const mutedColor = useThemeColor("--color-foreground-muted");
+  return (
+    <Pressable
+      accessibilityHint={
+        props.expanded ? "Collapses the pinned threads." : "Expands the pinned threads."
+      }
+      accessibilityLabel={props.count === 1 ? "1 pinned thread" : `${props.count} pinned threads`}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: props.expanded }}
+      className={cn(
+        // mt-2 rather than the sibling headers' mt-4: this header leads the
+        // list, so it only needs breathing room from the list edge.
+        "mb-1.5 mt-2 flex-row items-center gap-2.5",
+        props.pane === "sidebar" ? "px-3" : "px-5",
+      )}
+      onPress={props.onToggle}
+      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+    >
+      <Text className="text-xs font-t3-medium text-foreground-tertiary">
+        {props.expanded ? "Pinned" : `Pinned (${props.count})`}
+      </Text>
+      <View className="h-px flex-1 bg-border" />
+      <SymbolView
+        name="chevron.down"
+        size={10}
+        tintColor={mutedColor}
+        type="monochrome"
+        style={{ transform: [{ rotate: props.expanded ? "180deg" : "0deg" }] }}
+      />
+    </Pressable>
   );
 });
 

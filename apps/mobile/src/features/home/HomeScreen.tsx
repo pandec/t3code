@@ -59,6 +59,7 @@ import {
 import {
   ThreadListV2PendingRow,
   ThreadListV2PinnedDivider,
+  ThreadListV2PinnedShelfHeader,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
@@ -705,6 +706,8 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("snoozed");
   const { expanded: settledShelfExpanded, toggle: toggleSettledShelf } =
     useThreadShelfExpansion("settled");
+  const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
+    useThreadShelfExpansion("pinned");
   // now is quantized to the minute and ticks so the inactivity auto-settle
   // boundary is actually crossed while the app stays open (mirrors web);
   // without a clock dependency the partition memoizes a frozen "now".
@@ -789,6 +792,8 @@ export function HomeScreen(props: HomeScreenProps) {
       return {
         items: [],
         hiddenSettledCount: 0,
+        pinnedCount: 0,
+        pinnedShelfHeaderVisible: false,
         olderCount: 0,
         olderShelfHeaderIndex: null,
         snoozedCount: 0,
@@ -822,6 +827,7 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozeNow: new Date().toISOString(),
       snoozedShelfExpanded,
       settledShelfExpanded,
+      pinnedShelfExpanded,
       selectedThreadKey: null,
     });
   }, [
@@ -837,6 +843,7 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozeWakeTick,
     snoozedShelfExpanded,
     settledShelfExpanded,
+    pinnedShelfExpanded,
     settledVisibleCount,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
@@ -907,6 +914,9 @@ export function HomeScreen(props: HomeScreenProps) {
       buildThreadListV2ListItems({
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
+        pinnedCount: threadListV2Layout.pinnedCount,
+        pinnedShelfExpanded,
+        pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
         olderCount: threadListV2Layout.olderCount,
         olderShelfExpanded,
         olderShelfHeaderIndex: threadListV2Layout.olderShelfHeaderIndex,
@@ -920,6 +930,7 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [
       olderShelfExpanded,
+      pinnedShelfExpanded,
       settledShelfExpanded,
       snoozedShelfExpanded,
       threadListV2Layout,
@@ -954,6 +965,15 @@ export function HomeScreen(props: HomeScreenProps) {
             showTrailingDivider={showTrailingDivider}
             onSelectPendingTask={props.onSelectPendingTask}
             onDeletePendingTask={props.onDeletePendingTask}
+          />
+        );
+      }
+      if (item.type === "v2-pinned-shelf") {
+        return (
+          <ThreadListV2PinnedShelfHeader
+            count={item.count}
+            expanded={item.expanded}
+            onToggle={togglePinnedShelf}
           />
         );
       }
@@ -1084,6 +1104,7 @@ export function HomeScreen(props: HomeScreenProps) {
       threadSearchMatchByKey,
       titleRegenerationEnvironmentIds,
       toggleOlderShelf,
+      togglePinnedShelf,
       toggleSettledShelf,
       toggleSnoozedShelf,
       v2ProjectTitleByProjectKey,

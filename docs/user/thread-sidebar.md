@@ -1,8 +1,15 @@
 # Organizing threads
 
-Pin a thread from its context menu to keep it in the pinned section above your active work.
-Pinned threads are shown independently of their project, including when you connect to more than
-one environment.
+Pin a thread from its context menu, or from the pin button that appears when you hover its card on
+web and desktop, to keep it in the pinned section above your active work. The same button, filled
+while the thread is pinned, unpins it again. Pinned threads are shown independently of their
+project, including when you connect to more than one environment.
+
+The pinned section folds behind its **Pinned** header like the other sections, with a count while
+it is folded. It starts unfolded, and folding it is remembered per device. The thread you have
+open keeps its row even while the section is folded, and while the Attention filter is on or you
+are searching, the fold steps aside entirely — both have already narrowed the list to what you
+asked to see, and a pinned match should never sit behind a fold.
 
 On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
 and choose **Move up** or **Move down**. The order is stored by the server and appears on your
@@ -33,9 +40,9 @@ on, or while you are searching, the section steps aside entirely: both have alre
 list to what you asked to see, and a search match should never sit behind a fold.
 
 The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
-you fold or unfold the section yourself that choice wins — for good on web and desktop, and for as
-long as the thread list stays open on mobile. The thread you have open keeps its row even while the section is
-folded, so it never disappears out from under you.
+you fold or unfold the section yourself that choice wins, remembered per device on every client.
+The thread you have open keeps its row even while the section is folded, so it never disappears
+out from under you.
 
 The window and the choices around it are set per device: mobile keeps its own copy of these
 settings rather than following the ones on your desktop.

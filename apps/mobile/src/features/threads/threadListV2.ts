@@ -289,6 +289,16 @@ export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
   /** Settled threads beyond the render limit (behind "Show more"). */
   readonly hiddenSettledCount: number;
+  /** Pinned threads matching the current filters, including rows hidden by
+      collapse. */
+  readonly pinnedCount: number;
+  /** Whether the pinned shelf header should render. Unlike the other
+      shelves, pinned is structurally always the leading block, so it needs a
+      visibility flag rather than a header index. The header steps aside (and
+      the collapse stops applying) while the Attention filter or a search is
+      active — folding rows those modes asked for would answer a different
+      question, the same contract the Older shelf follows. */
+  readonly pinnedShelfHeaderVisible: boolean;
   /** Threads folded under the Older shelf, including rows hidden by collapse. */
   readonly olderCount: number;
   /** Index in `items` where the Older shelf header belongs. */
@@ -324,11 +334,20 @@ export interface ThreadListV2PendingListItem {
   readonly showPendingDivider: boolean;
 }
 
-/** Closes the pinned block, matching the web sidebar's headerless rule. The
-    pin glyphs carry the meaning, so the divider stays unlabeled. */
+/** Closes the pinned block, matching the web sidebar. The shelf header above
+    carries the label, so the divider stays unlabeled. */
 export interface ThreadListV2PinnedDividerListItem {
   readonly type: "v2-pinned-divider";
   readonly key: "v2-pinned-divider";
+}
+
+/** Opens the pinned block: collapsible like the other shelves, expanded by
+    default. */
+export interface ThreadListV2PinnedShelfListItem {
+  readonly type: "v2-pinned-shelf";
+  readonly key: "v2-pinned-shelf";
+  readonly count: number;
+  readonly expanded: boolean;
 }
 
 /** Fork addition: the shelf quiet-but-active threads fold behind. */
@@ -356,6 +375,7 @@ export interface ThreadListV2SettledShelfListItem {
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2PinnedShelfListItem
   | ThreadListV2PinnedDividerListItem
   | ThreadListV2OlderShelfListItem
   | ThreadListV2SnoozedShelfListItem
@@ -370,6 +390,13 @@ export type ThreadListV2ListItem =
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly pinnedCount?: number;
+  readonly pinnedShelfExpanded?: boolean;
+  /** False hides the pinned shelf header (Attention filter or search active)
+      while its rows still render. Absent = header whenever anything is
+      pinned; callers building from a real layout should always pass the
+      layout's flag, or a collapsed shelf leaks into those modes. */
+  readonly pinnedShelfHeaderVisible?: boolean;
   readonly olderCount?: number;
   readonly olderShelfExpanded?: boolean;
   readonly olderShelfHeaderIndex?: number | null;
@@ -413,15 +440,30 @@ export function buildThreadListV2ListItems(input: {
     threadItems.length;
   const olderEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  // Pinned rows lead the list; close them with the same headerless rule the
-  // web sidebar draws, so the inbox reads as its own block.
+  // Pinned rows lead the list under their own collapsible shelf header;
+  // close them with the same rule the web sidebar draws, so the inbox reads
+  // as its own block. While the header shows, the count is the whole
+  // footprint when collapsed and rows render only when expanded (or for the
+  // thread currently open); under the Attention filter or a search the
+  // layout hides the header and the rows render unconditionally.
   let pinnedEnd = 0;
   while (pinnedEnd < activeEnd) {
     const item = threadItems[pinnedEnd];
     if (item?.type !== "v2-thread" || !item.item.pinned) break;
     pinnedEnd += 1;
   }
-  const result: ThreadListV2ListItem[] = threadItems.slice(0, pinnedEnd);
+  const pinnedCount = input.pinnedCount ?? pinnedEnd;
+  const pinnedShelfHeaderVisible = input.pinnedShelfHeaderVisible ?? true;
+  const result: ThreadListV2ListItem[] = [];
+  if (pinnedShelfHeaderVisible && pinnedCount > 0) {
+    result.push({
+      type: "v2-pinned-shelf",
+      key: "v2-pinned-shelf",
+      count: pinnedCount,
+      expanded: input.pinnedShelfExpanded !== false,
+    });
+  }
+  result.push(...threadItems.slice(0, pinnedEnd));
   if (pinnedEnd > 0) {
     result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
   }
@@ -512,6 +554,8 @@ export function buildThreadListV2Items(input: {
   readonly snoozedShelfExpanded?: boolean;
   /** Expands the settled shelf into rows. Expanded is the default. */
   readonly settledShelfExpanded?: boolean;
+  /** Expands the pinned block into rows. Expanded is the default. */
+  readonly pinnedShelfExpanded?: boolean;
   /** The selected thread remains visible on an otherwise collapsed shelf so
       a split-view detail can never lose its navigation row. */
   readonly selectedThreadKey?: string | null;
@@ -669,8 +713,20 @@ export function buildThreadListV2Items(input: {
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
 
+  const orderedPinned = sortPinnedThreadsByOrderKey(pinned);
+  // The collapse must never hide rows the Attention filter or a search asked
+  // for, so the shelf only folds (and only draws its header) outside those
+  // modes — the same contract the Older shelf follows.
+  const pinnedShelfCollapsible = input.attentionMemberThreadKeys == null && query.length === 0;
+  const visiblePinned =
+    !pinnedShelfCollapsible || input.pinnedShelfExpanded !== false
+      ? orderedPinned
+      : orderedPinned.filter(
+          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+        );
+
   const items: ThreadListV2Item[] = [];
-  for (const thread of sortPinnedThreadsByOrderKey(pinned)) {
+  for (const thread of visiblePinned) {
     items.push({
       thread,
       variant: "card",
@@ -727,6 +783,8 @@ export function buildThreadListV2Items(input: {
   return {
     items,
     hiddenSettledCount: orderedSettled.length - pagedSettled.length,
+    pinnedCount: orderedPinned.length,
+    pinnedShelfHeaderVisible: orderedPinned.length > 0 && pinnedShelfCollapsible,
     olderCount: orderedOlder.length,
     olderShelfHeaderIndex,
     snoozedCount: orderedSnoozed.length,
