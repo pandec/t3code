@@ -1,8 +1,13 @@
 # Organizing threads
 
-Pin a thread from its context menu to keep it in the pinned section above your active work.
-Pinned threads are shown independently of their project, including when you connect to more than
-one environment.
+Pin a thread from its context menu, or from the pin button that appears when you hover its card on
+web and desktop, to keep it in the pinned section above your active work. The same button, filled
+while the thread is pinned, unpins it again. Pinned threads are shown independently of their
+project, including when you connect to more than one environment.
+
+The pinned section folds behind its **Pinned** header like the other sections, with a count while
+it is folded, and remembers that choice per device. The thread you have open keeps its row even
+while the section is folded.
 
 On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
 and choose **Move up** or **Move down**. The order is stored by the server and appears on your

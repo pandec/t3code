@@ -93,6 +93,7 @@ import {
 import {
   ThreadListV2PendingRow,
   ThreadListV2PinnedDivider,
+  ThreadListV2PinnedShelfHeader,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
@@ -620,6 +621,8 @@ function ThreadNavigationSidebarPane(
     useThreadShelfExpansion("snoozed");
   const { expanded: settledShelfExpanded, toggle: toggleSettledShelf } =
     useThreadShelfExpansion("settled");
+  const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
+    useThreadShelfExpansion("pinned");
   // now ticks per minute so the inactivity auto-settle boundary is actually
   // crossed while the pane stays open; without a clock dependency the
   // partition memoizes a frozen "now".
@@ -700,6 +703,7 @@ function ThreadNavigationSidebarPane(
       return {
         items: [],
         hiddenSettledCount: 0,
+        pinnedCount: 0,
         olderCount: 0,
         olderShelfHeaderIndex: null,
         snoozedCount: 0,
@@ -731,6 +735,7 @@ function ThreadNavigationSidebarPane(
       snoozeNow: new Date().toISOString(),
       snoozedShelfExpanded,
       settledShelfExpanded,
+      pinnedShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
@@ -747,6 +752,7 @@ function ThreadNavigationSidebarPane(
     snoozeWakeTick,
     snoozedShelfExpanded,
     settledShelfExpanded,
+    pinnedShelfExpanded,
     props.selectedThreadKey,
     options.selectedEnvironmentId,
     options.selectedModel,
@@ -804,6 +810,8 @@ function ThreadNavigationSidebarPane(
     const items: SidebarListItem[] = buildThreadListV2ListItems({
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
+      pinnedCount: threadListV2Layout.pinnedCount,
+      pinnedShelfExpanded,
       olderCount: threadListV2Layout.olderCount,
       olderShelfExpanded,
       olderShelfHeaderIndex: threadListV2Layout.olderShelfHeaderIndex,
@@ -833,6 +841,7 @@ function ThreadNavigationSidebarPane(
     props.searchQuery,
     selectedProjectRefs,
     olderShelfExpanded,
+    pinnedShelfExpanded,
     settledShelfExpanded,
     snoozedShelfExpanded,
     threadListV2Enabled,
@@ -1124,6 +1133,9 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-pinned-divider" || item.type === "v2-pinned-divider") {
         return previous.type === item.type;
       }
+      if (previous.type === "v2-pinned-shelf" && item.type === "v2-pinned-shelf") {
+        return previous.count === item.count && previous.expanded === item.expanded;
+      }
       if (previous.type === "v2-older-shelf" && item.type === "v2-older-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
@@ -1137,12 +1149,14 @@ function ThreadNavigationSidebarPane(
         previous.type === "v2-thread" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
+        previous.type === "v2-pinned-shelf" ||
         previous.type === "v2-older-shelf" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
+        item.type === "v2-pinned-shelf" ||
         item.type === "v2-older-shelf" ||
         item.type === "v2-snoozed-shelf" ||
         item.type === "v2-settled-shelf"
@@ -1267,6 +1281,15 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
+        case "v2-pinned-shelf":
+          return (
+            <ThreadListV2PinnedShelfHeader
+              count={item.count}
+              expanded={item.expanded}
+              onToggle={togglePinnedShelf}
+              pane="sidebar"
+            />
+          );
         case "v2-pinned-divider":
           return <ThreadListV2PinnedDivider pane="sidebar" />;
         case "v2-older-shelf":

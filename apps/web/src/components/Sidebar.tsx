@@ -242,6 +242,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
 const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
+const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:pinned-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -819,7 +820,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // in-row pin state cue (the pinned block has no header), so it always
   // shows while pinned; it only becomes a clickable unpin quick-action once
   // the pinning capability is confirmed, and stays a passive marker while
-  // the descriptor is not loaded. Pinning itself lives in the context menu.
+  // the descriptor is not loaded. Pinning lives in the context menu and in
+  // the card's hover quick-actions (pin/unpin toggle).
   pinningSupported: boolean;
   isPinned: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
@@ -860,6 +862,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
+  onPin: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
@@ -885,6 +888,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onThreadClick,
     onUnsettle,
     onUnsnooze,
+    onPin,
     onUnpin,
     openPullRequestsInRightPanel,
     renamingTitle,
@@ -1190,6 +1194,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onUnpin(threadRef);
     },
     [onUnpin, threadRef],
+  );
+  const handlePinToggleClick = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (props.isPinned) {
+        onUnpin(threadRef);
+      } else {
+        onPin(threadRef);
+      }
+    },
+    [onPin, onUnpin, props.isPinned, threadRef],
   );
   const handleSnoozePreset = useCallback(
     (preset: SnoozePreset) => {
@@ -1684,7 +1700,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     threadTimeLabel(thread)
                   )}
                 </span>
-                {props.settlementSupported || showSnoozeButton || showArchiveButton ? (
+                {props.settlementSupported ||
+                props.pinningSupported ||
+                showSnoozeButton ||
+                showArchiveButton ? (
                   <span
                     className={cn(
                       // focus-visible, not focus-within: a mouse click leaves
@@ -1696,6 +1715,27 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       snoozeMenuOpen && "pointer-events-auto static opacity-100",
                     )}
                   >
+                    {props.pinningSupported ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
+                              onClick={handlePinToggleClick}
+                              className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <PinIcon
+                                className={cn("size-3.5", props.isPinned && "fill-current")}
+                              />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>
+                          {props.isPinned ? "Unpin thread" : "Pin thread"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : null}
                     {showSnoozeButton ? (
                       <SnoozePopoverButton
                         open={snoozeMenuOpen}
@@ -1718,7 +1758,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           }
                         >
                           <CheckIcon className="size-3.5" />
-                          Settle
                         </TooltipTrigger>
                         <TooltipPopup>Settle thread</TooltipPopup>
                       </Tooltip>
@@ -2848,6 +2887,28 @@ export default function Sidebar() {
           ),
     [archivedShelfExpanded, displayedRecentArchive.threads, routeThreadKey],
   );
+  // Pinned is the block the user curated to the top, so it starts expanded;
+  // folding it is still remembered per device like every other shelf.
+  const [pinnedShelfExpanded, setPinnedShelfExpanded] = useLocalStorage(
+    PINNED_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const togglePinnedShelf = useCallback(
+    () => setPinnedShelfExpanded((value) => !value),
+    [setPinnedShelfExpanded],
+  );
+  // Same exception every other shelf makes: the open thread keeps its row,
+  // so a folded pinned block never hides the thread being read.
+  const visiblePinnedThreads = useMemo(() => {
+    if (pinnedShelfExpanded) return pinnedThreads;
+    if (routeThreadKey === null) return [];
+    const routeThread = pinnedThreads.find(
+      (thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+    );
+    return routeThread === undefined ? [] : [routeThread];
+  }, [pinnedShelfExpanded, pinnedThreads, routeThreadKey]);
   // The Older shelf's starting state comes from Extras; toggling it writes a
   // per-device preference that outranks the setting from then on.
   const [olderShelfExpanded, setOlderShelfExpanded] = useLocalStorage(
@@ -2887,14 +2948,14 @@ export default function Sidebar() {
 
   const orderedThreads = useMemo(
     () => [
-      ...pinnedThreads,
+      ...visiblePinnedThreads,
       ...activeThreads,
       ...visibleOlderThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
     [
-      pinnedThreads,
+      visiblePinnedThreads,
       activeThreads,
       visibleOlderThreads,
       visibleSnoozedThreads,
@@ -4649,6 +4710,7 @@ export default function Sidebar() {
                         onUnsettle={attemptUnsettle}
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}
+                        onPin={attemptPin}
                         onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
@@ -4657,12 +4719,19 @@ export default function Sidebar() {
                     );
                   };
                   // Draft block above everything, then the pinned block:
-                  // full cards above the inbox, closed by a thin divider (the
-                  // pin glyphs carry the meaning, so no header text). Both
-                  // vanish entirely at count 0.
+                  // full cards above the inbox, opened by a collapsible
+                  // header and closed by a thin divider. Both vanish
+                  // entirely at count 0.
                   // Pinned rows render in the one shared pinned order; only
                   // reorder-capable rows register as sortable (legacy-server
                   // pins render in place as plain rows).
+                  const renderedPinnedThreads = pinnedShelfExpanded
+                    ? orderedPinnedThreads
+                    : orderedPinnedThreads.filter(
+                        (thread) =>
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                          routeThreadKey,
+                      );
                   const items: ReactNode[] = [
                     <SidebarDraftBlock
                       key="draft-sessions"
@@ -4676,6 +4745,33 @@ export default function Sidebar() {
                       onNavigateToDraft={navigateToDraft}
                     />,
                     pinnedThreads.length > 0 ? (
+                      <li
+                        key="pinned-shelf-header"
+                        data-thread-selection-safe
+                        className="list-none"
+                      >
+                        <button
+                          type="button"
+                          onClick={togglePinnedShelf}
+                          aria-expanded={pinnedShelfExpanded}
+                          data-testid="sidebar-pinned-shelf-toggle"
+                          className="mb-1 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                        >
+                          <span className="text-xs font-medium text-muted-foreground/50">
+                            {pinnedShelfExpanded ? "Pinned" : `Pinned (${pinnedThreads.length})`}
+                          </span>
+                          <span className="h-px flex-1 bg-sidebar-border/60" />
+                          <ChevronDownIcon
+                            aria-hidden
+                            className={cn(
+                              "size-3 text-muted-foreground/50 transition-transform",
+                              pinnedShelfExpanded && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </li>
+                    ) : null,
+                    renderedPinnedThreads.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
                           sensors={pinnedDndSensors}
@@ -4684,7 +4780,7 @@ export default function Sidebar() {
                           onDragEnd={handlePinnedDragEnd}
                         >
                           <SortableContext
-                            items={orderedPinnedThreads
+                            items={renderedPinnedThreads
                               .map((thread) =>
                                 scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                               )
@@ -4696,7 +4792,7 @@ export default function Sidebar() {
                               aria-label="Pinned threads"
                               className="flex flex-col gap-px"
                             >
-                              {orderedPinnedThreads.map((thread) => {
+                              {renderedPinnedThreads.map((thread) => {
                                 const threadKey = scopedThreadKey(
                                   scopeThreadRef(thread.environmentId, thread.id),
                                 );
@@ -4715,7 +4811,7 @@ export default function Sidebar() {
                       </li>
                     ) : null,
                   ];
-                  if (pinnedThreads.length > 0) {
+                  if (renderedPinnedThreads.length > 0) {
                     items.push(
                       <li
                         key="pinned-divider"
