@@ -616,6 +616,8 @@ export interface ChatComposerSendOptions {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  /** Drag-mention scope (`env` or `env:projectId`); defaults to the environment alone. */
+  mentionScope?: string | undefined;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -735,6 +737,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    mentionScope,
     routeKind,
     routeThreadRef,
     draftId,
@@ -3268,7 +3271,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // editor never sees the drop; the load-bearing rules (native stop, "move"
   // effect, no eager focus) live in makeComposerMentionDragHandlers.
   const composerMentionDragHandlers = makeComposerMentionDragHandlers({
-    mentionScope: environmentId,
+    mentionScope: mentionScope ?? environmentId,
     insertMentionAtEnd: (text) => insertComposerTextAtEnd(text, { ensureLeadingBoundary: true }),
     setDragActive: setIsDragOverComposer,
     onInsertRejected: () => {
@@ -3282,7 +3285,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       toastManager.add({
         type: "error",
         title: "Unable to add to chat",
-        description: "That file lives in another environment, so this thread can't reference it.",
+        description:
+          "That file lives in another project or environment, so this thread can't reference it.",
       });
     },
   });

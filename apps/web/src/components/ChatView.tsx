@@ -7214,6 +7214,7 @@ function ChatViewContent(props: ChatViewProps) {
           environmentId={activeProject.environmentId}
           cwd={activeWorkspaceRoot}
           projectName={activeProject.title}
+          mentionScope={`${activeProject.environmentId}:${activeProject.id}`}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
@@ -7468,6 +7469,11 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            mentionScope={
+                              activeProject
+                                ? `${activeProject.environmentId}:${activeProject.id}`
+                                : environmentId
+                            }
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

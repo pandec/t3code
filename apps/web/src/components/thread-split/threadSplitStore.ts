@@ -66,6 +66,10 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   splitRatio: readStoredSplitRatio(),
 
   openSecondaryThread: (ref) => {
+    // The pick usually comes from the command palette, whose close restores
+    // focus to the trigger in the primary pane a beat later — the intent
+    // makes that restore bounce into the pane the user just opened.
+    requestThreadPaneFocus("secondary");
     const current = get().secondaryRef;
     if (current && scopedThreadKey(current) === scopedThreadKey(ref)) {
       set({ activePaneId: "secondary" });
@@ -77,6 +81,9 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   closeSplit: () => {
     if (get().secondaryRef === null) return;
     set({ secondaryRef: null, activePaneId: "primary" });
+    // The close control usually lives in the secondary pane, whose unmount
+    // would drop DOM focus to <body>; hand it to the surviving pane instead.
+    focusThreadPane("primary");
   },
 
   setSplitMounted: (mounted) => {
@@ -144,18 +151,85 @@ export function noteThreadPaneFocus(paneId: ThreadPaneId, element: EventTarget |
   }
 }
 
+/**
+ * One-shot intent that survives an overlay's close-time focus restore. A
+ * palette pick activates a pane, but the closing dialog then restores focus
+ * to its trigger in the other pane, which would silently re-activate it.
+ * While the intent is fresh, that stray focus gets bounced to the intended
+ * pane instead; a real pointerdown anywhere cancels it as user intent.
+ */
+let pendingPaneFocus: { paneId: ThreadPaneId; expiresAt: number } | null = null;
+const PENDING_PANE_FOCUS_TTL_MS = 1_500;
+
+export function requestThreadPaneFocus(paneId: ThreadPaneId): void {
+  pendingPaneFocus = { paneId, expiresAt: Date.now() + PENDING_PANE_FOCUS_TTL_MS };
+}
+
+export function cancelPendingThreadPaneFocus(): void {
+  pendingPaneFocus = null;
+}
+
+/**
+ * Called from a pane's focus-capture. Returns true when the focus event was
+ * a stray restore into the wrong pane and has been re-routed — the caller
+ * must then leave the active pane unchanged.
+ */
+export function redirectStrayThreadPaneFocus(focusedPaneId: ThreadPaneId): boolean {
+  const pending = pendingPaneFocus;
+  if (pending === null) {
+    return false;
+  }
+  pendingPaneFocus = null;
+  if (Date.now() > pending.expiresAt || pending.paneId === focusedPaneId) {
+    return false;
+  }
+  focusThreadPane(pending.paneId);
+  return true;
+}
+
 function focusThreadPane(paneId: ThreadPaneId): void {
   const runtime = paneRuntimes[paneId];
   const lastFocused = runtime.lastFocused;
   if (lastFocused && lastFocused.isConnected) {
     lastFocused.focus();
-    return;
+    // A connected element can still refuse focus (disabled, hidden, inert);
+    // fall through to the composer or root instead of leaving focus behind.
+    if (document.activeElement === lastFocused) {
+      return;
+    }
   }
   if (runtime.composer?.current) {
     runtime.composer.current.focusAtEnd();
     return;
   }
   runtime.root?.focus();
+}
+
+/**
+ * The composer that overlay actions (palette inserts, close-time focus)
+ * should target: the secondary pane's while it is rendered and active, null
+ * otherwise — callers fall back to the app-root (primary) handle.
+ */
+export function activeThreadPaneComposerHandle(): ComposerHandleRef | null {
+  const state = useThreadSplitStore.getState();
+  if (!state.splitMounted || state.activePaneId !== "secondary") {
+    return null;
+  }
+  return paneRuntimes.secondary.composer;
+}
+
+/**
+ * Overlay close hook (command palette): return focus to the active pane's
+ * composer. Returns false when the primary/app-root composer is the right
+ * target anyway, so callers can keep their default.
+ */
+export function focusActiveThreadPaneComposer(): boolean {
+  const composer = activeThreadPaneComposerHandle();
+  if (composer?.current) {
+    composer.current.focusAtEnd();
+    return true;
+  }
+  return false;
 }
 
 /**

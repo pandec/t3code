@@ -199,6 +199,8 @@ import { ComposerHandleContext, useComposerHandleContext } from "../composerHand
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { buildOpenInSplitThreadItems } from "./thread-split/splitPaletteItems";
 import {
+  activeThreadPaneComposerHandle,
+  focusActiveThreadPaneComposer,
   focusOtherThreadPane,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
@@ -613,7 +615,12 @@ function CommandPaletteDialog(props: {
       data-palette-mode={props.mode}
       data-testid="command-palette"
       finalFocus={() => {
-        composerHandleRef?.current?.focusAtEnd();
+        // The app-root composer belongs to the primary pane; while the split
+        // is open with the secondary pane active (including a pick that just
+        // activated it), focus must return there instead.
+        if (!focusActiveThreadPaneComposer()) {
+          composerHandleRef?.current?.focusAtEnd();
+        }
         return false;
       }}
       onBackdropPointerDown={() => {
@@ -2513,8 +2520,11 @@ function OpenCommandPaletteDialog(props: {
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   // Ref read at render: fine for a footer hint — the composer mounts long
-  // before the palette opens, and re-opening re-renders this component.
-  const canInsertSavedPrompt = isSavedPromptsView && composerHandleRef?.current != null;
+  // before the palette opens, and re-opening re-renders this component. The
+  // active split pane's composer takes precedence over the app-root one.
+  const canInsertSavedPrompt =
+    isSavedPromptsView &&
+    (activeThreadPaneComposerHandle()?.current ?? composerHandleRef?.current) != null;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&
@@ -2624,7 +2634,7 @@ function OpenCommandPaletteDialog(props: {
       const prompt = savedPrompts.find(
         (candidate) => savedPromptItemValue(candidate) === highlightedItem?.value,
       );
-      const composer = composerHandleRef?.current;
+      const composer = (activeThreadPaneComposerHandle() ?? composerHandleRef)?.current;
       // Close only on a successful insert — a busy composer (approval,
       // pending input) refuses it, and silently dismissing the palette would
       // make that failure look like success.

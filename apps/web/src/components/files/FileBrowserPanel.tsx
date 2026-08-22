@@ -26,6 +26,8 @@ interface FileBrowserPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
+  /** Drag-mention scope (`env` or `env:projectId`); defaults to the environment alone. */
+  mentionScope?: string | undefined;
   /** File currently open in the preview pane; revealed and selected in the tree. */
   selectedPath: string | null;
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
@@ -103,6 +105,7 @@ export default function FileBrowserPanel({
   environmentId,
   cwd,
   projectName,
+  mentionScope,
   selectedPath,
   selectedPathRevealId,
   onOpenFile,
@@ -206,9 +209,9 @@ export default function FileBrowserPanel({
     () =>
       createFileTreeDragMentionController({
         deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
-        mentionScope: environmentId,
+        mentionScope: mentionScope ?? environmentId,
       }),
-    [environmentId],
+    [environmentId, mentionScope],
   );
   const { model } = useFileTree({
     composition: {

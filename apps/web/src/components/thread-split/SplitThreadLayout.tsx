@@ -1,5 +1,5 @@
 import { useParams } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
@@ -10,9 +10,11 @@ import { resolveThreadRouteRef } from "../../threadRoutes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
 import { ThreadPaneContext } from "./threadPaneContext";
 import {
+  cancelPendingThreadPaneFocus,
   clampSplitRatio,
   noteThreadPaneFocus,
   reclaimThreadPaneFocus,
+  redirectStrayThreadPaneFocus,
   registerThreadPaneComposer,
   registerThreadPaneRoot,
   THREAD_SPLIT_MEDIA_QUERY,
@@ -65,6 +67,18 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
     }
   }, [closeSplit, routeThreadRef, secondaryRef]);
 
+  // Sidebar and palette navigation happen outside both pane roots, yet they
+  // retarget the primary pane — attention (and shortcut ownership, e.g.
+  // mod+shift+E archive) must follow, or the secondary pane would keep
+  // swallowing thread-targeted shortcuts after the user switched threads.
+  const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
+  const previousRouteThreadKeyRef = useRef(routeThreadKey);
+  useEffect(() => {
+    if (previousRouteThreadKeyRef.current === routeThreadKey) return;
+    previousRouteThreadKeyRef.current = routeThreadKey;
+    useThreadSplitStore.getState().setActivePane("primary");
+  }, [routeThreadKey]);
+
   const splitOpen = secondaryRef !== null && isWideEnoughForSplit;
 
   return (
@@ -87,7 +101,10 @@ function SplitThreadPanes({
   // splitMounted is the store's single source of truth for "two panes are on
   // screen"; every active-pane gate reads it, so it must track the rendered
   // state exactly — including this layout unmounting on a non-chat route.
-  useEffect(() => {
+  // Layout effect on purpose: a passive effect would leave a stale-true
+  // window after the secondary pane is removed from the tree, during which
+  // the only visible pane still rejects shortcuts.
+  useLayoutEffect(() => {
     setSplitMounted(splitOpen);
     return () => setSplitMounted(false);
   }, [setSplitMounted, splitOpen]);
@@ -163,10 +180,13 @@ function ThreadPaneSection({
       data-active={isActive ? "true" : "false"}
       className="relative h-full min-h-0 min-w-0 outline-none"
       onPointerDownCapture={() => {
+        // A real click is user intent — it beats any queued pane-focus grant.
+        cancelPendingThreadPaneFocus();
         setActivePane(paneId);
         reclaimThreadPaneFocus(paneId);
       }}
       onFocusCapture={(event) => {
+        if (redirectStrayThreadPaneFocus(paneId)) return;
         setActivePane(paneId);
         noteThreadPaneFocus(paneId, event.target);
       }}
