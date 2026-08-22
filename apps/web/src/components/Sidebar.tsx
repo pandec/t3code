@@ -4004,17 +4004,7 @@ export default function Sidebar() {
             await attemptMoveThreadToTop(threadRef);
             return;
           case "fork": {
-            const result = await forkThread(threadRef);
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Failed to fork conversation",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
+            attemptFork(threadRef);
             return;
           }
           case "archive": {
@@ -4083,12 +4073,12 @@ export default function Sidebar() {
       attemptUnsettle,
       attemptUnsnooze,
       attemptArchive,
+      attemptFork,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
-      forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
