@@ -10,6 +10,8 @@ import {
 } from "react";
 
 import { Command, CommandGroup, CommandGroupLabel, CommandList } from "../ui/command";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 
 /** Filter-query state for a composer picker; feed the filtered entries into
     `useComposerPickerKeyboard` below. */
@@ -41,6 +43,7 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
   readonly menuRef: RefObject<HTMLDivElement | null>;
 } {
   const { entries, onPick, onClose, setQuery } = input;
+  const threadPaneId = useThreadPaneId();
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -76,6 +79,8 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      // Split view: only the active pane's picker owns the window keys.
+      if (!isThreadPaneActive(threadPaneId)) return;
       // During IME composition the keys belong to the IME, not the picker.
       if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
@@ -125,7 +130,7 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [entries, highlightedEntry, highlightedId, onClose, onPick, setQuery]);
+  }, [entries, highlightedEntry, highlightedId, onClose, onPick, setQuery, threadPaneId]);
 
   return { highlightedEntry, highlightedId, setHighlightedId, inputRef, menuRef };
 }

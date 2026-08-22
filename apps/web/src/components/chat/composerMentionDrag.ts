@@ -7,6 +7,40 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
  */
 export const COMPOSER_MENTION_DRAG_TYPE = "application/x-t3code-composer-mention";
 
+/**
+ * Scope the dragged paths belong to: `environmentId` or
+ * `environmentId:projectId`. Mentions are workspace-relative text, so a drop
+ * into another project's or environment's composer (split view) would
+ * silently mention a file that workspace doesn't have. Project granularity,
+ * not cwd: worktree-aware cwds differ between the tree and the composer
+ * within one thread, so a cwd-level scope would false-reject ordinary
+ * in-pane drops. When either side doesn't know its project, only the
+ * environment is compared.
+ */
+export const COMPOSER_MENTION_DRAG_SCOPE_TYPE = "application/x-t3code-composer-mention-scope";
+
+function parseComposerMentionScope(scope: string): {
+  environmentId: string;
+  projectId: string | null;
+} {
+  const separatorIndex = scope.indexOf(":");
+  return separatorIndex === -1
+    ? { environmentId: scope, projectId: null }
+    : {
+        environmentId: scope.slice(0, separatorIndex),
+        projectId: scope.slice(separatorIndex + 1),
+      };
+}
+
+export function composerMentionScopeMismatch(dragScope: string, hostScope: string): boolean {
+  const drag = parseComposerMentionScope(dragScope);
+  const host = parseComposerMentionScope(hostScope);
+  if (drag.environmentId !== host.environmentId) {
+    return true;
+  }
+  return drag.projectId !== null && host.projectId !== null && drag.projectId !== host.projectId;
+}
+
 export function composerMentionFromTreePath(treePath: string): string | null {
   const relativePath = treePath.replace(/\/+$/, "");
   if (relativePath.length === 0) {
@@ -40,9 +74,12 @@ export interface ComposerMentionDragEvent {
  * the next frame, after the editor has caught up.
  */
 export interface ComposerMentionDropHost {
+  /** Scope the composer targets (`env` or `env:projectId`); mismatched drops are declined. */
+  mentionScope?: string | null;
   insertMentionAtEnd(text: string): boolean;
   setDragActive(active: boolean): void;
   onInsertRejected(): void;
+  onScopeMismatch?(): void;
 }
 
 export interface ComposerMentionDragHandlers {
@@ -88,6 +125,15 @@ export function makeComposerMentionDragHandlers(
       host.setDragActive(false);
       const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);
       if (mention.length === 0) {
+        return;
+      }
+      const dragScope = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_SCOPE_TYPE);
+      if (
+        host.mentionScope &&
+        dragScope.length > 0 &&
+        composerMentionScopeMismatch(dragScope, host.mentionScope)
+      ) {
+        host.onScopeMismatch?.();
         return;
       }
       if (!host.insertMentionAtEnd(`${mention} `)) {

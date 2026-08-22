@@ -2,15 +2,16 @@
 // asking for a full listing on a single click.
 export const WORKSPACE_BASENAME_LOOKUP_LIMIT = 25;
 
-// One counter for every caller: they all open the same panel, so the newest
-// click wins regardless of which one started the lookup.
-let latestLookupSequence = 0;
+// One counter per scope (scoped thread key): within a pane the newest click
+// wins, but a click in one split pane must not cancel the other pane's
+// in-flight lookup — they open different panels.
+const latestLookupSequenceByScope = new Map<string, number>();
 
 /** Call the returned predicate when the search settles; false means a later click superseded it. */
-export function claimWorkspaceBasenameLookup(): () => boolean {
-  latestLookupSequence += 1;
-  const claimed = latestLookupSequence;
-  return () => claimed === latestLookupSequence;
+export function claimWorkspaceBasenameLookup(scopeKey = ""): () => boolean {
+  const claimed = (latestLookupSequenceByScope.get(scopeKey) ?? 0) + 1;
+  latestLookupSequenceByScope.set(scopeKey, claimed);
+  return () => claimed === latestLookupSequenceByScope.get(scopeKey);
 }
 
 export interface WorkspaceEntryCandidate {

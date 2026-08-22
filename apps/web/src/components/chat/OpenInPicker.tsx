@@ -46,6 +46,8 @@ import {
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { shellEnvironment } from "~/state/shell";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 
 type OpenInOption = {
   label: string;
@@ -273,9 +275,13 @@ export const OpenInPicker = memo(function OpenInPicker({
     [keybindings],
   );
 
+  const threadPaneId = useThreadPaneId();
   useEffect(() => {
     if (!enableShortcut) return;
     const handler = (e: globalThis.KeyboardEvent) => {
+      // Split view: both panes' headers mount this picker — only the active
+      // pane's shortcut may open its cwd (possibly on another machine).
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
       if (!openInCwd) return;
       if (!preferredEditor) return;
@@ -285,7 +291,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [enableShortcut, keybindings, openInCwd, openInEditor, preferredEditor]);
+  }, [enableShortcut, keybindings, openInCwd, openInEditor, preferredEditor, threadPaneId]);
 
   return (
     <Group aria-label="Open in editor">

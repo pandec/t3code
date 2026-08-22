@@ -282,7 +282,6 @@ import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import {
-  primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
   primaryServerSettingsAtom,
   serverEnvironment,
@@ -393,6 +392,9 @@ import {
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
+import { useThreadPaneId } from "./thread-split/threadPaneContext";
+import { ThreadPaneControls } from "./thread-split/ThreadPaneControls";
+import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
@@ -425,6 +427,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_PANE_AVAILABLE_EDITORS: never[] = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -1305,6 +1308,22 @@ function ChatViewContent(props: ChatViewProps) {
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
+  // Split view (fork): which pane hosts this ChatView, and the other pane's
+  // thread key while the split is open. Window-level listeners gate on the
+  // active pane so shortcuts never fire in both panes at once.
+  const threadPaneId = useThreadPaneId();
+  const isSecondaryPane = threadPaneId === "secondary";
+  const splitSecondaryThreadKey = useThreadSplitStore((state) =>
+    state.splitMounted && state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
+  );
+  const threadSplitActive = splitSecondaryThreadKey !== null;
+  // Deliberately NOT mounted-gated like the key above: terminal ownership
+  // must swap in the same commit the secondary thread is picked or dropped,
+  // or both panes would attach the same terminal for a frame. While a picked
+  // split is not rendered this only costs a prewarmed hidden surface.
+  const splitReservedTerminalThreadKey = useThreadSplitStore((state) =>
+    state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
+  );
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -1478,7 +1497,10 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  // Split panes are roughly half a window wide, so the inline right panel
+  // would crush the chat column — force the narrow-viewport sheet behavior.
+  const shouldUseRightPanelSheet =
+    useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY) || threadSplitActive;
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
@@ -1809,8 +1831,25 @@ function ChatViewContent(props: ChatViewProps) {
 
   const existingOpenTerminalThreadKeys = useMemo(() => {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
-    return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
-  }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
+    return openTerminalThreadKeys.filter((nextThreadKey) => {
+      if (!existingThreadKeys.has(nextThreadKey)) return false;
+      // With the split open each terminal needs exactly one owner, or two
+      // ChatViews would mount duplicate surfaces for every open terminal:
+      // the secondary pane owns only its own thread's terminals and the
+      // primary pane owns everything else.
+      if (isSecondaryPane) return nextThreadKey === routeThreadKey;
+      return (
+        splitReservedTerminalThreadKey === null || nextThreadKey !== splitReservedTerminalThreadKey
+      );
+    });
+  }, [
+    draftThreadKeys,
+    isSecondaryPane,
+    openTerminalThreadKeys,
+    routeThreadKey,
+    serverThreadKeys,
+    splitReservedTerminalThreadKey,
+  ]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   // Reading a finished thread clears the sidebar's Done badge. The visit is
   // stamped at the turn's completion time — not now/updatedAt — so it clears
@@ -1853,8 +1892,21 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeProject = useProject(activeProjectRef);
   const handleNewThreadInActiveProject = useCallback(() => {
+    // New-thread flows mutate then navigate the router, i.e. the primary
+    // pane. From the secondary pane that continuation would land in the
+    // wrong pane, so v1 declines instead of half-working.
+    if (isSecondaryPane) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "Not available in the split pane",
+          description: "Open this thread in the main pane to start a new thread from it.",
+        }),
+      );
+      return;
+    }
     startNewThreadForProject(activeProjectRef, handleNewThread);
-  }, [activeProjectRef, handleNewThread]);
+  }, [activeProjectRef, handleNewThread, isSecondaryPane]);
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -2813,7 +2865,12 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  // Editors must come from this thread's own environment — another server's
+  // list would offer/submit editor ids this pane's server may not have
+  // (visible with cross-environment split panes). While the config is still
+  // unresolved, offering none beats offering a wrong list.
+  const paneServerConfig = serverConfigs.get(environmentId);
+  const availableEditors = paneServerConfig?.availableEditors ?? EMPTY_PANE_AVAILABLE_EDITORS;
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -3176,9 +3233,10 @@ function ChatViewContent(props: ChatViewProps) {
     ) => {
       if (!activeThreadId || !activeProject || !activeThread) return;
       if (options?.rememberAsLastInvoked !== false) {
+        const scriptPreferenceKey = `${activeProject.environmentId}:${activeProject.id}`;
         setLastInvokedScriptByProjectId((current) => {
-          if (current[activeProject.id] === script.id) return current;
-          return { ...current, [activeProject.id]: script.id };
+          if (current[scriptPreferenceKey] === script.id) return current;
+          return { ...current, [scriptPreferenceKey]: script.id };
         });
       }
       const targetCwd = options?.cwd ?? gitCwd ?? activeProject.workspaceRoot;
@@ -3818,9 +3876,12 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(
     () =>
       subscribePreviewAction((action) => {
+        // The bus is untargeted; with the split open only the active pane
+        // reacts, or one shortcut would toggle previews in both panes.
+        if (!isThreadPaneActive(threadPaneId)) return;
         if (action === "toggle-panel") togglePreviewPanel();
       }),
-    [togglePreviewPanel],
+    [threadPaneId, togglePreviewPanel],
   );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -4278,21 +4339,33 @@ function ChatViewContent(props: ChatViewProps) {
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     // activeThreadRef resets transitively with the active thread.
-  }, [activeThread?.id]);
+    // Scoped key: cloned state can repeat a bare thread id across
+    // environments, and per-thread view state must still reset then.
+  }, [activeThreadKey]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
-  }, [activeThread?.id]);
+  }, [activeThreadKey]);
 
   useEffect(() => {
     if (!activeThread?.id || terminalUiState.terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
+      // Split view: both panes mount fresh when the chat layout remounts
+      // (e.g. returning from Settings) — only the active pane's autofocus
+      // may run, or whichever pane's frame fires last steals ownership.
+      if (!isThreadPaneActive(threadPaneId)) return;
       focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
+  }, [
+    activeThread?.id,
+    activeThreadKey,
+    focusComposer,
+    terminalUiState.terminalOpen,
+    threadPaneId,
+  ]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -4578,7 +4651,11 @@ function ChatViewContent(props: ChatViewProps) {
     return composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget));
   });
   const activeBranchMismatchKey = branchMismatchKey(
-    activeThread?.id ?? null,
+    // Scoped key: bare thread ids can repeat across environments (cloned
+    // state), which would share dismissals between unrelated threads.
+    activeThread
+      ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
+      : null,
     localCheckoutBranchMismatch,
   );
   const showBranchMismatchBanner = shouldShowBranchMismatchBanner({
@@ -4899,7 +4976,7 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
-  }, [activeThread?.id]);
+  }, [activeThreadKey]);
 
   useEffect(() => {
     if (canOverrideServerThreadEnvMode) {
@@ -4976,6 +5053,11 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      // With the split open, only the active pane's ChatView may handle
+      // window shortcuts — both panes install this capture listener.
+      if (!isThreadPaneActive(threadPaneId)) {
+        return;
+      }
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
         event.stopPropagation();
         return;
@@ -5012,9 +5094,21 @@ function ChatViewContent(props: ChatViewProps) {
         }
       }
 
-      const command = resolveShortcutCommand(event, keybindings, {
+      let command = resolveShortcutCommand(event, keybindings, {
         context: shortcutContext,
       });
+      if (!command && paneServerConfig?.keybindings) {
+        // Project-script chords are written to the thread's own environment,
+        // so a pane on a non-primary server resolves them from that server's
+        // config. Only script commands are accepted here — app-global
+        // commands stay bound to the primary server's keybindings.
+        const paneCommand = resolveShortcutCommand(event, paneServerConfig.keybindings, {
+          context: shortcutContext,
+        });
+        if (paneCommand && projectScriptIdFromCommand(paneCommand)) {
+          command = paneCommand;
+        }
+      }
       if (!command) return;
 
       if (command === "terminal.toggle") {
@@ -5131,6 +5225,8 @@ function ChatViewContent(props: ChatViewProps) {
     splitTerminal,
     splitPanelTerminal,
     keybindings,
+    paneServerConfig?.keybindings,
+    threadPaneId,
     onToggleDiff,
     toggleRightPanel,
     toggleRightPanelMaximized,
@@ -6666,6 +6762,17 @@ function ChatViewContent(props: ChatViewProps) {
     ) {
       return;
     }
+    if (isSecondaryPane) {
+      // Creates a thread and navigates the router (the primary pane).
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "Not available in the split pane",
+          description: "Open this thread in the main pane to implement the plan in a new thread.",
+        }),
+      );
+      return;
+    }
 
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
@@ -6803,6 +6910,7 @@ function ChatViewContent(props: ChatViewProps) {
     createThread,
     deleteThread,
     isConnecting,
+    isSecondaryPane,
     isSendBusy,
     isServerThread,
     navigate,
@@ -7017,6 +7125,7 @@ function ChatViewContent(props: ChatViewProps) {
           onToggle={toggleRightPanelMaximized}
         />
       ) : null}
+      <ThreadPaneControls />
       {panelToggleControls}
     </div>
   );
@@ -7057,6 +7166,7 @@ function ChatViewContent(props: ChatViewProps) {
         <DiffPanel
           key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
           mode="embedded"
+          threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           initialGitScope={initialDiffPanelGitScope}
         />
@@ -7116,6 +7226,7 @@ function ChatViewContent(props: ChatViewProps) {
           environmentId={activeProject.environmentId}
           cwd={activeWorkspaceRoot}
           projectName={activeProject.title}
+          mentionScope={`${activeProject.environmentId}:${activeProject.id}`}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
@@ -7173,7 +7284,11 @@ function ChatViewContent(props: ChatViewProps) {
             openInCwd={gitCwd}
             activeProjectScripts={activeProject?.scripts}
             preferredScriptId={
-              activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+              activeProject
+                ? (lastInvokedScriptByProjectId[
+                    `${activeProject.environmentId}:${activeProject.id}`
+                  ] ?? null)
+                : null
             }
             keybindings={keybindings}
             availableEditors={availableEditors}
@@ -7366,6 +7481,17 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            mentionScope={
+                              // The thread itself carries the project id even
+                              // while the project entity is still loading —
+                              // degrading to env-only there would briefly
+                              // accept cross-project drops.
+                              activeThread
+                                ? `${activeThread.environmentId}:${activeThread.projectId}`
+                                : activeProject
+                                  ? `${activeProject.environmentId}:${activeProject.id}`
+                                  : environmentId
+                            }
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}
@@ -7608,7 +7734,14 @@ function ChatViewContent(props: ChatViewProps) {
         </RightPanelTabs>
       ) : null}
       {shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelSheet open onClose={closePreviewPanel}>
+        <RightPanelSheet
+          open
+          onClose={closePreviewPanel}
+          // While split, a blurred window-wide backdrop would hide the other
+          // pane — the panel stays modal, but the rest of the app stays
+          // legible and a click outside just dismisses it.
+          backdropClassName={threadSplitActive ? "bg-transparent backdrop-blur-none" : undefined}
+        >
           <RightPanelTabs
             mode="sheet"
             // Same effective inset as the closed-state titlebar controls

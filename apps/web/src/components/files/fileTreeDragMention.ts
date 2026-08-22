@@ -1,4 +1,5 @@
 import {
+  COMPOSER_MENTION_DRAG_SCOPE_TYPE,
   COMPOSER_MENTION_DRAG_TYPE,
   composerMentionFromTreePath,
 } from "~/components/chat/composerMentionDrag";
@@ -15,6 +16,8 @@ export interface FileTreeDragStartEvent {
 export interface FileTreeDragMentionHost {
   /** Drop the tree's gesture-applied selection of the dragged row. */
   deselect(treePath: string): void;
+  /** Environment the dragged paths live in; stamped on the drag payload. */
+  mentionScope?: string;
 }
 
 export interface FileTreeDragMentionController {
@@ -81,6 +84,9 @@ export function createFileTreeDragMentionController(
       }
       draggedPaths = dragged;
       event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mentions.join(" "));
+      if (host.mentionScope) {
+        event.dataTransfer.setData(COMPOSER_MENTION_DRAG_SCOPE_TYPE, host.mentionScope);
+      }
     },
     handleDragEnd() {
       if (draggedPaths.length === 0) {

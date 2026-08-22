@@ -2,6 +2,8 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -12,6 +14,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   preview,
   onClose,
 }: ExpandedImageDialogProps) {
+  const threadPaneId = useThreadPaneId();
   const [imageOffset, setImageOffset] = useState(0);
   const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
 
@@ -21,6 +24,17 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      // Split view: two dialogs can be open (one per pane) — only the
+      // active pane's dialog owns Escape and the arrow keys then. A lone
+      // dialog keeps them even from the inactive pane: it covers the whole
+      // window, so gating it off would strand a keyboard-undismissable modal
+      // (reachable via mod+\ while the dialog is open).
+      if (
+        !isThreadPaneActive(threadPaneId) &&
+        document.querySelectorAll("[data-expanded-image-dialog]").length > 1
+      ) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -41,7 +55,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigateImage, onClose, preview.images.length]);
+  }, [navigateImage, onClose, preview.images.length, threadPaneId]);
 
   const item = preview.images[index];
   if (!item) return null;
@@ -52,6 +66,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       role="dialog"
       aria-modal="true"
       aria-label="Expanded image preview"
+      data-expanded-image-dialog
     >
       <button
         type="button"

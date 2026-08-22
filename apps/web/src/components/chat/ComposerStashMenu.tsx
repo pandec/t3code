@@ -6,6 +6,8 @@ import { cn } from "~/lib/utils";
 import { type PromptStashEntry } from "../../promptStashStore";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { Button } from "../ui/button";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 
 const SNIPPET_MAX_CHARS = 90;
 
@@ -36,6 +38,7 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
   onClose: () => void;
 }) {
   const { entries, onRestore, onDelete, onClose } = props;
+  const threadPaneId = useThreadPaneId();
   const drawerRef = useRef<HTMLDivElement>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(entries[0]?.id ?? null);
 
@@ -66,6 +69,9 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      // Split view: gate the window listener to the active pane so two open
+      // stash menus can't both consume navigation keys.
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -104,7 +110,7 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [entries, highlightedEntry, highlightedId, onClose, onDelete, onRestore]);
+  }, [entries, highlightedEntry, highlightedId, onClose, onDelete, onRestore, threadPaneId]);
 
   return (
     <Command autoHighlight={false} mode="none">

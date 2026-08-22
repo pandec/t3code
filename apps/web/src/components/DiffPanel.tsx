@@ -88,6 +88,12 @@ const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
+  /**
+   * The thread whose repo this panel diffs. Without it the panel falls back
+   * to the routed thread, which is wrong for any host that isn't the routed
+   * pane (e.g. the secondary split pane) — hosts should always pass it.
+   */
+  threadRef?: ScopedThreadRef | null;
   composerDraftTarget: ScopedThreadRef | DraftId;
   initialGitScope: "branch" | "unstaged";
 }
@@ -96,6 +102,7 @@ export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({
   mode = "inline",
+  threadRef: threadRefProp,
   composerDraftTarget,
   initialGitScope: initialGitScopeProp,
 }: DiffPanelProps) {
@@ -118,10 +125,11 @@ export default function DiffPanel({
     readonly turnId: TurnId | null;
   } | null>(null);
 
-  const routeThreadRef = useParams({
+  const routeParamsThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
   });
+  const routeThreadRef = threadRefProp ?? routeParamsThreadRef;
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThread(routeThreadRef);
   const activeProjectId = activeThread?.projectId ?? null;

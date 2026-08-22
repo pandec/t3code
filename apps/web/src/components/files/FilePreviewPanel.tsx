@@ -69,6 +69,8 @@ interface FilePreviewPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
+  /** Drag-mention scope (`env` or `env:projectId`); defaults to the environment alone. */
+  mentionScope?: string | undefined;
   relativePath: string | null;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -759,6 +761,7 @@ export default function FilePreviewPanel({
   environmentId,
   cwd,
   projectName,
+  mentionScope,
   relativePath,
   threadRef,
   composerDraftTarget,
@@ -1077,6 +1080,7 @@ export default function FilePreviewPanel({
               environmentId={environmentId}
               cwd={cwd}
               projectName={projectName}
+              mentionScope={mentionScope}
               selectedPath={relativePath}
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}

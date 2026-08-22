@@ -28,6 +28,7 @@ import {
 import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { useThreadSplitStore } from "~/components/thread-split/threadSplitStore";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
 import {
@@ -540,9 +541,18 @@ function ToastProvider({ children, position = "top-right", ...props }: ToastProv
 function Toasts({ position }: { position: ToastPosition }) {
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const activeThreadRef = useActiveThreadRefFromRoute();
+  // Split view: while two panes are rendered, the secondary pane's thread is
+  // on screen too, so its thread-scoped toasts must not be filtered away by
+  // the route check.
+  const secondaryThreadRef = useThreadSplitStore((state) =>
+    state.splitMounted ? state.secondaryRef : null,
+  );
   const isTop = position.startsWith("top");
-  const visibleToasts = toasts.filter((toast) =>
-    shouldRenderThreadScopedToast(toast.data, activeThreadRef),
+  const visibleToasts = toasts.filter(
+    (toast) =>
+      shouldRenderThreadScopedToast(toast.data, activeThreadRef) ||
+      (secondaryThreadRef !== null &&
+        shouldRenderThreadScopedToast(toast.data, secondaryThreadRef)),
   );
   const visibleToastLayout = buildVisibleToastLayout(visibleToasts);
 
@@ -713,12 +723,20 @@ function AnchoredToastProvider({ children, ...props }: Toast.Provider.Props) {
 function AnchoredToasts() {
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const activeThreadRef = useActiveThreadRefFromRoute();
+  const secondaryThreadRef = useThreadSplitStore((state) =>
+    state.splitMounted ? state.secondaryRef : null,
+  );
 
   return (
     <Toast.Portal data-slot="toast-portal-anchored">
       <Toast.Viewport className="outline-none" data-slot="toast-viewport-anchored">
         {toasts
-          .filter((toast) => shouldRenderThreadScopedToast(toast.data, activeThreadRef))
+          .filter(
+            (toast) =>
+              shouldRenderThreadScopedToast(toast.data, activeThreadRef) ||
+              (secondaryThreadRef !== null &&
+                shouldRenderThreadScopedToast(toast.data, secondaryThreadRef)),
+          )
           .map((toast) => {
             const tooltipStyle = toast.data?.tooltipStyle ?? false;
             const positionerProps = toast.positionerProps;

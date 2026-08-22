@@ -7,6 +7,8 @@ import {
 } from "../../pendingUserInput";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { cn } from "~/lib/utils";
 
 interface PendingUserInputPanelProps {
@@ -132,9 +134,14 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // outside editable fields. Multi-select prompts toggle options in place; single-
   // select prompts keep the existing auto-advance behavior. Collapsed prompts opt
   // out, since the numbers they refer to are not on screen.
+  const threadPaneId = useThreadPaneId();
   useEffect(() => {
     if (!activeQuestion || isResponding || isCollapsed) return;
     const handler = (event: globalThis.KeyboardEvent) => {
+      // Split view: both panes can show a pending question at once, and this
+      // is a document-level listener — only the active pane may answer, or
+      // one keypress would answer (approve!) both panes' prompts.
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
@@ -157,7 +164,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, handleOptionSelection, isCollapsed, isResponding]);
+  }, [activeQuestion, handleOptionSelection, isCollapsed, isResponding, threadPaneId]);
 
   if (!activeQuestion) {
     return null;

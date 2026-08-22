@@ -88,6 +88,8 @@ import {
 import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { resolveShortcutCommand } from "../../keybindings";
 import {
   type TerminalContextDraft,
@@ -614,6 +616,8 @@ export interface ChatComposerSendOptions {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  /** Drag-mention scope (`env` or `env:projectId`); defaults to the environment alone. */
+  mentionScope?: string | undefined;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -729,9 +733,11 @@ export interface ChatComposerProps {
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const providerUsageSettingsHydrated = useClientSettingsHydrated();
+  const threadPaneId = useThreadPaneId();
   const {
     composerDraftTarget,
     environmentId,
+    mentionScope,
     routeKind,
     routeThreadRef,
     draftId,
@@ -3088,6 +3094,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      // Split view: both panes' composers install this window listener —
+      // only the active pane's composer may claim the stash shortcut.
+      if (!isThreadPaneActive(threadPaneId)) return;
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: getTerminalFocusOwner() !== null,
@@ -3123,6 +3132,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectSelectionRequired,
     stashCurrentPrompt,
     terminalOpen,
+    threadPaneId,
   ]);
 
   // ------------------------------------------------------------------
@@ -3261,6 +3271,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // editor never sees the drop; the load-bearing rules (native stop, "move"
   // effect, no eager focus) live in makeComposerMentionDragHandlers.
   const composerMentionDragHandlers = makeComposerMentionDragHandlers({
+    mentionScope: mentionScope ?? environmentId,
     insertMentionAtEnd: (text) => insertComposerTextAtEnd(text, { ensureLeadingBoundary: true }),
     setDragActive: setIsDragOverComposer,
     onInsertRejected: () => {
@@ -3268,6 +3279,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         type: "error",
         title: "Unable to add to chat",
         description: "The composer is busy; try again once it is ready.",
+      });
+    },
+    onScopeMismatch: () => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description:
+          "That file lives in another project or environment, so this thread can't reference it.",
       });
     },
   });

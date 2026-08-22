@@ -64,16 +64,18 @@ function SheetPopup({
   keepMounted = false,
   side = "right",
   variant = "default",
+  backdropClassName,
   ...props
 }: SheetPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   keepMounted?: boolean;
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
+  backdropClassName?: string | undefined;
 }) {
   return (
     <SheetPortal keepMounted={keepMounted}>
-      <SheetBackdrop />
+      <SheetBackdrop className={backdropClassName} />
       <SheetViewport side={side} variant={variant}>
         <SheetPrimitive.Popup
           className={cn(

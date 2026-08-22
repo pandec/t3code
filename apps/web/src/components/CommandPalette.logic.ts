@@ -15,7 +15,7 @@ import * as Result from "effect/Result";
 import { type ReactNode } from "react";
 import { sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
-import { type Project, type SidebarThreadSummary, type Thread } from "../types";
+import { type Project, type SidebarThreadSummary } from "../types";
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
@@ -43,7 +43,7 @@ export function browseInputEndPaddingClass(input: {
 export type SearchOverlayMode = "command" | "files" | "content";
 
 export interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in";
+  readonly kind: "add-project" | "new-thread-in" | "open-in-split";
 }
 
 export interface CommandPaletteUiState {
@@ -57,6 +57,7 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
+  | { readonly _tag: "OpenInSplit" }
   | { readonly _tag: "ClearOpenIntent" };
 
 export function reduceCommandPaletteUiState(
@@ -76,6 +77,8 @@ export function reduceCommandPaletteUiState(
       return { open: true, mode: "command", openIntent: { kind: "add-project" } };
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
+    case "OpenInSplit":
+      return { open: true, mode: "command", openIntent: { kind: "open-in-split" } };
     case "ClearOpenIntent":
       return state.openIntent ? { ...state, openIntent: null } : state;
   }
@@ -438,8 +441,10 @@ export type BuildThreadActionItemsThread = Pick<
 
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {
   threads: ReadonlyArray<TThread>;
-  activeThreadId?: Thread["id"];
-  projectTitleById: ReadonlyMap<Project["id"], string>;
+  /** Scoped `environmentId:threadId` key — bare thread ids collide across environments. */
+  activeThreadKey?: string;
+  /** Keyed by scoped `environmentId:projectId` — bare project ids collide across environments. */
+  projectTitleByKey: ReadonlyMap<string, string>;
   sortOrder: SidebarThreadSortOrder;
   icon: ReactNode;
   /** Optional content rendered inline before the title text per-thread. */
@@ -460,7 +465,8 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     input.limit === undefined ? sortedThreads : sortedThreads.slice(0, input.limit);
 
   return visibleThreads.map((thread) => {
-    const projectTitle = input.projectTitleById.get(thread.projectId);
+    const threadKey = `${thread.environmentId}:${thread.id}`;
+    const projectTitle = input.projectTitleByKey.get(`${thread.environmentId}:${thread.projectId}`);
     const descriptionParts: string[] = [];
 
     if (projectTitle) {
@@ -469,7 +475,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     if (thread.branch) {
       descriptionParts.push(`#${thread.branch}`);
     }
-    if (thread.id === input.activeThreadId) {
+    if (threadKey === input.activeThreadKey) {
       descriptionParts.push("Current thread");
     }
 
@@ -483,7 +489,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     return Object.assign(
       {
         kind: "action" as const,
-        value: `thread:${thread.id}`,
+        value: `thread:${threadKey}`,
         searchTerms: [
           thread.title,
           projectTitle ?? ``,

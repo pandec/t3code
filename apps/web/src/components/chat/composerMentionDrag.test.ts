@@ -4,6 +4,7 @@ import {
   COMPOSER_MENTION_DRAG_TYPE,
   type ComposerMentionDropHost,
   composerMentionFromTreePath,
+  composerMentionScopeMismatch,
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag.ts";
@@ -119,5 +120,19 @@ describe("makeComposerMentionDragHandlers", () => {
     const handlers = makeComposerMentionDragHandlers(host);
     handlers.onDrop(makeDragEvent({ mention: "" }).event);
     expect(log).toEqual(["active:false"]);
+  });
+});
+
+describe("composerMentionScopeMismatch", () => {
+  it("rejects across environments and across projects in one environment", () => {
+    expect(composerMentionScopeMismatch("env-a:proj-1", "env-b:proj-1")).toBe(true);
+    expect(composerMentionScopeMismatch("env-a:proj-1", "env-a:proj-2")).toBe(true);
+  });
+
+  it("accepts a matching project and degrades to environment-only when one side lacks it", () => {
+    expect(composerMentionScopeMismatch("env-a:proj-1", "env-a:proj-1")).toBe(false);
+    expect(composerMentionScopeMismatch("env-a:proj-1", "env-a")).toBe(false);
+    expect(composerMentionScopeMismatch("env-a", "env-a:proj-1")).toBe(false);
+    expect(composerMentionScopeMismatch("env-a", "env-b")).toBe(true);
   });
 });
