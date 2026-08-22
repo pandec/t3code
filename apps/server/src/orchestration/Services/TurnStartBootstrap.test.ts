@@ -18,6 +18,7 @@ import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./TurnStartBootstrap.ts";
 
 type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
+type DispatchOptions = Parameters<OrchestrationEngine.OrchestrationEngineShape["dispatch"]>[1];
 
 const threadId = ThreadId.make("thread-bootstrap-test");
 const modelSelection = {
@@ -74,15 +75,20 @@ const localStatusWithRef = (refName: string | null) =>
 
 const makeLayer = (input: {
   readonly dispatched: Array<OrchestrationCommand>;
+  readonly dispatchOptions?: Array<DispatchOptions>;
   readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
+  readonly projectSetupScriptRunner?: Partial<
+    ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
+  >;
   readonly failTurnStart?: boolean;
   readonly failThreadDelete?: boolean;
 }) =>
   TurnStartBootstrap.layer.pipe(
     Layer.provide(
       Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-        dispatch: (command) => {
+        dispatch: (command, options) => {
           input.dispatched.push(command);
+          input.dispatchOptions?.push(options);
           if (input.failThreadDelete && command.type === "thread.delete") {
             return Effect.die(new Error("thread cleanup exploded"));
           }
@@ -108,6 +114,7 @@ const makeLayer = (input: {
     Layer.provide(
       Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
         runForThread: () => Effect.succeed({ status: "no-script" as const }),
+        ...input.projectSetupScriptRunner,
       }),
     ),
     Layer.provide(
@@ -122,6 +129,10 @@ describe("TurnStartBootstrap", () => {
   it.effect("creates the thread, prepares the worktree, then starts the turn", () =>
     Effect.gen(function* () {
       const dispatched: Array<OrchestrationCommand> = [];
+      const dispatchOptions: Array<DispatchOptions> = [];
+      const clientOptions = {
+        origin: { surface: "mobile", appVersion: "1.2.3" },
+      } as const;
       const result = yield* Effect.gen(function* () {
         const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
         return yield* bootstrap.dispatchTurnStart(
@@ -134,13 +145,15 @@ describe("TurnStartBootstrap", () => {
             },
             runSetupScript: true,
           }),
+          clientOptions,
         );
-      }).pipe(Effect.provide(makeLayer({ dispatched })));
+      }).pipe(Effect.provide(makeLayer({ dispatched, dispatchOptions })));
 
       assert.deepEqual(
         dispatched.map((command) => command.type),
         ["thread.create", "thread.meta.update", "thread.turn.start"],
       );
+      assert.deepEqual(dispatchOptions, [clientOptions, clientOptions, clientOptions]);
       const metaUpdate = dispatched[1] as Extract<
         OrchestrationCommand,
         { type: "thread.meta.update" }
@@ -150,6 +163,63 @@ describe("TurnStartBootstrap", () => {
       const turnStart = dispatched[2] as TurnStartCommand;
       assert.isUndefined(turnStart.bootstrap);
       assert.equal(result.sequence, dispatched.length);
+    }),
+  );
+
+  it.effect("passes client origin through setup activity and cleanup dispatches", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const dispatchOptions: Array<DispatchOptions> = [];
+      const clientOptions = {
+        origin: { surface: "desktop", appVersion: "2.0.0" },
+      } as const;
+
+      const result = yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        return yield* bootstrap.dispatchTurnStart(
+          makeTurnStartCommand({
+            createThread: createThreadBootstrap,
+            prepareWorktree: {
+              projectCwd: "/tmp/project",
+              baseBranch: "main",
+              branch: "t3code/test-branch",
+            },
+            runSetupScript: true,
+          }),
+          clientOptions,
+        );
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            dispatchOptions,
+            failTurnStart: true,
+            projectSetupScriptRunner: {
+              runForThread: () =>
+                Effect.succeed({
+                  status: "started" as const,
+                  scriptId: "script-1",
+                  scriptName: "Setup",
+                  terminalId: "terminal-1",
+                  cwd: "/tmp/worktrees/t3code/test-branch",
+                }),
+            },
+          }),
+        ),
+        Effect.flip,
+      );
+
+      assert.equal(result._tag, "OrchestrationDispatchCommandError");
+      assert.equal(dispatched.length, 6);
+      assert.deepEqual(
+        dispatched
+          .filter((command) => command.type === "thread.activity.append")
+          .map((command) => command.activity.kind)
+          .sort(),
+        ["setup-script.requested", "setup-script.started"],
+      );
+      assert.equal(dispatchOptions.length, dispatched.length);
+      assert.isTrue(dispatchOptions.every((options) => options === clientOptions));
     }),
   );
 

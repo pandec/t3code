@@ -92,6 +92,7 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
+import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { resolveThreadFeedInsetBaseline } from "./threadFeedInsets";
 import type { ThreadHistoryWindowState } from "./threadHistoryLoadMore";
 
@@ -279,9 +280,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const listRef = useRef<LegendListRef>(null);
   const feedTouchStartRef = useRef<{ pageX: number; pageY: number } | null>(null);
   const selectedThreadKeyRef = useRef(selectedThreadKey);
-  const lastScrolledAnchorMessageIdRef = useRef<MessageId | null>(null);
+  const lastScrolledSubmittedMessageIdRef = useRef<MessageId | null>(null);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
+  const [submittedMessageId, setSubmittedMessageId] = useState<MessageId | null>(null);
   const [endFollowEnabled, setEndFollowEnabled] = useState(true);
   const [measuredComposerOverlay, setMeasuredComposerOverlay] = useState<{
     readonly threadKey: string;
@@ -509,17 +511,20 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
   useEffect(() => {
     setAnchorMessageId(null);
-    lastScrolledAnchorMessageIdRef.current = null;
+    setSubmittedMessageId(null);
+    lastScrolledSubmittedMessageIdRef.current = null;
     setEndFollowEnabled(true);
     freeze.set(false);
   }, [freeze, selectedThreadKey]);
 
   useEffect(() => {
     if (
-      anchorMessageId === null ||
-      lastScrolledAnchorMessageIdRef.current === anchorMessageId ||
+      submittedMessageId === null ||
+      lastScrolledSubmittedMessageIdRef.current === submittedMessageId ||
       contentPresentationKind !== "ready" ||
-      !selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === anchorMessageId)
+      !selectedThreadFeed.some(
+        (entry) => entry.type === "message" && entry.id === submittedMessageId,
+      )
     ) {
       return;
     }
@@ -529,7 +534,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       if (selectedThreadKeyRef.current !== targetThreadKey) {
         return;
       }
-      lastScrolledAnchorMessageIdRef.current = anchorMessageId;
+      lastScrolledSubmittedMessageIdRef.current = submittedMessageId;
       // On iOS, keep keyboard-driven inset updates alive through both the
       // deterministic reconciliation deadline and a bounded native dismiss.
       // Android retains its direct dismiss flow and aborts scrolling on failure.
@@ -587,9 +592,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             void flushMobileDiagnostics();
             if (
               selectedThreadKeyRef.current === targetThreadKey &&
-              lastScrolledAnchorMessageIdRef.current === anchorMessageId
+              lastScrolledSubmittedMessageIdRef.current === submittedMessageId
             ) {
-              lastScrolledAnchorMessageIdRef.current = null;
+              lastScrolledSubmittedMessageIdRef.current = null;
               freeze.set(false);
             }
             return;
@@ -598,7 +603,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
         if (
           selectedThreadKeyRef.current !== targetThreadKey ||
-          lastScrolledAnchorMessageIdRef.current !== anchorMessageId
+          lastScrolledSubmittedMessageIdRef.current !== submittedMessageId
         ) {
           return;
         }
@@ -608,11 +613,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         } catch {
           if (
             selectedThreadKeyRef.current !== targetThreadKey ||
-            lastScrolledAnchorMessageIdRef.current !== anchorMessageId
+            lastScrolledSubmittedMessageIdRef.current !== submittedMessageId
           ) {
             return;
           }
-          lastScrolledAnchorMessageIdRef.current = null;
+          lastScrolledSubmittedMessageIdRef.current = null;
           freeze.set(false);
         }
       };
@@ -620,7 +625,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     });
     return () => cancelAnimationFrame(frame);
   }, [
-    anchorMessageId,
+    submittedMessageId,
     freeze,
     keyboardAnimation.height,
     contentPresentationKind,
@@ -636,12 +641,24 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleSendMessage = useCallback(
     async (options?: SendMessageOptions) => {
       const targetThreadKey = selectedThreadKey;
+      const hasUserMessage = selectedThreadFeed.some(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      );
       const messageId = await props.onSendMessage(options);
       if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
         return messageId;
       }
 
-      setAnchorMessageId(messageId);
+      setSubmittedMessageId(messageId);
+      setAnchorMessageId((currentAnchorMessageId) =>
+        resolveThreadFeedSubmissionAnchor({
+          currentAnchorMessageId,
+          submittedMessageId: messageId,
+          hasStartedTurn: props.selectedThread.latestTurn !== null,
+          hasUserMessage,
+          queuedMessageCount: props.selectedThreadQueueCount,
+        }),
+      );
       composerEditorRef.current?.blur();
       const stickyResetHandled = requestKeyboardStickyReset("message-send");
       recordMobileDiagnostic("keyboard-sticky", {
@@ -652,7 +669,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       });
       return messageId;
     },
-    [props.onSendMessage, selectedThreadKey],
+    [
+      props.onSendMessage,
+      props.selectedThread.latestTurn,
+      props.selectedThreadQueueCount,
+      selectedThreadFeed,
+      selectedThreadKey,
+    ],
   );
 
   const collapseComposer = useCallback(() => {
@@ -729,6 +752,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}
+            submittedMessageId={submittedMessageId}
             onAnchorEndSpaceConsumed={handleAnchorEndSpaceConsumed}
             contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
             contentInsetBaseline={contentInsetBaseline}

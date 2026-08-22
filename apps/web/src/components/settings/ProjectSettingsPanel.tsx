@@ -120,9 +120,12 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { SessionImportDialog } from "../SessionImportDialog";
 import { inheritedEnvModeLabels } from "./projectEnvModeInheritance";
+import {
+  canPickExternalProjectFavicon,
+  ProjectFaviconPickerDialog,
+} from "./ProjectFaviconPickerDialog";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
@@ -301,6 +304,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 
 function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const navigate = useNavigate();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const settings = usePrimarySettings();
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -334,6 +338,15 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
   const faviconPath = representative.faviconPath ?? null;
+  const pickProjectFavicon =
+    typeof window !== "undefined" &&
+    group.memberProjects.every(
+      (member) =>
+        member.environmentId === primaryEnvironmentId &&
+        canPickExternalProjectFavicon(member.workspaceRoot, navigator.platform),
+    )
+      ? window.desktopBridge?.pickProjectFavicon
+      : undefined;
 
   // ----- thread accent -----
   const projectAccentColors = useProjectAccentColors();
@@ -1279,6 +1292,9 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         cwd={representative.workspaceRoot}
         environmentId={representative.environmentId}
         onOpenChange={setFaviconPickerOpen}
+        {...(pickProjectFavicon
+          ? { onPickExternal: () => pickProjectFavicon(representative.workspaceRoot) }
+          : {})}
         onSelect={(path) => void setFaviconPath(path)}
         open={faviconPickerOpen}
         projectName={group.displayName}

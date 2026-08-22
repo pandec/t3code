@@ -43,12 +43,13 @@ import {
 import { createPortal } from "react-dom";
 import {
   clampCollapsedComposerCursor,
+  type ComposerSubmissionIntent,
   type ComposerTrigger,
   collapseExpandedComposerCursor,
+  composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
-  shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import {
@@ -603,6 +604,7 @@ export interface ChatComposerHandle {
 
 export interface ChatComposerSendOptions {
   readonly deliveryIntent?: ThreadOutboxDeliveryIntent;
+  readonly submissionIntent?: ComposerSubmissionIntent;
   readonly directAnnotation?: {
     readonly annotation: PreviewAnnotationPayload;
     readonly image: ComposerImageAttachment | null;
@@ -2631,11 +2633,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return true;
       }
     }
-    if (
-      key === "Enter" &&
-      shouldSubmitComposerOnEnter({ isMobileViewport, shiftKey: event.shiftKey })
-    ) {
-      submitComposer();
+    const submissionIntent =
+      key === "Enter"
+        ? composerSubmissionIntentForEnter({
+            isMobileViewport,
+            shiftKey: event.shiftKey,
+            modifierKey: event.metaKey || event.ctrlKey,
+            isDraftThread: routeKind === "draft",
+          })
+        : null;
+    if (submissionIntent) {
+      submitComposer(undefined, { submissionIntent });
       return true;
     }
     // Up-arrow on an empty composer pulls the newest queued message back for

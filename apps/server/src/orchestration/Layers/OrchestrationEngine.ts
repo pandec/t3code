@@ -1,4 +1,5 @@
 import type {
+  OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
@@ -66,6 +67,7 @@ const decodeProjectActionReceiptRejection = Schema.decodeUnknownOption(
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  origin: OrchestrationClientOrigin | undefined;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
@@ -261,8 +263,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
-        const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
-        const enrichedEventBases = yield* Effect.forEach(eventBases, (event) =>
+        const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        // Stamp the dispatching client's origin before fork-owned repository
+        // identity enrichment, then persist and project the enriched events.
+        const originStampedEvents =
+          envelope.origin === undefined
+            ? plannedEvents
+            : plannedEvents.map((planned) => ({
+                ...planned,
+                metadata: { ...planned.metadata, origin: envelope.origin },
+              }));
+        const enrichedEventBases = yield* Effect.forEach(originStampedEvents, (event) =>
           enrichProjectEventForPersistence(event, commandReadModel),
         );
         const committedCommand = yield* sql
@@ -420,11 +431,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     filter,
   ) => eventStore.readFromSequence(fromSequenceExclusive, limit, filter);
 
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
+  const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, {
         command,
+        origin: options?.origin,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
       });

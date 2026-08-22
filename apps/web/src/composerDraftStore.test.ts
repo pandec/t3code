@@ -59,6 +59,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
+  beginBackgroundDraftSubmissionByRef,
+  clearBackgroundDraftSubmissionByRef,
   clearComposerDraftsEnvironment,
   finalizePromotedDraftThreadByRef,
   hydrateImagesFromPersisted,
@@ -131,6 +133,7 @@ function resetComposerDraftStore() {
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+    backgroundSubmissionThreadKeys: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
   });
@@ -172,6 +175,33 @@ function draftFor(threadId: ThreadId, environmentId: EnvironmentId = LEGACY_TEST
 function draftByKey(key: string) {
   return useComposerDraftStore.getState().draftsByThreadKey[key] ?? undefined;
 }
+
+describe("composerDraftStore background submission tracking", () => {
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-background"));
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("keeps pending background submissions transient and clears them explicitly", () => {
+    beginBackgroundDraftSubmissionByRef(threadRef);
+
+    expect(useComposerDraftStore.getState().backgroundSubmissionThreadKeys).toEqual({
+      [scopedThreadKey(threadRef)]: true,
+    });
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState());
+    expect(persistedState).not.toHaveProperty("backgroundSubmissionThreadKeys");
+
+    clearBackgroundDraftSubmissionByRef(threadRef);
+    expect(useComposerDraftStore.getState().backgroundSubmissionThreadKeys).toEqual({});
+  });
+});
 
 describe("composerDraftStore addImages", () => {
   const threadId = ThreadId.make("thread-dedupe");
@@ -923,6 +953,8 @@ describe("composerDraftStore project draft thread mapping", () => {
       store.addImage(localDraftId, makeImage({ id: "img-local", previewUrl: "blob:local-draft" }));
       store.setPrompt(localThreadRef, "local thread draft");
       store.setPrompt(remoteThreadRef, "remote thread draft");
+      beginBackgroundDraftSubmissionByRef(localThreadRef);
+      beginBackgroundDraftSubmissionByRef(remoteThreadRef);
 
       clearComposerDraftsEnvironment(TEST_ENVIRONMENT_ID);
 
@@ -933,6 +965,9 @@ describe("composerDraftStore project draft thread mapping", () => {
       expect(next.getComposerDraft(remoteDraftId)?.prompt).toBe("remote thread draft");
       expect(next.getComposerDraft(localThreadRef)).toBeNull();
       expect(next.getComposerDraft(remoteThreadRef)?.prompt).toBe("remote thread draft");
+      expect(next.backgroundSubmissionThreadKeys).toEqual({
+        [scopedThreadKey(remoteThreadRef)]: true,
+      });
       expect(revokeSpy).toHaveBeenCalledWith("blob:local-draft");
     } finally {
       URL.revokeObjectURL = originalRevokeObjectUrl;
@@ -1266,14 +1301,18 @@ describe("composerDraftStore project draft thread mapping", () => {
 
   it("finalizes a promoted draft after the canonical thread route is active", () => {
     const store = useComposerDraftStore.getState();
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
     store.setPrompt(draftId, "promote me");
     markPromotedDraftThread(threadId);
+    beginBackgroundDraftSubmissionByRef(threadRef);
 
-    finalizePromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
+    finalizePromotedDraftThreadByRef(threadRef);
 
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
+    const next = useComposerDraftStore.getState();
+    expect(next.getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(next.getDraftThread(draftId)).toBeNull();
+    expect(next.backgroundSubmissionThreadKeys).toEqual({});
     expect(draftByKey(draftId)).toBeUndefined();
   });
 

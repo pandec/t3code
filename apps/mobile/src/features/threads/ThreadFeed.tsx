@@ -205,6 +205,7 @@ export interface ThreadFeedProps {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
+  readonly submittedMessageId: MessageId | null;
   readonly onAnchorEndSpaceConsumed: (messageId: MessageId) => void;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentInsetBaseline: number;
@@ -2238,12 +2239,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     transitionEndFollow({ type: "reset" });
   }, [clearUserScrollSettle, feedThreadKey, transitionEndFollow]);
   useEffect(() => {
-    if (props.anchorMessageId !== null) {
+    if (props.submittedMessageId !== null) {
       clearUserScrollSettle();
       userScrollSessionRef.current = false;
       transitionEndFollow({ type: "reset" });
     }
-  }, [clearUserScrollSettle, props.anchorMessageId, transitionEndFollow]);
+  }, [clearUserScrollSettle, props.submittedMessageId, transitionEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2288,7 +2289,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     const resolved = resolveChatListAnchoredEndSpace(
       presentedFeed,
       props.anchorMessageId,
-      (entry) => (entry.type === "message" ? entry.id : null),
+      (entry) => (entry.type === "message" && entry.message.role === "user" ? entry.id : null),
       { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
     );
     const anchorMessageId = props.anchorMessageId;
@@ -2342,7 +2343,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.keyboardVisible,
     props.listRef,
   ]);
-
   const terminalAssistantMessageIds = useMemo(() => {
     const terminalIdsByTurn = new Map<TurnId, string>();
     for (const entry of props.feed) {

@@ -57,6 +57,7 @@ function resetComposerDraftStore() {
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+    backgroundSubmissionThreadKeys: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
   });
