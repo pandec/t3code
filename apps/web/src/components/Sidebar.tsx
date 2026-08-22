@@ -1621,7 +1621,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <PinIcon
                   aria-label="Pinned"
                   role="img"
-                  className="size-3 shrink-0 text-muted-foreground/65"
+                  className={cn(
+                    "size-3 shrink-0 text-muted-foreground/65",
+                    // The quick actions include their own interactive pin toggle.
+                    props.pinningSupported &&
+                      "group-has-[:focus-visible]/sidebar-row:hidden group-hover/sidebar-row:hidden",
+                    props.pinningSupported && snoozeMenuOpen && "hidden",
+                  )}
                 />
               ) : null}
               {/* The visible state owns this slot's width: status at rest,
