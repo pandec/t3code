@@ -1658,10 +1658,16 @@ function OpenCommandPaletteDialog(props: {
     if (openIntent?.kind !== "open-in-split") {
       return;
     }
+    if (allThreadItems.length === 0) {
+      // Thread shells may still be hydrating (cold load, environments still
+      // connecting) — hold the intent like the new-thread-in guard above and
+      // re-run when the list lands.
+      return;
+    }
     if (openInSplitItems.length === 0) {
-      // Routine for one-thread setups (unlike the new-thread-in guard, which
-      // only trips with zero projects) — say so instead of silently opening
-      // the plain palette.
+      // Threads exist but every one is already on screen — routine for
+      // one-thread setups, so say so instead of silently opening the plain
+      // palette.
       clearOpenIntent();
       setOpen(false);
       toastManager.add(
@@ -1688,7 +1694,15 @@ function OpenCommandPaletteDialog(props: {
         },
       ],
     });
-  }, [browseNavigation, clearOpenIntent, openInSplitItems, openIntent, pushPaletteView, setOpen]);
+  }, [
+    allThreadItems.length,
+    browseNavigation,
+    clearOpenIntent,
+    openInSplitItems,
+    openIntent,
+    pushPaletteView,
+    setOpen,
+  ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 

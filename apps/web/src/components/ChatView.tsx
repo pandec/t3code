@@ -282,7 +282,6 @@ import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import {
-  primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
   primaryServerSettingsAtom,
   serverEnvironment,
@@ -428,6 +427,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_PANE_AVAILABLE_EDITORS: never[] = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -1317,6 +1317,13 @@ function ChatViewContent(props: ChatViewProps) {
     state.splitMounted && state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
   );
   const threadSplitActive = splitSecondaryThreadKey !== null;
+  // Deliberately NOT mounted-gated like the key above: terminal ownership
+  // must swap in the same commit the secondary thread is picked or dropped,
+  // or both panes would attach the same terminal for a frame. While a picked
+  // split is not rendered this only costs a prewarmed hidden surface.
+  const splitReservedTerminalThreadKey = useThreadSplitStore((state) =>
+    state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
+  );
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -1831,7 +1838,9 @@ function ChatViewContent(props: ChatViewProps) {
       // the secondary pane owns only its own thread's terminals and the
       // primary pane owns everything else.
       if (isSecondaryPane) return nextThreadKey === routeThreadKey;
-      return splitSecondaryThreadKey === null || nextThreadKey !== splitSecondaryThreadKey;
+      return (
+        splitReservedTerminalThreadKey === null || nextThreadKey !== splitReservedTerminalThreadKey
+      );
     });
   }, [
     draftThreadKeys,
@@ -1839,7 +1848,7 @@ function ChatViewContent(props: ChatViewProps) {
     openTerminalThreadKeys,
     routeThreadKey,
     serverThreadKeys,
-    splitSecondaryThreadKey,
+    splitReservedTerminalThreadKey,
   ]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   // Reading a finished thread clears the sidebar's Done badge. The visit is
@@ -2856,12 +2865,12 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const primaryAvailableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
-  // Editors must come from this thread's own environment — the primary
-  // server's list would offer/submit editor ids the pane's server may not
-  // have (visible with cross-environment split panes).
+  // Editors must come from this thread's own environment — another server's
+  // list would offer/submit editor ids this pane's server may not have
+  // (visible with cross-environment split panes). While the config is still
+  // unresolved, offering none beats offering a wrong list.
   const paneServerConfig = serverConfigs.get(environmentId);
-  const availableEditors = paneServerConfig?.availableEditors ?? primaryAvailableEditors;
+  const availableEditors = paneServerConfig?.availableEditors ?? EMPTY_PANE_AVAILABLE_EDITORS;
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -7701,7 +7710,14 @@ function ChatViewContent(props: ChatViewProps) {
         </RightPanelTabs>
       ) : null}
       {shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelSheet open onClose={closePreviewPanel}>
+        <RightPanelSheet
+          open
+          onClose={closePreviewPanel}
+          // While split, a blurred window-wide backdrop would hide the other
+          // pane — the panel stays modal, but the rest of the app stays
+          // legible and a click outside just dismisses it.
+          backdropClassName={threadSplitActive ? "bg-transparent backdrop-blur-none" : undefined}
+        >
           <RightPanelTabs
             mode="sheet"
             // Same effective inset as the closed-state titlebar controls

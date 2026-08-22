@@ -6,6 +6,7 @@ import ChatView from "../ChatView";
 import { Button } from "~/components/ui/button";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { useThreadDetail, useThreadShell, useThreadStatus } from "../../state/entities";
+import { useEnvironment, useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentShell } from "../../state/shell";
 import { resolveThreadRouteRenderState } from "../../threadRoutes";
@@ -54,8 +55,32 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
     status: serverThreadStatus,
   });
 
-  if (renderState === "missing") {
-    return <ThreadPaneUnavailable />;
+  const { isReady: environmentCatalogReady } = useEnvironments();
+  const environment = useEnvironment(threadRef.environmentId);
+
+  if (renderState === "missing" || (environmentCatalogReady && environment === null)) {
+    return (
+      <ThreadPaneNotice
+        title="Thread unavailable"
+        description="This thread was deleted or its environment is gone."
+      />
+    );
+  }
+
+  // The route can lean on the sidebar's connection indicators; this pane has
+  // no chrome of its own, so a never-bootstrapping environment must say so
+  // instead of staying blank forever.
+  if (
+    renderState === "loading" &&
+    environment !== null &&
+    environment.connection.phase !== "connected"
+  ) {
+    return (
+      <ThreadPaneNotice
+        title="Environment not connected"
+        description={`Waiting for ${environment.label} to connect.`}
+      />
+    );
   }
 
   return (
@@ -74,21 +99,19 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
   );
 }
 
-function ThreadPaneUnavailable() {
+function ThreadPaneNotice({ title, description }: { title: string; description: string }) {
   const closeSplit = useThreadSplitStore((state) => state.closeSplit);
   return (
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background p-6 text-center">
-      <div className="text-sm font-medium text-foreground">Thread unavailable</div>
-      <div className="max-w-64 text-sm text-muted-foreground">
-        This thread was deleted or its environment is gone.
-      </div>
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <div className="max-w-64 text-sm text-muted-foreground">{description}</div>
       <div className="flex items-center gap-2">
         <Button
           size="sm"
           variant="outline"
           onClick={() => openCommandPalette({ open: "open-in-split" })}
         >
-          Choose thread…
+          Choose thread...
         </Button>
         <Button size="sm" variant="ghost" onClick={closeSplit}>
           Close split

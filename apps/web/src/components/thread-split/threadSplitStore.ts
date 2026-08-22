@@ -33,7 +33,8 @@ function readStoredSplitRatio(): number {
     return DEFAULT_SPLIT_RATIO;
   }
   const raw = window.localStorage.getItem(SPLIT_RATIO_STORAGE_KEY);
-  if (raw === null) {
+  // Number("") is 0, which would clamp to the minimum instead of the default.
+  if (raw === null || raw.trim().length === 0) {
     return DEFAULT_SPLIT_RATIO;
   }
   return clampSplitRatio(Number(raw));
@@ -155,6 +156,25 @@ function focusThreadPane(paneId: ThreadPaneId): void {
     return;
   }
   runtime.root?.focus();
+}
+
+/**
+ * A pointerdown that prevents default (toolbar buttons, drag affordances)
+ * keeps DOM focus where it was — possibly in the other pane. Active pane and
+ * real focus must not diverge: global focus probes (getTerminalFocusOwner)
+ * would describe the other pane's terminal while this pane's handlers act on
+ * it. Deferred a tick so it runs after the event cascade's default focusing.
+ */
+export function reclaimThreadPaneFocus(paneId: ThreadPaneId): void {
+  window.setTimeout(() => {
+    const state = useThreadSplitStore.getState();
+    if (!state.splitMounted || state.activePaneId !== paneId) return;
+    const otherRoot = paneRuntimes[paneId === "primary" ? "secondary" : "primary"].root;
+    const activeElement = document.activeElement;
+    if (otherRoot && activeElement instanceof HTMLElement && otherRoot.contains(activeElement)) {
+      focusThreadPane(paneId);
+    }
+  }, 0);
 }
 
 /** Jump focus to the other pane. Returns false while the split is not rendered. */

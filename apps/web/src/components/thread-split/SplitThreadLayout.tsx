@@ -5,7 +5,6 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { ComposerHandleContext, useComposerHandleContext } from "../../composerHandleContext";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
-import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { resolveThreadRouteRef } from "../../threadRoutes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
@@ -13,6 +12,7 @@ import { ThreadPaneContext } from "./threadPaneContext";
 import {
   clampSplitRatio,
   noteThreadPaneFocus,
+  reclaimThreadPaneFocus,
   registerThreadPaneComposer,
   registerThreadPaneRoot,
   THREAD_SPLIT_MEDIA_QUERY,
@@ -31,9 +31,10 @@ const SINGLE_GRID_TEMPLATE_COLUMNS = "minmax(0, 1fr)";
  * Wraps the chat routes' content. The tree shape is identical whether the
  * split is open or closed — only the separator and the secondary pane mount
  * and unmount — so toggling the split never remounts the routed ChatView
- * (which would reload previews, terminals, and scroll positions). The shared
- * DiffWorkerPoolProvider up here also means both panes reuse one worker pool
- * instead of spawning one per ChatView.
+ * instance. (Its right panel still remounts on toggle: the split forces the
+ * sheet presentation, which lives in a different tree position than the
+ * inline one.) No diff worker pool is hoisted here on purpose: the pool is a
+ * module singleton, so both panes' ChatView-level providers already share it.
  */
 export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const secondaryRef = useThreadSplitStore((state) => state.secondaryRef);
@@ -67,9 +68,7 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const splitOpen = secondaryRef !== null && isWideEnoughForSplit;
 
   return (
-    <DiffWorkerPoolProvider>
-      <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
-    </DiffWorkerPoolProvider>
+    <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
   );
 }
 
@@ -163,7 +162,10 @@ function ThreadPaneSection({
       data-thread-pane-id={paneId}
       data-active={isActive ? "true" : "false"}
       className="relative h-full min-h-0 min-w-0 outline-none"
-      onPointerDownCapture={() => setActivePane(paneId)}
+      onPointerDownCapture={() => {
+        setActivePane(paneId);
+        reclaimThreadPaneFocus(paneId);
+      }}
       onFocusCapture={(event) => {
         setActivePane(paneId);
         noteThreadPaneFocus(paneId, event.target);
@@ -186,7 +188,15 @@ function SplitResizeHandle({
   containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const setSplitRatio = useThreadSplitStore((state) => state.setSplitRatio);
-  const dragStateRef = useRef<{ pointerId: number; ratio: number } | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    ratio: number;
+    // Captured once at pointerdown: reading getBoundingClientRect per
+    // pointermove would force a synchronous layout of both panes on every
+    // move, defeating the rAF write coalescing below.
+    boundsLeft: number;
+    boundsWidth: number;
+  } | null>(null);
   const frameRef = useRef<number | null>(null);
 
   const applyRatio = useCallback(
@@ -206,21 +216,26 @@ function SplitResizeHandle({
       className="relative z-40 h-full w-1 shrink-0 cursor-col-resize bg-border/60 hover:bg-primary/40 data-[dragging=true]:bg-primary/60"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        const container = containerRef.current;
+        if (!container) return;
+        const bounds = container.getBoundingClientRect();
+        if (bounds.width <= 0) return;
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
         event.currentTarget.dataset.dragging = "true";
         dragStateRef.current = {
           pointerId: event.pointerId,
           ratio: useThreadSplitStore.getState().splitRatio,
+          boundsLeft: bounds.left,
+          boundsWidth: bounds.width,
         };
       }}
       onPointerMove={(event) => {
         const dragState = dragStateRef.current;
-        const container = containerRef.current;
-        if (!dragState || dragState.pointerId !== event.pointerId || !container) return;
-        const bounds = container.getBoundingClientRect();
-        if (bounds.width <= 0) return;
-        dragState.ratio = clampSplitRatio((event.clientX - bounds.left) / bounds.width);
+        if (!dragState || dragState.pointerId !== event.pointerId) return;
+        dragState.ratio = clampSplitRatio(
+          (event.clientX - dragState.boundsLeft) / dragState.boundsWidth,
+        );
         if (frameRef.current === null) {
           frameRef.current = window.requestAnimationFrame(() => {
             frameRef.current = null;
@@ -240,8 +255,9 @@ function SplitResizeHandle({
         }
         setSplitRatio(dragState.ratio);
       }}
-      onPointerCancel={() => {
+      onPointerCancel={(event) => {
         dragStateRef.current = null;
+        delete event.currentTarget.dataset.dragging;
         if (frameRef.current !== null) {
           window.cancelAnimationFrame(frameRef.current);
           frameRef.current = null;

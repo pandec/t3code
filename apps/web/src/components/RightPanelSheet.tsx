@@ -7,6 +7,7 @@ export function RightPanelSheet(props: {
   children: ReactNode;
   open: boolean;
   onClose: () => void;
+  backdropClassName?: string | undefined;
 }) {
   return (
     <Sheet
@@ -22,6 +23,7 @@ export function RightPanelSheet(props: {
         showCloseButton={false}
         keepMounted
         className={RIGHT_PANEL_SHEET_CLASS_NAME}
+        backdropClassName={props.backdropClassName}
       >
         {props.children}
       </SheetPopup>
