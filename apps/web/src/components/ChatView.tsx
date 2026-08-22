@@ -4339,11 +4339,13 @@ function ChatViewContent(props: ChatViewProps) {
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     // activeThreadRef resets transitively with the active thread.
-  }, [activeThread?.id]);
+    // Scoped key: cloned state can repeat a bare thread id across
+    // environments, and per-thread view state must still reset then.
+  }, [activeThreadKey]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
-  }, [activeThread?.id]);
+  }, [activeThreadKey]);
 
   useEffect(() => {
     if (!activeThread?.id || terminalUiState.terminalOpen) return;
@@ -4353,7 +4355,7 @@ function ChatViewContent(props: ChatViewProps) {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
+  }, [activeThread?.id, activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -4964,7 +4966,7 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
-  }, [activeThread?.id]);
+  }, [activeThreadKey]);
 
   useEffect(() => {
     if (canOverrideServerThreadEnvMode) {
