@@ -4350,12 +4350,22 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     if (!activeThread?.id || terminalUiState.terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
+      // Split view: both panes mount fresh when the chat layout remounts
+      // (e.g. returning from Settings) — only the active pane's autofocus
+      // may run, or whichever pane's frame fires last steals ownership.
+      if (!isThreadPaneActive(threadPaneId)) return;
       focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
+  }, [
+    activeThread?.id,
+    activeThreadKey,
+    focusComposer,
+    terminalUiState.terminalOpen,
+    threadPaneId,
+  ]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -7472,9 +7482,15 @@ function ChatViewContent(props: ChatViewProps) {
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             mentionScope={
-                              activeProject
-                                ? `${activeProject.environmentId}:${activeProject.id}`
-                                : environmentId
+                              // The thread itself carries the project id even
+                              // while the project entity is still loading —
+                              // degrading to env-only there would briefly
+                              // accept cross-project drops.
+                              activeThread
+                                ? `${activeThread.environmentId}:${activeThread.projectId}`
+                                : activeProject
+                                  ? `${activeProject.environmentId}:${activeProject.id}`
+                                  : environmentId
                             }
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}

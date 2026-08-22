@@ -200,7 +200,7 @@ import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { buildOpenInSplitThreadItems } from "./thread-split/splitPaletteItems";
 import {
   activeThreadPaneComposerHandle,
-  focusActiveThreadPaneComposer,
+  focusActiveThreadPane,
   focusOtherThreadPane,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
@@ -618,7 +618,7 @@ function CommandPaletteDialog(props: {
         // The app-root composer belongs to the primary pane; while the split
         // is open with the secondary pane active (including a pick that just
         // activated it), focus must return there instead.
-        if (!focusActiveThreadPaneComposer()) {
+        if (!focusActiveThreadPane()) {
           composerHandleRef?.current?.focusAtEnd();
         }
         return false;
@@ -2521,10 +2521,11 @@ function OpenCommandPaletteDialog(props: {
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   // Ref read at render: fine for a footer hint — the composer mounts long
   // before the palette opens, and re-opening re-renders this component. The
-  // active split pane's composer takes precedence over the app-root one.
+  // active split pane's composer takes precedence over the app-root one —
+  // same resolution as the insert below, so the hint never advertises an
+  // insert the action would refuse (composer-less secondary notice state).
   const canInsertSavedPrompt =
-    isSavedPromptsView &&
-    (activeThreadPaneComposerHandle()?.current ?? composerHandleRef?.current) != null;
+    isSavedPromptsView && (activeThreadPaneComposerHandle() ?? composerHandleRef)?.current != null;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&

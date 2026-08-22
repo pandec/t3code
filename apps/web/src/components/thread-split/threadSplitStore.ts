@@ -219,17 +219,19 @@ export function activeThreadPaneComposerHandle(): ComposerHandleRef | null {
 }
 
 /**
- * Overlay close hook (command palette): return focus to the active pane's
- * composer. Returns false when the primary/app-root composer is the right
- * target anyway, so callers can keep their default.
+ * Overlay close hook (command palette): return focus to the active pane.
+ * Falls through to the pane root when it shows a composer-less notice, so
+ * dismissing an overlay never silently hands ownership to the other pane.
+ * Returns false when the primary/app-root composer is the right target
+ * anyway, so callers can keep their default.
  */
-export function focusActiveThreadPaneComposer(): boolean {
-  const composer = activeThreadPaneComposerHandle();
-  if (composer?.current) {
-    composer.current.focusAtEnd();
-    return true;
+export function focusActiveThreadPane(): boolean {
+  const state = useThreadSplitStore.getState();
+  if (!state.splitMounted || state.activePaneId !== "secondary") {
+    return false;
   }
-  return false;
+  focusThreadPane("secondary");
+  return true;
 }
 
 /**

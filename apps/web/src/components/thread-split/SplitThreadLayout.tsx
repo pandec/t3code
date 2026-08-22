@@ -29,6 +29,14 @@ const SPLIT_GRID_TEMPLATE_COLUMNS =
   "minmax(min(20rem, 45%), var(--thread-split-a)) auto minmax(min(20rem, 45%), var(--thread-split-b))";
 const SINGLE_GRID_TEMPLATE_COLUMNS = "minmax(0, 1fr)";
 
+// Module-level so route changes made while the chat layout is unmounted
+// (e.g. picking another thread from Settings) still register as a change on
+// remount — a component ref would re-initialize and miss them.
+const UNOBSERVED_ROUTE_THREAD_KEY = Symbol("unobserved");
+const lastSeenRouteThreadKey: { value: string | null | typeof UNOBSERVED_ROUTE_THREAD_KEY } = {
+  value: UNOBSERVED_ROUTE_THREAD_KEY,
+};
+
 /**
  * Wraps the chat routes' content. The tree shape is identical whether the
  * split is open or closed — only the separator and the secondary pane mount
@@ -72,10 +80,11 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   // mod+shift+E archive) must follow, or the secondary pane would keep
   // swallowing thread-targeted shortcuts after the user switched threads.
   const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
-  const previousRouteThreadKeyRef = useRef(routeThreadKey);
   useEffect(() => {
-    if (previousRouteThreadKeyRef.current === routeThreadKey) return;
-    previousRouteThreadKeyRef.current = routeThreadKey;
+    if (lastSeenRouteThreadKey.value === routeThreadKey) return;
+    const isFirstObservation = lastSeenRouteThreadKey.value === UNOBSERVED_ROUTE_THREAD_KEY;
+    lastSeenRouteThreadKey.value = routeThreadKey;
+    if (isFirstObservation) return;
     useThreadSplitStore.getState().setActivePane("primary");
   }, [routeThreadKey]);
 
