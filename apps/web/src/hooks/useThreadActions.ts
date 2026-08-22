@@ -64,6 +64,10 @@ export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArc
 }
 
 const archivingThreadKeys = new Set<string>();
+// Forking replays the whole provider conversation, so it is slow and the
+// source thread stays forkable the entire time. The guard lives here so every
+// surface (hover quick-action, context menus, palette) inherits it.
+const forkingThreadKeys = new Set<string>();
 
 export class ThreadSettlementUnsupportedError extends Schema.TaggedErrorClass<ThreadSettlementUnsupportedError>()(
   "ThreadSettlementUnsupportedError",
@@ -358,22 +362,31 @@ export function useThreadActions() {
 
   const forkThread = useCallback(
     async (target: ScopedThreadRef) => {
-      const result = await forkThreadMutation({
-        environmentId: target.environmentId,
-        input: { sourceThreadId: target.threadId },
-      });
-      if (result._tag === "Failure") {
-        return result;
+      const threadKey = scopedThreadKey(target);
+      // Interrupted, not a plain failure: callers already treat interrupts as
+      // silent no-ops, which is exactly right for a duplicate click.
+      if (forkingThreadKeys.has(threadKey)) return AsyncResult.failure(Cause.interrupt());
+      forkingThreadKeys.add(threadKey);
+      try {
+        const result = await forkThreadMutation({
+          environmentId: target.environmentId,
+          input: { sourceThreadId: target.threadId },
+        });
+        if (result._tag === "Failure") {
+          return result;
+        }
+        const navigationResult = await settlePromise(() =>
+          router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(
+              scopeThreadRef(target.environmentId, result.value.threadId),
+            ),
+          }),
+        );
+        return navigationResult._tag === "Failure" ? navigationResult : result;
+      } finally {
+        forkingThreadKeys.delete(threadKey);
       }
-      const navigationResult = await settlePromise(() =>
-        router.navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(
-            scopeThreadRef(target.environmentId, result.value.threadId),
-          ),
-        }),
-      );
-      return navigationResult._tag === "Failure" ? navigationResult : result;
     },
     [forkThreadMutation, router],
   );

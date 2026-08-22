@@ -855,6 +855,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onArchive: (threadRef: ScopedThreadRef) => void;
+  onFork: (threadRef: ScopedThreadRef) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
@@ -877,6 +878,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onContextMenu,
     onAcknowledgeWoke,
     onArchive,
+    onFork,
     onRenameTitleChange,
     onSettle,
     onSnooze,
@@ -1168,6 +1170,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onArchive, threadRef],
   );
+  const handleForkClick = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onFork(threadRef);
+    },
+    [onFork, threadRef],
+  );
   const handleUnsettleClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1210,6 +1220,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const showSnoozeButton =
     props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
   const showArchiveButton = canArchiveThreadNow(thread);
+  const showForkButton = canForkConversation(thread);
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
   // stale true from permanently hiding the status label / pinning the
@@ -1681,6 +1692,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 {props.settlementSupported ||
                 props.pinningSupported ||
                 showSnoozeButton ||
+                showForkButton ||
                 showArchiveButton ? (
                   <span
                     className={cn(
@@ -1738,6 +1750,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           <CheckIcon className="size-3.5" />
                         </TooltipTrigger>
                         <TooltipPopup>Settle thread</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                    {showForkButton ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Fork conversation"
+                              onClick={handleForkClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <GitBranchIcon className="size-3" />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>Fork conversation</TooltipPopup>
                       </Tooltip>
                     ) : null}
                     {showArchiveButton ? (
@@ -3305,6 +3334,24 @@ export default function Sidebar() {
     },
     [unsettleThread],
   );
+  const attemptFork = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void (async () => {
+        const result = await forkThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to fork conversation",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [forkThread],
+  );
   const attemptUnsnooze = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -3957,17 +4004,7 @@ export default function Sidebar() {
             await attemptMoveThreadToTop(threadRef);
             return;
           case "fork": {
-            const result = await forkThread(threadRef);
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Failed to fork conversation",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
+            attemptFork(threadRef);
             return;
           }
           case "archive": {
@@ -4036,12 +4073,12 @@ export default function Sidebar() {
       attemptUnsettle,
       attemptUnsnooze,
       attemptArchive,
+      attemptFork,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
-      forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
@@ -4689,6 +4726,7 @@ export default function Sidebar() {
                         renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                         onContextMenu={handleThreadContextMenu}
                         onArchive={attemptArchive}
+                        onFork={attemptFork}
                         onSettle={attemptSettle}
                         onUnsettle={attemptUnsettle}
                         onSnooze={attemptSnooze}
