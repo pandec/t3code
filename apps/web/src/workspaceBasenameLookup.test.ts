@@ -89,4 +89,17 @@ describe("claimWorkspaceBasenameLookup", () => {
     const only = claimWorkspaceBasenameLookup();
     expect(only()).toBe(true);
   });
+
+  it("scopes claims so one pane's click cannot cancel another pane's lookup", () => {
+    const paneA = claimWorkspaceBasenameLookup("env-a:thread-1");
+    const paneB = claimWorkspaceBasenameLookup("env-b:thread-2");
+
+    expect(paneA()).toBe(true);
+    expect(paneB()).toBe(true);
+
+    const paneANewer = claimWorkspaceBasenameLookup("env-a:thread-1");
+    expect(paneA()).toBe(false);
+    expect(paneANewer()).toBe(true);
+    expect(paneB()).toBe(true);
+  });
 });

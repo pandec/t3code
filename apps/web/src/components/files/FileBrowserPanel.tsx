@@ -206,8 +206,9 @@ export default function FileBrowserPanel({
     () =>
       createFileTreeDragMentionController({
         deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
+        mentionScope: environmentId,
       }),
-    [],
+    [environmentId],
   );
   const { model } = useFileTree({
     composition: {

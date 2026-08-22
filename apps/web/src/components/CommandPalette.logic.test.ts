@@ -445,15 +445,15 @@ describe("buildThreadActionItems", () => {
             updatedAt: "2026-03-20T00:00:00.000Z",
           }),
         ],
-        projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+        projectTitleByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "Project"]]),
         sortOrder: "updated_at",
         icon: null,
         runThread: async (_thread) => undefined,
       });
 
       expect(items.map((item) => item.value)).toEqual([
-        "thread:thread-older",
-        "thread:thread-newer",
+        "thread:environment-local:thread-older",
+        "thread:environment-local:thread-newer",
       ]);
       expect(items[0]?.timestamp).toBe("1d ago");
       expect(items[1]?.timestamp).toBe("5d ago");
@@ -477,7 +477,7 @@ describe("buildThreadActionItems", () => {
           updatedAt: "2026-03-19T00:00:00.000Z",
         }),
       ],
-      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      projectTitleByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "Project"]]),
       sortOrder: "updated_at",
       icon: null,
       runThread: async (_thread) => undefined,
@@ -494,8 +494,8 @@ describe("buildThreadActionItems", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.value).toBe("threads-search");
     expect(groups[0]?.items.map((item) => item.value)).toEqual([
-      "thread:thread-title-match",
-      "thread:thread-context-match",
+      "thread:environment-local:thread-title-match",
+      "thread:environment-local:thread-context-match",
     ]);
   });
 
@@ -531,7 +531,7 @@ describe("buildThreadActionItems", () => {
   it("keeps message excerpts searchable without replacing thread metadata", () => {
     const [item] = buildThreadActionItems({
       threads: [makeThread({ branch: "feat/search" })],
-      projectTitleById: new Map([[PROJECT_ID, "T3 Code"]]),
+      projectTitleByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "T3 Code"]]),
       sortOrder: "updated_at",
       icon: null,
       getContentMatch: () => ({
@@ -554,7 +554,7 @@ describe("buildThreadActionItems", () => {
   it("prefers renderDescription when provided", () => {
     const [item] = buildThreadActionItems({
       threads: [makeThread({ branch: "feat/search", worktreePath: "/tmp/wt" })],
-      projectTitleById: new Map([[PROJECT_ID, "T3 Code"]]),
+      projectTitleByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "T3 Code"]]),
       sortOrder: "updated_at",
       icon: null,
       renderDescription: (thread, { projectTitle }) =>
@@ -581,13 +581,42 @@ describe("buildThreadActionItems", () => {
           updatedAt: "2026-03-20T00:00:00.000Z",
         }),
       ],
-      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      projectTitleByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "Project"]]),
       sortOrder: "updated_at",
       icon: null,
       runThread: async (_thread) => undefined,
     });
 
-    expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
+    expect(items.map((item) => item.value)).toEqual(["thread:environment-local:thread-active"]);
+  });
+
+  it("keeps same-id threads from different environments distinct", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({ title: "Local copy", updatedAt: "2026-03-20T00:00:00.000Z" }),
+        makeThread({
+          environmentId: remoteEnvironmentId,
+          title: "Remote copy",
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        }),
+      ],
+      activeThreadKey: `${LOCAL_ENVIRONMENT_ID}:thread-1`,
+      projectTitleByKey: new Map([
+        [`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, "Local project"],
+        [`${remoteEnvironmentId}:${PROJECT_ID}`, "Remote project"],
+      ]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      "thread:environment-local:thread-1",
+      "thread:environment-remote:thread-1",
+    ]);
+    expect(items[0]?.description).toBe("Local project · Current thread");
+    expect(items[1]?.description).toBe("Remote project");
   });
 });
 

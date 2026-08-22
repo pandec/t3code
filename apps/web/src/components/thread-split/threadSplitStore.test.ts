@@ -1,0 +1,131 @@
+import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+
+import type { ComposerHandleRef } from "../../composerHandleContext";
+
+import {
+  clampSplitRatio,
+  focusOtherThreadPane,
+  isThreadPaneActive,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
+  registerThreadPaneComposer,
+  useThreadSplitStore,
+} from "./threadSplitStore";
+
+const threadRef = (environmentId: string, threadId: string) => ({
+  environmentId: EnvironmentId.make(environmentId),
+  threadId: ThreadId.make(threadId),
+});
+
+const REF_A = threadRef("env-a", "thread-1");
+const REF_B = threadRef("env-b", "thread-1");
+
+// SplitThreadLayout owns splitMounted via an effect; tests simulate it.
+function mountSplit() {
+  useThreadSplitStore.getState().setSplitMounted(true);
+}
+
+beforeEach(() => {
+  useThreadSplitStore.setState({
+    secondaryRef: null,
+    splitMounted: false,
+    activePaneId: "primary",
+    splitRatio: 0.5,
+  });
+  registerThreadPaneComposer("primary", null);
+  registerThreadPaneComposer("secondary", null);
+});
+
+describe("useThreadSplitStore", () => {
+  it("opens the secondary pane focused and closes back to primary", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_A);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+
+    useThreadSplitStore.getState().closeSplit();
+    expect(useThreadSplitStore.getState().secondaryRef).toBeNull();
+    expect(useThreadSplitStore.getState().activePaneId).toBe("primary");
+  });
+
+  it("treats same thread id in another environment as a different thread", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    useThreadSplitStore.getState().openSecondaryThread(REF_B);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_B);
+  });
+
+  it("re-picking the current secondary thread only refocuses the pane", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    useThreadSplitStore.getState().setActivePane("primary");
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_A);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+  });
+});
+
+describe("isThreadPaneActive", () => {
+  it("treats every pane as active while the split is closed", () => {
+    expect(isThreadPaneActive("primary")).toBe(true);
+    expect(isThreadPaneActive("secondary")).toBe(true);
+  });
+
+  it("treats every pane as active while a picked split is not rendered", () => {
+    // A secondary thread stays picked when the viewport narrows or a
+    // non-chat route unmounts the layout; the single visible pane must keep
+    // owning every shortcut or the app goes keyboard-dead.
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+    expect(isThreadPaneActive("primary")).toBe(true);
+    expect(isThreadPaneActive("secondary")).toBe(true);
+  });
+
+  it("grants ownership only to the active pane while the split is rendered", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    expect(isThreadPaneActive("secondary")).toBe(true);
+    expect(isThreadPaneActive("primary")).toBe(false);
+
+    useThreadSplitStore.getState().setActivePane("primary");
+    expect(isThreadPaneActive("primary")).toBe(true);
+    expect(isThreadPaneActive("secondary")).toBe(false);
+  });
+});
+
+describe("focusOtherThreadPane", () => {
+  it("is a no-op while the split is closed", () => {
+    expect(focusOtherThreadPane()).toBe(false);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("primary");
+  });
+
+  it("is a no-op while a picked split is not rendered", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(focusOtherThreadPane()).toBe(false);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+  });
+
+  it("toggles the active pane and focuses its composer handle", () => {
+    const focused: string[] = [];
+    const primaryComposerRef = {
+      current: { focusAtEnd: () => focused.push("primary") },
+    } as unknown as ComposerHandleRef;
+    registerThreadPaneComposer("primary", primaryComposerRef);
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+
+    expect(focusOtherThreadPane()).toBe(true);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("primary");
+    expect(focused).toEqual(["primary"]);
+
+    expect(focusOtherThreadPane()).toBe(true);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+  });
+});
+
+describe("clampSplitRatio", () => {
+  it("clamps into the allowed pane range and rejects junk", () => {
+    expect(clampSplitRatio(0.1)).toBe(MIN_SPLIT_RATIO);
+    expect(clampSplitRatio(0.9)).toBe(MAX_SPLIT_RATIO);
+    expect(clampSplitRatio(0.6)).toBe(0.6);
+    expect(clampSplitRatio(Number.NaN)).toBe(0.5);
+  });
+});

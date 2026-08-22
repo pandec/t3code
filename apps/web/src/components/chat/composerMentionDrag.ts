@@ -7,6 +7,16 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
  */
 export const COMPOSER_MENTION_DRAG_TYPE = "application/x-t3code-composer-mention";
 
+/**
+ * Environment id the dragged paths belong to. Mentions are workspace-relative
+ * text, so a drop into another environment's composer (split view across
+ * machines) would silently mention a file that machine doesn't have.
+ * Environment-only on purpose: worktree-aware cwds differ between the tree
+ * and the composer within one thread, so a cwd-level scope would false-reject
+ * ordinary in-pane drops.
+ */
+export const COMPOSER_MENTION_DRAG_SCOPE_TYPE = "application/x-t3code-composer-mention-scope";
+
 export function composerMentionFromTreePath(treePath: string): string | null {
   const relativePath = treePath.replace(/\/+$/, "");
   if (relativePath.length === 0) {
@@ -40,9 +50,12 @@ export interface ComposerMentionDragEvent {
  * the next frame, after the editor has caught up.
  */
 export interface ComposerMentionDropHost {
+  /** Environment the composer targets; drops tagged with another one are declined. */
+  mentionScope?: string | null;
   insertMentionAtEnd(text: string): boolean;
   setDragActive(active: boolean): void;
   onInsertRejected(): void;
+  onScopeMismatch?(): void;
 }
 
 export interface ComposerMentionDragHandlers {
@@ -88,6 +101,11 @@ export function makeComposerMentionDragHandlers(
       host.setDragActive(false);
       const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);
       if (mention.length === 0) {
+        return;
+      }
+      const dragScope = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_SCOPE_TYPE);
+      if (host.mentionScope && dragScope.length > 0 && dragScope !== host.mentionScope) {
+        host.onScopeMismatch?.();
         return;
       }
       if (!host.insertMentionAtEnd(`${mention} `)) {

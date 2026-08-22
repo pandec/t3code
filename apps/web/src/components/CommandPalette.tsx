@@ -29,7 +29,6 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
-  type ProjectId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -44,6 +43,7 @@ import {
   ArrowUpToLineIcon,
   CircleCheckIcon,
   CircleDotIcon,
+  Columns2Icon,
   CopyIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
@@ -197,6 +197,13 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
+import { buildOpenInSplitThreadItems } from "./thread-split/splitPaletteItems";
+import {
+  focusOtherThreadPane,
+  THREAD_SPLIT_MEDIA_QUERY,
+  useThreadSplitStore,
+} from "./thread-split/threadSplitStore";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import {
@@ -473,6 +480,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
+  const openInSplit = useCallback(() => dispatch({ _tag: "OpenInSplit" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -547,11 +555,13 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           openNewThreadIn();
         } else if (detail.open === "add-project") {
           openAddProject();
+        } else if (detail.open === "open-in-split") {
+          openInSplit();
         } else {
           setOpen(true);
         }
       }),
-    [openAddProject, openNewThreadIn, setOpen],
+    [openAddProject, openInSplit, openNewThreadIn, setOpen],
   );
 
   return (
@@ -979,26 +989,49 @@ function OpenCommandPaletteDialog(props: {
     [environments],
   );
 
-  const projectCwdById = useMemo(
+  // Project metadata maps are keyed by scoped `environmentId:projectId` —
+  // bare project ids can collide across environments (state gets cloned
+  // between machines) and would overwrite each other's cwd/title/favicon.
+  const projectCwdByKey = useMemo(
     () =>
-      new Map<ProjectId, string>(projects.map((project) => [project.id, project.workspaceRoot])),
+      new Map<string, string>(
+        projects.map((project) => [
+          `${project.environmentId}:${project.id}`,
+          project.workspaceRoot,
+        ]),
+      ),
     [projects],
   );
-  const projectFaviconPathById = useMemo(
-    () => new Map(projects.map((project) => [project.id, project.faviconPath ?? null] as const)),
+  const projectFaviconPathByKey = useMemo(
+    () =>
+      new Map(
+        projects.map(
+          (project) =>
+            [`${project.environmentId}:${project.id}`, project.faviconPath ?? null] as const,
+        ),
+      ),
     [projects],
   );
-  const projectTitleById = useMemo(
-    () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
+  const projectTitleByKey = useMemo(
+    () =>
+      new Map<string, string>(
+        projects.map((project) => [`${project.environmentId}:${project.id}`, project.title]),
+      ),
     [projects],
   );
 
-  const activeThreadId = activeThread?.id;
+  const activeThreadKey = activeThread
+    ? `${activeThread.environmentId}:${activeThread.id}`
+    : undefined;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
-  const currentProjectCwd = currentProjectId
-    ? (projectCwdById.get(currentProjectId) ?? null)
+  const currentProjectKey =
+    currentProjectEnvironmentId !== null && currentProjectId !== null
+      ? `${currentProjectEnvironmentId}:${currentProjectId}`
+      : null;
+  const currentProjectCwd = currentProjectKey
+    ? (projectCwdByKey.get(currentProjectKey) ?? null)
     : null;
   const currentProjectCwdForBrowse =
     browseEnvironmentId && currentProjectEnvironmentId === browseEnvironmentId
@@ -1206,8 +1239,8 @@ function OpenCommandPaletteDialog(props: {
     () =>
       buildThreadActionItems({
         threads,
-        ...(activeThreadId ? { activeThreadId } : {}),
-        projectTitleById,
+        ...(activeThreadKey ? { activeThreadKey } : {}),
+        projectTitleByKey,
         sortOrder: clientSettings.sidebarThreadSortOrder,
         icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
         renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
@@ -1222,12 +1255,16 @@ function OpenCommandPaletteDialog(props: {
           return (
             <ThreadCommandSubtitle
               environmentId={thread.environmentId}
-              projectCwd={projectCwdById.get(thread.projectId) ?? null}
-              projectFaviconPath={projectFaviconPathById.get(thread.projectId) ?? null}
+              projectCwd={
+                projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+              }
+              projectFaviconPath={
+                projectFaviconPathByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+              }
               projectTitle={projectTitle ?? null}
               branch={thread.branch}
               worktreePath={thread.worktreePath}
-              isCurrent={thread.id === activeThreadId}
+              isCurrent={`${thread.environmentId}:${thread.id}` === activeThreadKey}
               driverKind={providerEntry?.driverKind ?? null}
               providerDisplayName={
                 thread.session?.providerName ?? providerEntry?.displayName ?? modelInstanceId
@@ -1258,12 +1295,12 @@ function OpenCommandPaletteDialog(props: {
         },
       }),
     [
-      activeThreadId,
+      activeThreadKey,
       clientSettings.sidebarThreadSortOrder,
       navigate,
-      projectCwdById,
-      projectFaviconPathById,
-      projectTitleById,
+      projectCwdByKey,
+      projectFaviconPathByKey,
+      projectTitleByKey,
       providerEntryByEnvironmentAndInstanceId,
       threadContentMatchByKey,
       threadSearchQuery,
@@ -1271,6 +1308,18 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
   const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
+
+  const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
+  const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
+  const openInSplitItems = useMemo(
+    () =>
+      buildOpenInSplitThreadItems({
+        threadItems: allThreadItems,
+        routeThreadRef,
+        secondaryRef: splitSecondaryRef,
+      }),
+    [allThreadItems, routeThreadRef, splitSecondaryRef],
+  );
 
   const pushPaletteView = useCallback(
     (view: CommandPaletteView): void => {
@@ -1605,12 +1654,48 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
   ]);
 
+  useLayoutEffect(() => {
+    if (openIntent?.kind !== "open-in-split") {
+      return;
+    }
+    if (openInSplitItems.length === 0) {
+      // Routine for one-thread setups (unlike the new-thread-in guard, which
+      // only trips with zero projects) — say so instead of silently opening
+      // the plain palette.
+      clearOpenIntent();
+      setOpen(false);
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "No other threads to show in a split",
+          description: "Every other thread is already open in a pane or archived.",
+        }),
+      );
+      return;
+    }
+    clearOpenIntent();
+    browseNavigation.invalidate();
+    setAddProjectCloneFlow(null);
+    setViewStack([]);
+    setQuery("");
+    pushPaletteView({
+      addonIcon: <Columns2Icon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "open-in-split-threads",
+          label: "Threads",
+          items: enumerateCommandPaletteItems(openInSplitItems),
+        },
+      ],
+    });
+  }, [browseNavigation, clearOpenIntent, openInSplitItems, openIntent, pushPaletteView, setOpen]);
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
     const activeProjectTitle =
       projectPickerEntries.find((entry) => entry.isPreferred)?.group.displayName ??
-      (currentProjectId ? (projectTitleById.get(currentProjectId) ?? null) : null);
+      (currentProjectKey ? (projectTitleByKey.get(currentProjectKey) ?? null) : null);
 
     if (activeProjectTitle) {
       actionItems.push({
@@ -1794,6 +1879,51 @@ function OpenCommandPaletteDialog(props: {
     }),
   );
 
+  if (splitSupported && openInSplitItems.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:open-in-split",
+      searchTerms: ["split", "split view", "side by side", "second pane", "open in split"],
+      title: splitSecondaryRef ? "Switch split thread..." : "Open thread in split view...",
+      icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+      addonIcon: <Columns2Icon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "open-in-split-threads",
+          label: "Threads",
+          items: enumerateCommandPaletteItems(openInSplitItems),
+        },
+      ],
+    });
+  }
+  if (splitSupported && splitSecondaryRef !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:focus-other-pane",
+      searchTerms: ["split", "pane", "focus", "other", "jump", "switch pane"],
+      title: "Focus other split pane",
+      icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "threadPane.focusOther",
+      run: async () => {
+        focusOtherThreadPane();
+      },
+    });
+  }
+  // Not gated on viewport width: a split opened on a wide window must stay
+  // closable after the window shrinks below the split breakpoint.
+  if (splitSecondaryRef !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:close-split",
+      searchTerms: ["split", "close", "pane", "single", "unsplit"],
+      title: "Close split view",
+      icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useThreadSplitStore.getState().closeSplit();
+      },
+    });
+  }
+
   actionItems.push({
     kind: "action",
     value: "action:open-file-picker",
@@ -1902,7 +2032,7 @@ function OpenCommandPaletteDialog(props: {
             })
           : null,
       projectTitle:
-        currentProjectId !== null ? (projectTitleById.get(currentProjectId) ?? null) : null,
+        currentProjectKey !== null ? (projectTitleByKey.get(currentProjectKey) ?? null) : null,
       icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
       openArchived: async (projectFilterKey) => {
         await navigate({

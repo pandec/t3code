@@ -25,6 +25,11 @@ import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { SplitThreadLayout } from "~/components/thread-split/SplitThreadLayout";
+import {
+  focusOtherThreadPane,
+  useThreadSplitStore,
+} from "~/components/thread-split/threadSplitStore";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import {
   threadActionUndoHistory,
@@ -92,17 +97,25 @@ function ChatRouteGlobalShortcuts() {
       }).length,
     [primaryEnvironmentId, projectGroupingSettings, projects],
   );
+  // Split view: thread-targeted shortcuts and their `when` context follow the
+  // active pane, so mod+shift+E can never archive the thread the user is not
+  // looking at while the secondary pane holds focus.
+  const secondaryActiveThreadRef = useThreadSplitStore((state) =>
+    state.splitMounted && state.activePaneId === "secondary" ? state.secondaryRef : null,
+  );
+  const shortcutThreadRef = secondaryActiveThreadRef ?? routeThreadRef;
   const terminalOpen = useTerminalUiStateStore((state) =>
-    routeThreadRef
-      ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
+    shortcutThreadRef
+      ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, shortcutThreadRef)
+          .terminalOpen
       : false,
   );
   // The `previewOpen` shortcut-context flag here uses the store-only value;
   // the URL-aware arbitration lives inside ChatView's `onTogglePreview`,
   // which we invoke via the action bus to avoid duplicating the rule.
   const previewOpen = useRightPanelStore((state) =>
-    routeThreadRef
-      ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
+    shortcutThreadRef
+      ? selectActiveRightPanel(state.byThreadKey, shortcutThreadRef) === "preview"
       : false,
   );
   useEffect(() => {
@@ -228,20 +241,28 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "threadPane.focusOther") {
+        if (focusOtherThreadPane()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+
       if (command === "thread.archive") {
-        if (!routeThreadRef) return;
+        if (!shortcutThreadRef) return;
         if (hasOpenArchiveUndoBlockingLayer()) return;
         event.preventDefault();
         event.stopPropagation();
-        if (readThreadShell(routeThreadRef)?.archivedAt !== null) return;
-        void attemptArchiveThread(routeThreadRef);
+        if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
+        void attemptArchiveThread(shortcutThreadRef);
         return;
       }
 
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        if (!routeThreadRef) return;
+        if (!shortcutThreadRef) return;
         if (!isPreviewSupportedInRuntime()) {
           toastManager.add(
             stackedThreadToast({
@@ -296,7 +317,7 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     previewOpen,
     projectGroupCount,
-    routeThreadRef,
+    shortcutThreadRef,
     selectedThreadKeysSize,
     legacySidebarEnabled,
     terminalOpen,
@@ -312,7 +333,9 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <Outlet />
+      <SplitThreadLayout>
+        <Outlet />
+      </SplitThreadLayout>
     </>
   );
 }

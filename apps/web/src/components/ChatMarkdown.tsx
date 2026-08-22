@@ -1374,7 +1374,12 @@ function ChatMarkdown({
     reportFailure: false,
   });
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
-  const environmentId = useActiveEnvironmentId();
+  const activeEnvironmentId = useActiveEnvironmentId();
+  // The thread's own environment must win: the singleton "active" environment
+  // tracks the routed thread, which is the wrong server for markdown rendered
+  // in the secondary split pane (file links would open via another machine's
+  // editor and RPC).
+  const environmentId = threadRef?.environmentId ?? activeEnvironmentId;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -1478,8 +1483,11 @@ function ChatMarkdown({
     (workspaceRelativePath: string, line: number | undefined) => {
       if (!threadRef) return;
       // Claimed on every open so a synchronous one supersedes a lookup already
-      // in flight.
-      const isLatestLookup = claimWorkspaceBasenameLookup();
+      // in flight. Scoped per thread so a click in one split pane cannot
+      // cancel the other pane's lookup.
+      const isLatestLookup = claimWorkspaceBasenameLookup(
+        `${threadRef.environmentId}:${threadRef.threadId}`,
+      );
       const openAt = (path: string) =>
         useRightPanelStore.getState().openFile(threadRef, path, line);
       if (!cwd || !needsWorkspaceBasenameLookup(workspaceRelativePath)) {

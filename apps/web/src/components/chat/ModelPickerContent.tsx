@@ -33,6 +33,8 @@ import {
 } from "../../keybindings";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { TooltipProvider } from "../ui/tooltip";
 import {
@@ -97,6 +99,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     getModelDisabledReason,
     onInstanceModelChange,
   } = props;
+  const threadPaneId = useThreadPaneId();
   const [searchQuery, setSearchQuery] = useState("");
   const [showTopScrollFade, setShowTopScrollFade] = useState(false);
   const [showBottomScrollFade, setShowBottomScrollFade] = useState(false);
@@ -550,6 +553,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       if (event.defaultPrevented || event.repeat) {
         return;
       }
+      // Split view: only the active pane's open picker may consume model
+      // jump shortcuts.
+      if (!isThreadPaneActive(threadPaneId)) {
+        return;
+      }
 
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
@@ -578,7 +586,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
     };
-  }, [handleModelSelect, keybindings, modelJumpModelKeys, modelJumpShortcutContext]);
+  }, [handleModelSelect, keybindings, modelJumpModelKeys, modelJumpShortcutContext, threadPaneId]);
 
   useLayoutEffect(() => {
     setShowTopScrollFade(false);

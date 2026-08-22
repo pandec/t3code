@@ -35,6 +35,8 @@ import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
@@ -626,9 +628,13 @@ export function PreviewView({
 
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
+  const threadPaneId = useThreadPaneId();
   useEffect(() => {
     if (!visible) return;
     return subscribePreviewAction((action) => {
+      // Split view: both panes can show a visible preview — the bus is
+      // untargeted, so only the active pane's preview reacts.
+      if (!isThreadPaneActive(threadPaneId)) return;
       switch (action) {
         case "refresh":
           handleRefresh();
@@ -649,7 +655,7 @@ export function PreviewView({
           return;
       }
     });
-  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, visible]);
+  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, threadPaneId, visible]);
 
   return (
     <div
