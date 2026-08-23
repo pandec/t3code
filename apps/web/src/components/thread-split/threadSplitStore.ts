@@ -30,17 +30,21 @@ export function clampSplitRatio(ratio: number): number {
 
 // `window` alone is not enough: the test runner and other embedded hosts define
 // a window without `localStorage`, and this store is constructed at import time.
-// Merely touching `window.localStorage` throws a SecurityError in sandboxed
-// iframes and cookie-blocked contexts, so the access itself needs the guard.
+// Restricted hosts go further: the property access and every Storage operation
+// can throw a SecurityError. Dragging the splitter writes at pointer-move rate,
+// so the handle resolves once and is dropped on the first failing operation
+// instead of throwing (and catching) per move.
+let resolvedStorage: Storage | null | undefined;
+
 function splitRatioStorage(): Storage | null {
-  if (typeof window === "undefined") {
-    return null;
+  if (resolvedStorage === undefined) {
+    try {
+      resolvedStorage = typeof window === "undefined" ? null : (window.localStorage ?? null);
+    } catch {
+      resolvedStorage = null;
+    }
   }
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return resolvedStorage;
 }
 
 function readStoredSplitRatio(): number {
@@ -48,7 +52,13 @@ function readStoredSplitRatio(): number {
   if (storage === null) {
     return DEFAULT_SPLIT_RATIO;
   }
-  const raw = storage.getItem(SPLIT_RATIO_STORAGE_KEY);
+  let raw: string | null;
+  try {
+    raw = storage.getItem(SPLIT_RATIO_STORAGE_KEY);
+  } catch {
+    resolvedStorage = null;
+    return DEFAULT_SPLIT_RATIO;
+  }
   // Number("") is 0, which would clamp to the minimum instead of the default.
   if (raw === null || raw.trim().length === 0) {
     return DEFAULT_SPLIT_RATIO;
@@ -117,11 +127,11 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     if (get().splitRatio === next) return;
     set({ splitRatio: next });
     // Persistence is best-effort: a full or read-only storage must not break
-    // the drag that triggered the write.
+    // the drag that triggered the write, and one failure stops further tries.
     try {
       splitRatioStorage()?.setItem(SPLIT_RATIO_STORAGE_KEY, String(next));
     } catch {
-      // Keep the in-memory ratio; it simply won't survive a reload.
+      resolvedStorage = null;
     }
   },
 }));
