@@ -530,35 +530,33 @@ function mapCollabAgentEvent(
   // finding: progress rows renamed math_one to its UUID).
   const knownName = nickname ?? pathLeaf;
   const title = knownName ?? agentThreadId;
-  // Identity repeated on every status patch so rows are self-describing when
+  // Identity repeated on every lifecycle row so rows are self-describing when
   // the start row ages out of activity retention (review finding: a
   // reconstructed agent had a UUID name and no role/path).
   const statusLinkage = {
     role,
     ...(knownName ? { title: knownName } : {}),
     ...(agentPath ? { agentPath } : {}),
+    ...(typeof payload.parentThreadId === "string"
+      ? { parentAgentId: payload.parentThreadId }
+      : {}),
     timelineBypass: true,
   } as const;
 
+  const buildTaskStarted = (): ProviderRuntimeEvent => ({
+    ...base,
+    type: "task.started",
+    payload: {
+      ...statusLinkage,
+      taskId,
+      description: title,
+      title,
+    },
+  });
+
   switch (event.method) {
     case "collabAgent/started":
-      return [
-        {
-          ...base,
-          type: "task.started",
-          payload: {
-            taskId,
-            description: title,
-            title,
-            role,
-            ...(agentPath ? { agentPath } : {}),
-            ...(typeof payload.parentThreadId === "string"
-              ? { parentAgentId: payload.parentThreadId }
-              : {}),
-            timelineBypass: true,
-          },
-        },
-      ];
+      return [buildTaskStarted()];
     case "collabAgent/activity": {
       const activityKind = typeof payload.activityKind === "string" ? payload.activityKind : "";
       if (activityKind === "interrupted") {
@@ -575,20 +573,7 @@ function mapCollabAgentEvent(
         // alone (no thread/started with a spawn source), so this is the one
         // shot at a task.started with a real name — agentPath leaf beats a
         // bare thread-id title.
-        return [
-          {
-            ...base,
-            type: "task.started",
-            payload: {
-              taskId,
-              description: title,
-              title,
-              role,
-              ...(agentPath ? { agentPath } : {}),
-              timelineBypass: true,
-            },
-          },
-        ];
+        return [buildTaskStarted()];
       }
       // Reading a child's result also emits "interacted" after its turn is idle.
       // Only the child's turn or thread lifecycle can prove it resumed work.
@@ -704,9 +689,8 @@ function mapCollabAgentEvent(
           payload: {
             taskId,
             description: title,
-            ...(knownName ? { title: knownName } : {}),
+            ...statusLinkage,
             typedUsage,
-            timelineBypass: true,
           },
         },
       ];
@@ -736,9 +720,8 @@ function mapCollabAgentEvent(
           payload: {
             taskId,
             description: title,
-            ...(knownName ? { title: knownName } : {}),
+            ...statusLinkage,
             summary,
-            timelineBypass: true,
           },
         },
       ];
