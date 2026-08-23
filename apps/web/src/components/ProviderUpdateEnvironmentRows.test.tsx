@@ -6,12 +6,14 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { Cause } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import type {
   LocalEnvironmentUpdateGroup,
   ProviderUpdateCandidate,
   ProviderUpdateRowStatus,
+  ProviderUpdateToastView,
 } from "./ProviderUpdateLaunchNotification.logic";
 
 const testState = vi.hoisted(() => ({
@@ -36,10 +38,6 @@ const hooks = vi.hoisted(() => {
     useCallback<T>(callback: T): T {
       nextIndex();
       return callback;
-    },
-    useEffect(effect: () => void | (() => void)): void {
-      nextIndex();
-      effect();
     },
     useMemo<T>(factory: () => T): T {
       nextIndex();
@@ -80,7 +78,6 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: hooks.useCallback,
-    useEffect: hooks.useEffect,
     useMemo: hooks.useMemo,
     useRef: hooks.useRef,
     useState: hooks.useState,
@@ -107,20 +104,28 @@ vi.mock("./ProviderUpdateLaunchNotification.environments", () => ({
 }));
 
 import {
+  createProviderUpdateResultDelivery,
   ProviderUpdateEnvironmentRows,
-  useProviderUpdateEnvironmentRowsController,
+  type ProviderUpdateResultClaim,
 } from "./ProviderUpdateEnvironmentRows";
 
 const environmentId = "env-wsl" as EnvironmentId;
 const pendingExpiryMs = 6 * 60_000;
 
-function provider(updateStatus?: "succeeded"): ServerProvider {
+function provider(
+  updateStatus?: "failed" | "succeeded" | "unchanged",
+  timestamps: {
+    readonly startedAt?: string;
+    readonly finishedAt?: string;
+  } = {},
+): ServerProvider {
+  const succeeded = updateStatus === "succeeded";
   const result: ServerProvider = {
     instanceId: ProviderInstanceId.make("codex-wsl"),
     driver: ProviderDriverKind.make("codex"),
     enabled: true,
     installed: true,
-    version: updateStatus ? "1.1.0" : "1.0.0",
+    version: succeeded ? "1.1.0" : "1.0.0",
     status: "ready",
     auth: { status: "authenticated" },
     checkedAt: "2026-06-26T12:00:00.000Z",
@@ -128,13 +133,13 @@ function provider(updateStatus?: "succeeded"): ServerProvider {
     slashCommands: [],
     skills: [],
     versionAdvisory: {
-      status: updateStatus ? "current" : "behind_latest",
-      currentVersion: updateStatus ? "1.1.0" : "1.0.0",
+      status: succeeded ? "current" : "behind_latest",
+      currentVersion: succeeded ? "1.1.0" : "1.0.0",
       latestVersion: "1.1.0",
       updateCommand: "npm install -g @openai/codex@latest",
       canUpdate: true,
       checkedAt: "2026-06-26T12:00:00.000Z",
-      message: updateStatus ? "Up to date." : "Update available.",
+      message: succeeded ? "Up to date." : "Update available.",
     },
   };
 
@@ -143,9 +148,9 @@ function provider(updateStatus?: "succeeded"): ServerProvider {
         ...result,
         updateState: {
           status: updateStatus,
-          startedAt: "2026-06-26T12:00:00.000Z",
-          finishedAt: "2026-06-26T12:00:01.000Z",
-          message: "Provider updated.",
+          startedAt: timestamps.startedAt ?? "2026-06-26T12:00:01.000Z",
+          finishedAt: timestamps.finishedAt ?? "2026-06-26T12:00:02.000Z",
+          message: updateStatus === "failed" ? "Provider update failed." : "Provider updated.",
           output: null,
         },
       }
@@ -165,14 +170,18 @@ type RowElement = ReactElement<{
   readonly onUpdate: () => void;
 }>;
 
-function renderController(onResult = vi.fn()) {
+function renderRow(
+  callbacks: {
+    readonly onUpdateFinished?: (
+      environmentId: EnvironmentId,
+      generation: number,
+      view: ProviderUpdateToastView,
+    ) => void;
+    readonly onUpdateStarted?: (claim: ProviderUpdateResultClaim) => void;
+  } = {},
+): RowElement {
   hooks.beginRender();
-  return useProviderUpdateEnvironmentRowsController({ groups: testState.groups, onResult });
-}
-
-function renderRow(): RowElement {
-  const controller = renderController();
-  const output = ProviderUpdateEnvironmentRows({ controller }) as ReactElement<{
+  const output = ProviderUpdateEnvironmentRows(callbacks) as ReactElement<{
     readonly children: RowElement | RowElement[];
   }>;
   const children = output.props.children;
@@ -188,6 +197,7 @@ async function flushPromises(): Promise<void> {
 describe("ProviderUpdateEnvironmentRows", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-26T12:00:00.000Z"));
     hooks.reset();
     testState.updateProvider.mockReset();
     const candidate = provider() as ProviderUpdateCandidate;
@@ -205,25 +215,6 @@ describe("ProviderUpdateEnvironmentRows", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("reports the terminal result after the toast body is dismissed", async () => {
-    const request =
-      deferred<ReturnType<typeof AsyncResult.success<{ providers: ServerProvider[] }>>>();
-    const onResult = vi.fn();
-    testState.updateProvider.mockReturnValue(request.promise);
-
-    renderController(onResult).updateEnvironment(environmentId);
-    request.resolve(AsyncResult.success({ providers: [] }));
-    await flushPromises();
-    expect(onResult).not.toHaveBeenCalled();
-
-    testState.groups = [
-      { ...testState.groups[0]!, candidates: [], providers: [provider("succeeded")] },
-    ];
-    renderController(onResult);
-
-    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ phase: "succeeded" }));
   });
 
   it("keeps a successor pending when an expired request resolves late, then shows its success", async () => {
@@ -250,9 +241,190 @@ describe("ProviderUpdateEnvironmentRows", () => {
 
     expect(renderRow().props.status.kind).toBe("loading");
 
-    successorRequest.resolve(AsyncResult.success({ providers: [provider("succeeded")] }));
+    successorRequest.resolve(
+      AsyncResult.success({
+        providers: [
+          provider("succeeded", {
+            startedAt: "2026-06-26T12:06:01.000Z",
+            finishedAt: "2026-06-26T12:06:02.000Z",
+          }),
+        ],
+      }),
+    );
     await flushPromises();
 
     expect(renderRow().props.status.kind).toBe("success");
+  });
+
+  it("keeps a live terminal result when the command response hangs", async () => {
+    const request =
+      deferred<ReturnType<typeof AsyncResult.success<{ providers: ServerProvider[] }>>>();
+    const onUpdateFinished = vi.fn();
+    testState.updateProvider.mockReturnValue(request.promise);
+
+    renderRow({ onUpdateFinished }).props.onUpdate();
+    testState.groups = [
+      {
+        ...testState.groups[0]!,
+        candidates: [],
+        providers: [provider("succeeded")],
+      },
+    ];
+    expect(renderRow({ onUpdateFinished }).props.status.kind).toBe("success");
+
+    await vi.advanceTimersByTimeAsync(pendingExpiryMs);
+    expect(renderRow({ onUpdateFinished }).props.status.kind).toBe("success");
+    expect(onUpdateFinished).toHaveBeenCalledTimes(1);
+    expect(onUpdateFinished).toHaveBeenCalledWith(
+      environmentId,
+      1,
+      expect.objectContaining({ phase: "succeeded" }),
+    );
+  });
+
+  it("turns an interrupted dispatch into a retryable result", async () => {
+    const onUpdateFinished = vi.fn();
+    testState.updateProvider.mockResolvedValue(AsyncResult.failure(Cause.interrupt()));
+
+    renderRow({ onUpdateFinished }).props.onUpdate();
+    await flushPromises();
+
+    expect(renderRow({ onUpdateFinished }).props.status.kind).toBe("failed");
+    expect(onUpdateFinished).toHaveBeenCalledTimes(1);
+    expect(onUpdateFinished).toHaveBeenCalledWith(
+      environmentId,
+      1,
+      expect.objectContaining({
+        phase: "failed",
+        description: "Provider update was interrupted. Try again.",
+      }),
+    );
+  });
+});
+
+describe("provider update result delivery", () => {
+  const unchangedView: ProviderUpdateToastView = {
+    phase: "unchanged",
+    type: "warning",
+    title: "Provider still needs an update",
+    description: "Codex still appears outdated.",
+  };
+
+  function claim(
+    generation = 1,
+    startedAfterIso = "2026-06-26T12:00:00.000Z",
+  ): ProviderUpdateResultClaim {
+    return {
+      environmentId,
+      generation,
+      providerCount: 1,
+      providerInstanceIds: new Set([ProviderInstanceId.make("codex-wsl")]),
+      startedAfterIso,
+    };
+  }
+
+  function groupWith(providerSnapshot: ServerProvider): LocalEnvironmentUpdateGroup {
+    return {
+      ...testState.groups[0]!,
+      candidates: [provider() as ProviderUpdateCandidate],
+      providers: [providerSnapshot],
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    testState.groups = [
+      {
+        environmentId,
+        label: "WSL",
+        isPrimary: false,
+        isSettling: false,
+        candidates: [provider() as ProviderUpdateCandidate],
+        providers: [provider()],
+      },
+    ];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports a dismissed popover's result exactly once", () => {
+    let isPopoverOpen = true;
+    const onResult = vi.fn();
+    const delivery = createProviderUpdateResultDelivery({
+      isPopoverOpen: () => isPopoverOpen,
+      onResult,
+    });
+    delivery.startUpdate(claim());
+    isPopoverOpen = false;
+
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(true);
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(false);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(unchangedView);
+  });
+
+  it("lets a fresh live unchanged state claim before the RPC result", () => {
+    const onResult = vi.fn();
+    const delivery = createProviderUpdateResultDelivery({
+      isPopoverOpen: () => false,
+      onResult,
+    });
+    delivery.startUpdate(claim());
+
+    delivery.observeGroups([groupWith(provider("unchanged"))]);
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(false);
+
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ phase: "unchanged" }));
+  });
+
+  it("rejects stale terminal state and an older attempt's completion", () => {
+    const onResult = vi.fn();
+    const delivery = createProviderUpdateResultDelivery({
+      isPopoverOpen: () => false,
+      onResult,
+    });
+    delivery.startUpdate(claim(1, "2026-06-26T12:00:00.000Z"));
+    delivery.startUpdate(claim(2, "2026-06-26T12:00:03.000Z"));
+
+    delivery.observeGroups([
+      groupWith(
+        provider("unchanged", {
+          startedAt: "2026-06-26T12:00:01.000Z",
+          finishedAt: "2026-06-26T12:00:04.000Z",
+        }),
+      ),
+    ]);
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(false);
+    expect(onResult).not.toHaveBeenCalled();
+
+    delivery.observeGroups([
+      groupWith(
+        provider("unchanged", {
+          startedAt: "2026-06-26T12:00:04.000Z",
+          finishedAt: "2026-06-26T12:00:05.000Z",
+        }),
+      ),
+    ]);
+    expect(onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports expiry once after the popover is dismissed", async () => {
+    const onResult = vi.fn();
+    const delivery = createProviderUpdateResultDelivery({
+      isPopoverOpen: () => false,
+      onResult,
+    });
+    delivery.startUpdate(claim());
+
+    await vi.advanceTimersByTimeAsync(pendingExpiryMs);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "failed", description: "Update timed out. Try again." }),
+    );
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(false);
+    expect(onResult).toHaveBeenCalledTimes(1);
   });
 });

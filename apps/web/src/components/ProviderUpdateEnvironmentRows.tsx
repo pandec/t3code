@@ -1,5 +1,5 @@
 import { CheckIcon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -10,6 +10,7 @@ import {
 import { cn } from "~/lib/utils";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useLocalEnvironmentUpdateGroups } from "./ProviderUpdateLaunchNotification.environments";
 import {
   collectProviderUpdateOutcomeSnapshots,
   firstRejectedProviderUpdateMessage,
@@ -32,11 +33,15 @@ type ProviderUpdateCommandResult = AtomCommandResult<
   unknown
 >;
 
+interface ProviderUpdateDispatchOutcome {
+  readonly result: PromiseSettledResult<LocalProviderUpdateOutcome>;
+  readonly interrupted: boolean;
+}
+
 /**
  * Map one targeted instance's update command result into the settled-outcome
- * shape the multi-backend reducers consume: a non-interrupted failure becomes a
- * rejection carrying its message; a success carries the post-update snapshot of
- * the targeted instance (null when the backend did not report it).
+ * shape the multi-backend reducers consume. The interruption flag stays separate
+ * so a dispatch with no terminal snapshot can still show a retryable result.
  */
 function toProviderUpdateOutcome(input: {
   readonly environmentId: EnvironmentId;
@@ -46,26 +51,30 @@ function toProviderUpdateOutcome(input: {
     readonly instanceId: ServerProvider["instanceId"];
   };
   readonly result: ProviderUpdateCommandResult;
-}): PromiseSettledResult<LocalProviderUpdateOutcome> {
+}): ProviderUpdateDispatchOutcome {
   if (input.result._tag === "Failure") {
     if (isAtomCommandInterrupted(input.result)) {
-      // An interrupted dispatch (e.g. superseded) is neither a success nor a
-      // hard failure — surface it as a non-contributing, non-rejecting outcome.
       return {
-        status: "fulfilled",
-        value: {
-          environmentId: input.environmentId,
-          isPrimary: input.isPrimary,
-          driver: input.target.driver,
-          instanceId: input.target.instanceId,
-          provider: null,
+        interrupted: true,
+        result: {
+          status: "fulfilled",
+          value: {
+            environmentId: input.environmentId,
+            isPrimary: input.isPrimary,
+            driver: input.target.driver,
+            instanceId: input.target.instanceId,
+            provider: null,
+          },
         },
       };
     }
     const error = squashAtomCommandFailure(input.result);
     return {
-      status: "rejected",
-      reason: error instanceof Error ? error : new Error("Provider update failed."),
+      interrupted: false,
+      result: {
+        status: "rejected",
+        reason: error instanceof Error ? error : new Error("Provider update failed."),
+      },
     };
   }
 
@@ -74,13 +83,16 @@ function toProviderUpdateOutcome(input: {
       (candidate) => candidate.instanceId === input.target.instanceId,
     ) ?? null;
   return {
-    status: "fulfilled",
-    value: {
-      environmentId: input.environmentId,
-      isPrimary: input.isPrimary,
-      driver: input.target.driver,
-      instanceId: input.target.instanceId,
-      provider,
+    interrupted: false,
+    result: {
+      status: "fulfilled",
+      value: {
+        environmentId: input.environmentId,
+        isPrimary: input.isPrimary,
+        driver: input.target.driver,
+        instanceId: input.target.instanceId,
+        provider,
+      },
     },
   };
 }
@@ -92,6 +104,125 @@ function toProviderUpdateOutcome(input: {
 // update (npm installs routinely run tens of seconds) is never cut off and left
 // showing a dead, unresponsive Update button.
 const PENDING_EXPIRY_MS = 6 * 60_000;
+const UPDATE_INTERRUPTED_MESSAGE = "Provider update was interrupted. Try again.";
+const UPDATE_TIMED_OUT_MESSAGE = "Update timed out. Try again.";
+
+export interface ProviderUpdateResultClaim {
+  readonly environmentId: EnvironmentId;
+  readonly generation: number;
+  readonly providerInstanceIds: ReadonlySet<ServerProvider["instanceId"]>;
+  readonly providerCount: number;
+  readonly startedAfterIso: string;
+}
+
+interface ActiveProviderUpdateResultClaim extends ProviderUpdateResultClaim {
+  readonly timeout: ReturnType<typeof setTimeout>;
+}
+
+function isProviderUpdateSnapshotAfter(provider: ServerProvider, startedAfterIso: string): boolean {
+  const state = provider.updateState;
+  if (state?.startedAt === null || state?.startedAt === undefined) {
+    return false;
+  }
+  if (state.startedAt < startedAfterIso) {
+    return false;
+  }
+  if (state.status === "failed" || state.status === "succeeded" || state.status === "unchanged") {
+    return state.finishedAt !== null && state.finishedAt >= startedAfterIso;
+  }
+  return state.finishedAt === null || state.finishedAt >= startedAfterIso;
+}
+
+function getTerminalProviderUpdateView(
+  groups: ReadonlyArray<LocalEnvironmentUpdateGroup>,
+  claim: ProviderUpdateResultClaim,
+): ProviderUpdateToastView | null {
+  const group = groups.find((candidate) => candidate.environmentId === claim.environmentId);
+  if (!group) {
+    return null;
+  }
+  const providers = group.providers.filter(
+    (provider) =>
+      claim.providerInstanceIds.has(provider.instanceId) &&
+      isProviderUpdateSnapshotAfter(provider, claim.startedAfterIso),
+  );
+  const view = getProviderUpdateProgressToastView({
+    providers,
+    providerCount: claim.providerCount,
+  });
+  return isTerminalProviderUpdatePhase(view.phase) ? view : null;
+}
+
+/**
+ * Keep terminal-result claims in the notification host so dismissing the
+ * popover cannot discard an in-flight update's result. The row still owns all
+ * visible progress while the popover remains open.
+ */
+export function createProviderUpdateResultDelivery(input: {
+  readonly isPopoverOpen: () => boolean;
+  readonly onResult: (view: ProviderUpdateToastView) => void;
+}) {
+  const activeUpdates = new Map<EnvironmentId, ActiveProviderUpdateResultClaim>();
+  let latestGroups: ReadonlyArray<LocalEnvironmentUpdateGroup> = [];
+
+  const finishUpdate = (
+    environmentId: EnvironmentId,
+    generation: number,
+    view: ProviderUpdateToastView,
+  ): boolean => {
+    const activeUpdate = activeUpdates.get(environmentId);
+    if (activeUpdate && activeUpdate.generation !== generation) {
+      return false;
+    }
+    const timeout = activeUpdate?.timeout;
+    if (!activeUpdates.delete(environmentId)) {
+      return false;
+    }
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+    if (!input.isPopoverOpen()) {
+      input.onResult(view);
+    }
+    return true;
+  };
+
+  const startUpdate = (claim: ProviderUpdateResultClaim): void => {
+    const previous = activeUpdates.get(claim.environmentId);
+    if (previous) {
+      clearTimeout(previous.timeout);
+    }
+    const timeout = setTimeout(() => {
+      const liveView = getTerminalProviderUpdateView(latestGroups, claim);
+      finishUpdate(
+        claim.environmentId,
+        claim.generation,
+        liveView ??
+          getProviderUpdateRejectedToastView(claim.providerCount, UPDATE_TIMED_OUT_MESSAGE),
+      );
+    }, PENDING_EXPIRY_MS);
+    activeUpdates.set(claim.environmentId, { ...claim, timeout });
+  };
+
+  const observeGroups = (groups: ReadonlyArray<LocalEnvironmentUpdateGroup>): void => {
+    latestGroups = groups;
+    for (const claim of activeUpdates.values()) {
+      const view = getTerminalProviderUpdateView(groups, claim);
+      if (view) {
+        finishUpdate(claim.environmentId, claim.generation, view);
+      }
+    }
+  };
+
+  const dispose = (): void => {
+    for (const claim of activeUpdates.values()) {
+      clearTimeout(claim.timeout);
+    }
+    activeUpdates.clear();
+  };
+
+  return { dispose, finishUpdate, observeGroups, startUpdate };
+}
 
 function rowToneClass(kind: ProviderUpdateRowStatusKind): string {
   switch (kind) {
@@ -151,15 +282,28 @@ function EnvironmentUpdateRow({
   );
 }
 
-export function useProviderUpdateEnvironmentRowsController({
-  groups,
+/**
+ * The launch popover's body when WSL is present: one row per local environment
+ * (Windows + WSL), each with its own "update all" trigger that targets only
+ * that environment's backend.
+ */
+export function ProviderUpdateEnvironmentRows({
   onInteract,
-  onResult,
+  onUpdateFinished,
+  onUpdateStarted,
 }: {
-  readonly groups: ReadonlyArray<LocalEnvironmentUpdateGroup>;
+  /** Called when the user triggers an update, so the host keeps this popover open. */
   readonly onInteract?: () => void;
-  readonly onResult?: (view: ProviderUpdateToastView) => void;
+  /** Hands terminal command results to the host-owned exactly-once claim. */
+  readonly onUpdateFinished?: (
+    environmentId: EnvironmentId,
+    generation: number,
+    view: ProviderUpdateToastView,
+  ) => void;
+  /** Registers result delivery before dispatching an environment's updates. */
+  readonly onUpdateStarted?: (claim: ProviderUpdateResultClaim) => void;
 }) {
+  const { groups } = useLocalEnvironmentUpdateGroups();
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
     reportFailure: false,
   });
@@ -167,9 +311,16 @@ export function useProviderUpdateEnvironmentRowsController({
     () => new Map(groups.map((group) => [group.environmentId, group] as const)),
     [groups],
   );
+  const latestGroupsRef = useRef(groups);
+  latestGroupsRef.current = groups;
 
-  // Only surface results that land after this popover opened.
-  const visibleAfterIsoRef = useRef<string>(new Date().toISOString());
+  // Before an environment is updated, ignore terminal state from before this
+  // popover opened. Once dispatched, use that attempt's start time instead.
+  const popoverOpenedAfterIsoRef = useRef<string>(new Date().toISOString());
+  const visibleAfterIsoByEnvironmentRef = useRef<Map<EnvironmentId, string>>(new Map());
+  const trackedProviderIdsByEnvironmentRef = useRef<
+    Map<EnvironmentId, ReadonlySet<ServerProvider["instanceId"]>>
+  >(new Map());
 
   // Synchronous re-entry guard. setPendingEnvironments is an async state update,
   // and PENDING_EXPIRY_MS can clear the spinner while a request is still in
@@ -184,9 +335,6 @@ export function useProviderUpdateEnvironmentRowsController({
   // current and skips every state write when it finally resolves, instead of
   // clobbering the newer attempt's spinner/result/error or its in-flight guard.
   const requestVersionRef = useRef<Map<EnvironmentId, number>>(new Map());
-  const activeUpdatesRef = useRef<Map<EnvironmentId, ReadonlySet<ServerProvider["instanceId"]>>>(
-    new Map(),
-  );
 
   const [pendingEnvironments, setPendingEnvironments] = useState<ReadonlySet<EnvironmentId>>(
     () => new Set(),
@@ -209,24 +357,6 @@ export function useProviderUpdateEnvironmentRowsController({
     });
   }, []);
 
-  useEffect(() => {
-    for (const [environmentId, providerInstanceIds] of activeUpdatesRef.current) {
-      const group = groupByEnvironment.get(environmentId);
-      if (!group) continue;
-      const view = getProviderUpdateProgressToastView({
-        providers: group.providers.filter((provider) =>
-          providerInstanceIds.has(provider.instanceId),
-        ),
-        providerCount: providerInstanceIds.size,
-      });
-      if (isTerminalProviderUpdatePhase(view.phase)) {
-        activeUpdatesRef.current.delete(environmentId);
-        setResultByEnvironment((previous) => new Map(previous).set(environmentId, view));
-        onResult?.(view);
-      }
-    }
-  }, [groupByEnvironment, onResult]);
-
   const handleUpdate = useCallback(
     async (environmentId: EnvironmentId) => {
       const group = groupByEnvironment.get(environmentId);
@@ -241,16 +371,24 @@ export function useProviderUpdateEnvironmentRowsController({
       requestVersionRef.current.set(environmentId, requestVersion);
       const isCurrentRequest = () =>
         requestVersionRef.current.get(environmentId) === requestVersion;
+      const startedAfterIso = new Date().toISOString();
+      visibleAfterIsoByEnvironmentRef.current.set(environmentId, startedAfterIso);
       onInteract?.();
       const providerCount = group.candidates.length;
       const targets = group.candidates.map((candidate) => ({
         driver: candidate.driver,
         instanceId: candidate.instanceId,
       }));
-      activeUpdatesRef.current.set(
+      const providerInstanceIds = new Set(targets.map((target) => target.instanceId));
+      trackedProviderIdsByEnvironmentRef.current.set(environmentId, providerInstanceIds);
+      onUpdateStarted?.({
         environmentId,
-        new Set(targets.map((target) => target.instanceId)),
-      );
+        generation: requestVersion,
+        providerCount,
+        providerInstanceIds,
+        startedAfterIso,
+      });
+
       setPendingEnvironments((previous) => new Set(previous).add(environmentId));
       setErrorByEnvironment((previous) => {
         if (!previous.has(environmentId)) {
@@ -281,15 +419,32 @@ export function useProviderUpdateEnvironmentRowsController({
         // rather than silently reverting to idle.
         inFlightEnvironmentsRef.current.delete(environmentId);
         clearPending(environmentId);
+        const liveView = getTerminalProviderUpdateView(latestGroupsRef.current, {
+          environmentId,
+          generation: requestVersion,
+          providerCount,
+          providerInstanceIds,
+          startedAfterIso,
+        });
+        if (liveView) {
+          setResultByEnvironment((previous) => new Map(previous).set(environmentId, liveView));
+          onUpdateFinished?.(environmentId, requestVersion, liveView);
+          return;
+        }
         setErrorByEnvironment((previous) =>
-          new Map(previous).set(environmentId, "Update timed out — try again."),
+          new Map(previous).set(environmentId, UPDATE_TIMED_OUT_MESSAGE),
+        );
+        onUpdateFinished?.(
+          environmentId,
+          requestVersion,
+          getProviderUpdateRejectedToastView(providerCount, UPDATE_TIMED_OUT_MESSAGE),
         );
       }, PENDING_EXPIRY_MS);
       try {
         // Dispatch each candidate's update to this environment's own backend and
         // normalize every settled outcome into the multi-backend reducer shape.
-        const results = await Promise.all(
-          targets.map(async (target): Promise<PromiseSettledResult<LocalProviderUpdateOutcome>> => {
+        const dispatchOutcomes = await Promise.all(
+          targets.map(async (target): Promise<ProviderUpdateDispatchOutcome> => {
             try {
               const result = await updateProvider({
                 environmentId,
@@ -303,8 +458,11 @@ export function useProviderUpdateEnvironmentRowsController({
               });
             } catch (error) {
               return {
-                status: "rejected",
-                reason: error instanceof Error ? error : new Error("Provider update failed."),
+                interrupted: false,
+                result: {
+                  status: "rejected",
+                  reason: error instanceof Error ? error : new Error("Provider update failed."),
+                },
               };
             }
           }),
@@ -325,46 +483,48 @@ export function useProviderUpdateEnvironmentRowsController({
           next.delete(environmentId);
           return next;
         });
-        if (results.length === 0) {
-          activeUpdatesRef.current.delete(environmentId);
-          const message = "This environment isn’t connected — try again once it reconnects.";
-          setErrorByEnvironment((previous) => new Map(previous).set(environmentId, message));
-          onResult?.(getProviderUpdateRejectedToastView(providerCount, message));
-          return;
-        }
+        const results = dispatchOutcomes.map((outcome) => outcome.result);
         const rejectedMessage = firstRejectedProviderUpdateMessage(results);
         if (rejectedMessage) {
-          activeUpdatesRef.current.delete(environmentId);
+          const view = getProviderUpdateRejectedToastView(providerCount, rejectedMessage);
           setErrorByEnvironment((previous) =>
             new Map(previous).set(environmentId, rejectedMessage),
           );
-          onResult?.(getProviderUpdateRejectedToastView(providerCount, rejectedMessage));
+          onUpdateFinished?.(environmentId, requestVersion, view);
           return;
         }
         const view = getProviderUpdateProgressToastView({
-          providers: collectProviderUpdateOutcomeSnapshots(results),
+          providers: collectProviderUpdateOutcomeSnapshots(results).filter((provider) =>
+            isProviderUpdateSnapshotAfter(provider, startedAfterIso),
+          ),
           providerCount,
         });
-        // Only persist a terminal outcome. A non-terminal ("running"/"initial")
-        // view means this dispatch could not confirm completion — e.g. a snapshot
-        // came back without its targeted instance (collectProviderUpdateOutcome-
-        // Snapshots drops null providers), which happens when the command is
-        // interrupted as a second backend connects and supersedes the in-flight
-        // update. A stored view never re-polls, so persisting it would pin the
-        // row's spinner forever once the pending flag expires. Drop it and let
-        // the live per-environment provider state (pill) plus the pending expiry
-        // drive the row, so it self-heals to whatever the backend actually did.
+        // Only persist a terminal outcome. A non-terminal snapshot never
+        // re-polls, so the live environment state must finish the row instead.
         if (isTerminalProviderUpdatePhase(view.phase)) {
-          activeUpdatesRef.current.delete(environmentId);
           setResultByEnvironment((previous) => new Map(previous).set(environmentId, view));
-          onResult?.(view);
+          onUpdateFinished?.(environmentId, requestVersion, view);
+          return;
+        }
+        if (dispatchOutcomes.some((outcome) => outcome.interrupted)) {
+          const interruptedView = getProviderUpdateRejectedToastView(
+            providerCount,
+            UPDATE_INTERRUPTED_MESSAGE,
+          );
+          setErrorByEnvironment((previous) =>
+            new Map(previous).set(environmentId, UPDATE_INTERRUPTED_MESSAGE),
+          );
+          onUpdateFinished?.(environmentId, requestVersion, interruptedView);
         }
       } catch (error) {
         if (isCurrentRequest()) {
-          activeUpdatesRef.current.delete(environmentId);
           const message = error instanceof Error ? error.message : "Provider update failed.";
           setErrorByEnvironment((previous) => new Map(previous).set(environmentId, message));
-          onResult?.(getProviderUpdateRejectedToastView(providerCount, message));
+          onUpdateFinished?.(
+            environmentId,
+            requestVersion,
+            getProviderUpdateRejectedToastView(providerCount, message),
+          );
         }
       } finally {
         clearTimeout(expiry);
@@ -376,49 +536,59 @@ export function useProviderUpdateEnvironmentRowsController({
         }
       }
     },
-    [clearPending, groupByEnvironment, onInteract, onResult, updateProvider],
+    [
+      clearPending,
+      groupByEnvironment,
+      onInteract,
+      onUpdateFinished,
+      onUpdateStarted,
+      updateProvider,
+    ],
   );
 
   const rows = groups
-    .map((group) => ({
-      group,
-      status: resolveEnvironmentUpdateRowStatus({
+    .map((group) => {
+      const trackedProviderIds = trackedProviderIdsByEnvironmentRef.current.get(
+        group.environmentId,
+      );
+      const visibleAfterIso =
+        visibleAfterIsoByEnvironmentRef.current.get(group.environmentId) ??
+        popoverOpenedAfterIsoRef.current;
+      const liveProviders = trackedProviderIds
+        ? group.providers.filter(
+            (provider) =>
+              trackedProviderIds.has(provider.instanceId) &&
+              isProviderUpdateSnapshotAfter(provider, visibleAfterIso),
+          )
+        : group.candidates;
+      return {
         group,
-        error: errorByEnvironment.get(group.environmentId),
-        result: resultByEnvironment.get(group.environmentId),
-        // Derive the live pill from the candidates this row is actually
-        // tracking, not every provider in the environment. Otherwise an
-        // unrelated provider's recent success (or one candidate succeeding while
-        // another was interrupted) makes the pill report success and hides the
-        // Update action for candidates that are still outdated.
-        pill: getProviderUpdateSidebarPillView(group.candidates, {
-          visibleAfterIso: visibleAfterIsoRef.current,
+        status: resolveEnvironmentUpdateRowStatus({
+          group,
+          error: errorByEnvironment.get(group.environmentId),
+          result: resultByEnvironment.get(group.environmentId),
+          // Before dispatch, only candidates can contribute state. Afterward,
+          // keep tracking those instance ids even when a successful update
+          // removes them from the candidate set.
+          pill: getProviderUpdateSidebarPillView(liveProviders, { visibleAfterIso }),
+          isPending: pendingEnvironments.has(group.environmentId),
         }),
-        isPending: pendingEnvironments.has(group.environmentId),
-      }),
-    }))
+      };
+    })
     .filter(({ group, status }) => group.candidates.length > 0 || status.kind !== "idle");
 
-  return { rows, updateEnvironment: handleUpdate };
-}
-
-export function ProviderUpdateEnvironmentRows({
-  controller,
-}: {
-  readonly controller: ReturnType<typeof useProviderUpdateEnvironmentRowsController>;
-}) {
-  if (controller.rows.length === 0) {
+  if (rows.length === 0) {
     return null;
   }
 
   return (
     <div className="mt-0.5 flex flex-col gap-1">
-      {controller.rows.map(({ group, status }) => (
+      {rows.map(({ group, status }) => (
         <EnvironmentUpdateRow
           key={group.environmentId}
           group={group}
           status={status}
-          onUpdate={() => controller.updateEnvironment(group.environmentId)}
+          onUpdate={() => handleUpdate(group.environmentId)}
         />
       ))}
     </div>

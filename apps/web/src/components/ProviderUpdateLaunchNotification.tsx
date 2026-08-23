@@ -6,8 +6,8 @@ import { useEnvironments } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";
 import {
+  createProviderUpdateResultDelivery,
   ProviderUpdateEnvironmentRows,
-  useProviderUpdateEnvironmentRowsController,
 } from "./ProviderUpdateEnvironmentRows";
 import { useLocalEnvironmentUpdateGroups } from "./ProviderUpdateLaunchNotification.environments";
 import {
@@ -62,7 +62,7 @@ type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 // suppress the primary's updates indefinitely.
 const SETTLING_GRACE_MS = 30_000;
 
-function ProviderUpdateEnvironmentsNotification() {
+export function ProviderUpdateEnvironmentsNotification() {
   const navigate = useNavigate();
   const { groups, isAnySettling } = useLocalEnvironmentUpdateGroups();
   const { dismissedNotificationKeys, dismissNotificationKey } =
@@ -73,6 +73,10 @@ function ProviderUpdateEnvironmentsNotification() {
     readonly key: string;
   } | null>(null);
   const notificationKeyRef = useRef<string | null>(null);
+  // Whether the user has triggered an update from the current toast. Until they
+  // do, the prompt is replaced when the available updates change; afterward it
+  // is kept so in-progress rows are not torn down.
+  const hasInteractedRef = useRef(false);
 
   // Close our prompt if this flow unmounts (e.g. the WSL backend is disabled
   // and we fall back to the single-prompt flow).
@@ -110,31 +114,39 @@ function ProviderUpdateEnvironmentsNotification() {
   }, [isAnySettling]);
   const isGated = isAnySettling && !settleGraceElapsed;
 
-  const closePrompt = useCallback(() => {
-    const active = activeToastRef.current;
-    if (active !== null) {
-      toastManager.close(active.toastId);
-      activeToastRef.current = null;
-    }
-  }, []);
   const openProviderSettings = useCallback(
     (toastId?: ProviderUpdateToastId) => {
-      if (toastId !== undefined) toastManager.close(toastId);
-      else closePrompt();
+      if (toastId !== undefined) {
+        toastManager.close(toastId);
+      } else {
+        const active = activeToastRef.current;
+        if (active !== null) {
+          toastManager.close(active.toastId);
+          activeToastRef.current = null;
+        }
+      }
       void navigate({ to: "/settings/providers" });
     },
-    [closePrompt, navigate],
+    [navigate],
   );
   const reportUpdateResult = useCallback(
     (view: ProviderUpdateToastView) =>
       addProviderUpdateToast({ view, openSettings: openProviderSettings }),
     [openProviderSettings],
   );
-  const rowsController = useProviderUpdateEnvironmentRowsController({
-    groups,
-    onInteract: closePrompt,
-    onResult: reportUpdateResult,
-  });
+  const reportUpdateResultRef = useRef(reportUpdateResult);
+  reportUpdateResultRef.current = reportUpdateResult;
+  const [resultDelivery] = useState(() =>
+    createProviderUpdateResultDelivery({
+      isPopoverOpen: () => activeToastRef.current !== null,
+      onResult: (view) => reportUpdateResultRef.current(view),
+    }),
+  );
+
+  useEffect(() => resultDelivery.dispose, [resultDelivery]);
+  useEffect(() => {
+    resultDelivery.observeGroups(groups);
+  }, [groups, resultDelivery]);
 
   useEffect(() => {
     // Whether a fresh prompt can actually be shown for the current update set.
@@ -144,10 +156,18 @@ function ProviderUpdateEnvironmentsNotification() {
       !dismissedNotificationKeys.has(notificationKey) &&
       !seenProviderUpdateNotificationKeys.has(notificationKey);
 
-    // Close a stale prompt when updates clear or a fresh set is ready. Keep it
-    // only while a backend is re-settling (updates still exist, just gated).
+    // Close a prompt the user hasn't acted on yet when the available updates
+    // change: when they clear entirely (key null) so the toast doesn't linger,
+    // and when a fresh set is ready to replace it. Keep it only while a backend
+    // is re-settling (updates still exist, just gated) — and once an update is
+    // in progress, so its rows survive.
     const active = activeToastRef.current;
-    if (active && active.key !== notificationKey && (notificationKey === null || !isGated)) {
+    if (
+      active &&
+      active.key !== notificationKey &&
+      !hasInteractedRef.current &&
+      (notificationKey === null || !isGated)
+    ) {
       toastManager.close(active.toastId);
       activeToastRef.current = null;
     }
@@ -157,6 +177,7 @@ function ProviderUpdateEnvironmentsNotification() {
     }
 
     seenProviderUpdateNotificationKeys.add(notificationKey);
+    hasInteractedRef.current = false;
 
     const dismissPrompt = () => {
       // Dismiss whatever set is still on offer at close time, so the popover
@@ -175,7 +196,15 @@ function ProviderUpdateEnvironmentsNotification() {
           updateProviders: candidateUnion,
           oneClickProviders: candidateUnion,
         }).title,
-        description: <ProviderUpdateEnvironmentRows controller={rowsController} />,
+        description: (
+          <ProviderUpdateEnvironmentRows
+            onInteract={() => {
+              hasInteractedRef.current = true;
+            }}
+            onUpdateFinished={resultDelivery.finishUpdate}
+            onUpdateStarted={resultDelivery.startUpdate}
+          />
+        ),
         timeout: 0,
         actionProps: {
           children: "Settings",
@@ -197,7 +226,7 @@ function ProviderUpdateEnvironmentsNotification() {
     dismissedNotificationKeys,
     dismissNotificationKey,
     openProviderSettings,
-    rowsController,
+    resultDelivery,
   ]);
 
   return null;
