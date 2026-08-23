@@ -1,14 +1,19 @@
-import { useParams } from "@tanstack/react-router";
+import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { ArrowLeftRightIcon, ReplaceIcon, XIcon } from "lucide-react";
 
+import { openCommandPalette } from "../../commandPaletteBus";
 import { ComposerHandleContext, useComposerHandleContext } from "../../composerHandleContext";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { resolveThreadRouteRef } from "../../threadRoutes";
+import { buildThreadRouteParams, resolveThreadRouteRef } from "../../threadRoutes";
+import { swapThreadPanes } from "./swapThreadPanes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
+import { shouldCloseSplitForRoute } from "./threadOpenTarget";
 import { ThreadPaneContext } from "./threadPaneContext";
+import { PaneControlButton } from "./PaneControls";
 import {
   cancelPendingThreadPaneFocus,
   clampSplitRatio,
@@ -64,28 +69,46 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   }, [primaryComposerRef]);
 
   // No duplicate thread across panes: navigating the primary pane onto the
-  // secondary's thread means it "moved" there, so the split closes.
-  useEffect(() => {
-    if (
-      secondaryRef !== null &&
-      routeThreadRef !== null &&
-      scopedThreadKey(routeThreadRef) === scopedThreadKey(secondaryRef)
-    ) {
-      closeSplit();
-    }
-  }, [closeSplit, routeThreadRef, secondaryRef]);
-
-  // Sidebar and palette navigation happen outside both pane roots, yet they
-  // retarget the primary pane — attention (and shortcut ownership, e.g.
-  // mod+shift+E archive) must follow, or the secondary pane would keep
-  // swallowing thread-targeted shortcuts after the user switched threads.
+  // secondary's thread means it "moved" there, so the split closes — except
+  // mid-swap, where that duplicate is a transient the latch vouches for. An
+  // expired latch means the swap navigation never arrived; restoring the old
+  // secondary is the better degraded outcome than folding the split.
+  const pendingSwap = useThreadSplitStore((state) => state.pendingSwap);
+  const abortPaneSwap = useThreadSplitStore((state) => state.abortPaneSwap);
   const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
+  useEffect(() => {
+    const shouldClose = shouldCloseSplitForRoute({
+      routeThreadKey,
+      secondaryKey: secondaryRef === null ? null : scopedThreadKey(secondaryRef),
+      pendingSwap,
+      now: Date.now(),
+    });
+    if (!shouldClose) return;
+    if (pendingSwap !== null) {
+      abortPaneSwap();
+      return;
+    }
+    closeSplit();
+  }, [abortPaneSwap, closeSplit, pendingSwap, routeThreadKey, secondaryRef]);
+
+  // A primary route change made outside both pane roots (sidebar, palette,
+  // deep link) retargets the primary pane — attention (and shortcut
+  // ownership, e.g. mod+shift+E archive) must follow, or the secondary pane
+  // would keep swallowing thread-targeted shortcuts after the user switched
+  // threads. A pane swap is the exception: the threads traded sides on
+  // purpose, so the side the user was working on keeps its activation.
   useEffect(() => {
     if (lastSeenRouteThreadKey.value === routeThreadKey) return;
     const isFirstObservation = lastSeenRouteThreadKey.value === UNOBSERVED_ROUTE_THREAD_KEY;
     lastSeenRouteThreadKey.value = routeThreadKey;
     if (isFirstObservation) return;
-    useThreadSplitStore.getState().setActivePane("primary");
+    const state = useThreadSplitStore.getState();
+    const pending = state.pendingSwap;
+    if (pending !== null) {
+      state.settlePaneSwap();
+      if (routeThreadKey === pending.expectedRouteKey) return;
+    }
+    state.setActivePane("primary");
   }, [routeThreadKey]);
 
   const splitOpen = secondaryRef !== null && isWideEnoughForSplit;
@@ -202,9 +225,11 @@ function ThreadPaneSection({
     >
       {children}
       {showActiveIndicator && isActive ? (
+        // Below the divider wrapper's z-40 on purpose: the ring's inset edge
+        // must not draw across the divider's hover control cluster.
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-50 ring-1 ring-primary/25 ring-inset"
+          className="pointer-events-none absolute inset-0 z-30 ring-1 ring-primary/25 ring-inset"
         />
       ) : null}
     </section>
@@ -217,6 +242,7 @@ function SplitResizeHandle({
   containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const setSplitRatio = useThreadSplitStore((state) => state.setSplitRatio);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
     pointerId: number;
     ratio: number;
@@ -238,62 +264,138 @@ function SplitResizeHandle({
     [containerRef],
   );
 
+  const endDrag = useCallback(() => {
+    delete wrapperRef.current?.dataset.dragging;
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  // The wrapper is the visible divider line and owns the grid track; the drag
+  // surface is a wider invisible child so the divider is grabbable without
+  // fattening the line. Its overhang extends only into the secondary pane:
+  // the primary pane's right edge carries a classic scrollbar lane that must
+  // keep winning hit-testing. The control cluster is a sibling of the drag
+  // surface, so its clicks can never start a drag, and data-dragging on the
+  // wrapper hides the cluster while resizing so a drag can't end on a button.
   return (
     <div
-      role="separator"
-      aria-orientation="vertical"
-      className="relative z-40 h-full w-1 shrink-0 cursor-col-resize bg-border/60 hover:bg-primary/40 data-[dragging=true]:bg-primary/60"
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        const container = containerRef.current;
-        if (!container) return;
-        const bounds = container.getBoundingClientRect();
-        if (bounds.width <= 0) return;
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        event.currentTarget.dataset.dragging = "true";
-        dragStateRef.current = {
-          pointerId: event.pointerId,
-          ratio: useThreadSplitStore.getState().splitRatio,
-          boundsLeft: bounds.left,
-          boundsWidth: bounds.width,
-        };
-      }}
-      onPointerMove={(event) => {
-        const dragState = dragStateRef.current;
-        if (!dragState || dragState.pointerId !== event.pointerId) return;
-        dragState.ratio = clampSplitRatio(
-          (event.clientX - dragState.boundsLeft) / dragState.boundsWidth,
-        );
-        if (frameRef.current === null) {
-          frameRef.current = window.requestAnimationFrame(() => {
-            frameRef.current = null;
-            const current = dragStateRef.current;
-            if (current) applyRatio(current.ratio);
+      ref={wrapperRef}
+      className="group/split-handle relative z-40 h-full w-1 shrink-0 bg-border/60 hover:bg-primary/40 data-[dragging=true]:bg-primary/60"
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        className="absolute inset-y-0 -right-2 left-0 cursor-col-resize"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          const container = containerRef.current;
+          if (!container) return;
+          const bounds = container.getBoundingClientRect();
+          if (bounds.width <= 0) return;
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          if (wrapperRef.current) {
+            wrapperRef.current.dataset.dragging = "true";
+          }
+          dragStateRef.current = {
+            pointerId: event.pointerId,
+            ratio: useThreadSplitStore.getState().splitRatio,
+            boundsLeft: bounds.left,
+            boundsWidth: bounds.width,
+          };
+        }}
+        onPointerMove={(event) => {
+          const dragState = dragStateRef.current;
+          if (!dragState || dragState.pointerId !== event.pointerId) return;
+          dragState.ratio = clampSplitRatio(
+            (event.clientX - dragState.boundsLeft) / dragState.boundsWidth,
+          );
+          if (frameRef.current === null) {
+            frameRef.current = window.requestAnimationFrame(() => {
+              frameRef.current = null;
+              const current = dragStateRef.current;
+              if (current) applyRatio(current.ratio);
+            });
+          }
+        }}
+        onPointerUp={(event) => {
+          const dragState = dragStateRef.current;
+          if (!dragState || dragState.pointerId !== event.pointerId) return;
+          dragStateRef.current = null;
+          endDrag();
+          setSplitRatio(dragState.ratio);
+        }}
+        onPointerCancel={() => {
+          dragStateRef.current = null;
+          endDrag();
+          // Snap back to the committed ratio.
+          applyRatio(useThreadSplitStore.getState().splitRatio);
+        }}
+      />
+      <SplitPaneControls />
+    </div>
+  );
+}
+
+/**
+ * Hover-revealed pane controls anchored near the top of the divider. They
+ * live on the boundary instead of either pane's titlebar so they never cover
+ * the header actions, and they read as owning the split rather than one
+ * side. Reveal is a one-shot opacity transition (no continuous animation),
+ * slightly delayed so a pointer merely crossing the divider does not flash
+ * the cluster; focus-within keeps the buttons reachable by keyboard, and
+ * coarse pointers see the cluster pinned visible — a touch user has no hover
+ * to reveal it with.
+ */
+function SplitPaneControls() {
+  const router = useRouter();
+  const routeThreadRef = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteRef(params),
+  });
+  const swapPending = useThreadSplitStore((state) => state.pendingSwap !== null);
+  const closeSplit = useThreadSplitStore((state) => state.closeSplit);
+  const swapEnabled = routeThreadRef !== null && !swapPending;
+
+  return (
+    <div
+      data-thread-split-controls
+      role="group"
+      aria-label="Split view controls"
+      className="pointer-events-none absolute top-[calc(var(--workspace-topbar-height)+0.5rem)] left-1/2 z-50 flex -translate-x-1/2 flex-col gap-1 rounded-md border border-border bg-background p-1 opacity-0 shadow-sm transition-opacity group-focus-within/split-handle:pointer-events-auto group-focus-within/split-handle:opacity-100 group-hover/split-handle:pointer-events-auto group-hover/split-handle:opacity-100 group-hover/split-handle:delay-100 group-data-[dragging=true]/split-handle:pointer-events-none group-data-[dragging=true]/split-handle:opacity-0 group-data-[dragging=true]/split-handle:delay-0 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <PaneControlButton
+        label={
+          routeThreadRef === null ? "Swap split threads (needs two threads)" : "Swap split threads"
+        }
+        tooltipSide="right"
+        disabled={!swapEnabled}
+        onClick={() => {
+          void swapThreadPanes({
+            routeThreadRef,
+            navigateToThread: (ref) =>
+              router.navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(ref),
+              }),
           });
-        }
-      }}
-      onPointerUp={(event) => {
-        const dragState = dragStateRef.current;
-        if (!dragState || dragState.pointerId !== event.pointerId) return;
-        dragStateRef.current = null;
-        delete event.currentTarget.dataset.dragging;
-        if (frameRef.current !== null) {
-          window.cancelAnimationFrame(frameRef.current);
-          frameRef.current = null;
-        }
-        setSplitRatio(dragState.ratio);
-      }}
-      onPointerCancel={(event) => {
-        dragStateRef.current = null;
-        delete event.currentTarget.dataset.dragging;
-        if (frameRef.current !== null) {
-          window.cancelAnimationFrame(frameRef.current);
-          frameRef.current = null;
-        }
-        // Snap back to the committed ratio.
-        applyRatio(useThreadSplitStore.getState().splitRatio);
-      }}
-    />
+        }}
+      >
+        <ArrowLeftRightIcon className="size-4" />
+      </PaneControlButton>
+      <PaneControlButton
+        label="Switch split thread"
+        tooltipSide="right"
+        onClick={() => openCommandPalette({ open: "open-in-split" })}
+      >
+        <ReplaceIcon className="size-4" />
+      </PaneControlButton>
+      <PaneControlButton label="Close split view" tooltipSide="right" onClick={closeSplit}>
+        <XIcon className="size-4" />
+      </PaneControlButton>
+    </div>
   );
 }

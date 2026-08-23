@@ -26,6 +26,7 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { SplitThreadLayout } from "~/components/thread-split/SplitThreadLayout";
+import { canSwapThreadPanes, swapThreadPanes } from "~/components/thread-split/swapThreadPanes";
 import {
   focusOtherThreadPane,
   useThreadSplitStore,
@@ -249,6 +250,24 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "threadPane.swap") {
+        // Swaps the primary route thread with the secondary pane's — needs
+        // two server threads on screen, so a draft primary leaves the key
+        // to its default behavior.
+        if (!canSwapThreadPanes(routeThreadRef)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void swapThreadPanes({
+          routeThreadRef,
+          navigateToThread: (ref) =>
+            router.navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(ref),
+            }),
+        });
+        return;
+      }
+
       if (command === "thread.archive") {
         if (!shortcutThreadRef) return;
         if (hasOpenArchiveUndoBlockingLayer()) return;
@@ -317,6 +336,7 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     previewOpen,
     projectGroupCount,
+    routeThreadRef,
     shortcutThreadRef,
     selectedThreadKeysSize,
     legacySidebarEnabled,

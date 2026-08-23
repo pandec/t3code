@@ -140,6 +140,11 @@ const DEFAULT_BINDINGS = compile([
   { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
   { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
+  {
+    shortcut: modShortcut("\\", { shiftKey: true }),
+    command: "threadPane.swap",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("[", { shiftKey: true }), command: "thread.previous" },
   { shortcut: modShortcut("]", { shiftKey: true }), command: "thread.next" },
   { shortcut: modShortcut("1"), command: "thread.jump.1" },
@@ -707,6 +712,21 @@ describe("resolveShortcutCommand", () => {
         platform: "MacIntel",
       }),
       "rightPanel.toggleMaximized",
+    );
+  });
+
+  it("matches the swap-panes shortcut using the physical key code", () => {
+    // Shift+Backslash types "|" on a US layout, so without the Backslash
+    // code alias the default mod+shift+\ binding would never resolve.
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "|", code: "Backslash", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+        },
+      ),
+      "threadPane.swap",
     );
   });
 

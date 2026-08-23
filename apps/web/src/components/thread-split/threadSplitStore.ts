@@ -66,6 +66,38 @@ function readStoredSplitRatio(): number {
   return clampSplitRatio(Number(raw));
 }
 
+/**
+ * In-flight pane swap. Swapping sets the secondary to the old primary and
+ * then navigates the primary route to the old secondary — between those two
+ * steps the route still equals the new secondary, which the duplicate-thread
+ * guard would read as "moved" and fold the split. The latch tells the guard
+ * to hold off until the route arrives (or the swap visibly failed).
+ */
+export interface PendingPaneSwap {
+  /** Where the primary route is headed: the old secondary thread. */
+  expectedRouteKey: string;
+  /** The route (old primary) at swap start — also the new secondary's key. */
+  startedRouteKey: string;
+  /** The old secondary ref, restored if the swap aborts. */
+  restoreSecondaryRef: ScopedThreadRef;
+  expiresAt: number;
+}
+
+export const PENDING_SWAP_TTL_MS = 5_000;
+
+// Store-owned expiry: without a timer the TTL is only observed when something
+// re-renders, so a stalled swap navigation would leave the latch (and every
+// swap affordance) stuck indefinitely. The latch object doubles as the token,
+// so a timer can never abort a swap it did not start.
+let pendingSwapExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingSwapExpiry(): void {
+  if (pendingSwapExpiryTimer !== null) {
+    clearTimeout(pendingSwapExpiryTimer);
+    pendingSwapExpiryTimer = null;
+  }
+}
+
 interface ThreadSplitStore {
   secondaryRef: ScopedThreadRef | null;
   /**
@@ -78,11 +110,22 @@ interface ThreadSplitStore {
   splitMounted: boolean;
   activePaneId: ThreadPaneId;
   splitRatio: number;
+  pendingSwap: PendingPaneSwap | null;
   openSecondaryThread: (ref: ScopedThreadRef) => void;
   closeSplit: () => void;
   setSplitMounted: (mounted: boolean) => void;
   setActivePane: (paneId: ThreadPaneId) => void;
   setSplitRatio: (ratio: number) => void;
+  beginPaneSwap: (
+    routeThreadRef: ScopedThreadRef,
+  ) => { target: ScopedThreadRef; pendingSwap: PendingPaneSwap } | null;
+  settlePaneSwap: () => void;
+  /**
+   * With `onlyIfCurrent`, aborts only while that exact latch is still in
+   * flight — an async caller (a swap's navigation catch, the expiry timer)
+   * must never abort a newer swap it does not own.
+   */
+  abortPaneSwap: (onlyIfCurrent?: PendingPaneSwap) => void;
 }
 
 export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
@@ -90,12 +133,17 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   splitMounted: false,
   activePaneId: "primary",
   splitRatio: readStoredSplitRatio(),
+  pendingSwap: null,
 
   openSecondaryThread: (ref) => {
-    // The pick usually comes from the command palette, whose close restores
-    // focus to the trigger in the primary pane a beat later — the intent
-    // makes that restore bounce into the pane the user just opened.
-    requestThreadPaneFocus("secondary");
+    // Overlay callers (command palette) queue their own pane-focus intent —
+    // the store must not, or a sidebar pick would leave a stray intent that
+    // bounces the next deliberate pane switch back here.
+    //
+    // An in-flight swap latch deliberately survives a pick: abortPaneSwap's
+    // restore guard already yields to the newer secondary, and clearing the
+    // latch early would let the swap's late route arrival re-activate the
+    // primary pane over this pick (or fold the split on a transient match).
     const current = get().secondaryRef;
     if (current && scopedThreadKey(current) === scopedThreadKey(ref)) {
       set({ activePaneId: "secondary" });
@@ -106,10 +154,62 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
 
   closeSplit: () => {
     if (get().secondaryRef === null) return;
-    set({ secondaryRef: null, activePaneId: "primary" });
+    clearPendingSwapExpiry();
+    set({ secondaryRef: null, activePaneId: "primary", pendingSwap: null });
     // The close control usually lives in the secondary pane, whose unmount
     // would drop DOM focus to <body>; hand it to the surviving pane instead.
     focusThreadPane("primary");
+  },
+
+  beginPaneSwap: (routeThreadRef) => {
+    const state = get();
+    if (state.secondaryRef === null || !state.splitMounted) {
+      return null;
+    }
+    if (state.pendingSwap !== null && Date.now() <= state.pendingSwap.expiresAt) {
+      return null;
+    }
+    const target = state.secondaryRef;
+    const pendingSwap: PendingPaneSwap = {
+      expectedRouteKey: scopedThreadKey(target),
+      startedRouteKey: scopedThreadKey(routeThreadRef),
+      restoreSecondaryRef: target,
+      expiresAt: Date.now() + PENDING_SWAP_TTL_MS,
+    };
+    // Deliberately leaves activePaneId alone: the threads trade sides, and the
+    // side the user was working on should stay the one that owns shortcuts.
+    set({ secondaryRef: routeThreadRef, pendingSwap });
+    clearPendingSwapExpiry();
+    pendingSwapExpiryTimer = setTimeout(() => {
+      pendingSwapExpiryTimer = null;
+      get().abortPaneSwap(pendingSwap);
+    }, PENDING_SWAP_TTL_MS);
+    return { target, pendingSwap };
+  },
+
+  settlePaneSwap: () => {
+    if (get().pendingSwap === null) return;
+    clearPendingSwapExpiry();
+    set({ pendingSwap: null });
+  },
+
+  abortPaneSwap: (onlyIfCurrent) => {
+    const state = get();
+    const pending = state.pendingSwap;
+    if (pending === null) return;
+    // A stale caller must also leave the current latch's timer armed.
+    if (onlyIfCurrent !== undefined && pending !== onlyIfCurrent) return;
+    clearPendingSwapExpiry();
+    // Restore only when the secondary is still the one the swap installed —
+    // a pick that replaced it mid-flight is newer user intent and wins.
+    if (
+      state.secondaryRef !== null &&
+      scopedThreadKey(state.secondaryRef) === pending.startedRouteKey
+    ) {
+      set({ secondaryRef: pending.restoreSecondaryRef, pendingSwap: null });
+      return;
+    }
+    set({ pendingSwap: null });
   },
 
   setSplitMounted: (mounted) => {
@@ -281,6 +381,35 @@ export function reclaimThreadPaneFocus(paneId: ThreadPaneId): void {
       focusThreadPane(paneId);
     }
   }, 0);
+}
+
+/**
+ * Make a pane active and hand it focus. Used when a sidebar click or palette
+ * pick targets a thread that is already on screen: nothing navigates, so the
+ * pane must be activated explicitly. The focus intent covers the palette case
+ * (the closing dialog's focus restore would otherwise bounce activation back);
+ * the direct focus covers the sidebar case, where no overlay close follows.
+ */
+export function activateThreadPane(paneId: ThreadPaneId): void {
+  requestThreadPaneFocus(paneId);
+  useThreadSplitStore.getState().setActivePane(paneId);
+  focusThreadPane(paneId);
+}
+
+/**
+ * The pane that owned focus when the command palette opened. Thread picks
+ * must target this snapshot, not the live active pane: the dialog's own
+ * focus juggling (close-time restores, list focus) can move the live value
+ * while the palette is open.
+ */
+let paletteOwnerPaneId: ThreadPaneId = "primary";
+
+export function capturePaletteOwnerPane(): void {
+  paletteOwnerPaneId = useThreadSplitStore.getState().activePaneId;
+}
+
+export function paletteOwnerPane(): ThreadPaneId {
+  return paletteOwnerPaneId;
 }
 
 /** Jump focus to the other pane. Returns false while the split is not rendered. */
