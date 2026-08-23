@@ -554,6 +554,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           source.instanceId === pendingReplacement.targetInstanceId;
         if (eventMayBeFromPendingReplacement) {
           yield* Deferred.await(pendingReplacement.settled);
+          // Waiting for replacement settlement does not consume a binding
+          // compare-and-swap retry.
+          attempt -= 1;
           continue;
         }
 
@@ -1138,14 +1141,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 settled: yield* Deferred.make<void>(),
               }
             : undefined;
-        if (pendingReplacement !== undefined) {
-          yield* Ref.update(pendingSessionReplacements, (current) => {
-            const next = new Map(current);
-            next.set(threadId, pendingReplacement);
-            return next;
-          });
-        }
         const sessionWithInstance = yield* Effect.gen(function* () {
+          if (pendingReplacement !== undefined) {
+            yield* Ref.update(pendingSessionReplacements, (current) => {
+              const next = new Map(current);
+              next.set(threadId, pendingReplacement);
+              return next;
+            });
+          }
           yield* prepareMcpSession(threadId, resolvedInstanceId);
           const session = yield* adapter
             .startSession({
