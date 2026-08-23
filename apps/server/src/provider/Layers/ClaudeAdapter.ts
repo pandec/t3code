@@ -5213,8 +5213,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               settings: { disableAllHooks: true },
               // Project settings must be loaded to see project skills, but a
               // metadata lookup must not boot the workspace's `.mcp.json`
-              // servers. Strict mode keeps discovery to the skills we asked
-              // for instead of spawning arbitrary project subprocesses.
+              // servers. Strict mode with an explicit empty server set keeps
+              // discovery from spawning arbitrary project subprocesses.
+              mcpServers: {},
               strictMcpConfig: true,
               allowedTools: [],
               env: claudeEnvironment,
