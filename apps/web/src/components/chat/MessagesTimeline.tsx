@@ -89,28 +89,33 @@ import { keepTimelineEndVisibleAfterOverlayGrowth } from "./timelineScrollAnchor
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
-  deriveTimelineMinimapItems,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
-  resolveTimelineMinimapHasPersistentGutter,
-  resolveTimelineMinimapHeightStyle,
-  resolveTimelineMinimapHitStripWidth,
-  resolveTimelineMinimapItemIndexFromPointer,
-  resolveTimelineMinimapInteractiveWidth,
-  resolveTimelineMinimapTopPercent,
-  resolveTimelineMinimapTooltipTranslate,
-  resolveTimelineMinimapAriaLabel,
   shouldPreserveAssistantLineBreaks,
   toolGroupAction,
   workEntryIsVisibleInGroup,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
-  TIMELINE_MINIMAP_MIN_ITEMS,
-  type TimelineMinimapItem,
   type TimelineLatestTurn,
 } from "./MessagesTimeline.logic";
+import {
+  computeTimelineMinimapState,
+  EMPTY_TIMELINE_MINIMAP_STATE,
+  resolveTimelineMinimapAriaLabel,
+  resolveTimelineMinimapHasPersistentGutter,
+  resolveTimelineMinimapHeightStyle,
+  resolveTimelineMinimapHitStripWidth,
+  resolveTimelineMinimapItemIndexFromPointer,
+  resolveTimelineMinimapInteractiveWidth,
+  resolveTimelineMinimapTooltipTranslate,
+  resolveTimelineMinimapTopPercent,
+  resolveTimelineMinimapVisibleItemIds,
+  TIMELINE_MINIMAP_MIN_ITEMS,
+  type TimelineMinimapItem,
+  type TimelineMinimapPositionState,
+} from "./MessagesTimeline.minimap";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -338,6 +343,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const [userMinimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const [assistantMinimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
+  const userMinimapInViewIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const assistantMinimapInViewIdsRef = useRef<ReadonlySet<string>>(new Set());
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
@@ -488,11 +495,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
-  const userMinimapItems = useMemo(() => deriveTimelineMinimapItems(rows, "user-turn"), [rows]);
-  const assistantMinimapItems = useMemo(
-    () => deriveTimelineMinimapItems(rows, "final-assistant"),
-    [rows],
-  );
+  const minimapState = useTimelineMinimapState(rows);
+  const userMinimapItems = minimapState.userItems;
+  const assistantMinimapItems = minimapState.assistantItems;
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -526,26 +531,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const scrollTop = state.scroll ?? 0;
     const scrollBottom = scrollTop + (state.scrollLength ?? 0);
 
-    for (const [items, stripMap] of [
-      [userMinimapItems, userMinimapStripMap],
-      [assistantMinimapItems, assistantMinimapStripMap],
-    ] as const) {
-      for (const item of items) {
-        const strip = stripMap.get(item.id);
-        if (!strip) {
-          continue;
-        }
-
-        const rowTop = resolveTimelineRowTop(state, item.rowIndex);
-        const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
-        const inView =
-          rowTop !== null &&
-          rowTop < scrollBottom &&
-          rowTop + Math.max(1, rowHeight ?? 1) > scrollTop;
-
-        strip.dataset.inView = inView ? "true" : "false";
-      }
-    }
+    userMinimapInViewIdsRef.current = updateTimelineMinimapInView({
+      items: userMinimapItems,
+      previousIds: userMinimapInViewIdsRef.current,
+      scrollBottom,
+      scrollTop,
+      state,
+      stripMap: userMinimapStripMap,
+    });
+    assistantMinimapInViewIdsRef.current = updateTimelineMinimapInView({
+      items: assistantMinimapItems,
+      previousIds: assistantMinimapInViewIdsRef.current,
+      scrollBottom,
+      scrollTop,
+      state,
+      stripMap: assistantMinimapStripMap,
+    });
   }, [
     assistantMinimapItems,
     assistantMinimapStripMap,
@@ -652,6 +653,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ),
     [],
   );
+  const handleMinimapSelect = useCallback(
+    (item: TimelineMinimapItem) => {
+      onManualNavigation();
+      void listRef.current?.scrollToIndex({
+        index: item.rowIndex,
+        animated: true,
+        viewOffset: 24,
+      });
+    },
+    [listRef, onManualNavigation],
+  );
 
   if (rows.length === 0 && !isWorking) {
     if (hideEmptyPlaceholder) {
@@ -712,14 +724,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             side="left"
             stripMap={userMinimapStripMap}
             testId="timeline-minimap"
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
+            onSelect={handleMinimapSelect}
           />
           <TimelineMinimap
             items={assistantMinimapItems}
@@ -728,14 +733,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             side="right"
             stripMap={assistantMinimapStripMap}
             testId="timeline-agent-minimap"
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
+            onSelect={handleMinimapSelect}
           />
         </div>
       </TimelineRowActivityCtx>
@@ -751,29 +749,44 @@ function getItemType(item: MessagesTimelineRow) {
   return item.kind === "message" ? `message:${item.message.role}` : item.kind;
 }
 
-interface TimelinePositionState {
-  readonly contentLength?: number;
-  readonly scroll?: number;
-  readonly scrollLength?: number;
-  readonly positionAtIndex?: (index: number) => number | undefined;
-  readonly sizeAtIndex?: (index: number) => number | undefined;
-}
-
-function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
-  const top = state.positionAtIndex?.(rowIndex);
-  return typeof top === "number" && Number.isFinite(top) ? top : null;
-}
-
-function resolveTimelineRowHeight(state: TimelinePositionState, rowIndex: number) {
-  const height = state.sizeAtIndex?.(rowIndex);
-  return typeof height === "number" && Number.isFinite(height) ? height : null;
+function updateTimelineMinimapInView(input: {
+  readonly items: ReadonlyArray<TimelineMinimapItem>;
+  readonly previousIds: ReadonlySet<string>;
+  readonly scrollBottom: number;
+  readonly scrollTop: number;
+  readonly state: TimelineMinimapPositionState;
+  readonly stripMap: ReadonlyMap<string, HTMLSpanElement>;
+}): ReadonlySet<string> {
+  const nextIds = new Set(
+    resolveTimelineMinimapVisibleItemIds({
+      items: input.items,
+      scrollBottom: input.scrollBottom,
+      scrollTop: input.scrollTop,
+      state: input.state,
+    }),
+  );
+  for (const id of input.previousIds) {
+    if (!nextIds.has(id)) {
+      const strip = input.stripMap.get(id);
+      if (strip) {
+        strip.dataset.inView = "false";
+      }
+    }
+  }
+  for (const id of nextIds) {
+    const strip = input.stripMap.get(id);
+    if (strip) {
+      strip.dataset.inView = "true";
+    }
+  }
+  return nextIds;
 }
 
 function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
   return target instanceof Element && target.closest("[data-minimap-preview]") !== null;
 }
 
-function TimelineMinimap({
+const TimelineMinimap = memo(function TimelineMinimap({
   hasPersistentGutter,
   hitStripWidth,
   items,
@@ -993,7 +1006,7 @@ function TimelineMinimap({
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // TimelineRowContent — the actual row component
@@ -2545,6 +2558,15 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     const nextState = computeStableMessagesTimelineRows(rows, prevState.current);
     prevState.current = nextState;
     return nextState.result;
+  }, [rows]);
+}
+
+function useTimelineMinimapState(rows: ReadonlyArray<MessagesTimelineRow>) {
+  const previousState = useRef(EMPTY_TIMELINE_MINIMAP_STATE);
+  return useMemo(() => {
+    const nextState = computeTimelineMinimapState(rows, previousState.current);
+    previousState.current = nextState;
+    return nextState;
   }, [rows]);
 }
 
