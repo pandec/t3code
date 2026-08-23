@@ -2,7 +2,7 @@ import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/e
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import type { CommandPaletteActionItem } from "../CommandPalette.logic";
-import { useThreadSplitStore } from "./threadSplitStore";
+import { requestThreadPaneFocus, useThreadSplitStore } from "./threadSplitStore";
 
 const THREAD_ITEM_VALUE_PREFIX = "thread:";
 
@@ -42,6 +42,10 @@ export function buildOpenInSplitThreadItems(input: {
         ...item,
         value: `open-in-split:${threadKey}`,
         run: async () => {
+          // The closing palette restores focus to its trigger in the primary
+          // pane a beat later; the intent bounces that restore into the pane
+          // the user just opened.
+          requestThreadPaneFocus("secondary");
           useThreadSplitStore.getState().openSecondaryThread(threadRef);
         },
       },

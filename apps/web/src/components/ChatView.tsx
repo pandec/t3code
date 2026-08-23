@@ -393,7 +393,6 @@ import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
-import { ThreadPaneControls } from "./thread-split/ThreadPaneControls";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
@@ -7125,7 +7124,6 @@ function ChatViewContent(props: ChatViewProps) {
           onToggle={toggleRightPanelMaximized}
         />
       ) : null}
-      <ThreadPaneControls />
       {panelToggleControls}
     </div>
   );

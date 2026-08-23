@@ -43,6 +43,7 @@ import {
   ArrowUpToLineIcon,
   CircleCheckIcon,
   CircleDotIcon,
+  ArrowLeftRightIcon,
   Columns2Icon,
   CopyIcon,
   CornerLeftUpIcon,
@@ -198,10 +199,15 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { buildOpenInSplitThreadItems } from "./thread-split/splitPaletteItems";
+import { swapThreadPanes } from "./thread-split/swapThreadPanes";
+import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import {
   activeThreadPaneComposerHandle,
+  capturePaletteOwnerPane,
   focusActiveThreadPane,
   focusOtherThreadPane,
+  paletteOwnerPane,
+  requestThreadPaneFocus,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
@@ -565,6 +571,14 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       }),
     [openAddProject, openInSplit, openNewThreadIn, setOpen],
   );
+
+  // Thread picks must target the pane that owned focus when the palette
+  // OPENED. The dialog's own focus traffic (list focus, close-time restores)
+  // moves the live active pane while it is up, so run callbacks read this
+  // snapshot instead.
+  useEffect(() => {
+    if (state.open) capturePaletteOwnerPane();
+  }, [state.open]);
 
   return (
     <ComposerHandleContext value={composerHandleRef}>
@@ -1295,14 +1309,30 @@ function OpenCommandPaletteDialog(props: {
             : undefined;
         },
         runThread: async (thread) => {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
+          const targetRef = scopeThreadRef(thread.environmentId, thread.id);
+          const { plan, completion } = openThreadInActivePane({
+            targetRef,
+            routeThreadRef,
+            paneOverride: paletteOwnerPane(),
+            navigateToPrimary: () =>
+              navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(targetRef),
+              }),
           });
+          if (plan.kind === "open-secondary") {
+            // The closing palette restores focus to its trigger a beat later;
+            // the intent bounces that restore into the pane just opened.
+            requestThreadPaneFocus("secondary");
+          }
+          // Awaited so a navigation rejection still reaches the palette's
+          // run-command error handling, as it did before the split routing.
+          if (completion) await completion;
         },
       }),
     [
       activeThreadKey,
+      routeThreadRef,
       clientSettings.sidebarThreadSortOrder,
       navigate,
       projectCwdByKey,
@@ -1317,6 +1347,7 @@ function OpenCommandPaletteDialog(props: {
   const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
 
   const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
+  const splitMounted = useThreadSplitStore((state) => state.splitMounted);
   const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
   const openInSplitItems = useMemo(
     () =>
@@ -1927,6 +1958,26 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "threadPane.focusOther",
       run: async () => {
         focusOtherThreadPane();
+      },
+    });
+  }
+  if (splitSupported && splitMounted && splitSecondaryRef !== null && routeThreadRef !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:swap-split-threads",
+      searchTerms: ["split", "swap", "pane", "exchange", "flip", "trade"],
+      title: "Swap split threads",
+      icon: <ArrowLeftRightIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "threadPane.swap",
+      run: async () => {
+        await swapThreadPanes({
+          routeThreadRef,
+          navigateToThread: (ref) =>
+            navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(ref),
+            }),
+        });
       },
     });
   }

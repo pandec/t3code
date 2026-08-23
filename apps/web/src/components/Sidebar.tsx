@@ -151,6 +151,12 @@ import {
 import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
+import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
+import {
+  SplitPaneMarkerIcon,
+  useSplitSecondaryThreadKey,
+  type SplitPaneMarker,
+} from "./thread-split/SplitPaneMarker";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
@@ -831,6 +837,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  // Which split pane shows this thread, while the split view is on screen.
+  splitPaneMarker: SplitPaneMarker | null;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
@@ -1351,9 +1359,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <TerminalIcon className={cn("size-3.5", terminalStatus.pulse && "animate-status-pulse")} />
     </span>
   ) : null;
+  // Only the two threads on screen ever get a non-null marker, so the list
+  // stays quiet.
+  const splitPaneIcon = props.splitPaneMarker ? (
+    <SplitPaneMarkerIcon marker={props.splitPaneMarker} />
+  ) : null;
   const diff = latestTurnDiff(thread);
   const cardTrailingMetadata = !isRenaming ? (
     <>
+      {splitPaneIcon}
       {/* Upstream anchors the worktree marker to the branch, which compact
           cards do not render. Carrying it here covers both card shapes instead
           of only the expanded one. Slim rows (settled, snoozed) build their own
@@ -1443,6 +1457,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 visibility={props.providerIconVisibility}
               />
             ) : null}
+            {/* A settled or snoozed thread can still occupy a split pane, so
+                the marker rides slim rows too — like the terminal and PR
+                icons already do. */}
+            {splitPaneIcon}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -2167,6 +2185,7 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const splitSecondaryKey = useSplitSecondaryThreadKey();
   // Post-settle navigation validates against the CURRENT route, not the one
   // captured when the settle started: if the user navigated elsewhere while
   // the command was in flight, completing it must not yank them away.
@@ -3066,6 +3085,32 @@ export default function Sidebar() {
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  // Direct picks (row clicks, Enter/Space, search results, archived rows)
+  // route through the split-aware helper so the thread lands in the active
+  // pane; forward navigation after settle/archive keeps using
+  // navigateToThread — it must always retarget the primary route. The
+  // primary branch delegates to navigateToThread wholesale, so only the
+  // split-local branches repeat its selection/mobile prep. The sidebar sits
+  // outside both pane roots, so the click's own pointerdown never changes
+  // which pane is active.
+  const openThreadFromSidebar = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      const { plan } = openThreadInActivePane({
+        targetRef: threadRef,
+        routeThreadRef,
+        navigateToPrimary: () => navigateToThread(threadRef),
+      });
+      if (plan.kind === "navigate-primary") return;
+      if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
+        clearSelection();
+      }
+      setSelectionAnchor(scopedThreadKey(threadRef));
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+    },
+    [clearSelection, isMobile, navigateToThread, routeThreadRef, setOpenMobile, setSelectionAnchor],
+  );
   const attemptUnarchive = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -3144,9 +3189,9 @@ export default function Sidebar() {
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell) => {
       clearThreadSearch();
-      navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
+      openThreadFromSidebar(scopeThreadRef(thread.environmentId, thread.id));
     },
-    [clearThreadSearch, navigateToThread],
+    [clearThreadSearch, openThreadFromSidebar],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -3242,9 +3287,9 @@ export default function Sidebar() {
       if (isTrailingDoubleClick(event.detail)) {
         return;
       }
-      navigateToThread(threadRef);
+      openThreadFromSidebar(threadRef);
     },
-    [navigateToThread, rangeSelectTo, toggleThreadSelection],
+    [openThreadFromSidebar, rangeSelectTo, toggleThreadSelection],
   );
 
   const attemptArchive = useCallback(
@@ -4692,6 +4737,15 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
+                        splitPaneMarker={
+                          splitSecondaryKey === null
+                            ? null
+                            : threadKey === splitSecondaryKey
+                              ? "right"
+                              : threadKey === routeThreadKey
+                                ? "left"
+                                : null
+                        }
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null}
                         currentEnvironmentId={primaryEnvironmentId}
@@ -4723,7 +4777,7 @@ export default function Sidebar() {
                         }
                         timestampFormat={timestampFormat}
                         onThreadClick={handleThreadClick}
-                        onThreadActivate={navigateToThread}
+                        onThreadActivate={openThreadFromSidebar}
                         onStartRename={startThreadRename}
                         onRenameTitleChange={setRenamingTitle}
                         onCommitRename={commitThreadRename}
@@ -5023,7 +5077,7 @@ export default function Sidebar() {
                           routeThreadKey ===
                           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
                         }
-                        onOpen={navigateToThread}
+                        onOpen={openThreadFromSidebar}
                         onUnarchive={attemptUnarchive}
                         onContextMenu={handleArchivedThreadContextMenu}
                       />
