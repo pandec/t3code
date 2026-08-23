@@ -24,7 +24,7 @@ it("exposes an effort descriptor with default high for custom models", () => {
   if (effort?.type === "select") {
     assert.deepEqual(
       effort.options.map((option) => option.id),
-      ["low", "medium", "high"],
+      ["low", "medium", "high", "xhigh"],
     );
   }
   assert.equal(getProviderOptionCurrentValue(effort), "high");
@@ -45,7 +45,7 @@ it("keeps built-in model capabilities unchanged", () => {
 });
 
 it("rewrites custom model ids with the selected effort suffix", () => {
-  for (const effort of ["low", "medium", "high"]) {
+  for (const effort of ["low", "medium", "high", "xhigh"]) {
     assert.equal(
       resolveClaudeApiModelId(
         createModelSelection(INSTANCE_ID, "gpt-5.6-sol", [{ id: "effort", value: effort }]),
@@ -96,7 +96,7 @@ it("keeps built-in model id resolution unchanged", () => {
 });
 
 it("never yields a Claude-native effort for custom models", () => {
-  for (const effort of ["low", "medium", "high"]) {
+  for (const effort of ["low", "medium", "high", "xhigh"]) {
     assert.equal(normalizeClaudeCliEffort(effort, "gpt-5.6-sol"), undefined);
   }
   assert.equal(normalizeClaudeCliEffort("high", "gpt-5.6-sol(high)"), undefined);
