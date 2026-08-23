@@ -540,25 +540,25 @@ function mapCollabAgentEvent(
     timelineBypass: true,
   } as const;
 
+  const buildTaskStarted = (): ProviderRuntimeEvent => ({
+    ...base,
+    type: "task.started",
+    payload: {
+      taskId,
+      description: title,
+      title,
+      role,
+      ...(agentPath ? { agentPath } : {}),
+      ...(typeof payload.parentThreadId === "string"
+        ? { parentAgentId: payload.parentThreadId }
+        : {}),
+      timelineBypass: true,
+    },
+  });
+
   switch (event.method) {
     case "collabAgent/started":
-      return [
-        {
-          ...base,
-          type: "task.started",
-          payload: {
-            taskId,
-            description: title,
-            title,
-            role,
-            ...(agentPath ? { agentPath } : {}),
-            ...(typeof payload.parentThreadId === "string"
-              ? { parentAgentId: payload.parentThreadId }
-              : {}),
-            timelineBypass: true,
-          },
-        },
-      ];
+      return [buildTaskStarted()];
     case "collabAgent/activity": {
       const activityKind = typeof payload.activityKind === "string" ? payload.activityKind : "";
       if (activityKind === "interrupted") {
@@ -575,20 +575,7 @@ function mapCollabAgentEvent(
         // alone (no thread/started with a spawn source), so this is the one
         // shot at a task.started with a real name — agentPath leaf beats a
         // bare thread-id title.
-        return [
-          {
-            ...base,
-            type: "task.started",
-            payload: {
-              taskId,
-              description: title,
-              title,
-              role,
-              ...(agentPath ? { agentPath } : {}),
-              timelineBypass: true,
-            },
-          },
-        ];
+        return [buildTaskStarted()];
       }
       // Reading a child's result also emits "interacted" after its turn is idle.
       // Only the child's turn or thread lifecycle can prove it resumed work.

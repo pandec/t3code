@@ -110,6 +110,21 @@ describe("CodexSessionRuntime collab integration", () => {
       assert.include(methods, "collabAgent/turnCompleted");
       assert.include(methods, "collabAgent/closed");
 
+      const childActivity = events.find(
+        (event) =>
+          event.method === "collabAgent/activity" &&
+          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
+      );
+      assert.isDefined(childActivity, "child A's activity becomes an agent event");
+      if (!childActivity) {
+        return;
+      }
+      assert.equal(
+        (childActivity.payload as { parentThreadId?: string }).parentThreadId,
+        ROOT,
+        "activity keeps the parent thread that emitted it",
+      );
+
       const childTurnCompleted = events.find(
         (event) =>
           event.method === "collabAgent/turnCompleted" &&

@@ -1113,7 +1113,8 @@ export const makeCodexSessionRuntime = (
             // ones. spawnTurnId is registration-time-only: for an already
             // registered child, a later activity during an UNRELATED turn
             // must not backfill that turn as the spawn batch (review
-            // finding); an unset spawn turn stays unset.
+            // finding); an unset spawn turn stays unset. A started activity's
+            // envelope thread id identifies the spawning parent.
             next.set(item.agentThreadId, {
               agentThreadId: item.agentThreadId,
               nickname:
@@ -1122,7 +1123,9 @@ export const makeCodexSessionRuntime = (
               role: existing?.role,
               agentPath: existing?.agentPath ?? item.agentPath,
               depth: existing?.depth,
-              parentThreadId: existing?.parentThreadId,
+              parentThreadId:
+                existing?.parentThreadId ??
+                (item.kind === "started" ? notification.params.threadId : undefined),
               spawnTurnId: existing ? existing.spawnTurnId : activitySpawnTurnId,
             });
             return next;
@@ -1137,6 +1140,9 @@ export const makeCodexSessionRuntime = (
               agentThreadId: item.agentThreadId,
               agentPath: item.agentPath,
               activityKind: item.kind,
+              ...(registeredChild?.parentThreadId
+                ? { parentThreadId: registeredChild.parentThreadId }
+                : {}),
             },
           });
           return true;
