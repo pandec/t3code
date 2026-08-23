@@ -138,8 +138,9 @@ describe("pane swap latch", () => {
     openMountedSplit();
     useThreadSplitStore.getState().setActivePane("secondary");
 
-    const target = useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
-    expect(target).toEqual(REF_A);
+    const begun = useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    expect(begun?.target).toEqual(REF_A);
+    expect(begun?.pendingSwap).toBe(useThreadSplitStore.getState().pendingSwap);
     expect(useThreadSplitStore.getState().secondaryRef).toEqual(ROUTE_REF);
     expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
     expect(useThreadSplitStore.getState().pendingSwap).not.toBeNull();
@@ -182,6 +183,19 @@ describe("pane swap latch", () => {
     useThreadSplitStore.getState().abortPaneSwap();
     expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_B);
     expect(useThreadSplitStore.getState().pendingSwap).toBeNull();
+  });
+
+  it("a token-scoped abort from a stale swap leaves a newer latch alone", () => {
+    openMountedSplit();
+    const first = useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    useThreadSplitStore.getState().settlePaneSwap();
+    const second = useThreadSplitStore.getState().beginPaneSwap(REF_B);
+    expect(second).not.toBeNull();
+
+    // Swap 1's navigation rejecting late must not roll back swap 2.
+    useThreadSplitStore.getState().abortPaneSwap(first?.pendingSwap);
+    expect(useThreadSplitStore.getState().pendingSwap).toBe(second?.pendingSwap);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_B);
   });
 
   it("closeSplit clears an in-flight latch", () => {

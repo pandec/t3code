@@ -76,6 +76,25 @@ describe("planThreadOpen", () => {
     ).toEqual({ kind: "focus-pane", paneId: "secondary" });
   });
 
+  it("focuses primary when the target is an in-flight swap's destination", () => {
+    // Mid-swap the route still shows the old primary while heading to the
+    // old secondary; picking that destination must not reopen it in the
+    // secondary pane, or the arrival becomes a duplicate and folds the split.
+    expect(
+      planThreadOpen({
+        ...mountedSplit,
+        targetRef: OTHER_REF,
+        activePaneId: "secondary",
+        pendingSwap: {
+          expectedRouteKey: scopedThreadKey(OTHER_REF),
+          startedRouteKey: scopedThreadKey(ROUTE_REF),
+          restoreSecondaryRef: OTHER_REF,
+          expiresAt: 10_000,
+        },
+      }),
+    ).toEqual({ kind: "focus-pane", paneId: "primary" });
+  });
+
   it("routes a fresh target to the active pane", () => {
     expect(planThreadOpen({ ...mountedSplit, targetRef: OTHER_REF })).toEqual({
       kind: "navigate-primary",

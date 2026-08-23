@@ -21,7 +21,10 @@ export type ThreadOpenPlan =
  *
  * 1. No rendered split → plain primary navigation (also covers a parked
  *    secondaryRef on a too-narrow viewport).
- * 2. Already the routed thread → focus the primary pane, never re-navigate.
+ * 2. Already the routed thread — including the destination of an in-flight
+ *    pane swap, which the route is about to become → focus the primary
+ *    pane, never re-navigate. Opening a swap destination in the secondary
+ *    instead would recreate the duplicate the guard folds on arrival.
  * 3. Already the secondary thread → focus the secondary pane. Navigating
  *    instead would trip the duplicate-thread guard and fold the split.
  * 4. Otherwise the active pane (or the caller's snapshot of it) receives it.
@@ -32,6 +35,7 @@ export function planThreadOpen(input: {
   splitMounted: boolean;
   activePaneId: ThreadPaneId;
   secondaryRef: ScopedThreadRef | null;
+  pendingSwap?: PendingPaneSwap | null;
   paneOverride?: ThreadPaneId;
 }): ThreadOpenPlan {
   if (!input.splitMounted) {
@@ -39,6 +43,9 @@ export function planThreadOpen(input: {
   }
   const targetKey = scopedThreadKey(input.targetRef);
   if (input.routeThreadRef !== null && scopedThreadKey(input.routeThreadRef) === targetKey) {
+    return { kind: "focus-pane", paneId: "primary" };
+  }
+  if (input.pendingSwap != null && input.pendingSwap.expectedRouteKey === targetKey) {
     return { kind: "focus-pane", paneId: "primary" };
   }
   if (input.secondaryRef !== null && scopedThreadKey(input.secondaryRef) === targetKey) {
@@ -79,6 +86,7 @@ export function openThreadInActivePane(input: {
     splitMounted: state.splitMounted,
     activePaneId: state.activePaneId,
     secondaryRef: state.secondaryRef,
+    pendingSwap: state.pendingSwap,
     ...(input.paneOverride ? { paneOverride: input.paneOverride } : {}),
   });
   switch (plan.kind) {

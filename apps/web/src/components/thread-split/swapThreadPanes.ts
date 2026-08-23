@@ -31,6 +31,12 @@ export function canSwapThreadPanes(routeThreadRef: ScopedThreadRef | null): bool
  * expected route arrives, which is also what keeps the same physical side
  * active.
  */
+// The most recent swap this module started. A swap whose latch expired can
+// still see its navigation settle much later; comparing against this token
+// keeps such a stale continuation from aborting, toasting over, or stealing
+// focus from a newer swap.
+let latestSwapToken: object | null = null;
+
 export async function swapThreadPanes(input: {
   routeThreadRef: ScopedThreadRef | null;
   navigateToThread: (ref: ScopedThreadRef) => void | Promise<unknown>;
@@ -38,21 +44,28 @@ export async function swapThreadPanes(input: {
   if (input.routeThreadRef === null) {
     return false;
   }
-  const target = useThreadSplitStore.getState().beginPaneSwap(input.routeThreadRef);
-  if (target === null) {
+  const begun = useThreadSplitStore.getState().beginPaneSwap(input.routeThreadRef);
+  if (begun === null) {
     return false;
   }
+  latestSwapToken = begun.pendingSwap;
   try {
-    await input.navigateToThread(target);
+    await input.navigateToThread(begun.target);
   } catch {
-    useThreadSplitStore.getState().abortPaneSwap();
-    toastManager.add(
-      stackedThreadToast({
-        type: "error",
-        title: "Could not swap split threads",
-        description: "Navigation to the other pane's thread failed.",
-      }),
-    );
+    useThreadSplitStore.getState().abortPaneSwap(begun.pendingSwap);
+    if (latestSwapToken === begun.pendingSwap) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not swap split threads",
+          description: "Navigation to the other pane's thread failed.",
+        }),
+      );
+    }
+    return false;
+  }
+  if (latestSwapToken !== begun.pendingSwap) {
+    // Superseded mid-flight; the newer swap's completion owns focus.
     return false;
   }
   // The active side keeps its role, but its ChatView remounted with the other

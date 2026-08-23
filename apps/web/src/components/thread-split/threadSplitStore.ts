@@ -116,9 +116,16 @@ interface ThreadSplitStore {
   setSplitMounted: (mounted: boolean) => void;
   setActivePane: (paneId: ThreadPaneId) => void;
   setSplitRatio: (ratio: number) => void;
-  beginPaneSwap: (routeThreadRef: ScopedThreadRef) => ScopedThreadRef | null;
+  beginPaneSwap: (
+    routeThreadRef: ScopedThreadRef,
+  ) => { target: ScopedThreadRef; pendingSwap: PendingPaneSwap } | null;
   settlePaneSwap: () => void;
-  abortPaneSwap: () => void;
+  /**
+   * With `onlyIfCurrent`, aborts only while that exact latch is still in
+   * flight — an async caller (a swap's navigation catch, the expiry timer)
+   * must never abort a newer swap it does not own.
+   */
+  abortPaneSwap: (onlyIfCurrent?: PendingPaneSwap) => void;
 }
 
 export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
@@ -175,11 +182,9 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     clearPendingSwapExpiry();
     pendingSwapExpiryTimer = setTimeout(() => {
       pendingSwapExpiryTimer = null;
-      if (get().pendingSwap === pendingSwap) {
-        get().abortPaneSwap();
-      }
+      get().abortPaneSwap(pendingSwap);
     }, PENDING_SWAP_TTL_MS);
-    return target;
+    return { target, pendingSwap };
   },
 
   settlePaneSwap: () => {
@@ -188,10 +193,12 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     set({ pendingSwap: null });
   },
 
-  abortPaneSwap: () => {
+  abortPaneSwap: (onlyIfCurrent) => {
     const state = get();
     const pending = state.pendingSwap;
     if (pending === null) return;
+    // A stale caller must also leave the current latch's timer armed.
+    if (onlyIfCurrent !== undefined && pending !== onlyIfCurrent) return;
     clearPendingSwapExpiry();
     // Restore only when the secondary is still the one the swap installed —
     // a pick that replaced it mid-flight is newer user intent and wins.
