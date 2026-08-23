@@ -26,190 +26,121 @@ const testState = vi.hoisted(() => ({
 }));
 
 const hooks = vi.hoisted(() => {
-  interface EffectSlot {
-    readonly kind: "effect";
-    readonly deps: ReadonlyArray<unknown> | undefined;
+  interface HookSlot {
     cleanup: (() => void) | undefined;
-  }
-
-  interface MemoSlot {
-    readonly kind: "memo";
-    readonly deps: ReadonlyArray<unknown> | undefined;
-    readonly value: unknown;
-  }
-
-  interface RefSlot {
-    readonly kind: "ref";
-    readonly value: { current: unknown };
-  }
-
-  interface StateSlot {
-    readonly kind: "state";
+    deps: ReadonlyArray<unknown> | undefined;
+    hasValue: boolean;
     value: unknown;
   }
 
-  type Slot = EffectSlot | MemoSlot | RefSlot | StateSlot | unknown[];
-  interface Context {
+  interface HookContext {
     cursor: number;
-    readonly pendingEffects: Array<{
-      readonly effect: () => void | (() => void);
-      readonly index: number;
-      readonly previousCleanup: (() => void) | undefined;
-    }>;
-    readonly slots: Slot[];
+    readonly slots: HookSlot[];
   }
 
-  const contexts = new Map<string, Context>();
-  let currentContextKey: string | null = null;
+  const contexts = new Map<string, HookContext>();
+  let currentKey: string | null = null;
 
-  const context = (): Context => {
-    if (currentContextKey === null) {
+  const current = (): HookContext => {
+    if (currentKey === null) {
       throw new Error("Hook called outside a test render.");
     }
-    let value = contexts.get(currentContextKey);
-    if (!value) {
-      value = { cursor: 0, pendingEffects: [], slots: [] };
-      contexts.set(currentContextKey, value);
+    let context = contexts.get(currentKey);
+    if (!context) {
+      context = { cursor: 0, slots: [] };
+      contexts.set(currentKey, context);
     }
-    return value;
+    return context;
   };
 
-  const nextIndex = (): number => context().cursor++;
-  const depsChanged = (
+  const nextSlot = (): HookSlot => {
+    const context = current();
+    const index = context.cursor++;
+    return (context.slots[index] ??= {
+      cleanup: undefined,
+      deps: undefined,
+      hasValue: false,
+      value: undefined,
+    });
+  };
+
+  const sameDeps = (
     previous: ReadonlyArray<unknown> | undefined,
     next: ReadonlyArray<unknown> | undefined,
   ): boolean =>
-    previous === undefined ||
-    next === undefined ||
-    previous.length !== next.length ||
-    previous.some((value, index) => !Object.is(value, next[index]));
+    previous !== undefined &&
+    next !== undefined &&
+    previous.length === next.length &&
+    previous.every((value, index) => Object.is(value, next[index]));
+
+  function memo<T>(factory: () => T, deps?: ReadonlyArray<unknown>): T {
+    const slot = nextSlot();
+    if (slot.hasValue && sameDeps(slot.deps, deps)) {
+      return slot.value as T;
+    }
+    const value = factory();
+    slot.deps = deps;
+    slot.hasValue = true;
+    slot.value = value;
+    return value;
+  }
 
   return {
-    flushEffects(key: string): void {
-      const value = contexts.get(key);
-      if (!value) return;
-      const effects = value.pendingEffects.splice(0);
-      for (const pending of effects) {
-        pending.previousCleanup?.();
-        const cleanup = pending.effect();
-        const slot = value.slots[pending.index];
-        if (slot && !Array.isArray(slot) && slot.kind === "effect") {
-          slot.cleanup = cleanup ?? undefined;
-        }
-      }
-    },
     render<T>(key: string, render: () => T): T {
-      currentContextKey = key;
-      const value = context();
-      value.cursor = 0;
+      currentKey = key;
+      current().cursor = 0;
       try {
         return render();
       } finally {
-        currentContextKey = null;
+        currentKey = null;
       }
     },
     reset(): void {
-      for (const value of contexts.values()) {
-        for (const slot of value.slots) {
-          if (slot && !Array.isArray(slot) && slot.kind === "effect") {
-            slot.cleanup?.();
-          }
+      for (const context of contexts.values()) {
+        for (const slot of context.slots) {
+          slot.cleanup?.();
         }
       }
       contexts.clear();
-      currentContextKey = null;
+      currentKey = null;
     },
     useCallback<T>(callback: T, deps?: ReadonlyArray<unknown>): T {
-      const index = nextIndex();
-      const value = context();
-      const previous = value.slots[index];
-      if (
-        previous &&
-        !Array.isArray(previous) &&
-        previous.kind === "memo" &&
-        !depsChanged(previous.deps, deps)
-      ) {
-        return previous.value as T;
-      }
-      value.slots[index] = { kind: "memo", deps, value: callback };
-      return callback;
+      return memo(() => callback, deps);
     },
     useEffect(effect: () => void | (() => void), deps?: ReadonlyArray<unknown>): void {
-      const index = nextIndex();
-      const value = context();
-      const previous = value.slots[index];
-      if (
-        previous &&
-        !Array.isArray(previous) &&
-        previous.kind === "effect" &&
-        !depsChanged(previous.deps, deps)
-      ) {
+      const slot = nextSlot();
+      if (slot.hasValue && sameDeps(slot.deps, deps)) {
         return;
       }
-      const previousCleanup =
-        previous && !Array.isArray(previous) && previous.kind === "effect"
-          ? previous.cleanup
-          : undefined;
-      value.slots[index] = { kind: "effect", deps, cleanup: previousCleanup };
-      value.pendingEffects.push({ effect, index, previousCleanup });
+      slot.cleanup?.();
+      slot.cleanup = effect() ?? undefined;
+      slot.deps = deps;
+      slot.hasValue = true;
     },
-    useMemo<T>(factory: () => T, deps?: ReadonlyArray<unknown>): T {
-      const index = nextIndex();
-      const value = context();
-      const previous = value.slots[index];
-      if (
-        previous &&
-        !Array.isArray(previous) &&
-        previous.kind === "memo" &&
-        !depsChanged(previous.deps, deps)
-      ) {
-        return previous.value as T;
-      }
-      const next = factory();
-      value.slots[index] = { kind: "memo", deps, value: next };
-      return next;
-    },
+    useMemo: memo,
     useMemoCache(size: number): unknown[] {
-      const index = nextIndex();
-      const value = context();
-      const previous = value.slots[index];
-      if (Array.isArray(previous)) {
-        return previous;
-      }
-      const next = Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel"));
-      value.slots[index] = next;
-      return next;
+      return memo(
+        () => Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel")),
+        [],
+      );
     },
     useRef<T>(initialValue: T): { current: T } {
-      const index = nextIndex();
-      const value = context();
-      const previous = value.slots[index];
-      if (previous && !Array.isArray(previous) && previous.kind === "ref") {
-        return previous.value as { current: T };
-      }
-      const next = { current: initialValue };
-      value.slots[index] = { kind: "ref", value: next as { current: unknown } };
-      return next;
+      return memo(() => ({ current: initialValue }), []);
     },
     useState<T>(initialValue: T | (() => T)): [T, Dispatch<SetStateAction<T>>] {
-      const index = nextIndex();
-      const value = context();
-      let slot = value.slots[index];
-      if (!slot || Array.isArray(slot) || slot.kind !== "state") {
-        slot = {
-          kind: "state",
-          value: typeof initialValue === "function" ? (initialValue as () => T)() : initialValue,
-        };
-        value.slots[index] = slot;
+      const slot = nextSlot();
+      if (!slot.hasValue) {
+        slot.value =
+          typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
+        slot.hasValue = true;
       }
-      const stateSlot = slot as StateSlot;
       const setValue: Dispatch<SetStateAction<T>> = (nextValue) => {
-        stateSlot.value =
+        slot.value =
           typeof nextValue === "function"
-            ? (nextValue as (previous: T) => T)(stateSlot.value as T)
+            ? (nextValue as (previous: T) => T)(slot.value as T)
             : nextValue;
       };
-      return [stateSlot.value as T, setValue];
+      return [slot.value as T, setValue];
     },
   };
 });
@@ -331,7 +262,6 @@ function deferred<T>() {
 
 function renderHost(): void {
   hooks.render("host", () => ProviderUpdateEnvironmentsNotification());
-  hooks.flushEffects("host");
 }
 
 type RowElement = ReactElement<{
