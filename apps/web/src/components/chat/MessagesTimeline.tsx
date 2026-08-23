@@ -93,7 +93,13 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
+  resolveTimelineMinimapHasPersistentGutter,
+  resolveTimelineMinimapHeightStyle,
+  resolveTimelineMinimapHitStripWidth,
+  resolveTimelineMinimapInteractiveWidth,
+  resolveTimelineMinimapTopPercent,
   shouldPreserveAssistantLineBreaks,
+  TIMELINE_MINIMAP_MIN_ITEMS,
   toolGroupAction,
   workEntryIsVisibleInGroup,
   type StableMessagesTimelineRowsState,
@@ -104,15 +110,9 @@ import {
   computeTimelineMinimapState,
   EMPTY_TIMELINE_MINIMAP_STATE,
   resolveTimelineMinimapAriaLabel,
-  resolveTimelineMinimapHasPersistentGutter,
-  resolveTimelineMinimapHeightStyle,
-  resolveTimelineMinimapHitStripWidth,
   resolveTimelineMinimapItemIndexFromPointer,
-  resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTooltipTranslate,
-  resolveTimelineMinimapTopPercent,
   resolveTimelineMinimapVisibleItemIds,
-  TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineMinimapItem,
   type TimelineMinimapPositionState,
 } from "./MessagesTimeline.minimap";
@@ -560,7 +560,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     const frame = requestAnimationFrame(() => handleScroll());
     return () => cancelAnimationFrame(frame);
-  }, [handleScroll, rows.length]);
+  }, [handleScroll, minimapState]);
 
   useEffect(() => {
     if (!timelineViewportElement) {
@@ -774,6 +774,9 @@ function updateTimelineMinimapInView(input: {
     }
   }
   for (const id of nextIds) {
+    if (input.previousIds.has(id)) {
+      continue;
+    }
     const strip = input.stripMap.get(id);
     if (strip) {
       strip.dataset.inView = "true";
