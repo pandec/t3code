@@ -58,6 +58,10 @@ function findChevron(row: Elem): Elem | null {
   return visitElements(row, (element) => typeof element.props["aria-expanded"] === "boolean");
 }
 
+function findPreview(row: Elem): Elem | null {
+  return visitElements(row, (element) => element.props.children === "First line of the prompt");
+}
+
 function findEdit(row: Elem): Elem | null {
   return visitElements(
     row,
@@ -83,6 +87,7 @@ describe("SavedPromptRow", () => {
     const collapsedPanel = visitElements(row, (element) => element.type === CollapsibleContent);
     expect(collapsedPanel?.props.id).toBe("saved-prompt-content");
     expect(collapsedPanel?.props.keepMounted).toBe(true);
+    expect(findPreview(row)).not.toBeNull();
 
     (collapsedChevron?.props.onClick as (() => void) | undefined)?.();
     row = renderRow({ prompt: multilinePrompt, canEdit: true, onEdit });
@@ -91,6 +96,9 @@ describe("SavedPromptRow", () => {
     expect(openChevron?.props["aria-expanded"]).toBe(true);
     expect(openChevron?.props["aria-label"]).toBe("Collapse Review checklist");
     expect(visitElements(row, (element) => element.type === Collapsible)?.props.open).toBe(true);
+    // The full content includes the first line, so the inline preview hides
+    // while expanded to avoid reading it twice.
+    expect(findPreview(row)).toBeNull();
 
     const panel = visitElements(row, (element) => element.type === CollapsibleContent);
     const content = visitElements(

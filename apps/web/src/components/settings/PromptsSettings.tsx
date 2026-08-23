@@ -140,9 +140,11 @@ export function SavedPromptRow({
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
         <h3 className="flex min-h-5 min-w-0 flex-1 items-baseline gap-2 text-sm font-medium tracking-[-0.005em] text-foreground">
           <span className="max-w-60 shrink-0 truncate">{prompt.title}</span>
-          <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
-            {promptPreview(prompt)}
-          </span>
+          {!isExpanded && (
+            <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
+              {promptPreview(prompt)}
+            </span>
+          )}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
           <Button
