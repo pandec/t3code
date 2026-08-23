@@ -1491,30 +1491,6 @@ const make = Effect.gen(function* () {
   }) {
     const { event, thread } = input;
 
-    // Events are drained asynchronously, so one emitted by a session generation
-    // that has since been replaced can arrive after the thread was rebound. The
-    // provider binding rejects those; the thread's metadata must too, or the UI
-    // ends up describing a directory no live session is using.
-    const sessions = yield* providerService.listSessions();
-    const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-    // Reject only against a *different* live generation. Requiring a live
-    // session would discard the most important case of all: the agent leaves a
-    // worktree as its last act, the session exits, and the event drains after
-    // the adapter has already dropped it — leaving the thread pointing at a
-    // directory nothing uses. Events drain in order, so when no session is live
-    // the newest observation is still the correct one.
-    if (
-      liveSession !== undefined &&
-      liveSession.sessionGenerationId !== event.payload.sessionGenerationId
-    ) {
-      yield* Effect.logDebug("provider.session.cwd-changed-stale-generation", {
-        threadId: thread.id,
-        eventGenerationId: event.payload.sessionGenerationId,
-        liveGenerationId: liveSession.sessionGenerationId,
-      });
-      return;
-    }
-
     const workspace = yield* projectionSnapshotQuery
       .getThreadCheckpointContext(thread.id)
       .pipe(Effect.map(Option.getOrUndefined));
@@ -1721,26 +1697,6 @@ const make = Effect.gen(function* () {
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
-      const sessionExitMatchesLiveGeneration =
-        event.type !== "session.exited" || event.payload.sessionGenerationId === undefined
-          ? true
-          : yield* Effect.gen(function* () {
-              const sessions = yield* providerService.listSessions();
-              const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-              if (
-                liveSession === undefined ||
-                liveSession.sessionGenerationId === event.payload.sessionGenerationId
-              ) {
-                return true;
-              }
-              yield* Effect.logDebug("provider.session.exited-stale-generation", {
-                threadId: thread.id,
-                eventGenerationId: event.payload.sessionGenerationId,
-                liveGenerationId: liveSession.sessionGenerationId,
-              });
-              return false;
-            });
-
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
       // provider session already tracks the event's turn as its active turn:
@@ -1759,7 +1715,7 @@ const make = Effect.gen(function* () {
         }
         switch (event.type) {
           case "session.exited":
-            return sessionExitMatchesLiveGeneration;
+            return true;
           case "session.started":
           case "thread.started":
             return true;
@@ -2244,12 +2200,6 @@ const make = Effect.gen(function* () {
           break;
         }
         case "session.exited": {
-          // The projected lifecycle and in-memory liveness must make the same
-          // generation decision or a stale exit can clear only half of the
-          // replacement session's state.
-          if (!sessionExitMatchesLiveGeneration) {
-            break;
-          }
           threadBackgroundLiveness.clearThreadLiveness(thread.id);
           threadPlanProgress.clearThreadPlanProgress(thread.id);
           break;

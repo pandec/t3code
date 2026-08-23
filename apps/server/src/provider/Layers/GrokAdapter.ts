@@ -215,12 +215,15 @@ function completedStopReasonFromPromptResponse(
 export function grokPromptSettlementBelongsToContext(input: {
   readonly liveAcpSessionId: string;
   readonly expectedAcpSessionId: string;
+  readonly liveSessionGenerationId: string;
+  readonly originatingSessionGenerationId: string;
   readonly liveActiveTurnId: TurnId | undefined;
   readonly liveSessionActiveTurnId: TurnId | undefined;
   readonly turnId: TurnId;
 }): boolean {
   return (
     input.liveAcpSessionId === input.expectedAcpSessionId &&
+    input.liveSessionGenerationId === input.originatingSessionGenerationId &&
     (input.liveActiveTurnId === input.turnId || input.liveSessionActiveTurnId === input.turnId)
   );
 }
@@ -299,6 +302,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       threadId: ThreadId,
       turnId: TurnId,
       expectedAcpSessionId: string,
+      originatingSessionGenerationId: string,
       options?: {
         readonly errorMessage?: string;
         readonly completedStopReason?: EffectAcpSchema.StopReason | null;
@@ -315,6 +319,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         const settlementBelongsToLiveContext = grokPromptSettlementBelongsToContext({
           liveAcpSessionId: liveCtx.acpSessionId,
           expectedAcpSessionId,
+          liveSessionGenerationId: liveCtx.sessionGenerationId,
+          originatingSessionGenerationId,
           liveActiveTurnId: liveCtx.activeTurnId,
           liveSessionActiveTurnId: liveCtx.session.activeTurnId,
           turnId,
@@ -340,7 +346,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 payload: {
                   state: "failed",
                   errorMessage: options.errorMessage,
-                  sessionGenerationId: liveCtx.sessionGenerationId,
+                  sessionGenerationId: originatingSessionGenerationId,
                 },
               });
             } else if (options?.completedStopReason !== undefined) {
@@ -353,7 +359,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 payload: {
                   state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
                   stopReason: options.completedStopReason ?? null,
-                  sessionGenerationId: liveCtx.sessionGenerationId,
+                  sessionGenerationId: originatingSessionGenerationId,
                 },
               });
             }
@@ -418,7 +424,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             payload: {
               state: "failed",
               errorMessage: options.errorMessage,
-              sessionGenerationId: liveCtx.sessionGenerationId,
+              sessionGenerationId: originatingSessionGenerationId,
             },
           });
         } else if (shouldEmitCompletedTurn) {
@@ -431,7 +437,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             payload: {
               state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
               stopReason: options.completedStopReason ?? null,
-              sessionGenerationId: liveCtx.sessionGenerationId,
+              sessionGenerationId: originatingSessionGenerationId,
             },
           });
         }
@@ -1022,11 +1028,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 yield* Effect.yieldNow;
               }
               if (ctx.interruptedTurnIds.has(turnId)) {
-                yield* settlePromptInFlight(input.threadId, turnId, ctx.acpSessionId, {
-                  completedStopReason: "cancelled",
-                  emitTurnCompletion: false,
-                  settleAllPrompts: true,
-                });
+                yield* settlePromptInFlight(
+                  input.threadId,
+                  turnId,
+                  ctx.acpSessionId,
+                  ctx.sessionGenerationId,
+                  {
+                    completedStopReason: "cancelled",
+                    emitTurnCompletion: false,
+                    settleAllPrompts: true,
+                  },
+                );
                 return yield* new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "session/prompt",
@@ -1058,6 +1070,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               return {
                 acp: ctx.acp,
                 acpSessionId: ctx.acpSessionId,
+                sessionGenerationId: ctx.sessionGenerationId,
                 displayModel,
                 promptParts,
                 turnId,
@@ -1069,10 +1082,16 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   if (!liveCtx) {
                     return;
                   }
-                  yield* settlePromptInFlight(input.threadId, turnId, liveCtx.acpSessionId, {
-                    errorMessage: "Grok prompt preparation failed.",
-                    emitTurnCompletion: false,
-                  });
+                  yield* settlePromptInFlight(
+                    input.threadId,
+                    turnId,
+                    liveCtx.acpSessionId,
+                    liveCtx.sessionGenerationId,
+                    {
+                      errorMessage: "Grok prompt preparation failed.",
+                      emitTurnCompletion: false,
+                    },
+                  );
                 }),
               ),
             );
@@ -1113,11 +1132,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             input.threadId,
             Effect.gen(function* () {
               const ctx = yield* requireSession(input.threadId);
-              if (ctx.acpSessionId !== prepared.acpSessionId) {
+              if (
+                ctx.acpSessionId !== prepared.acpSessionId ||
+                ctx.sessionGenerationId !== prepared.sessionGenerationId
+              ) {
                 yield* settlePromptInFlight(
                   input.threadId,
                   prepared.turnId,
                   prepared.acpSessionId,
+                  prepared.sessionGenerationId,
                   {
                     errorMessage: "Grok session changed before the turn completed.",
                     settleAllPrompts: true,
@@ -1205,7 +1228,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   payload: {
                     state: result.stopReason === "cancelled" ? "cancelled" : "completed",
                     stopReason: completedStopReason,
-                    sessionGenerationId: ctx.sessionGenerationId,
+                    sessionGenerationId: prepared.sessionGenerationId,
                   },
                 });
                 ctx.interruptedTurnIds.delete(prepared.turnId);
@@ -1237,11 +1260,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   input.threadId,
                   Effect.gen(function* () {
                     const ctx = yield* requireSession(input.threadId);
-                    if (ctx.acpSessionId !== prepared.acpSessionId) {
+                    if (
+                      ctx.acpSessionId !== prepared.acpSessionId ||
+                      ctx.sessionGenerationId !== prepared.sessionGenerationId
+                    ) {
                       yield* settlePromptInFlight(
                         input.threadId,
                         prepared.turnId,
                         prepared.acpSessionId,
+                        prepared.sessionGenerationId,
                         {
                           errorMessage: "Grok session changed before the turn completed.",
                           settleAllPrompts: true,
@@ -1269,6 +1296,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       input.threadId,
                       prepared.turnId,
                       prepared.acpSessionId,
+                      prepared.sessionGenerationId,
                       {
                         completedStopReason: completedStopReasonFromPromptResponse(promptResult),
                       },
@@ -1281,9 +1309,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const errorMessage = yield* Ref.get(promptFailureMessageRef);
               yield* withThreadLock(
                 input.threadId,
-                settlePromptInFlight(input.threadId, prepared.turnId, prepared.acpSessionId, {
-                  errorMessage: errorMessage ?? "Grok prompt request failed.",
-                }),
+                settlePromptInFlight(
+                  input.threadId,
+                  prepared.turnId,
+                  prepared.acpSessionId,
+                  prepared.sessionGenerationId,
+                  {
+                    errorMessage: errorMessage ?? "Grok prompt request failed.",
+                  },
+                ),
               );
             }).pipe(Effect.catch(() => Effect.void)),
           ),
@@ -1350,10 +1384,16 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             );
             if (interruptedTurnId) {
               ctx.interruptedTurnIds.add(interruptedTurnId);
-              yield* settlePromptInFlight(threadId, interruptedTurnId, ctx.acpSessionId, {
-                completedStopReason: "cancelled",
-                settleAllPrompts: true,
-              });
+              yield* settlePromptInFlight(
+                threadId,
+                interruptedTurnId,
+                ctx.acpSessionId,
+                ctx.sessionGenerationId,
+                {
+                  completedStopReason: "cancelled",
+                  settleAllPrompts: true,
+                },
+              );
             } else if (
               ctx.promptsInFlight > 0 ||
               ctx.session.status === "running" ||

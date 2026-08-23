@@ -306,12 +306,15 @@ function completedStopReasonFromPromptResponse(
 export function hermesPromptSettlementBelongsToContext(input: {
   readonly liveAcpSessionId: string;
   readonly expectedAcpSessionId: string;
+  readonly liveSessionGenerationId: string;
+  readonly originatingSessionGenerationId: string;
   readonly liveActiveTurnId: TurnId | undefined;
   readonly liveSessionActiveTurnId: TurnId | undefined;
   readonly turnId: TurnId;
 }): boolean {
   return (
     input.liveAcpSessionId === input.expectedAcpSessionId &&
+    input.liveSessionGenerationId === input.originatingSessionGenerationId &&
     (input.liveActiveTurnId === input.turnId || input.liveSessionActiveTurnId === input.turnId)
   );
 }
@@ -422,6 +425,7 @@ export function makeHermesAdapter(
       threadId: ThreadId,
       turnId: TurnId,
       expectedAcpSessionId: string,
+      originatingSessionGenerationId: string,
       options?: {
         readonly errorMessage?: string;
         readonly completedStopReason?: EffectAcpSchema.StopReason | null;
@@ -438,6 +442,8 @@ export function makeHermesAdapter(
         const settlementBelongsToLiveContext = hermesPromptSettlementBelongsToContext({
           liveAcpSessionId: liveCtx.acpSessionId,
           expectedAcpSessionId,
+          liveSessionGenerationId: liveCtx.sessionGenerationId,
+          originatingSessionGenerationId,
           liveActiveTurnId: liveCtx.activeTurnId,
           liveSessionActiveTurnId: liveCtx.session.activeTurnId,
           turnId,
@@ -463,7 +469,7 @@ export function makeHermesAdapter(
                 payload: {
                   state: "failed",
                   errorMessage: options.errorMessage,
-                  sessionGenerationId: liveCtx.sessionGenerationId,
+                  sessionGenerationId: originatingSessionGenerationId,
                 },
               });
             } else if (options?.completedStopReason !== undefined) {
@@ -476,7 +482,7 @@ export function makeHermesAdapter(
                 payload: {
                   state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
                   stopReason: options.completedStopReason ?? null,
-                  sessionGenerationId: liveCtx.sessionGenerationId,
+                  sessionGenerationId: originatingSessionGenerationId,
                 },
               });
             }
@@ -563,7 +569,7 @@ export function makeHermesAdapter(
             payload: {
               state: "failed",
               errorMessage: promptFailureMessage,
-              sessionGenerationId: liveCtx.sessionGenerationId,
+              sessionGenerationId: originatingSessionGenerationId,
             },
           });
         } else if (shouldEmitCompletedTurn) {
@@ -576,7 +582,7 @@ export function makeHermesAdapter(
             payload: {
               state: completedStopReason === "cancelled" ? "cancelled" : "completed",
               stopReason: completedStopReason ?? null,
-              sessionGenerationId: liveCtx.sessionGenerationId,
+              sessionGenerationId: originatingSessionGenerationId,
             },
           });
         }
@@ -1289,6 +1295,7 @@ export function makeHermesAdapter(
                   return {
                     acp: ctx.acp,
                     acpSessionId: ctx.acpSessionId,
+                    sessionGenerationId: ctx.sessionGenerationId,
                     promptHandle,
                     promptParts,
                     promptSequence,
@@ -1309,7 +1316,30 @@ export function makeHermesAdapter(
                 input.threadId,
                 Effect.gen(function* () {
                   const ctx = yield* requireSession(input.threadId);
-                  if (ctx.acpSessionId !== prepared.acpSessionId) {
+                  if (
+                    ctx.acpSessionId !== prepared.acpSessionId ||
+                    ctx.sessionGenerationId !== prepared.sessionGenerationId
+                  ) {
+                    yield* settlePromptInFlight(
+                      input.threadId,
+                      prepared.turnId,
+                      prepared.acpSessionId,
+                      prepared.sessionGenerationId,
+                      outcome._tag === "Failure"
+                        ? {
+                            errorMessage: mapAcpToAdapterError(
+                              PROVIDER,
+                              input.threadId,
+                              "session/prompt",
+                              outcome.error,
+                            ).message,
+                          }
+                        : {
+                            completedStopReason: completedStopReasonFromPromptResponse(
+                              outcome.result,
+                            ),
+                          },
+                    );
                     return;
                   }
                   if (ctx.interruptedTurnIds.has(prepared.turnId)) {
@@ -1327,6 +1357,7 @@ export function makeHermesAdapter(
                       input.threadId,
                       prepared.turnId,
                       prepared.acpSessionId,
+                      prepared.sessionGenerationId,
                       {
                         errorMessage: mapAcpToAdapterError(
                           PROVIDER,
@@ -1402,7 +1433,7 @@ export function makeHermesAdapter(
                                 payload: {
                                   state: "failed",
                                   errorMessage: promptFailureMessage,
-                                  sessionGenerationId: ctx.sessionGenerationId,
+                                  sessionGenerationId: prepared.sessionGenerationId,
                                 },
                               }
                             : {
@@ -1416,7 +1447,7 @@ export function makeHermesAdapter(
                                   stopReason: promptWasCancelled
                                     ? "cancelled"
                                     : completedStopReason,
-                                  sessionGenerationId: ctx.sessionGenerationId,
+                                  sessionGenerationId: prepared.sessionGenerationId,
                                 },
                               },
                         );
@@ -1512,10 +1543,16 @@ export function makeHermesAdapter(
               );
               if (interruptedTurnId) {
                 ctx.interruptedTurnIds.add(interruptedTurnId);
-                yield* settlePromptInFlight(threadId, interruptedTurnId, ctx.acpSessionId, {
-                  completedStopReason: "cancelled",
-                  settleAllPrompts: true,
-                }).pipe(
+                yield* settlePromptInFlight(
+                  threadId,
+                  interruptedTurnId,
+                  ctx.acpSessionId,
+                  ctx.sessionGenerationId,
+                  {
+                    completedStopReason: "cancelled",
+                    settleAllPrompts: true,
+                  },
+                ).pipe(
                   Effect.ensuring(
                     Effect.sync(() => {
                       ctx.interruptedTurnIds.delete(interruptedTurnId);

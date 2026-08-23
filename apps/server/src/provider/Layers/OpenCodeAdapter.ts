@@ -221,6 +221,17 @@ function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
 
+export function makeOpenCodeUnexpectedRuntimeErrorPayload(
+  message: string,
+  sessionGenerationId: string,
+): Extract<ProviderRuntimeEvent, { type: "runtime.error" }>["payload"] {
+  return {
+    message,
+    class: "transport_error",
+    sessionGenerationId,
+  };
+}
+
 interface OpenCodeSessionContext {
   readonly sessionGenerationId: string;
   session: ProviderSession;
@@ -707,10 +718,7 @@ export function makeOpenCodeAdapter(
           turnId,
         })),
         type: "runtime.error",
-        payload: {
-          message,
-          class: "transport_error",
-        },
+        payload: makeOpenCodeUnexpectedRuntimeErrorPayload(message, context.sessionGenerationId),
       }).pipe(Effect.ignore);
       yield* emit({
         ...(yield* buildEventBase({
@@ -1212,6 +1220,7 @@ export function makeOpenCodeAdapter(
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        const sessionGenerationId = yield* randomUUIDv4;
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1371,7 +1380,6 @@ export function makeOpenCodeAdapter(
         }
 
         const createdAt = yield* nowIso;
-        const sessionGenerationId = yield* randomUUIDv4;
         const session: ProviderSession = {
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,

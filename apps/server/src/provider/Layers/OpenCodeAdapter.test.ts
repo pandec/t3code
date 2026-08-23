@@ -36,6 +36,7 @@ import {
   isOpenCodeNotFound,
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
+  makeOpenCodeUnexpectedRuntimeErrorPayload,
   mergeOpenCodeAssistantText,
 } from "./OpenCodeAdapter.ts";
 
@@ -247,7 +248,8 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
@@ -664,6 +666,19 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         "http://127.0.0.1:9999",
       ]);
       NodeAssert.deepEqual(sessions, []);
+    }),
+  );
+
+  it.effect("stamps unexpected runtime errors with the session generation", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(
+        makeOpenCodeUnexpectedRuntimeErrorPayload("server exited", "generation-1"),
+        {
+          message: "server exited",
+          class: "transport_error",
+          sessionGenerationId: "generation-1",
+        },
+      );
     }),
   );
 

@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -23,7 +24,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../../config.ts";
-import { makeHermesAdapter } from "./HermesAdapter.ts";
+import { hermesPromptSettlementBelongsToContext, makeHermesAdapter } from "./HermesAdapter.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -82,6 +83,32 @@ const makeTestAdapter = (binaryPath: string) =>
   makeHermesAdapter(
     decodeHermesSettings({ enabled: true, binaryPath, requireGateway: false }),
   ).pipe(Effect.orDie);
+
+it("requires a settlement to match the originating Hermes generation", () => {
+  const turnId = TurnId.make("turn-1");
+  assert.isFalse(
+    hermesPromptSettlementBelongsToContext({
+      liveAcpSessionId: "shared-session",
+      expectedAcpSessionId: "shared-session",
+      liveSessionGenerationId: "generation-2",
+      originatingSessionGenerationId: "generation-1",
+      liveActiveTurnId: turnId,
+      liveSessionActiveTurnId: turnId,
+      turnId,
+    }),
+  );
+  assert.isTrue(
+    hermesPromptSettlementBelongsToContext({
+      liveAcpSessionId: "shared-session",
+      expectedAcpSessionId: "shared-session",
+      liveSessionGenerationId: "generation-1",
+      originatingSessionGenerationId: "generation-1",
+      liveActiveTurnId: turnId,
+      liveSessionActiveTurnId: turnId,
+      turnId,
+    }),
+  );
+});
 
 it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
   it.effect("surfaces terminal-only Hermes authentication during session startup", () =>

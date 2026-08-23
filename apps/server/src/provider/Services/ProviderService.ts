@@ -34,6 +34,13 @@ import type { ProviderForkSessionResult } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 import type { ProviderRuntimeBindingWithMetadata } from "./ProviderSessionDirectory.ts";
 
+export function shouldApplySessionScopedRuntimeEvent(
+  eventIsStaleGeneration: boolean,
+  strictProviderLifecycleGuard: boolean,
+): boolean {
+  return !strictProviderLifecycleGuard || !eventIsStaleGeneration;
+}
+
 export interface ProviderSessionStartOptions {
   /**
    * `fail` makes an existing persisted cursor authoritative: the session may
@@ -133,7 +140,7 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
-   * Canonical provider runtime event stream.
+   * Generation-guarded canonical runtime events from all registered adapters.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
    */

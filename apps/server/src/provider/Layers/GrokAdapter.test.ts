@@ -97,6 +97,8 @@ it("requires a settlement to match the live Grok turn", () => {
     grokPromptSettlementBelongsToContext({
       liveAcpSessionId: "session-1",
       expectedAcpSessionId: "session-1",
+      liveSessionGenerationId: "generation-1",
+      originatingSessionGenerationId: "generation-1",
       liveActiveTurnId: replacementTurnId,
       liveSessionActiveTurnId: replacementTurnId,
       turnId: staleTurnId,
@@ -106,6 +108,19 @@ it("requires a settlement to match the live Grok turn", () => {
     grokPromptSettlementBelongsToContext({
       liveAcpSessionId: "replacement-session",
       expectedAcpSessionId: "stale-session",
+      liveSessionGenerationId: "generation-1",
+      originatingSessionGenerationId: "generation-1",
+      liveActiveTurnId: staleTurnId,
+      liveSessionActiveTurnId: staleTurnId,
+      turnId: staleTurnId,
+    }),
+  );
+  assert.isFalse(
+    grokPromptSettlementBelongsToContext({
+      liveAcpSessionId: "session-1",
+      expectedAcpSessionId: "session-1",
+      liveSessionGenerationId: "generation-2",
+      originatingSessionGenerationId: "generation-1",
       liveActiveTurnId: staleTurnId,
       liveSessionActiveTurnId: staleTurnId,
       turnId: staleTurnId,
@@ -115,6 +130,8 @@ it("requires a settlement to match the live Grok turn", () => {
     grokPromptSettlementBelongsToContext({
       liveAcpSessionId: "session-1",
       expectedAcpSessionId: "session-1",
+      liveSessionGenerationId: "generation-1",
+      originatingSessionGenerationId: "generation-1",
       liveActiveTurnId: staleTurnId,
       liveSessionActiveTurnId: staleTurnId,
       turnId: staleTurnId,
