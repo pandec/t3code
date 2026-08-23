@@ -13,6 +13,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  appearanceContrast: 100,
   archivedSectionVisibleCount: 10,
   accentTintsEnabled: true,
   accentTintIntensityPercent: 12,

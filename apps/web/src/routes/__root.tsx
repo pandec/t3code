@@ -31,6 +31,7 @@ import {
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useSavedPromptLibrarySync } from "../hooks/useSavedPrompts";
+import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
@@ -116,6 +117,7 @@ function RootRouteView() {
           <Outlet />
         ) : (
           <>
+            <ContrastAppearanceSync />
             <GlassAppearanceSync />
             <FontAppearanceSync />
             {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
@@ -144,6 +146,16 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function ContrastAppearanceSync() {
+  const appearanceContrast = useClientSettings((settings) => settings.appearanceContrast);
+
+  useEffect(() => {
+    applyAppearanceContrast(document.documentElement, appearanceContrast);
+  }, [appearanceContrast]);
+
+  return null;
 }
 
 function GlassAppearanceSync() {

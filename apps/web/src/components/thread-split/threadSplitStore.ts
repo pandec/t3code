@@ -28,11 +28,18 @@ export function clampSplitRatio(ratio: number): number {
   return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
 }
 
+// `window` alone is not enough: the test runner and other embedded hosts define
+// a window without `localStorage`, and this store is constructed at import time.
+function splitRatioStorage(): Storage | null {
+  return typeof window === "undefined" ? null : (window.localStorage ?? null);
+}
+
 function readStoredSplitRatio(): number {
-  if (typeof window === "undefined") {
+  const storage = splitRatioStorage();
+  if (storage === null) {
     return DEFAULT_SPLIT_RATIO;
   }
-  const raw = window.localStorage.getItem(SPLIT_RATIO_STORAGE_KEY);
+  const raw = storage.getItem(SPLIT_RATIO_STORAGE_KEY);
   // Number("") is 0, which would clamp to the minimum instead of the default.
   if (raw === null || raw.trim().length === 0) {
     return DEFAULT_SPLIT_RATIO;
@@ -100,9 +107,7 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     const next = clampSplitRatio(ratio);
     if (get().splitRatio === next) return;
     set({ splitRatio: next });
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(next));
-    }
+    splitRatioStorage()?.setItem(SPLIT_RATIO_STORAGE_KEY, String(next));
   },
 }));
 

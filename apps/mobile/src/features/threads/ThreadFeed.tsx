@@ -10,6 +10,7 @@ import type {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   formatListeningSpeed,
@@ -57,6 +58,7 @@ import {
   type ColorValue,
   useWindowDimensions,
   View,
+  type ViewStyle,
 } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
@@ -73,6 +75,7 @@ import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   hasNativeSelectableMarkdownText,
   SelectableMarkdownText,
+  type MarkdownImageRenderer,
   type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
@@ -150,6 +153,7 @@ import {
   startListeningPlayback,
   useListeningPlaybackSnapshot,
 } from "../../state/listeningPlayback";
+import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   includeOrderedLists: Platform.OS === "android",
@@ -272,6 +276,146 @@ function MessageAttachmentImage(props: {
         )}
       </View>
     </TouchableOpacity>
+  );
+}
+
+function ThreadMarkdownImageView(props: {
+  readonly uri: string | null;
+  readonly sourceKey: string;
+  readonly unavailable: boolean;
+  readonly alt: string | null;
+  readonly onPressImage: (uri: string) => void;
+}) {
+  const codeBackground = useThemeColor("--color-md-code-bg");
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null);
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const activeUriRef = useRef(props.uri);
+  activeUriRef.current = props.uri;
+
+  useEffect(() => {
+    setSourceSize(null);
+  }, [props.sourceKey]);
+
+  useEffect(() => {
+    setFailedUri(null);
+  }, [props.uri]);
+
+  const displaySize =
+    sourceSize === null
+      ? null
+      : resolveMarkdownImageDisplaySize({
+          sourceWidth: sourceSize.width,
+          sourceHeight: sourceSize.height,
+          availableWidth,
+        });
+  const failed = props.unavailable || (props.uri !== null && failedUri === props.uri);
+  const placeholderWidth: ViewStyle["width"] =
+    availableWidth > 0 ? Math.min(availableWidth, MARKDOWN_IMAGE_MAX_WIDTH) : "100%";
+  const frameStyle: ViewStyle = displaySize ?? { width: placeholderWidth, aspectRatio: 16 / 9 };
+
+  return (
+    <View
+      onLayout={(event) => setAvailableWidth(event.nativeEvent.layout.width)}
+      style={{ alignSelf: "stretch", gap: 6 }}
+    >
+      {props.uri === null || failed ? (
+        <View
+          style={{
+            ...frameStyle,
+            borderRadius: 10,
+            backgroundColor: codeBackground,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {failed ? (
+            <Text className="text-xs text-foreground-muted">Image unavailable</Text>
+          ) : (
+            <ActivityIndicator />
+          )}
+        </View>
+      ) : (
+        <TouchableOpacity
+          accessibilityRole="imagebutton"
+          accessibilityLabel={props.alt ?? "Markdown image"}
+          activeOpacity={0.7}
+          onPress={() => props.onPressImage(props.uri!)}
+          style={{ alignSelf: "flex-start" }}
+        >
+          <View
+            style={{
+              ...frameStyle,
+              borderRadius: 10,
+              backgroundColor: codeBackground,
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}
+          >
+            <Image
+              source={{ uri: props.uri }}
+              resizeMode="contain"
+              accessible={false}
+              onLoad={(event) => {
+                if (activeUriRef.current !== props.uri) return;
+                const { width, height } = event.nativeEvent.source;
+                setSourceSize({ width, height });
+              }}
+              onError={() => setFailedUri(props.uri)}
+              style={{
+                width: "100%",
+                height: "100%",
+                opacity: displaySize === null ? 0 : 1,
+              }}
+            />
+            {displaySize === null ? <ActivityIndicator style={StyleSheet.absoluteFill} /> : null}
+          </View>
+        </TouchableOpacity>
+      )}
+      {props.alt ? (
+        <Text selectable className="text-xs text-foreground-muted">
+          {props.alt}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** Markdown image whose src is a workspace file — loads through a signed asset URL. */
+function ThreadMarkdownImage(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly path: string;
+  readonly alt: string | null;
+  readonly onPressImage: (uri: string) => void;
+}) {
+  const assetUrl = useAssetUrlState(props.environmentId, {
+    _tag: "workspace-file",
+    threadId: props.threadId,
+    path: props.path,
+  });
+
+  return (
+    <ThreadMarkdownImageView
+      uri={assetUrl._tag === "Success" ? assetUrl.url : null}
+      sourceKey={props.path}
+      unavailable={assetUrl._tag === "Failure"}
+      alt={props.alt}
+      onPressImage={props.onPressImage}
+    />
+  );
+}
+
+function ThreadMarkdownImageUnavailable(props: { readonly alt: string | null }) {
+  return (
+    <ThreadMarkdownImageView
+      uri={null}
+      sourceKey="unavailable"
+      unavailable
+      alt={props.alt}
+      onPressImage={() => undefined}
+    />
   );
 }
 
@@ -490,7 +634,10 @@ function useReviewCommentColors(): ReviewCommentColors {
   );
 }
 
-function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSets {
+function useMarkdownStyles(
+  onLinkPress: (href: string) => void,
+  renderImage: MarkdownImageRenderer,
+): MarkdownStyleSets {
   const { appearance, themeAppearance } = useAppearancePreferences();
   const markdownFontSizes = useMemo(
     () => resolveMarkdownFontSizes(appearance.baseFontSize),
@@ -695,6 +842,14 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
           })}
         </View>
       ),
+      image: ({ node }) =>
+        node.href
+          ? (renderImage({
+              href: node.href,
+              alt: node.alt ?? null,
+              title: node.title ?? null,
+            }) ?? undefined)
+          : undefined,
       code_inline: ({ content }) => {
         const value = content ?? "";
         return (
@@ -868,6 +1023,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
     nativeMarkdownTypography,
     onLinkPress,
     regularFontFamily,
+    renderImage,
     themeMode,
     userBubbleForegroundMuted,
     userBubbleSkillForeground,
@@ -894,6 +1050,7 @@ function renderFeedEntry(
     readonly onToggleTurnFold: (turnId: TurnId) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
+    readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
@@ -994,6 +1151,7 @@ function renderFeedEntry(
                 reviewCommentColors={props.reviewCommentColors}
                 skills={props.skills}
                 onLinkPress={props.onMarkdownLinkPress}
+                renderImage={props.renderMarkdownImage}
               />
             ) : null}
             {attachments.map((attachment) => {
@@ -1059,6 +1217,7 @@ function renderFeedEntry(
               skills={props.skills}
               textStyle={styles.nativeTextStyle}
               onLinkPress={props.onMarkdownLinkPress}
+              renderImage={props.renderMarkdownImage}
             />
           ) : (
             <Markdown
@@ -1096,6 +1255,7 @@ function renderFeedEntry(
             markdownStyles={styles}
             skills={props.skills}
             onLinkPress={props.onMarkdownLinkPress}
+            renderImage={props.renderMarkdownImage}
           />
         ) : null}
       </Animated.View>
@@ -1132,6 +1292,7 @@ function AssistantMessageMetaAndArtifacts(props: {
   readonly markdownStyles: MarkdownStyleSet;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onLinkPress: (href: string) => void;
+  readonly renderImage: MarkdownImageRenderer;
 }) {
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
@@ -1307,6 +1468,7 @@ function AssistantMessageMetaAndArtifacts(props: {
               skills={props.skills}
               textStyle={props.markdownStyles.nativeTextStyle}
               onLinkPress={props.onLinkPress}
+              renderImage={props.renderImage}
             />
           ) : (
             <Markdown
@@ -1605,6 +1767,7 @@ function UserMessageContent(props: {
   readonly reviewCommentColors: ReviewCommentColors;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onLinkPress: (href: string) => void;
+  readonly renderImage: MarkdownImageRenderer;
 }) {
   const segments = parseReviewCommentMessageSegments(props.text);
   const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
@@ -1617,6 +1780,7 @@ function UserMessageContent(props: {
           textStyle={props.markdownStyles.nativeTextStyle}
           preserveSoftBreaks
           onLinkPress={props.onLinkPress}
+          renderImage={props.renderImage}
         />
       );
     }
@@ -1658,6 +1822,7 @@ function UserMessageContent(props: {
             textStyle={props.markdownStyles.nativeTextStyle}
             preserveSoftBreaks
             onLinkPress={props.onLinkPress}
+            renderImage={props.renderImage}
           />
         ) : (
           <Markdown
@@ -1980,7 +2145,36 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.environmentId, props.threadId, props.workspaceRoot, navigation],
   );
-  const markdownStyles = useMarkdownStyles(onMarkdownLinkPress);
+  const renderMarkdownImage = useCallback<MarkdownImageRenderer>(
+    (image) => {
+      const imageSource = classifyMarkdownImageSource(image.href, props.workspaceRoot ?? null);
+      if (imageSource._tag === "Direct") {
+        return (
+          <ThreadMarkdownImageView
+            uri={imageSource.uri}
+            sourceKey={imageSource.uri}
+            unavailable={false}
+            alt={image.alt}
+            onPressImage={(uri) => setExpandedImage({ uri })}
+          />
+        );
+      }
+      if (imageSource._tag === "Blocked") {
+        return <ThreadMarkdownImageUnavailable alt={image.alt} />;
+      }
+      return (
+        <ThreadMarkdownImage
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          path={imageSource.path}
+          alt={image.alt}
+          onPressImage={(uri) => setExpandedImage({ uri })}
+        />
+      );
+    },
+    [props.environmentId, props.threadId, props.workspaceRoot],
+  );
+  const markdownStyles = useMarkdownStyles(onMarkdownLinkPress, renderMarkdownImage);
   const reviewCommentColors = useReviewCommentColors();
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Keep row-local interaction props in extraData so disclosures and copy feedback repaint.
@@ -2545,6 +2739,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         onToggleTurnFold,
         onPressImage,
         onMarkdownLinkPress,
+        renderMarkdownImage,
         iconSubtleColor,
         userBubbleColor,
         markdownStyles,
@@ -2575,6 +2770,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.textToSpeechAvailable,
       props.steerPendingMessageIds,
       props.skills,
+      renderMarkdownImage,
     ],
   );
 
