@@ -155,12 +155,49 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         turnStarted?.type === "turn.started" ? turnStarted.payload.model : undefined,
         "anthropic:claude-sonnet-5",
       );
+      const turnCompleted = events.find((event) => event.type === "turn.completed");
+      assert.isString(session.sessionGenerationId);
+      assert.equal(
+        turnCompleted?.type === "turn.completed"
+          ? turnCompleted.payload.sessionGenerationId
+          : undefined,
+        session.sessionGenerationId,
+      );
       assert.includeMembers(
         events.map((event) => event.type),
         ["session.started", "thread.started", "turn.started", "content.delta", "turn.completed"],
       );
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("stamps session exit events with the session generation", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-exit-generation");
+      const adapter = yield* makeTestAdapter(yield* Effect.promise(() => makeMockHermesWrapper()));
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.stopSession(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")));
+      const exited = events.find((event) => event.type === "session.exited");
+      assert.isString(session.sessionGenerationId);
+      assert.equal(
+        exited?.type === "session.exited" ? exited.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
+      );
     }),
   );
 

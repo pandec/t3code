@@ -157,6 +157,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         schemaVersion: 1,
         sessionId: "mock-session-1",
       });
+      assert.isString(session.sessionGenerationId);
 
       yield* adapter.sendTurn({
         threadId,
@@ -183,6 +184,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       if (delta?.type === "content.delta") {
         assert.equal(delta.payload.delta, "hello from mock");
       }
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(
+        completed?.type === "turn.completed" ? completed.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
+      );
 
       yield* adapter.stopSession(threadId);
     }),
@@ -202,8 +208,14 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
 
-      yield* adapter.startSession({
+      const session = yield* adapter.startSession({
         threadId,
         provider: ProviderDriverKind.make("grok"),
         cwd: process.cwd(),
@@ -215,6 +227,12 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       const exitLog = yield* waitForFileContent(exitLogPath);
       assert.include(exitLog, "SIGTERM");
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")));
+      const exited = events.find((event) => event.type === "session.exited");
+      assert.equal(
+        exited?.type === "session.exited" ? exited.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
+      );
     }),
   );
 

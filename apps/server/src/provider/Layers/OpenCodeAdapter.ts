@@ -222,6 +222,7 @@ function isOpenCodeDefaultTitle(title: string): boolean {
 }
 
 interface OpenCodeSessionContext {
+  readonly sessionGenerationId: string;
   session: ProviderSession;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
@@ -721,6 +722,7 @@ export function makeOpenCodeAdapter(
           reason: message,
           recoverable: false,
           exitKind: "error",
+          sessionGenerationId: context.sessionGenerationId,
         },
       }).pipe(Effect.ignore);
       // Inline the teardown that `stopOpenCodeContext` would do; we can't
@@ -1085,6 +1087,7 @@ export function makeOpenCodeAdapter(
               type: "turn.completed",
               payload: {
                 state: "completed",
+                sessionGenerationId: context.sessionGenerationId,
               },
             });
           }
@@ -1114,6 +1117,7 @@ export function makeOpenCodeAdapter(
               payload: {
                 state: "failed",
                 errorMessage: message,
+                sessionGenerationId: context.sessionGenerationId,
               },
             });
           }
@@ -1367,6 +1371,7 @@ export function makeOpenCodeAdapter(
         }
 
         const createdAt = yield* nowIso;
+        const sessionGenerationId = yield* randomUUIDv4;
         const session: ProviderSession = {
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
@@ -1382,11 +1387,13 @@ export function makeOpenCodeAdapter(
             schemaVersion: OPENCODE_RESUME_VERSION,
             sessionId: started.openCodeSession.id,
           },
+          sessionGenerationId,
           createdAt,
           updatedAt: createdAt,
         };
 
         const context: OpenCodeSessionContext = {
+          sessionGenerationId,
           session,
           client: started.client,
           server: started.server,
@@ -1638,6 +1645,7 @@ export function makeOpenCodeAdapter(
             reason: "Session stopped.",
             recoverable: false,
             exitKind: "graceful",
+            sessionGenerationId: context.sessionGenerationId,
           },
         });
       },

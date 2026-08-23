@@ -789,14 +789,14 @@ const lifecycleLayer = it.layer(
 function startLifecycleRuntime() {
   return Effect.gen(function* () {
     const adapter = yield* CodexAdapter;
-    yield* adapter.startSession({
+    const session = yield* adapter.startSession({
       provider: ProviderDriverKind.make("codex"),
       threadId: asThreadId("thread-1"),
       runtimeMode: "full-access",
     });
     const runtime = lifecycleRuntimeFactory.lastRuntime;
     NodeAssert.ok(runtime);
-    return { adapter, runtime };
+    return { adapter, runtime, session };
   });
 }
 
@@ -1102,11 +1102,41 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
+  it.effect("stamps turn completion events with the session generation", () =>
     Effect.gen(function* () {
-      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const { adapter, runtime, session } = yield* startLifecycleRuntime();
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
+      NodeAssert.ok(session.sessionGenerationId);
+      yield* runtime.emit({
+        id: asEventId("evt-turn-completed-generation"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/completed",
+        payload: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed", items: [] },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "turn.completed") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.payload.sessionGenerationId, session.sessionGenerationId);
+    }),
+  );
+
+  it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime, session } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      NodeAssert.ok(session.sessionGenerationId);
       const event: ProviderEvent = {
         id: asEventId("evt-session-closed"),
         kind: "session",
@@ -1130,6 +1160,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       NodeAssert.equal(firstEvent.value.threadId, "thread-1");
       NodeAssert.equal(firstEvent.value.payload.reason, "Session stopped");
+      NodeAssert.equal(firstEvent.value.payload.sessionGenerationId, session.sessionGenerationId);
     }),
   );
 

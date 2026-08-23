@@ -124,6 +124,7 @@ interface PendingUserInput {
 
 interface CursorSessionContext {
   readonly threadId: ThreadId;
+  readonly sessionGenerationId: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -472,7 +473,10 @@ export function makeCursorAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          payload: {
+            exitKind: "graceful",
+            sessionGenerationId: ctx.sessionGenerationId,
+          },
         });
       });
 
@@ -751,6 +755,7 @@ export function makeCursorAdapter(
           });
 
           const now = yield* nowIso;
+          const sessionGenerationId = yield* randomUUIDv4;
           const session: ProviderSession = {
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
@@ -763,12 +768,14 @@ export function makeCursorAdapter(
               schemaVersion: CURSOR_RESUME_VERSION,
               sessionId: started.sessionId,
             },
+            sessionGenerationId,
             createdAt: now,
             updatedAt: now,
           };
 
           ctx = {
             threadId: input.threadId,
+            sessionGenerationId,
             session,
             scope: sessionScope,
             acp,
@@ -1046,6 +1053,7 @@ export function makeCursorAdapter(
               payload: {
                 state: result.stopReason === "cancelled" ? "cancelled" : "completed",
                 stopReason: result.stopReason ?? null,
+                sessionGenerationId: ctx.sessionGenerationId,
               },
             });
           }

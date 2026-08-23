@@ -168,6 +168,7 @@ interface HermesTurnItem {
 interface HermesSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
+  readonly sessionGenerationId: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -462,6 +463,7 @@ export function makeHermesAdapter(
                 payload: {
                   state: "failed",
                   errorMessage: options.errorMessage,
+                  sessionGenerationId: liveCtx.sessionGenerationId,
                 },
               });
             } else if (options?.completedStopReason !== undefined) {
@@ -474,6 +476,7 @@ export function makeHermesAdapter(
                 payload: {
                   state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
                   stopReason: options.completedStopReason ?? null,
+                  sessionGenerationId: liveCtx.sessionGenerationId,
                 },
               });
             }
@@ -560,6 +563,7 @@ export function makeHermesAdapter(
             payload: {
               state: "failed",
               errorMessage: promptFailureMessage,
+              sessionGenerationId: liveCtx.sessionGenerationId,
             },
           });
         } else if (shouldEmitCompletedTurn) {
@@ -572,6 +576,7 @@ export function makeHermesAdapter(
             payload: {
               state: completedStopReason === "cancelled" ? "cancelled" : "completed",
               stopReason: completedStopReason ?? null,
+              sessionGenerationId: liveCtx.sessionGenerationId,
             },
           });
         }
@@ -667,7 +672,10 @@ export function makeHermesAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          payload: {
+            exitKind: "graceful",
+            sessionGenerationId: ctx.sessionGenerationId,
+          },
         });
       });
 
@@ -898,6 +906,7 @@ export function makeHermesAdapter(
           });
 
           const now = yield* nowIso;
+          const sessionGenerationId = yield* randomUUIDv4;
           const session: ProviderSession = {
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
@@ -911,6 +920,7 @@ export function makeHermesAdapter(
               sessionId: started.sessionId,
               defaultModelId: defaultModelId ?? null,
             },
+            sessionGenerationId,
             createdAt: now,
             updatedAt: now,
           };
@@ -918,6 +928,7 @@ export function makeHermesAdapter(
           const ctx: HermesSessionContext = {
             threadId: input.threadId,
             acpSessionId: started.sessionId,
+            sessionGenerationId,
             session,
             scope: sessionScope,
             acp,
@@ -1391,6 +1402,7 @@ export function makeHermesAdapter(
                                 payload: {
                                   state: "failed",
                                   errorMessage: promptFailureMessage,
+                                  sessionGenerationId: ctx.sessionGenerationId,
                                 },
                               }
                             : {
@@ -1404,6 +1416,7 @@ export function makeHermesAdapter(
                                   stopReason: promptWasCancelled
                                     ? "cancelled"
                                     : completedStopReason,
+                                  sessionGenerationId: ctx.sessionGenerationId,
                                 },
                               },
                         );

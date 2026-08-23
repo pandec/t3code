@@ -1721,6 +1721,25 @@ const make = Effect.gen(function* () {
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
+      const sessionExitMatchesLiveGeneration =
+        event.type !== "session.exited" || event.payload.sessionGenerationId === undefined
+          ? true
+          : yield* Effect.gen(function* () {
+              const sessions = yield* providerService.listSessions();
+              const liveSession = sessions.find((entry) => entry.threadId === thread.id);
+              if (
+                liveSession === undefined ||
+                liveSession.sessionGenerationId === event.payload.sessionGenerationId
+              ) {
+                return true;
+              }
+              yield* Effect.logDebug("provider.session.exited-stale-generation", {
+                threadId: thread.id,
+                eventGenerationId: event.payload.sessionGenerationId,
+                liveGenerationId: liveSession.sessionGenerationId,
+              });
+              return false;
+            });
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -1740,7 +1759,7 @@ const make = Effect.gen(function* () {
         }
         switch (event.type) {
           case "session.exited":
-            return true;
+            return sessionExitMatchesLiveGeneration;
           case "session.started":
           case "thread.started":
             return true;
@@ -2088,7 +2107,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "session.exited") {
+      if (event.type === "session.exited" && shouldApplyThreadLifecycle) {
         yield* clearTurnStateForSession(thread.id);
       }
 
@@ -2225,26 +2244,10 @@ const make = Effect.gen(function* () {
           break;
         }
         case "session.exited": {
-          // Events drain asynchronously, so an exit emitted by a session
-          // generation that has since been replaced can arrive after the
-          // replacement session already recorded fresh liveness. Clearing on
-          // that stale exit would wipe the live session's state, mirroring the
-          // generation guard in mirrorSessionCwdOntoThread: reject only
-          // against a *different* live generation, and treat a missing event
-          // generation (older adapters) or no live session as clearable.
-          const exitedGenerationId = event.payload.sessionGenerationId;
-          const sessions = yield* providerService.listSessions();
-          const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-          if (
-            liveSession !== undefined &&
-            exitedGenerationId !== undefined &&
-            liveSession.sessionGenerationId !== exitedGenerationId
-          ) {
-            yield* Effect.logDebug("provider.session.exited-stale-generation-liveness", {
-              threadId: thread.id,
-              eventGenerationId: exitedGenerationId,
-              liveGenerationId: liveSession.sessionGenerationId,
-            });
+          // The projected lifecycle and in-memory liveness must make the same
+          // generation decision or a stale exit can clear only half of the
+          // replacement session's state.
+          if (!sessionExitMatchesLiveGeneration) {
             break;
           }
           threadBackgroundLiveness.clearThreadLiveness(thread.id);

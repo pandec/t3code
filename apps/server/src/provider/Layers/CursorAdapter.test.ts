@@ -195,6 +195,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         schemaVersion: 1,
         sessionId: "mock-session-1",
       });
+      assert.isString(session.sessionGenerationId);
 
       yield* adapter.sendTurn({
         threadId,
@@ -236,6 +237,13 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           event.type === "item.completed" && event.payload.itemType === "assistant_message",
       );
       assert.isDefined(assistantCompleted);
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(
+        turnCompleted?.type === "turn.completed"
+          ? turnCompleted.payload.sessionGenerationId
+          : undefined,
+        session.sessionGenerationId,
+      );
 
       const planUpdate = runtimeEvents.find((event) => event.type === "turn.plan.updated");
       assert.isDefined(planUpdate);
@@ -247,6 +255,38 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       }
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("stamps session exit events with the session generation", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-exit-generation");
+      const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.stopSession(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")));
+      const exited = events.find((event) => event.type === "session.exited");
+      assert.isString(session.sessionGenerationId);
+      assert.equal(
+        exited?.type === "session.exited" ? exited.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
+      );
     }),
   );
 

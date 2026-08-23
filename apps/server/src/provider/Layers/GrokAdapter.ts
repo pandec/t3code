@@ -101,6 +101,7 @@ interface PendingUserInput {
 interface GrokSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
+  readonly sessionGenerationId: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -339,6 +340,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 payload: {
                   state: "failed",
                   errorMessage: options.errorMessage,
+                  sessionGenerationId: liveCtx.sessionGenerationId,
                 },
               });
             } else if (options?.completedStopReason !== undefined) {
@@ -351,6 +353,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 payload: {
                   state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
                   stopReason: options.completedStopReason ?? null,
+                  sessionGenerationId: liveCtx.sessionGenerationId,
                 },
               });
             }
@@ -415,6 +418,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             payload: {
               state: "failed",
               errorMessage: options.errorMessage,
+              sessionGenerationId: liveCtx.sessionGenerationId,
             },
           });
         } else if (shouldEmitCompletedTurn) {
@@ -427,6 +431,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             payload: {
               state: options.completedStopReason === "cancelled" ? "cancelled" : "completed",
               stopReason: options.completedStopReason ?? null,
+              sessionGenerationId: liveCtx.sessionGenerationId,
             },
           });
         }
@@ -523,7 +528,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          payload: {
+            exitKind: "graceful",
+            sessionGenerationId: ctx.sessionGenerationId,
+          },
         });
       });
 
@@ -747,6 +755,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const now = yield* nowIso;
+          const sessionGenerationId = yield* randomUUIDv4;
           const session: ProviderSession = {
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
@@ -759,6 +768,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               schemaVersion: GROK_RESUME_VERSION,
               sessionId: started.sessionId,
             },
+            sessionGenerationId,
             createdAt: now,
             updatedAt: now,
           };
@@ -766,6 +776,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           const ctx: GrokSessionContext = {
             threadId: input.threadId,
             acpSessionId: started.sessionId,
+            sessionGenerationId,
             session,
             scope: sessionScope,
             acp,
@@ -1194,6 +1205,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   payload: {
                     state: result.stopReason === "cancelled" ? "cancelled" : "completed",
                     stopReason: completedStopReason,
+                    sessionGenerationId: ctx.sessionGenerationId,
                   },
                 });
                 ctx.interruptedTurnIds.delete(prepared.turnId);
