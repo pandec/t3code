@@ -558,6 +558,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   ]);
 
   useEffect(() => {
+    // Depends on the state object, not just handleScroll: row content growth
+    // (streaming text, live work rows) moves markers without changing the
+    // reference-stable item arrays, and only a fresh derivation signals it.
+    // rAF coalesces the recompute to once per frame while content grows.
     const frame = requestAnimationFrame(() => handleScroll());
     return () => cancelAnimationFrame(frame);
   }, [handleScroll, minimapState]);
@@ -774,11 +778,11 @@ function updateTimelineMinimapInView(input: {
     }
   }
   for (const id of nextIds) {
-    if (input.previousIds.has(id)) {
-      continue;
-    }
+    // Idempotent on purpose: an id can enter previousIds before its strip
+    // mounts (the rail renders only past the minimum item count), so skipping
+    // already-known ids would leave that strip dim until it left the viewport.
     const strip = input.stripMap.get(id);
-    if (strip) {
+    if (strip && strip.dataset.inView !== "true") {
       strip.dataset.inView = "true";
     }
   }

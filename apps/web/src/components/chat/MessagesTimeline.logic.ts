@@ -17,9 +17,6 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
-export const TIMELINE_MINIMAP_HIT_STRIP_LEFT = 12;
-export const TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-export const TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH = "22rem";
 
 export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
@@ -110,6 +107,10 @@ export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number)
   const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
   return sideGutter >= TIMELINE_MINIMAP_PERSISTENT_GUTTER;
 }
+
+export const TIMELINE_MINIMAP_HIT_STRIP_LEFT = 12;
+export const TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
+export const TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH = "22rem";
 
 /**
  * The minimap overlays the viewport's left edge while the content column is
