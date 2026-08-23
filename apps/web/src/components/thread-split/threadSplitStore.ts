@@ -30,8 +30,17 @@ export function clampSplitRatio(ratio: number): number {
 
 // `window` alone is not enough: the test runner and other embedded hosts define
 // a window without `localStorage`, and this store is constructed at import time.
+// Merely touching `window.localStorage` throws a SecurityError in sandboxed
+// iframes and cookie-blocked contexts, so the access itself needs the guard.
 function splitRatioStorage(): Storage | null {
-  return typeof window === "undefined" ? null : (window.localStorage ?? null);
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function readStoredSplitRatio(): number {
@@ -107,7 +116,13 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     const next = clampSplitRatio(ratio);
     if (get().splitRatio === next) return;
     set({ splitRatio: next });
-    splitRatioStorage()?.setItem(SPLIT_RATIO_STORAGE_KEY, String(next));
+    // Persistence is best-effort: a full or read-only storage must not break
+    // the drag that triggered the write.
+    try {
+      splitRatioStorage()?.setItem(SPLIT_RATIO_STORAGE_KEY, String(next));
+    } catch {
+      // Keep the in-memory ratio; it simply won't survive a reload.
+    }
   },
 }));
 
