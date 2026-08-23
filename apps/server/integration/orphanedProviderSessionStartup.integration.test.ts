@@ -118,6 +118,7 @@ const startupDependencies = Layer.mergeAll(
     rollbackConversation: () => Effect.die("unused"),
     forkConversation: () => Effect.die("unused"),
     stopSessionIfUnchanged: () => Effect.die("unused"),
+    uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),
 );

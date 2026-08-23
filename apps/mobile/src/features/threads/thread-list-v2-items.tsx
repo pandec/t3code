@@ -658,7 +658,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   } satisfies MenuAction,
                 ]
               : []),
-            pinnedRow
+            thread.pinnedAt != null
               ? { id: "unpin", title: "Unpin", image: "pin.slash" }
               : { id: "pin", title: "Pin", image: "pin" },
           ]
@@ -669,6 +669,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       props.canMovePinnedUp,
       props.pinReorderSupported,
       props.pinningSupported,
+      thread.pinnedAt,
     ],
   );
   // Menu twin for the swipe-right Fork action, so the gesture keeps a
@@ -716,11 +717,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
       ...SLIM_MENU_ACTIONS.slice(0, -1),
+      ...(thread.pinnedAt != null ? pinMenuItem : []),
       ...forkMenuItem,
       ...titleRegenerationMenuItems,
       SLIM_MENU_ACTIONS[SLIM_MENU_ACTIONS.length - 1]!,
     ],
-    [forkMenuItem, titleRegenerationMenuItems],
+    [forkMenuItem, pinMenuItem, thread.pinnedAt, titleRegenerationMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [

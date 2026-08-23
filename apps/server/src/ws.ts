@@ -41,6 +41,7 @@ import {
   ProjectSearchContentsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
+  ProviderUploadFeedbackError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
@@ -96,6 +97,7 @@ import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHea
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
 import type { ProviderInstance } from "./provider/ProviderDriver.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -458,6 +460,7 @@ const makeWsRpcLayer = (
         instanceRegistry: providerInstanceRegistry,
         httpClient: yield* HttpClient.HttpClient,
       });
+      const providerService = yield* ProviderService.ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1375,6 +1378,20 @@ const makeWsRpcLayer = (
             WS_METHODS.serverListProviderSkills,
             providerRegistry.listSkillsForCwd(input),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.providerUploadFeedback]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUploadFeedback,
+            providerService.uploadFeedback(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderUploadFeedbackError({
+                    threadId: input.threadId,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(

@@ -115,6 +115,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     }),
   );
 
+  public readonly uploadFeedbackImpl = vi.fn((_reason?: string) =>
+    Promise.resolve({ threadId: "provider-thread-1" }),
+  );
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -154,6 +158,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   }
 
   readAccountUsage = Effect.promise(() => this.readAccountUsageImpl());
+
+  uploadFeedback(reason?: string) {
+    return Effect.promise(() => this.uploadFeedbackImpl(reason));
+  }
 
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
     return Effect.promise(() => this.respondToRequestImpl(requestId, decision));
@@ -613,6 +621,42 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       NodeAssert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
       NodeAssert.equal(result.failure.provider, "codex");
       NodeAssert.equal(result.failure.threadId, "sess-missing");
+    }),
+  );
+
+  it.effect("uploads feedback for the active Codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-feedback");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      const result = yield* adapter.uploadFeedback({
+        threadId,
+        reason: "The agent stopped early.",
+      });
+
+      NodeAssert.deepStrictEqual(result, { feedbackId: "provider-thread-1" });
+      NodeAssert.deepStrictEqual(runtime.uploadFeedbackImpl.mock.calls, [
+        ["The agent stopped early."],
+      ]);
+    }),
+  );
+
+  it.effect("rejects feedback for an unknown Codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const result = yield* adapter
+        .uploadFeedback({ threadId: asThreadId("thread-feedback-missing") })
+        .pipe(Effect.result);
+
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
     }),
   );
 

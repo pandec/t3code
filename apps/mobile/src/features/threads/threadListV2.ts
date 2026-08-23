@@ -619,10 +619,7 @@ export function buildThreadListV2Items(input: {
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
     const changeRequest =
       input.changeRequestByKey?.get(`${thread.environmentId}:${thread.id}`) ?? null;
-    // Visibility parity with web: snooze outranks everything, including a
-    // pin — a snoozed thread leaves the list until it wakes (or raises its
-    // hand). The pin (and its pinOrderKey) survives underneath, so a woken
-    // thread reappears at its exact spot in the pinned block.
+    // Snooze outranks settlement and pinning until the thread wakes.
     if (supportsSnooze && effectiveSnoozed(thread, { now: snoozeNow })) {
       snoozed.push(thread);
       if (
@@ -632,12 +629,6 @@ export function buildThreadListV2Items(input: {
       ) {
         nextSnoozeWakeAt = thread.snoozedUntil;
       }
-      continue;
-    }
-    // A pin otherwise overrides the lifecycle: pinned threads render above
-    // the inbox and never auto-settle out of sight.
-    if (thread.pinnedAt != null) {
-      pinned.push(thread);
       continue;
     }
     if (
@@ -651,6 +642,13 @@ export function buildThreadListV2Items(input: {
       })
     ) {
       settled.push(thread);
+      continue;
+    }
+    // Settlement outranks the pin: a settled pinned thread files into the
+    // settled shelf and keeps its pin (and pinOrderKey) underneath, so
+    // unsettling returns it to its exact spot in the pinned block.
+    if (thread.pinnedAt != null) {
+      pinned.push(thread);
       continue;
     }
     // Older is a display grouping, not a lifecycle state: these threads are

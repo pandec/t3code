@@ -140,6 +140,7 @@ function createProviderServiceHarness() {
       });
     },
     rollbackConversation: () => unsupported(),
+    uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub).pipe(
         Stream.filter(({ eventIsStaleGeneration }) =>

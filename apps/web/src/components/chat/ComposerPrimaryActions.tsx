@@ -171,7 +171,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               variant="outline"
               className={cn("rounded-full", compact ? "px-2.5" : undefined)}
               {...pointerFocusProps}
-              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               onClick={onQueue}
             >
               {compact ? "Queue" : "Queue for later"}
@@ -181,7 +181,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               size="sm"
               className="rounded-full"
               {...pointerFocusProps}
-              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               aria-label="Steer the running turn"
             >
               {isConnecting || isSendBusy ? "Sending..." : "Steer"}

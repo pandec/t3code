@@ -11,6 +11,9 @@ open keeps its row even while the section is folded, and while the Attention fil
 are searching, the fold steps aside entirely — both have already narrowed the list to what you
 asked to see, and a pinned match should never sit behind a fold.
 
+Pinned threads still move to **Settled** when they become inactive. They also move when their pull
+request merges if **Auto-settle merged threads** is enabled.
+
 On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
 and choose **Move up** or **Move down**. The order is stored by the server and appears on your
 other connected devices.

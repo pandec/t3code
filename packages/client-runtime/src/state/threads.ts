@@ -1769,6 +1769,7 @@ export * from "./threadRetention.ts";
 export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
+export * from "./threadFeedback.ts";
 export * from "./threadDetail.ts";
 export * from "./threadEventCoalescing.ts";
 export * from "./threadReducer.ts";

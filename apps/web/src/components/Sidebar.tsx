@@ -814,11 +814,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Server accepts a null wake time (indefinite "Until I wake it" snooze);
   // gates that preset without hiding the timed ones.
   snoozeUntilWokenSupported: boolean;
-  // Gates the pin/unpin hover quick-action. Pinned cards keep the full
-  // settle/snooze quick actions: settling clears the pin server-side, and
-  // snoozing hides the card until wake with the pin intact underneath. The
-  // in-row glyph beside the project title is a passive pinned marker only;
-  // acting on the pin lives in the hover quick-actions and the context menu.
+  // Gates the pin/unpin affordances. Pinned cards keep the full settle/snooze
+  // quick actions: settling clears the pin server-side, and snoozing hides the
+  // card until wake with the pin intact underneath. Pinned threads show the
+  // same pin marker in active, settled, and snoozed rows, and the marker can
+  // unpin the thread when the server supports pinning.
   pinningSupported: boolean;
   isPinned: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
@@ -1390,6 +1390,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </span>
     </>
   ) : null;
+  const pinIndicator = props.isPinned ? (
+    props.pinningSupported ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Unpin thread"
+              onClick={handlePinToggleClick}
+              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
+          <PinIcon aria-hidden className="size-3 shrink-0" />
+        </TooltipTrigger>
+        <TooltipPopup>Unpin thread</TooltipPopup>
+      </Tooltip>
+    ) : (
+      <PinIcon
+        aria-label="Pinned"
+        role="img"
+        className="size-3 shrink-0 text-muted-foreground/65"
+      />
+    )
+  ) : null;
 
   if (variant === "slim") {
     return (
@@ -1432,6 +1457,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               />
             </span>
             {title}
+            {pinIndicator}
             {driverKind ? (
               <SidebarProviderIcon
                 driverKind={driverKind}
@@ -2654,20 +2680,9 @@ export default function Sidebar() {
         snapshot != null && (thread.worktreePath === null || snapshot.branch === thread.branch)
           ? snapshot.pr
           : null;
-      // Snooze outranks everything, including a pin: "hide until Tuesday"
-      // temporarily suspends "keep on top". The pin survives underneath —
-      // and so does its pinOrderKey, so on wake the thread reappears at
-      // its exact slot in the pinned block. (For unpinned threads
-      // this is also the snooze-beats-auto-settle rule: the wake time is a
-      // stronger statement about when the thread matters again.)
+      // Snooze outranks settlement and pinning until the thread wakes.
       if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
         snoozed.push(thread);
-        // A pin otherwise overrides the lifecycle: pinned threads never
-        // auto-settle out of sight. (The decider clears settled state on
-        // pin and the pin on settle, so pin-vs-settled conflicts only
-        // arise from stale or raced writes.)
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
       } else if (
         supportsSettlement &&
         effectiveSettled(thread, {
@@ -2679,6 +2694,8 @@ export default function Sidebar() {
         })
       ) {
         settled.push(thread);
+      } else if (thread.pinnedAt != null) {
+        pinned.push(thread);
         // Older is a display grouping, not a lifecycle state: these threads
         // are still active, nothing was settled or snoozed on the user's
         // behalf, and any activity puts them straight back in the inbox.
@@ -4675,7 +4692,7 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadPinning === true
                         }
-                        isPinned={section === "pinned"}
+                        isPinned={thread.pinnedAt != null}
                         sortable={sortable}
                         snoozeWakeLabelText={
                           section === "snoozed"
