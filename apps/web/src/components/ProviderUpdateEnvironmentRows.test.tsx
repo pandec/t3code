@@ -365,6 +365,18 @@ describe("provider update result delivery", () => {
     expect(onResult).toHaveBeenCalledWith(unchangedView);
   });
 
+  it("keeps a terminal result in the open popover", () => {
+    const onResult = vi.fn();
+    const delivery = createProviderUpdateResultDelivery({
+      isPopoverOpen: () => true,
+      onResult,
+    });
+    delivery.startUpdate(claim());
+
+    expect(delivery.finishUpdate(environmentId, 1, unchangedView)).toBe(true);
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
   it("lets a fresh live unchanged state claim before the RPC result", () => {
     const onResult = vi.fn();
     const delivery = createProviderUpdateResultDelivery({
