@@ -47,20 +47,21 @@ export function PaneControlButton({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            className="shrink-0 [-webkit-app-region:no-drag]"
-            aria-label={label}
-            variant="ghost"
-            size="sm"
-            disabled={disabled}
-            onClick={onClick}
-          >
-            {children}
-          </Button>
-        }
-      />
+      {/* The span, not the button, triggers the tooltip: a disabled button
+          receives no pointer events, and its label is exactly the state that
+          needs explaining (same pattern as PanelLayoutControls). */}
+      <TooltipTrigger render={<span className="flex shrink-0" />}>
+        <Button
+          className="shrink-0 [-webkit-app-region:no-drag]"
+          aria-label={label}
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          onClick={onClick}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
       <TooltipPopup side={tooltipSide}>{label}</TooltipPopup>
     </Tooltip>
   );

@@ -207,6 +207,7 @@ import {
   focusActiveThreadPane,
   focusOtherThreadPane,
   paletteOwnerPane,
+  requestThreadPaneFocus,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
@@ -1309,7 +1310,7 @@ function OpenCommandPaletteDialog(props: {
         },
         runThread: async (thread) => {
           const targetRef = scopeThreadRef(thread.environmentId, thread.id);
-          openThreadInActivePane({
+          const { plan, completion } = openThreadInActivePane({
             targetRef,
             routeThreadRef,
             paneOverride: paletteOwnerPane(),
@@ -1319,6 +1320,14 @@ function OpenCommandPaletteDialog(props: {
                 params: buildThreadRouteParams(targetRef),
               }),
           });
+          if (plan.kind === "open-secondary") {
+            // The closing palette restores focus to its trigger a beat later;
+            // the intent bounces that restore into the pane just opened.
+            requestThreadPaneFocus("secondary");
+          }
+          // Awaited so a navigation rejection still reaches the palette's
+          // run-command error handling, as it did before the split routing.
+          if (completion) await completion;
         },
       }),
     [

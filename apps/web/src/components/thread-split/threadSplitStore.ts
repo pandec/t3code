@@ -83,7 +83,20 @@ export interface PendingPaneSwap {
   expiresAt: number;
 }
 
-const PENDING_SWAP_TTL_MS = 5_000;
+export const PENDING_SWAP_TTL_MS = 5_000;
+
+// Store-owned expiry: without a timer the TTL is only observed when something
+// re-renders, so a stalled swap navigation would leave the latch (and every
+// swap affordance) stuck indefinitely. The latch object doubles as the token,
+// so a timer can never abort a swap it did not start.
+let pendingSwapExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingSwapExpiry(): void {
+  if (pendingSwapExpiryTimer !== null) {
+    clearTimeout(pendingSwapExpiryTimer);
+    pendingSwapExpiryTimer = null;
+  }
+}
 
 interface ThreadSplitStore {
   secondaryRef: ScopedThreadRef | null;
@@ -116,22 +129,25 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   pendingSwap: null,
 
   openSecondaryThread: (ref) => {
-    // The pick usually comes from the command palette, whose close restores
-    // focus to the trigger in the primary pane a beat later — the intent
-    // makes that restore bounce into the pane the user just opened.
-    requestThreadPaneFocus("secondary");
+    // Overlay callers (command palette) queue their own pane-focus intent —
+    // the store must not, or a sidebar pick would leave a stray intent that
+    // bounces the next deliberate pane switch back here.
+    //
+    // An in-flight swap latch deliberately survives a pick: abortPaneSwap's
+    // restore guard already yields to the newer secondary, and clearing the
+    // latch early would let the swap's late route arrival re-activate the
+    // primary pane over this pick (or fold the split on a transient match).
     const current = get().secondaryRef;
-    // An explicit pick overrides any in-flight swap: keeping the latch alive
-    // would let its abort path later clobber the thread the user just chose.
     if (current && scopedThreadKey(current) === scopedThreadKey(ref)) {
-      set({ activePaneId: "secondary", pendingSwap: null });
+      set({ activePaneId: "secondary" });
       return;
     }
-    set({ secondaryRef: ref, activePaneId: "secondary", pendingSwap: null });
+    set({ secondaryRef: ref, activePaneId: "secondary" });
   },
 
   closeSplit: () => {
     if (get().secondaryRef === null) return;
+    clearPendingSwapExpiry();
     set({ secondaryRef: null, activePaneId: "primary", pendingSwap: null });
     // The close control usually lives in the secondary pane, whose unmount
     // would drop DOM focus to <body>; hand it to the surviving pane instead.
@@ -147,22 +163,28 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
       return null;
     }
     const target = state.secondaryRef;
+    const pendingSwap: PendingPaneSwap = {
+      expectedRouteKey: scopedThreadKey(target),
+      startedRouteKey: scopedThreadKey(routeThreadRef),
+      restoreSecondaryRef: target,
+      expiresAt: Date.now() + PENDING_SWAP_TTL_MS,
+    };
     // Deliberately leaves activePaneId alone: the threads trade sides, and the
     // side the user was working on should stay the one that owns shortcuts.
-    set({
-      secondaryRef: routeThreadRef,
-      pendingSwap: {
-        expectedRouteKey: scopedThreadKey(target),
-        startedRouteKey: scopedThreadKey(routeThreadRef),
-        restoreSecondaryRef: target,
-        expiresAt: Date.now() + PENDING_SWAP_TTL_MS,
-      },
-    });
+    set({ secondaryRef: routeThreadRef, pendingSwap });
+    clearPendingSwapExpiry();
+    pendingSwapExpiryTimer = setTimeout(() => {
+      pendingSwapExpiryTimer = null;
+      if (get().pendingSwap === pendingSwap) {
+        get().abortPaneSwap();
+      }
+    }, PENDING_SWAP_TTL_MS);
     return target;
   },
 
   settlePaneSwap: () => {
     if (get().pendingSwap === null) return;
+    clearPendingSwapExpiry();
     set({ pendingSwap: null });
   },
 
@@ -170,6 +192,7 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
     const state = get();
     const pending = state.pendingSwap;
     if (pending === null) return;
+    clearPendingSwapExpiry();
     // Restore only when the secondary is still the one the swap installed —
     // a pick that replaced it mid-flight is newer user intent and wins.
     if (

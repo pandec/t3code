@@ -148,6 +148,29 @@ describe("openThreadInActivePane", () => {
     expect(navigated).toBe(1);
     expect(useThreadSplitStore.getState().secondaryRef).toEqual(SECONDARY_REF);
   });
+
+  it("reports the executed plan and surfaces the navigation promise", async () => {
+    // The command palette awaited navigation before the split routing landed;
+    // a rejection must still reach its run-command error handling.
+    const failure = new Error("navigation rejected");
+    const navigated = openThreadInActivePane({
+      targetRef: OTHER_REF,
+      routeThreadRef: ROUTE_REF,
+      navigateToPrimary: () => Promise.reject(failure),
+    });
+    expect(navigated.plan).toEqual({ kind: "navigate-primary" });
+    await expect(navigated.completion).rejects.toBe(failure);
+
+    useThreadSplitStore.getState().openSecondaryThread(SECONDARY_REF);
+    useThreadSplitStore.getState().setSplitMounted(true);
+    const opened = openThreadInActivePane({
+      targetRef: OTHER_REF,
+      routeThreadRef: ROUTE_REF,
+      navigateToPrimary: () => undefined,
+    });
+    expect(opened.plan).toEqual({ kind: "open-secondary" });
+    expect(opened.completion).toBeNull();
+  });
 });
 
 describe("shouldCloseSplitForRoute", () => {

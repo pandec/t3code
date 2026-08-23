@@ -13,9 +13,8 @@ import { swapThreadPanes } from "./swapThreadPanes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
 import { shouldCloseSplitForRoute } from "./threadOpenTarget";
 import { ThreadPaneContext } from "./threadPaneContext";
-import { PaneControlButton } from "./ThreadPaneControls";
+import { PaneControlButton } from "./PaneControls";
 import {
-  activateThreadPane,
   cancelPendingThreadPaneFocus,
   clampSplitRatio,
   noteThreadPaneFocus,
@@ -115,23 +114,16 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const splitOpen = secondaryRef !== null && isWideEnoughForSplit;
 
   return (
-    <SplitThreadPanes
-      secondaryRef={splitOpen ? secondaryRef : null}
-      routeThreadRef={routeThreadRef}
-    >
-      {children}
-    </SplitThreadPanes>
+    <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
   );
 }
 
 function SplitThreadPanes({
   children,
   secondaryRef,
-  routeThreadRef,
 }: {
   children: ReactNode;
   secondaryRef: ScopedThreadRef | null;
-  routeThreadRef: ScopedThreadRef | null;
 }) {
   const splitRatio = useThreadSplitStore((state) => state.splitRatio);
   const setSplitMounted = useThreadSplitStore((state) => state.setSplitMounted);
@@ -167,9 +159,7 @@ function SplitThreadPanes({
       <ThreadPaneSection paneId="primary" showActiveIndicator={splitOpen}>
         {children}
       </ThreadPaneSection>
-      {splitOpen ? (
-        <SplitResizeHandle containerRef={containerRef} routeThreadRef={routeThreadRef} />
-      ) : null}
+      {splitOpen ? <SplitResizeHandle containerRef={containerRef} /> : null}
       {secondaryRef !== null ? (
         <ThreadPaneSection paneId="secondary" showActiveIndicator>
           <ThreadPaneContext value="secondary">
@@ -235,9 +225,11 @@ function ThreadPaneSection({
     >
       {children}
       {showActiveIndicator && isActive ? (
+        // Below the divider wrapper's z-40 on purpose: the ring's inset edge
+        // must not draw across the divider's hover control cluster.
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-50 ring-1 ring-primary/25 ring-inset"
+          className="pointer-events-none absolute inset-0 z-30 ring-1 ring-primary/25 ring-inset"
         />
       ) : null}
     </section>
@@ -246,10 +238,8 @@ function ThreadPaneSection({
 
 function SplitResizeHandle({
   containerRef,
-  routeThreadRef,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
-  routeThreadRef: ScopedThreadRef | null;
 }) {
   const setSplitRatio = useThreadSplitStore((state) => state.setSplitRatio);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -282,11 +272,13 @@ function SplitResizeHandle({
     }
   }, []);
 
-  // The wrapper is the visible 1px line and owns the grid track; the drag
+  // The wrapper is the visible divider line and owns the grid track; the drag
   // surface is a wider invisible child so the divider is grabbable without
-  // fattening the line. The control cluster is a sibling of the drag surface,
-  // so its clicks can never start a drag, and data-dragging on the wrapper
-  // hides the cluster while resizing so a drag can't end on a button.
+  // fattening the line. Its overhang extends only into the secondary pane:
+  // the primary pane's right edge carries a classic scrollbar lane that must
+  // keep winning hit-testing. The control cluster is a sibling of the drag
+  // surface, so its clicks can never start a drag, and data-dragging on the
+  // wrapper hides the cluster while resizing so a drag can't end on a button.
   return (
     <div
       ref={wrapperRef}
@@ -295,7 +287,7 @@ function SplitResizeHandle({
       <div
         role="separator"
         aria-orientation="vertical"
-        className="absolute inset-y-0 -right-1 -left-1 cursor-col-resize"
+        className="absolute inset-y-0 -right-2 left-0 cursor-col-resize"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           const container = containerRef.current;
@@ -342,7 +334,7 @@ function SplitResizeHandle({
           applyRatio(useThreadSplitStore.getState().splitRatio);
         }}
       />
-      <SplitPaneControls routeThreadRef={routeThreadRef} />
+      <SplitPaneControls />
     </div>
   );
 }
@@ -351,11 +343,18 @@ function SplitResizeHandle({
  * Hover-revealed pane controls anchored near the top of the divider. They
  * live on the boundary instead of either pane's titlebar so they never cover
  * the header actions, and they read as owning the split rather than one
- * side. Reveal is a one-shot opacity transition (no continuous animation);
- * focus-within keeps the buttons reachable by keyboard.
+ * side. Reveal is a one-shot opacity transition (no continuous animation),
+ * slightly delayed so a pointer merely crossing the divider does not flash
+ * the cluster; focus-within keeps the buttons reachable by keyboard, and
+ * coarse pointers see the cluster pinned visible — a touch user has no hover
+ * to reveal it with.
  */
-function SplitPaneControls({ routeThreadRef }: { routeThreadRef: ScopedThreadRef | null }) {
+function SplitPaneControls() {
   const router = useRouter();
+  const routeThreadRef = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteRef(params),
+  });
   const swapPending = useThreadSplitStore((state) => state.pendingSwap !== null);
   const closeSplit = useThreadSplitStore((state) => state.closeSplit);
   const swapEnabled = routeThreadRef !== null && !swapPending;
@@ -363,7 +362,9 @@ function SplitPaneControls({ routeThreadRef }: { routeThreadRef: ScopedThreadRef
   return (
     <div
       data-thread-split-controls
-      className="pointer-events-none absolute top-[calc(var(--workspace-topbar-height)+0.5rem)] left-1/2 z-50 flex -translate-x-1/2 flex-col gap-1 rounded-md border border-border bg-background p-1 opacity-0 shadow-sm transition-opacity [-webkit-app-region:no-drag] group-focus-within/split-handle:pointer-events-auto group-focus-within/split-handle:opacity-100 group-hover/split-handle:pointer-events-auto group-hover/split-handle:opacity-100 group-data-[dragging=true]/split-handle:pointer-events-none group-data-[dragging=true]/split-handle:opacity-0"
+      role="group"
+      aria-label="Split view controls"
+      className="pointer-events-none absolute top-[calc(var(--workspace-topbar-height)+0.5rem)] left-1/2 z-50 flex -translate-x-1/2 flex-col gap-1 rounded-md border border-border bg-background p-1 opacity-0 shadow-sm transition-opacity group-focus-within/split-handle:pointer-events-auto group-focus-within/split-handle:opacity-100 group-hover/split-handle:pointer-events-auto group-hover/split-handle:opacity-100 group-hover/split-handle:delay-100 group-data-[dragging=true]/split-handle:pointer-events-none group-data-[dragging=true]/split-handle:opacity-0 group-data-[dragging=true]/split-handle:delay-0 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
       onPointerDown={(event) => event.stopPropagation()}
     >
       <PaneControlButton
@@ -380,10 +381,6 @@ function SplitPaneControls({ routeThreadRef }: { routeThreadRef: ScopedThreadRef
                 to: "/$environmentId/$threadId",
                 params: buildThreadRouteParams(ref),
               }),
-          }).then((swapped) => {
-            // The click parked focus on this cluster button; hand it back to
-            // the pane that owns the shortcuts.
-            if (swapped) activateThreadPane(useThreadSplitStore.getState().activePaneId);
           });
         }}
       >

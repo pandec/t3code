@@ -7,7 +7,7 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { useThreadSplitStore } from "./threadSplitStore";
+import { activateThreadPane, useThreadSplitStore } from "./threadSplitStore";
 
 /**
  * Swap is offered only while two server threads are actually on screen: a
@@ -55,5 +55,10 @@ export async function swapThreadPanes(input: {
     );
     return false;
   }
+  // The active side keeps its role, but its ChatView remounted with the other
+  // thread (and a triggering button or shortcut may hold DOM focus) — reclaim
+  // focus here so every invocation path behaves the same. The queued intent
+  // also survives an overlay's close-time restore (palette action).
+  activateThreadPane(useThreadSplitStore.getState().activePaneId);
   return true;
 }

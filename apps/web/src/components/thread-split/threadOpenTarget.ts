@@ -50,6 +50,17 @@ export function planThreadOpen(input: {
   return { kind: "open-secondary" };
 }
 
+export interface ThreadOpenResult {
+  /** Which branch executed — callers key follow-up work off this. */
+  plan: ThreadOpenPlan;
+  /**
+   * The primary navigation's promise when the plan navigated, so callers
+   * that awaited navigation before (the command palette's error handling)
+   * still see rejections. Null for the store-only branches.
+   */
+  completion: Promise<unknown> | null;
+}
+
 /**
  * Execute a thread pick against the live split state. `paneOverride` is for
  * the command palette, which must use the pane snapshotted at open time
@@ -60,7 +71,7 @@ export function openThreadInActivePane(input: {
   routeThreadRef: ScopedThreadRef | null;
   paneOverride?: ThreadPaneId;
   navigateToPrimary: () => void | Promise<unknown>;
-}): void {
+}): ThreadOpenResult {
   const state = useThreadSplitStore.getState();
   const plan = planThreadOpen({
     targetRef: input.targetRef,
@@ -71,15 +82,16 @@ export function openThreadInActivePane(input: {
     ...(input.paneOverride ? { paneOverride: input.paneOverride } : {}),
   });
   switch (plan.kind) {
-    case "navigate-primary":
-      void input.navigateToPrimary();
-      return;
+    case "navigate-primary": {
+      const navigation = input.navigateToPrimary();
+      return { plan, completion: navigation instanceof Promise ? navigation : null };
+    }
     case "open-secondary":
       state.openSecondaryThread(input.targetRef);
-      return;
+      return { plan, completion: null };
     case "focus-pane":
       activateThreadPane(plan.paneId);
-      return;
+      return { plan, completion: null };
   }
 }
 
