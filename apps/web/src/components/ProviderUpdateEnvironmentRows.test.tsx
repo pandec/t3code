@@ -37,6 +37,10 @@ const hooks = vi.hoisted(() => {
       nextIndex();
       return callback;
     },
+    useEffect(effect: () => void | (() => void)): void {
+      nextIndex();
+      effect();
+    },
     useMemo<T>(factory: () => T): T {
       nextIndex();
       return factory();
@@ -76,6 +80,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: hooks.useCallback,
+    useEffect: hooks.useEffect,
     useMemo: hooks.useMemo,
     useRef: hooks.useRef,
     useState: hooks.useState,
@@ -101,7 +106,10 @@ vi.mock("./ProviderUpdateLaunchNotification.environments", () => ({
   }),
 }));
 
-import { ProviderUpdateEnvironmentRows } from "./ProviderUpdateEnvironmentRows";
+import {
+  ProviderUpdateEnvironmentRows,
+  useProviderUpdateEnvironmentRowsController,
+} from "./ProviderUpdateEnvironmentRows";
 
 const environmentId = "env-wsl" as EnvironmentId;
 const pendingExpiryMs = 6 * 60_000;
@@ -157,9 +165,14 @@ type RowElement = ReactElement<{
   readonly onUpdate: () => void;
 }>;
 
-function renderRow(): RowElement {
+function renderController(onResult = vi.fn()) {
   hooks.beginRender();
-  const output = ProviderUpdateEnvironmentRows({}) as ReactElement<{
+  return useProviderUpdateEnvironmentRowsController({ groups: testState.groups, onResult });
+}
+
+function renderRow(): RowElement {
+  const controller = renderController();
+  const output = ProviderUpdateEnvironmentRows({ controller }) as ReactElement<{
     readonly children: RowElement | RowElement[];
   }>;
   const children = output.props.children;
@@ -192,6 +205,25 @@ describe("ProviderUpdateEnvironmentRows", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("reports the terminal result after the toast body is dismissed", async () => {
+    const request =
+      deferred<ReturnType<typeof AsyncResult.success<{ providers: ServerProvider[] }>>>();
+    const onResult = vi.fn();
+    testState.updateProvider.mockReturnValue(request.promise);
+
+    renderController(onResult).updateEnvironment(environmentId);
+    request.resolve(AsyncResult.success({ providers: [] }));
+    await flushPromises();
+    expect(onResult).not.toHaveBeenCalled();
+
+    testState.groups = [
+      { ...testState.groups[0]!, candidates: [], providers: [provider("succeeded")] },
+    ];
+    renderController(onResult);
+
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ phase: "succeeded" }));
   });
 
   it("keeps a successor pending when an expired request resolves late, then shows its success", async () => {

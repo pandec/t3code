@@ -1,5 +1,5 @@
 import { CheckIcon } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -10,11 +10,11 @@ import {
 import { cn } from "~/lib/utils";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useLocalEnvironmentUpdateGroups } from "./ProviderUpdateLaunchNotification.environments";
 import {
   collectProviderUpdateOutcomeSnapshots,
   firstRejectedProviderUpdateMessage,
   getProviderUpdateProgressToastView,
+  getProviderUpdateRejectedToastView,
   getProviderUpdateSidebarPillView,
   isTerminalProviderUpdatePhase,
   resolveEnvironmentUpdateRowStatus,
@@ -151,18 +151,15 @@ function EnvironmentUpdateRow({
   );
 }
 
-/**
- * The launch popover's body when WSL is present: one row per local environment
- * (Windows + WSL), each with its own "update all" trigger that targets only
- * that environment's backend.
- */
-export function ProviderUpdateEnvironmentRows({
+export function useProviderUpdateEnvironmentRowsController({
+  groups,
   onInteract,
+  onResult,
 }: {
-  /** Called the first time the user triggers an update, so the host can stop refreshing the prompt. */
+  readonly groups: ReadonlyArray<LocalEnvironmentUpdateGroup>;
   readonly onInteract?: () => void;
+  readonly onResult?: (view: ProviderUpdateToastView) => void;
 }) {
-  const { groups } = useLocalEnvironmentUpdateGroups();
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
     reportFailure: false,
   });
@@ -187,6 +184,9 @@ export function ProviderUpdateEnvironmentRows({
   // current and skips every state write when it finally resolves, instead of
   // clobbering the newer attempt's spinner/result/error or its in-flight guard.
   const requestVersionRef = useRef<Map<EnvironmentId, number>>(new Map());
+  const activeUpdatesRef = useRef<Map<EnvironmentId, ReadonlySet<ServerProvider["instanceId"]>>>(
+    new Map(),
+  );
 
   const [pendingEnvironments, setPendingEnvironments] = useState<ReadonlySet<EnvironmentId>>(
     () => new Set(),
@@ -209,6 +209,24 @@ export function ProviderUpdateEnvironmentRows({
     });
   }, []);
 
+  useEffect(() => {
+    for (const [environmentId, providerInstanceIds] of activeUpdatesRef.current) {
+      const group = groupByEnvironment.get(environmentId);
+      if (!group) continue;
+      const view = getProviderUpdateProgressToastView({
+        providers: group.providers.filter((provider) =>
+          providerInstanceIds.has(provider.instanceId),
+        ),
+        providerCount: providerInstanceIds.size,
+      });
+      if (isTerminalProviderUpdatePhase(view.phase)) {
+        activeUpdatesRef.current.delete(environmentId);
+        setResultByEnvironment((previous) => new Map(previous).set(environmentId, view));
+        onResult?.(view);
+      }
+    }
+  }, [groupByEnvironment, onResult]);
+
   const handleUpdate = useCallback(
     async (environmentId: EnvironmentId) => {
       const group = groupByEnvironment.get(environmentId);
@@ -229,7 +247,10 @@ export function ProviderUpdateEnvironmentRows({
         driver: candidate.driver,
         instanceId: candidate.instanceId,
       }));
-
+      activeUpdatesRef.current.set(
+        environmentId,
+        new Set(targets.map((target) => target.instanceId)),
+      );
       setPendingEnvironments((previous) => new Set(previous).add(environmentId));
       setErrorByEnvironment((previous) => {
         if (!previous.has(environmentId)) {
@@ -305,19 +326,19 @@ export function ProviderUpdateEnvironmentRows({
           return next;
         });
         if (results.length === 0) {
-          setErrorByEnvironment((previous) =>
-            new Map(previous).set(
-              environmentId,
-              "This environment isn’t connected — try again once it reconnects.",
-            ),
-          );
+          activeUpdatesRef.current.delete(environmentId);
+          const message = "This environment isn’t connected — try again once it reconnects.";
+          setErrorByEnvironment((previous) => new Map(previous).set(environmentId, message));
+          onResult?.(getProviderUpdateRejectedToastView(providerCount, message));
           return;
         }
         const rejectedMessage = firstRejectedProviderUpdateMessage(results);
         if (rejectedMessage) {
+          activeUpdatesRef.current.delete(environmentId);
           setErrorByEnvironment((previous) =>
             new Map(previous).set(environmentId, rejectedMessage),
           );
+          onResult?.(getProviderUpdateRejectedToastView(providerCount, rejectedMessage));
           return;
         }
         const view = getProviderUpdateProgressToastView({
@@ -334,16 +355,16 @@ export function ProviderUpdateEnvironmentRows({
         // the live per-environment provider state (pill) plus the pending expiry
         // drive the row, so it self-heals to whatever the backend actually did.
         if (isTerminalProviderUpdatePhase(view.phase)) {
+          activeUpdatesRef.current.delete(environmentId);
           setResultByEnvironment((previous) => new Map(previous).set(environmentId, view));
+          onResult?.(view);
         }
       } catch (error) {
         if (isCurrentRequest()) {
-          setErrorByEnvironment((previous) =>
-            new Map(previous).set(
-              environmentId,
-              error instanceof Error ? error.message : "Provider update failed.",
-            ),
-          );
+          activeUpdatesRef.current.delete(environmentId);
+          const message = error instanceof Error ? error.message : "Provider update failed.";
+          setErrorByEnvironment((previous) => new Map(previous).set(environmentId, message));
+          onResult?.(getProviderUpdateRejectedToastView(providerCount, message));
         }
       } finally {
         clearTimeout(expiry);
@@ -355,7 +376,7 @@ export function ProviderUpdateEnvironmentRows({
         }
       }
     },
-    [clearPending, groupByEnvironment, onInteract, updateProvider],
+    [clearPending, groupByEnvironment, onInteract, onResult, updateProvider],
   );
 
   const rows = groups
@@ -378,18 +399,26 @@ export function ProviderUpdateEnvironmentRows({
     }))
     .filter(({ group, status }) => group.candidates.length > 0 || status.kind !== "idle");
 
-  if (rows.length === 0) {
+  return { rows, updateEnvironment: handleUpdate };
+}
+
+export function ProviderUpdateEnvironmentRows({
+  controller,
+}: {
+  readonly controller: ReturnType<typeof useProviderUpdateEnvironmentRowsController>;
+}) {
+  if (controller.rows.length === 0) {
     return null;
   }
 
   return (
     <div className="mt-0.5 flex flex-col gap-1">
-      {rows.map(({ group, status }) => (
+      {controller.rows.map(({ group, status }) => (
         <EnvironmentUpdateRow
           key={group.environmentId}
           group={group}
           status={status}
-          onUpdate={() => handleUpdate(group.environmentId)}
+          onUpdate={() => controller.updateEnvironment(group.environmentId)}
         />
       ))}
     </div>

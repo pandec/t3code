@@ -442,6 +442,7 @@ describe("provider update launch notification logic", () => {
       description: "New sessions will use the updated provider.",
       dismissAfterVisibleMs: 3_000,
     });
+    expect(shouldShowPrimaryProviderUpdateToast(view)).toBe(true);
   });
 
   it("uses the updated version in the single-provider success toast title", () => {
