@@ -24,17 +24,90 @@ import { makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
 
 const ROOT = wireFixture.rootThreadId;
 const [CHILD_A, CHILD_B] = wireFixture.childThreadIds as [string, string];
+const NESTED_CHILD = "nested-child-thread";
+const UNPARENTED_CHILD = "unparented-child-thread";
 const MEMORY = "memory-consolidation-thread";
 
 /**
- * The captured sequence, extended with the shapes the live capture didn't
- * include: a collabAgentToolCall with receiverThreadIds (feeds the legacy
- * receiver-turn map, so ordering vs. v2 interception is exercised), child
- * terminal lifecycle, and a serverRequest/resolved addressed to a child
- * (must pass through to the parent path, not vanish).
+ * The captured sequence, extended with shapes the live capture didn't include:
+ * explicit child spawn metadata, parent-envelope precedence, receiver-turn
+ * bookkeeping, child terminal lifecycle, and child-addressed approval cleanup.
  */
 function buildScript() {
-  const captured = wireFixture.notifications;
+  const captured = wireFixture.notifications.filter((entry) => entry.method !== "turn/completed");
+  const rootThreadStarted = captured.find((entry) => entry.method === "thread/started");
+  const childAStartedIndex = captured.findIndex((entry) => {
+    const item = (
+      entry.params as { item?: { type?: string; kind?: string; agentThreadId?: string } }
+    ).item;
+    return (
+      item?.type === "subAgentActivity" && item.kind === "started" && item.agentThreadId === CHILD_A
+    );
+  });
+  if (!rootThreadStarted || childAStartedIndex < 0) {
+    throw new Error("captured collab fixture is missing child A registration");
+  }
+  const childAStarted = captured[childAStartedIndex]!;
+  const childAStartedParams = childAStarted.params as {
+    readonly item: Record<string, unknown>;
+    readonly [key: string]: unknown;
+  };
+  const childThreadStarted = {
+    ...rootThreadStarted,
+    params: {
+      thread: {
+        ...rootThreadStarted.params.thread,
+        id: CHILD_A,
+        sessionId: CHILD_A,
+        parentThreadId: ROOT,
+        agentNickname: "alpha",
+        agentRole: "worker",
+        source: {
+          subAgent: {
+            thread_spawn: {
+              agent_nickname: "alpha",
+              agent_role: "worker",
+              agent_path: "/root/alpha",
+              depth: 1,
+              parent_thread_id: ROOT,
+            },
+          },
+        },
+      },
+    },
+  };
+  const notifications: Array<unknown> = captured.map((entry, index) =>
+    index === childAStartedIndex
+      ? { ...entry, params: { ...entry.params, threadId: "activity-envelope-thread" } }
+      : entry,
+  );
+  notifications.splice(childAStartedIndex, 0, childThreadStarted);
+  const unrelatedInteraction = {
+    ...childAStarted,
+    params: {
+      ...childAStartedParams,
+      threadId: "interaction-envelope-thread",
+      item: {
+        ...childAStartedParams.item,
+        kind: "interacted",
+        agentThreadId: UNPARENTED_CHILD,
+        agentPath: "/root/unparented",
+      },
+    },
+  };
+  const nestedSpawn = {
+    ...childAStarted,
+    params: {
+      ...childAStartedParams,
+      threadId: CHILD_A,
+      item: {
+        ...childAStartedParams.item,
+        kind: "started",
+        agentThreadId: NESTED_CHILD,
+        agentPath: "/root/alpha/nested",
+      },
+    },
+  };
   const extras = [
     {
       method: "item/completed",
@@ -67,7 +140,7 @@ function buildScript() {
   ];
   return {
     rootThreadId: ROOT,
-    notifications: [...captured.filter((entry) => entry.method !== "turn/completed"), ...extras],
+    notifications: [...notifications, nestedSpawn, unrelatedInteraction, ...extras],
   };
 }
 
@@ -102,6 +175,18 @@ describe("CodexSessionRuntime collab integration", () => {
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
       const methods = events.map((event) => event.method);
+      const findChildEvent = (method: string, childId: string, activityKind?: string) =>
+        events.find((event) => {
+          const payload = event.payload as {
+            agentThreadId?: string;
+            activityKind?: string;
+          };
+          return (
+            event.method === method &&
+            payload.agentThreadId === childId &&
+            (activityKind === undefined || payload.activityKind === activityKind)
+          );
+        });
 
       // Children registered from subAgentActivity become synthetic agent
       // lifecycle — including terminal rows that arrive AFTER the receiver
@@ -110,34 +195,44 @@ describe("CodexSessionRuntime collab integration", () => {
       assert.include(methods, "collabAgent/turnCompleted");
       assert.include(methods, "collabAgent/closed");
 
-      const childActivity = events.find(
-        (event) =>
-          event.method === "collabAgent/activity" &&
-          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
-      );
-      assert.isDefined(childActivity, "child A's activity becomes an agent event");
-      if (!childActivity) {
-        return;
-      }
+      const childActivity = findChildEvent("collabAgent/activity", CHILD_A, "started");
+      assert.isDefined(childActivity, "child A's started activity becomes an agent event");
       assert.equal(
-        (childActivity.payload as { parentThreadId?: string }).parentThreadId,
+        (childActivity?.payload as { parentThreadId?: string } | undefined)?.parentThreadId,
         ROOT,
-        "activity keeps the parent thread that emitted it",
+        "a later activity must not clobber the explicit spawn parent",
       );
 
-      const childTurnCompleted = events.find(
-        (event) =>
-          event.method === "collabAgent/turnCompleted" &&
-          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
+      const nestedChildActivity = findChildEvent("collabAgent/activity", NESTED_CHILD, "started");
+      assert.isDefined(nestedChildActivity, "nested child activity becomes an agent event");
+      assert.equal(
+        (nestedChildActivity?.payload as { parentThreadId?: string } | undefined)?.parentThreadId,
+        CHILD_A,
+        "a nested child keeps the spawning child's thread as its parent",
       );
+
+      const childTurnCompleted = findChildEvent("collabAgent/turnCompleted", CHILD_A);
       assert.isDefined(childTurnCompleted, "child A's turn completion becomes an agent event");
-
-      const childClosed = events.find(
-        (event) =>
-          event.method === "collabAgent/closed" &&
-          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_B,
+      assert.equal(
+        (childTurnCompleted?.payload as { parentThreadId?: string } | undefined)?.parentThreadId,
+        ROOT,
+        "child turn completion repeats its parent thread",
       );
+
+      const childClosed = findChildEvent("collabAgent/closed", CHILD_B);
       assert.isDefined(childClosed, "child B's close becomes an agent event");
+      assert.equal(
+        (childClosed?.payload as { parentThreadId?: string } | undefined)?.parentThreadId,
+        ROOT,
+        "child close repeats its parent thread",
+      );
+
+      const interacted = findChildEvent("collabAgent/activity", UNPARENTED_CHILD, "interacted");
+      assert.isDefined(interacted, "an interacted child still becomes an agent event");
+      assert.isUndefined(
+        (interacted?.payload as { parentThreadId?: string } | undefined)?.parentThreadId,
+        "a non-start activity envelope must not become the child's parent",
+      );
 
       // Parent-owned resolution passes through — not swallowed, not
       // re-labelled as an agent event.

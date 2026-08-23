@@ -1095,7 +1095,8 @@ export const makeCodexSessionRuntime = (
           // every subsequent root notification — including the final
           // assistant message and turn/completed — so the thread hung
           // "working" after all subagents finished (live-probe finding).
-          const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+          const session = yield* Ref.get(sessionRef);
+          const rootProviderThreadId = currentProviderThreadId(session);
           if (
             item.agentThreadId === rootProviderThreadId ||
             item.agentPath === "/root" ||
@@ -1103,8 +1104,8 @@ export const makeCodexSessionRuntime = (
           ) {
             return false;
           }
-          const activitySpawnTurnId = (yield* Ref.get(sessionRef)).activeTurnId ?? undefined;
-          yield* Ref.update(collabChildAgentsRef, (current) => {
+          const activitySpawnTurnId = session.activeTurnId ?? undefined;
+          const registeredChild = yield* Ref.modify(collabChildAgentsRef, (current) => {
             const existing = current.get(item.agentThreadId);
             const next = new Map(current);
             // Merge-late semantics: when thread/started registered first, a
@@ -1115,7 +1116,7 @@ export const makeCodexSessionRuntime = (
             // must not backfill that turn as the spawn batch (review
             // finding); an unset spawn turn stays unset. A started activity's
             // envelope thread id identifies the spawning parent.
-            next.set(item.agentThreadId, {
+            const registeredChild: CollabChildAgentState = {
               agentThreadId: item.agentThreadId,
               nickname:
                 existing?.nickname ??
@@ -1127,20 +1128,20 @@ export const makeCodexSessionRuntime = (
                 existing?.parentThreadId ??
                 (item.kind === "started" ? notification.params.threadId : undefined),
               spawnTurnId: existing ? existing.spawnTurnId : activitySpawnTurnId,
-            });
-            return next;
+            };
+            next.set(item.agentThreadId, registeredChild);
+            return [registeredChild, next];
           });
-          const registeredChild = (yield* Ref.get(collabChildAgentsRef)).get(item.agentThreadId);
           yield* emitEvent({
             kind: "notification",
             threadId: options.threadId,
             method: "collabAgent/activity",
-            ...(registeredChild?.spawnTurnId ? { turnId: registeredChild.spawnTurnId } : {}),
+            ...(registeredChild.spawnTurnId ? { turnId: registeredChild.spawnTurnId } : {}),
             payload: {
               agentThreadId: item.agentThreadId,
               agentPath: item.agentPath,
               activityKind: item.kind,
-              ...(registeredChild?.parentThreadId
+              ...(registeredChild.parentThreadId
                 ? { parentThreadId: registeredChild.parentThreadId }
                 : {}),
             },
@@ -1170,6 +1171,7 @@ export const makeCodexSessionRuntime = (
           ...(child.nickname ? { nickname: child.nickname } : {}),
           ...(child.role ? { role: child.role } : {}),
           ...(child.agentPath ? { agentPath: child.agentPath } : {}),
+          ...(child.parentThreadId ? { parentThreadId: child.parentThreadId } : {}),
         };
         switch (notification.method) {
           case "turn/started": {

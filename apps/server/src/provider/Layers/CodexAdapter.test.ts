@@ -512,39 +512,132 @@ function startLifecycleRuntime() {
   });
 }
 
+const childEvent = (id: string, method: string, payload: Record<string, unknown>) => ({
+  id: asEventId(id),
+  kind: "notification" as const,
+  provider: ProviderDriverKind.make("codex"),
+  createdAt: "2026-01-01T00:00:00.000Z",
+  method,
+  threadId: asThreadId("thread-1"),
+  turnId: asTurnId("turn-1"),
+  payload,
+});
+
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
-  it.effect("preserves the parent for a child first discovered through activity", () =>
+  it.effect("preserves a nested spawning child as the parent", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
-      yield* runtime.emit({
-        id: asEventId("evt-child-started"),
-        kind: "notification",
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: "2026-01-01T00:00:00.000Z",
-        method: "collabAgent/activity",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        payload: {
-          agentThreadId: "child-1",
-          agentPath: "/root/parent/child",
+      yield* runtime.emit(
+        childEvent("evt-child-b-started", "collabAgent/activity", {
+          agentThreadId: "child-b",
+          agentPath: "/root/child-a/child-b",
           activityKind: "started",
-          parentThreadId: "parent-1",
-        },
-      });
+          parentThreadId: "child-a",
+        }),
+      );
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
-      NodeAssert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      NodeAssert.equal(firstEvent.value.type, "task.started");
-      if (firstEvent.value.type !== "task.started") {
-        return;
-      }
+      NodeAssert.ok(firstEvent._tag === "Some");
+      NodeAssert.ok(firstEvent.value.type === "task.started");
+      NodeAssert.equal(firstEvent.value.payload.taskId, "child-b");
+      NodeAssert.equal(firstEvent.value.payload.parentAgentId, "child-a");
+    }),
+  );
+
+  it.effect("preserves the parent on collabAgent/started", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit(
+        childEvent("evt-child-announced", "collabAgent/started", {
+          agentThreadId: "child-1",
+          agentPath: "/root/parent/child",
+          parentThreadId: "parent-1",
+        }),
+      );
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.ok(firstEvent._tag === "Some");
+      NodeAssert.ok(firstEvent.value.type === "task.started");
       NodeAssert.equal(firstEvent.value.payload.taskId, "child-1");
       NodeAssert.equal(firstEvent.value.payload.parentAgentId, "parent-1");
+    }),
+  );
+
+  it.effect("does not start a task for an interacted activity", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit(
+        childEvent("evt-child-interacted", "collabAgent/activity", {
+          agentThreadId: "child-1",
+          agentPath: "/root/parent/child",
+          activityKind: "interacted",
+          parentThreadId: "parent-1",
+        }),
+      );
+      yield* runtime.emit(
+        childEvent("evt-sentinel-running", "collabAgent/turnStarted", {
+          agentThreadId: "child-2",
+          agentPath: "/root/sentinel",
+        }),
+      );
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.ok(firstEvent._tag === "Some");
+      NodeAssert.ok(firstEvent.value.type === "task.updated");
+      NodeAssert.equal(firstEvent.value.payload.taskId, "child-2");
+      NodeAssert.equal(firstEvent.value.payload.status, "running");
+    }),
+  );
+
+  it.effect("repeats the parent on child lifecycle rows", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        childEvent("evt-child-interrupted", "collabAgent/activity", {
+          agentThreadId: "child-1",
+          agentPath: "/root/parent/child",
+          activityKind: "interrupted",
+          parentThreadId: "parent-1",
+        }),
+      );
+      yield* runtime.emit(
+        childEvent("evt-child-usage", "collabAgent/tokenUsage", {
+          agentThreadId: "child-1",
+          agentPath: "/root/parent/child",
+          parentThreadId: "parent-1",
+          tokenUsage: { total: { totalTokens: 1 } },
+        }),
+      );
+      yield* runtime.emit(
+        childEvent("evt-child-item", "collabAgent/item", {
+          agentThreadId: "child-1",
+          agentPath: "/root/parent/child",
+          parentThreadId: "parent-1",
+          item: { type: "commandExecution", command: "pwd" },
+        }),
+      );
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const updated = events[0];
+      NodeAssert.ok(updated?.type === "task.updated");
+      NodeAssert.equal(updated.payload.status, "interrupted");
+      NodeAssert.equal(updated.payload.parentAgentId, "parent-1");
+      const usageProgress = events[1];
+      NodeAssert.ok(usageProgress?.type === "task.progress");
+      NodeAssert.equal(usageProgress.payload.parentAgentId, "parent-1");
+      const itemProgress = events[2];
+      NodeAssert.ok(itemProgress?.type === "task.progress");
+      NodeAssert.equal(itemProgress.payload.parentAgentId, "parent-1");
     }),
   );
 
@@ -554,17 +647,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
         Effect.forkChild,
       );
-
-      const childEvent = (id: string, method: string, payload: Record<string, unknown>) => ({
-        id: asEventId(id),
-        kind: "notification" as const,
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: "2026-01-01T00:00:00.000Z",
-        method,
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        payload,
-      });
 
       yield* runtime.emit(
         childEvent("evt-child-running", "collabAgent/turnStarted", {

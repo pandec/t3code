@@ -530,13 +530,16 @@ function mapCollabAgentEvent(
   // finding: progress rows renamed math_one to its UUID).
   const knownName = nickname ?? pathLeaf;
   const title = knownName ?? agentThreadId;
-  // Identity repeated on every status patch so rows are self-describing when
+  // Identity repeated on every lifecycle row so rows are self-describing when
   // the start row ages out of activity retention (review finding: a
   // reconstructed agent had a UUID name and no role/path).
   const statusLinkage = {
     role,
     ...(knownName ? { title: knownName } : {}),
     ...(agentPath ? { agentPath } : {}),
+    ...(typeof payload.parentThreadId === "string"
+      ? { parentAgentId: payload.parentThreadId }
+      : {}),
     timelineBypass: true,
   } as const;
 
@@ -544,15 +547,10 @@ function mapCollabAgentEvent(
     ...base,
     type: "task.started",
     payload: {
+      ...statusLinkage,
       taskId,
       description: title,
       title,
-      role,
-      ...(agentPath ? { agentPath } : {}),
-      ...(typeof payload.parentThreadId === "string"
-        ? { parentAgentId: payload.parentThreadId }
-        : {}),
-      timelineBypass: true,
     },
   });
 
@@ -691,9 +689,8 @@ function mapCollabAgentEvent(
           payload: {
             taskId,
             description: title,
-            ...(knownName ? { title: knownName } : {}),
+            ...statusLinkage,
             typedUsage,
-            timelineBypass: true,
           },
         },
       ];
@@ -723,9 +720,8 @@ function mapCollabAgentEvent(
           payload: {
             taskId,
             description: title,
-            ...(knownName ? { title: knownName } : {}),
+            ...statusLinkage,
             summary,
-            timelineBypass: true,
           },
         },
       ];
