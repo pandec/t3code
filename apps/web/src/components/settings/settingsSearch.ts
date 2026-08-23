@@ -167,6 +167,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "terminal-close-confirmation",
+    title: "Terminal close confirmation",
+    to: "/settings/general",
+  },
+  {
     id: "quit-confirmation",
     title: "Hold to quit",
     to: "/settings/general",

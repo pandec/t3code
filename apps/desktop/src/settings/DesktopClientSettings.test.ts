@@ -22,6 +22,7 @@ const clientSettings: ClientSettings = {
   browserDefaultAppearance: "dark",
   browserAutoShowFloatingPreview: false,
   confirmQuit: true,
+  confirmTerminalClose: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],

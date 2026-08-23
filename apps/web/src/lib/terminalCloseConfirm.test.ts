@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { confirmMock, readLocalApiMock } = vi.hoisted(() => {
+const { confirmMock, readLocalApiMock, getClientSettingsMock } = vi.hoisted(() => {
   const confirmMock = vi.fn<(message: string, options?: unknown) => Promise<boolean>>();
   const readLocalApiMock = vi.fn<
     () =>
@@ -9,11 +9,16 @@ const { confirmMock, readLocalApiMock } = vi.hoisted(() => {
         }
       | undefined
   >();
-  return { confirmMock, readLocalApiMock };
+  const getClientSettingsMock = vi.fn<() => { confirmTerminalClose: boolean }>();
+  return { confirmMock, readLocalApiMock, getClientSettingsMock };
 });
 
 vi.mock("~/localApi", () => ({
   readLocalApi: () => readLocalApiMock(),
+}));
+
+vi.mock("~/hooks/useSettings", () => ({
+  getClientSettings: () => getClientSettingsMock(),
 }));
 
 import { confirmTerminalClose, isTerminalCloseConfirmPending } from "./terminalCloseConfirm";
@@ -23,6 +28,8 @@ describe("terminal close confirmation", () => {
     confirmMock.mockReset();
     readLocalApiMock.mockReset();
     readLocalApiMock.mockReturnValue({ dialogs: { confirm: confirmMock } });
+    getClientSettingsMock.mockReset();
+    getClientSettingsMock.mockReturnValue({ confirmTerminalClose: true });
   });
 
   it("tracks pending state until the confirmation settles", async () => {
@@ -67,6 +74,14 @@ describe("terminal close confirmation", () => {
       ].join("\n"),
       { variant: "destructive" },
     );
+  });
+
+  it("closes without prompting when the confirmation setting is off", async () => {
+    getClientSettingsMock.mockReturnValue({ confirmTerminalClose: false });
+
+    await expect(confirmTerminalClose(["Terminal 1"])).resolves.toBe(true);
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(isTerminalCloseConfirmPending()).toBe(false);
   });
 
   it("closes without prompting when no local API is available", async () => {

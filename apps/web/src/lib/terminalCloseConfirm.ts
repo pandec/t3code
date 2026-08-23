@@ -1,3 +1,4 @@
+import { getClientSettings } from "~/hooks/useSettings";
 import { readLocalApi } from "~/localApi";
 
 let pendingConfirmations = 0;
@@ -12,10 +13,15 @@ export function isTerminalCloseConfirmPending(): boolean {
  * buttons, the `terminal.close` keybinding, and closing a terminal surface from
  * the tab strip. Auto-exit cleanup and bulk tab closes skip this path and close
  * directly.
+ *
+ * The `confirmTerminalClose` setting turns the prompt off; until client
+ * settings hydrate the snapshot reads the default, so the pre-hydration answer
+ * is to ask.
  */
 export async function confirmTerminalClose(
   labels: readonly [string, ...string[]],
 ): Promise<boolean> {
+  if (!getClientSettings().confirmTerminalClose) return true;
   const localApi = readLocalApi();
   if (!localApi) return true;
   pendingConfirmations += 1;
