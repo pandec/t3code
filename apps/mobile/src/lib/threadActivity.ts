@@ -1151,13 +1151,20 @@ function deriveThreadFeedTurnFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
 ): ThreadFeedTurnDerivation {
-  type MessageEntry = Extract<ThreadFeedEntry, { readonly type: "message" }>;
+  const firstAssistantMessageIdByTurn = new Map<TurnId, string>();
+  const terminalAssistantMessageIdByTurn = new Map<TurnId, string>();
+  for (const entry of feed) {
+    if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
+      if (!firstAssistantMessageIdByTurn.has(entry.message.turnId)) {
+        firstAssistantMessageIdByTurn.set(entry.message.turnId, entry.message.id);
+      }
+      terminalAssistantMessageIdByTurn.set(entry.message.turnId, entry.message.id);
+    }
+  }
+
   interface TurnGroup {
     readonly entries: ThreadFeedEntry[];
     readonly startBoundary: string | null;
-    firstAssistantEntry: MessageEntry | null;
-    terminalAssistantEntry: MessageEntry | null;
-    hasStreamingMessage: boolean;
   }
   const groupsByTurnId = new Map<TurnId, TurnGroup>();
   let pendingUserBoundary: string | null = null;
@@ -1177,46 +1184,45 @@ function deriveThreadFeedTurnFolds(
     }
     let group = groupsByTurnId.get(turnId);
     if (!group) {
-      group = {
-        entries: [],
-        startBoundary: pendingUserBoundary,
-        firstAssistantEntry: null,
-        terminalAssistantEntry: null,
-        hasStreamingMessage: false,
-      };
+      group = { entries: [], startBoundary: pendingUserBoundary };
       pendingUserBoundary = null;
       groupsByTurnId.set(turnId, group);
     }
     group.entries.push(entry);
-    if (entry.type === "message") {
-      group.firstAssistantEntry ??= entry;
-      group.terminalAssistantEntry = entry;
-      group.hasStreamingMessage ||= entry.message.streaming;
-    }
   }
 
   const unsettledTurnId = deriveUnsettledTurnId(latestTurn);
   const foldsByAnchorId = new Map<string, ThreadFeedTurnFold>();
   const settledTurnOpeningAssistantMessageIds = new Set<string>();
   for (const [turnId, group] of groupsByTurnId) {
-    const { entries, firstAssistantEntry, terminalAssistantEntry } = group;
-    if (turnId === unsettledTurnId || group.hasStreamingMessage) {
+    const { entries } = group;
+    if (turnId === unsettledTurnId) {
+      continue;
+    }
+    if (
+      entries.some(
+        (entry) =>
+          entry.type === "message" && entry.message.role === "assistant" && entry.message.streaming,
+      )
+    ) {
       continue;
     }
 
+    const firstAssistantMessageId = firstAssistantMessageIdByTurn.get(turnId);
+    const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
     if (
-      firstAssistantEntry &&
-      terminalAssistantEntry &&
-      firstAssistantEntry.message.id !== terminalAssistantEntry.message.id
+      firstAssistantMessageId &&
+      terminalAssistantMessageId &&
+      firstAssistantMessageId !== terminalAssistantMessageId
     ) {
-      settledTurnOpeningAssistantMessageIds.add(firstAssistantEntry.message.id);
+      settledTurnOpeningAssistantMessageIds.add(firstAssistantMessageId);
     }
 
     const hiddenEntryIds = new Set(
       entries
         .filter(
           (entry) =>
-            entry.id !== firstAssistantEntry?.id && entry.id !== terminalAssistantEntry?.id,
+            entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
         )
         .map((entry) => entry.id),
     );
@@ -1225,13 +1231,14 @@ function deriveThreadFeedTurnFolds(
     }
 
     const firstEntry = entries[0];
+    const firstHiddenEntry = entries.find((entry) => hiddenEntryIds.has(entry.id));
     const lastEntry = entries.at(-1);
-    // Older pages prepend and can reveal earlier entries in this turn. Its
-    // terminal boundary stays loaded, so anchoring there keeps the fold stable.
-    const anchorEntry = terminalAssistantEntry ?? lastEntry;
-    if (!firstEntry || !lastEntry || !anchorEntry) {
+    if (!firstEntry || !firstHiddenEntry || !lastEntry) {
       continue;
     }
+    const terminalEntry = terminalAssistantMessageId
+      ? entries.find((entry) => entry.id === terminalAssistantMessageId)
+      : null;
     const latestTurnMatches = latestTurn?.turnId === turnId;
     const lastEntryEnd =
       lastEntry.type === "message" ? lastEntry.message.updatedAt : lastEntry.createdAt;
@@ -1240,8 +1247,10 @@ function deriveThreadFeedTurnFolds(
         ? computeElapsedMs(latestTurn.startedAt, latestTurn.completedAt)
         : computeElapsedMs(
             group.startBoundary ?? firstEntry.createdAt,
-            maxIsoTimestamp(terminalAssistantEntry?.message.updatedAt ?? null, lastEntryEnd) ??
+            maxIsoTimestamp(
+              terminalEntry?.type === "message" ? terminalEntry.message.updatedAt : null,
               lastEntryEnd,
+            ) ?? lastEntryEnd,
           );
     const duration = elapsedMs === null ? null : formatDuration(elapsedMs);
     const interrupted = latestTurnMatches && latestTurn.state === "interrupted";
@@ -1253,9 +1262,11 @@ function deriveThreadFeedTurnFolds(
         ? `Worked for ${duration}`
         : "Worked";
 
-    foldsByAnchorId.set(anchorEntry.id, {
+    foldsByAnchorId.set(firstHiddenEntry.id, {
       turnId,
-      createdAt: anchorEntry.createdAt,
+      // Keep insertion in source order, but do not let page prepends change the
+      // row's timestamp and invalidate the virtualized anchor.
+      createdAt: terminalEntry?.createdAt ?? lastEntry.createdAt,
       hiddenEntryIds,
       label,
     });
@@ -1283,44 +1294,29 @@ export function deriveThreadFeedPresentationState(
     sourceFeed,
     latestTurn,
   );
-  const foldedEntryIds = new Set<string>();
-  const foldTurnIdByHiddenEntryId = new Map<string, TurnId>();
-  const hiddenEntriesByTurnId = new Map<TurnId, PresentableThreadFeedEntry[]>();
+  const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
-    hiddenEntriesByTurnId.set(fold.turnId, []);
-    for (const entryId of fold.hiddenEntryIds) {
-      foldTurnIdByHiddenEntryId.set(entryId, fold.turnId);
+    if (!expandedTurnIds.has(fold.turnId)) {
+      for (const entryId of fold.hiddenEntryIds) {
+        collapsedEntryIds.add(entryId);
+      }
     }
-  }
-  for (const entry of sourceFeed) {
-    const turnId = foldTurnIdByHiddenEntryId.get(entry.id);
-    if (!turnId) {
-      continue;
-    }
-    foldedEntryIds.add(entry.id);
-    hiddenEntriesByTurnId.get(turnId)?.push(entry);
   }
 
   const entries: ThreadFeedEntry[] = [];
   for (const entry of sourceFeed) {
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
-      const expanded = expandedTurnIds.has(fold.turnId);
       entries.push({
         type: "turn-fold",
         id: `turn-fold:${fold.turnId}`,
         createdAt: fold.createdAt,
         turnId: fold.turnId,
         label: fold.label,
-        expanded,
+        expanded: expandedTurnIds.has(fold.turnId),
       });
-      if (expanded) {
-        for (const hiddenEntry of hiddenEntriesByTurnId.get(fold.turnId) ?? []) {
-          appendPresentedFeedEntry(entries, hiddenEntry, expandedWorkGroupIds);
-        }
-      }
     }
-    if (!foldedEntryIds.has(entry.id)) {
+    if (!collapsedEntryIds.has(entry.id)) {
       appendPresentedFeedEntry(entries, entry, expandedWorkGroupIds);
     }
   }

@@ -735,7 +735,20 @@ describe("buildThreadFeed", () => {
       ],
       activities: [
         makeActivity({
-          id: EventId.make("work-1"),
+          id: EventId.make("work-before-response"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Read inputs",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId: firstTurnId,
+          payload: {
+            title: "Read inputs",
+            itemType: "file_read",
+            status: "completed",
+          },
+        }),
+        makeActivity({
+          id: EventId.make("work-after-response"),
           kind: "tool.completed",
           tone: "tool",
           summary: "Ran command",
@@ -756,6 +769,24 @@ describe("buildThreadFeed", () => {
       turnId: firstTurnId,
       label: "Worked for 12s",
     });
+    expect(collapsed.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "turn-fold:turn-1",
+      "assistant-commentary",
+      "user-2",
+      "assistant-next",
+    ]);
+
+    const expanded = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set([firstTurnId]));
+    expect(expanded.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "turn-fold:turn-1",
+      "work-before-response",
+      "assistant-commentary",
+      "work-after-response",
+      "user-2",
+      "assistant-next",
+    ]);
   });
 
   it("keeps an active turn expanded and classifies error-shaped tool output", () => {

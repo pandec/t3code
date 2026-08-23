@@ -190,6 +190,18 @@ function isFreshTimestamp(input: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
 }
 
+function haveSameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -2041,6 +2053,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const headerMaterialVisibleRef = useRef(false);
   const lastContentInsetReportRef = useRef<ThreadFeedInsetReport | null>(null);
   const previousLatestTurnRef = useRef(props.latestTurn);
+  const settledTurnOpeningAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
@@ -2469,8 +2482,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ],
   );
   const presentedFeed = presentationState.entries;
-  const settledTurnOpeningAssistantMessageIds =
+  const derivedSettledTurnOpeningAssistantMessageIds =
     presentationState.settledTurnOpeningAssistantMessageIds;
+  if (
+    !haveSameStringSet(
+      settledTurnOpeningAssistantMessageIdsRef.current,
+      derivedSettledTurnOpeningAssistantMessageIds,
+    )
+  ) {
+    settledTurnOpeningAssistantMessageIdsRef.current = derivedSettledTurnOpeningAssistantMessageIds;
+  }
+  const settledTurnOpeningAssistantMessageIds = settledTurnOpeningAssistantMessageIdsRef.current;
   const feedAppearanceData = useMemo(
     () => ({ listAppearanceData, settledTurnOpeningAssistantMessageIds }),
     [listAppearanceData, settledTurnOpeningAssistantMessageIds],
