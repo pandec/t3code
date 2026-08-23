@@ -80,6 +80,80 @@ export function shouldPreserveAssistantLineBreaks(text: string): boolean {
   return /^★ Insight(?:\s|─)/mu.test(text);
 }
 
+export function resolveTimelineMinimapHeightStyle(itemCount: number): string {
+  const naturalHeight = Math.max(1, (itemCount - 1) * TIMELINE_MINIMAP_ITEM_SPACING);
+  return `min(${naturalHeight}px, ${TIMELINE_MINIMAP_MAX_HEIGHT_CSS})`;
+}
+
+export function resolveTimelineMinimapTopPercent(index: number, itemCount: number): number {
+  if (itemCount <= 1) {
+    return 0;
+  }
+  return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
+}
+
+export function resolveTimelineMinimapIndexFromPointer(input: {
+  readonly itemCount: number;
+  readonly railTop: number;
+  readonly railHeight: number;
+  readonly pointerY: number;
+}): number | null {
+  if (input.itemCount <= 0 || input.railHeight <= 0) {
+    return null;
+  }
+  if (input.itemCount === 1) {
+    return 0;
+  }
+
+  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
+  return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
+}
+
+export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number): boolean {
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
+    return false;
+  }
+
+  const contentWidth = Math.min(viewportWidth, TIMELINE_CONTENT_MAX_WIDTH);
+  const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
+  return sideGutter >= TIMELINE_MINIMAP_PERSISTENT_GUTTER;
+}
+
+/**
+ * The minimap overlays the viewport's left edge while the content column is
+ * centered, so the side gutter between them shrinks under browser zoom or a
+ * narrow pane. A fixed-width hover strip would then sit on top of the message
+ * text and swallow its pointer events. Cap the strip's width so it never
+ * extends past the gutter into the content column; 0 disables the strip.
+ */
+export function resolveTimelineMinimapHitStripWidth(viewportWidth: number): number {
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
+    return 0;
+  }
+
+  const contentWidth = Math.min(viewportWidth, TIMELINE_CONTENT_MAX_WIDTH);
+  const sideGutter = Math.max(0, (viewportWidth - contentWidth) / 2);
+  return Math.max(
+    0,
+    Math.min(
+      TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH,
+      Math.floor(sideGutter) - TIMELINE_MINIMAP_HIT_STRIP_LEFT,
+    ),
+  );
+}
+
+/**
+ * Once the preview is open, keep the full preview and the space leading to it
+ * interactive. The collapsed strip remains gutter-capped so it cannot block
+ * selecting message text.
+ */
+export function resolveTimelineMinimapInteractiveWidth(
+  collapsedWidth: number,
+  expanded: boolean,
+): number | string {
+  return expanded ? TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
+}
+
 function computeElapsedMs(startIso: string, endIso: string): number | null {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
@@ -951,8 +1025,8 @@ export function deriveMessagesTimelineRows(input: {
     // While the turn is still running, the latest assistant message is only
     // provisionally terminal — withhold the metadata row until the turn
     // settles so commentary doesn't flash timestamps mid-work. Once settled,
-    // the preserved opening response gets the row too: folding keeps it
-    // visible as a first-class answer, so it earns the same controls.
+    // the turn's opening response earns the row too whenever it differs from
+    // the terminal message — with or without a fold between them.
     const showAssistantMeta =
       timelineEntry.message.role === "assistant" &&
       (terminalAssistantMessageIds.has(timelineEntry.message.id) ||
