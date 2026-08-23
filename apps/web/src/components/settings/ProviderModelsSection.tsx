@@ -229,7 +229,19 @@ export function ProviderModelsSection({
           const canMoveDown =
             nextModel !== undefined && favoriteModelSet.has(nextModel.slug) === isFavorite;
           const descriptors = caps?.optionDescriptors ?? [];
-          if (descriptors.some((descriptor) => descriptor.id === "fastMode")) {
+          // Codex models expose fast mode as a "Fast" service tier rather
+          // than a fastMode boolean. Match TraitsPicker's trigger display:
+          // codex-only, detected by the option label (tier ids vary).
+          if (
+            descriptors.some(
+              (descriptor) =>
+                descriptor.id === "fastMode" ||
+                (driverKind === "codex" &&
+                  descriptor.id === "serviceTier" &&
+                  descriptor.type === "select" &&
+                  descriptor.options.some((option) => option.label === "Fast")),
+            )
+          ) {
             capLabels.push("Fast mode");
           }
           if (descriptors.some((descriptor) => descriptor.id === "thinking")) {

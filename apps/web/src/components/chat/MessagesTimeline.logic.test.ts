@@ -3,119 +3,11 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
-  deriveTimelineMinimapItems,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
-  resolveTimelineMinimapAriaLabel,
-  resolveTimelineMinimapItemIndexFromPointer,
-  resolveTimelineMinimapTooltipTranslate,
   shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
-
-describe("resolveTimelineMinimapAriaLabel", () => {
-  it("uses a concise role and position label with a capped excerpt", () => {
-    const longResponse = "A".repeat(180);
-
-    expect(
-      resolveTimelineMinimapAriaLabel({
-        activeIndex: null,
-        itemCount: 3,
-        primaryText: null,
-        side: "right",
-      }),
-    ).toBe("Jump to message: Agent response");
-    expect(
-      resolveTimelineMinimapAriaLabel({
-        activeIndex: 1,
-        itemCount: 3,
-        primaryText: longResponse,
-        side: "right",
-      }),
-    ).toBe(`Jump to agent response 2 of 3: ${"A".repeat(120)}`);
-  });
-});
-
-describe("resolveTimelineMinimapItemIndexFromPointer", () => {
-  it("selects the nearest rendered reply in the full turn-position space", () => {
-    const items = [
-      { positionIndex: 0, positionCount: 4 },
-      { positionIndex: 3, positionCount: 4 },
-    ];
-
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items,
-        railTop: 100,
-        railHeight: 300,
-        pointerY: 360,
-      }),
-    ).toBe(1);
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items,
-        railTop: 100,
-        railHeight: 300,
-        pointerY: 160,
-      }),
-    ).toBe(0);
-  });
-
-  it("compares sparse markers against the continuous pointer position", () => {
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items: [
-          { positionIndex: 0, positionCount: 4 },
-          { positionIndex: 2, positionCount: 4 },
-        ],
-        railTop: 0,
-        railHeight: 24,
-        pointerY: 11,
-      }),
-    ).toBe(1);
-  });
-});
-
-describe("resolveTimelineMinimapTooltipTranslate", () => {
-  it("only edge-clamps markers at the endpoints of the full turn space", () => {
-    expect(resolveTimelineMinimapTooltipTranslate(0, 5)).toBe("0%");
-    expect(resolveTimelineMinimapTooltipTranslate(1, 5)).toBe("-50%");
-    expect(resolveTimelineMinimapTooltipTranslate(3, 5)).toBe("-50%");
-    expect(resolveTimelineMinimapTooltipTranslate(4, 5)).toBe("-100%");
-  });
-});
-
-describe("deriveTimelineMinimapItems", () => {
-  it("keeps sparse agent replies aligned with their user-turn positions", () => {
-    const messageRow = (
-      id: string,
-      role: "user" | "assistant",
-      isFinalAssistantResponse: boolean,
-    ) =>
-      ({
-        kind: "message",
-        id,
-        message: { id, role, text: id },
-        isFinalAssistantResponse,
-      }) as never;
-    const rows = [
-      messageRow("user-1", "user", false),
-      messageRow("assistant-1", "assistant", true),
-      messageRow("user-2", "user", false),
-      messageRow("assistant-commentary", "assistant", false),
-      messageRow("user-3", "user", false),
-      messageRow("assistant-3", "assistant", true),
-    ];
-
-    expect(
-      deriveTimelineMinimapItems(rows, "final-assistant").map(
-        ({ id, positionIndex, positionCount }) => ({ id, positionIndex, positionCount }),
-      ),
-    ).toEqual([
-      { id: "assistant-1", positionIndex: 0, positionCount: 3 },
-      { id: "assistant-3", positionIndex: 2, positionCount: 3 },
-    ]);
-  });
-});
+import { deriveTimelineMinimapItems } from "./MessagesTimeline.minimap";
 
 describe("shouldPreserveAssistantLineBreaks", () => {
   it("preserves Claude insight formatting without changing regular markdown", () => {
@@ -382,7 +274,7 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
-  it("only enables assistant copy for the terminal assistant message in a turn", () => {
+  it("enables assistant copy for the opening and terminal assistant messages in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
@@ -441,7 +333,9 @@ describe("deriveMessagesTimelineRows", () => {
     );
 
     expect(assistantRows).toHaveLength(2);
-    expect(assistantRows[0]?.showAssistantCopyButton).toBe(false);
+    // The first message of a settled two-message turn is the preserved
+    // opening response, so it carries the copy button like the terminal one.
+    expect(assistantRows[0]?.showAssistantCopyButton).toBe(true);
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
 
@@ -661,6 +555,112 @@ describe("deriveMessagesTimelineRows", () => {
     expect(
       expandedRows.find((row) => row.kind === "turn-fold" && row.expanded === true),
     ).toBeDefined();
+  });
+
+  it("shows the assistant meta row on the preserved opening response of a settled turn", () => {
+    const message = (id: string, text: string, createdAt: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: id as never,
+        role: "assistant" as const,
+        text,
+        turnId: "turn-1" as never,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const timelineEntries = [
+      {
+        id: "user-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        message: {
+          id: "user-1" as never,
+          role: "user" as const,
+          text: "Build it",
+          turnId: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          streaming: false,
+        },
+      },
+      message("assistant-first", "Here is the plan up front.", "2026-01-01T00:00:05Z"),
+      message("assistant-middle", "Now doing step two.", "2026-01-01T00:00:10Z"),
+      message("assistant-final", "Done", "2026-01-01T00:00:20Z"),
+    ];
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      completedTurnAssistantMessageIds: new Set(["assistant-final" as never]),
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    const messageRow = (id: string) =>
+      rows.find(
+        (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+          row.kind === "message" && row.message.id === (id as never),
+      );
+
+    // The preserved opening earns the meta row (copy/summary/speech), but
+    // never counts as the final response.
+    expect(messageRow("assistant-first")?.showAssistantMeta).toBe(true);
+    expect(messageRow("assistant-first")?.isFinalAssistantResponse).toBe(false);
+    // Folded-away commentary stays bare even when expanded into view.
+    expect(messageRow("assistant-middle")?.showAssistantMeta).toBe(false);
+    expect(messageRow("assistant-final")?.showAssistantMeta).toBe(true);
+    expect(messageRow("assistant-final")?.isFinalAssistantResponse).toBe(true);
+  });
+
+  it("withholds the opening meta row while the turn is still unsettled", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-first-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-first" as never,
+            role: "assistant" as const,
+            text: "Opening answer",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-followup-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-followup" as never,
+            role: "assistant" as const,
+            text: "Still working",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            updatedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+          },
+        },
+      ],
+      runningTurnId: "turn-1" as never,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:04Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const openingRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.id === ("assistant-first" as never),
+    );
+    expect(openingRow?.showAssistantMeta).toBe(false);
   });
 
   it("folds assistant messages between the first and terminal messages", () => {
@@ -1389,7 +1389,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.map((row) => row.id)).toContain("work-live:running-work-entry");
   });
 
-  it("only shows assistant metadata on the terminal assistant message", () => {
+  it("shows assistant metadata on the opening and terminal assistant messages", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
@@ -1448,7 +1448,7 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" && row.message.role === "assistant",
     );
 
-    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([true, true]);
     expect(deriveTimelineMinimapItems(rows, "user-turn")).toEqual([
       {
         id: "user-prompt-entry",

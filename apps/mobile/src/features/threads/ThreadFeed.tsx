@@ -107,7 +107,7 @@ import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCo
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
 import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
 import {
-  deriveThreadFeedPresentation,
+  deriveThreadFeedPresentationState,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
@@ -188,6 +188,18 @@ const FRESH_ENTRY_WINDOW_MS = 3_000;
 function isFreshTimestamp(input: string): boolean {
   const timestamp = Date.parse(input);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
+}
+
+function haveSameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface ThreadFeedProps {
@@ -1042,6 +1054,7 @@ function renderFeedEntry(
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
+    readonly settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
@@ -1119,7 +1132,8 @@ function renderFeedEntry(
       message.turnId === props.unsettledTurnId;
     const showAssistantMeta =
       message.role === "assistant" &&
-      props.terminalAssistantMessageIds.has(message.id) &&
+      (props.terminalAssistantMessageIds.has(message.id) ||
+        props.settledTurnOpeningAssistantMessageIds.has(message.id)) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
 
@@ -2039,6 +2053,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const headerMaterialVisibleRef = useRef(false);
   const lastContentInsetReportRef = useRef<ThreadFeedInsetReport | null>(null);
   const previousLatestTurnRef = useRef(props.latestTurn);
+  const settledTurnOpeningAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
@@ -2449,9 +2464,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return ids;
   }, [expandedWorkGroups]);
-  const presentedFeed = useMemo(
+  const presentationState = useMemo(
     () =>
-      deriveThreadFeedPresentation(
+      deriveThreadFeedPresentationState(
         props.feed,
         props.latestTurn,
         expandedTurnIds,
@@ -2465,6 +2480,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.feed,
       props.latestTurn,
     ],
+  );
+  const presentedFeed = presentationState.entries;
+  const derivedSettledTurnOpeningAssistantMessageIds =
+    presentationState.settledTurnOpeningAssistantMessageIds;
+  if (
+    !haveSameStringSet(
+      settledTurnOpeningAssistantMessageIdsRef.current,
+      derivedSettledTurnOpeningAssistantMessageIds,
+    )
+  ) {
+    settledTurnOpeningAssistantMessageIdsRef.current = derivedSettledTurnOpeningAssistantMessageIds;
+  }
+  const settledTurnOpeningAssistantMessageIds = settledTurnOpeningAssistantMessageIdsRef.current;
+  const feedAppearanceData = useMemo(
+    () => ({ listAppearanceData, settledTurnOpeningAssistantMessageIds }),
+    [listAppearanceData, settledTurnOpeningAssistantMessageIds],
   );
 
   // The empty↔filled key below remounts the list, which resets its imperative
@@ -2731,6 +2762,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         steerPendingMessageIds: props.steerPendingMessageIds,
         copiedRowId,
         expandedWorkRows,
+        settledTurnOpeningAssistantMessageIds,
         terminalAssistantMessageIds,
         unsettledTurnId,
         onCopyWorkRow,
@@ -2751,6 +2783,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [
       copiedRowId,
       expandedWorkRows,
+      settledTurnOpeningAssistantMessageIds,
       terminalAssistantMessageIds,
       unsettledTurnId,
       iconSubtleColor,
@@ -2856,7 +2889,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             data={presentedFeed}
-            extraData={listAppearanceData}
+            extraData={feedAppearanceData}
             renderItem={renderItem}
             keyExtractor={(entry) => entry.id}
             getItemType={(entry) =>

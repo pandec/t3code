@@ -378,7 +378,14 @@ describe("ClaudeAdapterLive", () => {
       // Project settings are loaded for skills, so discovery must opt out of
       // the workspace's `.mcp.json` servers rather than booting them.
       assert.equal(harness.getLastCreateQueryInput()?.options.strictMcpConfig, true);
-      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.mcpServers, {});
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.allowedTools, []);
+      // Connected claude.ai MCP servers live outside filesystem config, so the
+      // shared probe options must disable them independently.
+      assert.equal(
+        harness.getLastCreateQueryInput()?.options.env?.ENABLE_CLAUDEAI_MCP_SERVERS,
+        "false",
+      );
       assert.equal(harness.query.closeCalls, 1);
     }).pipe(
       Effect.provide(harness.layer),

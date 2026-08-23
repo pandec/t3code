@@ -1142,18 +1142,23 @@ interface ThreadFeedTurnFold {
   readonly label: string;
 }
 
+interface ThreadFeedTurnDerivation {
+  readonly foldsByAnchorId: ReadonlyMap<string, ThreadFeedTurnFold>;
+  readonly settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
+}
+
 function deriveThreadFeedTurnFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
-): ReadonlyMap<string, ThreadFeedTurnFold> {
+): ThreadFeedTurnDerivation {
   const firstAssistantMessageIdByTurn = new Map<TurnId, string>();
   const terminalAssistantMessageIdByTurn = new Map<TurnId, string>();
   for (const entry of feed) {
     if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
       if (!firstAssistantMessageIdByTurn.has(entry.message.turnId)) {
-        firstAssistantMessageIdByTurn.set(entry.message.turnId, entry.id);
+        firstAssistantMessageIdByTurn.set(entry.message.turnId, entry.message.id);
       }
-      terminalAssistantMessageIdByTurn.set(entry.message.turnId, entry.id);
+      terminalAssistantMessageIdByTurn.set(entry.message.turnId, entry.message.id);
     }
   }
 
@@ -1179,10 +1184,7 @@ function deriveThreadFeedTurnFolds(
     }
     let group = groupsByTurnId.get(turnId);
     if (!group) {
-      group = {
-        entries: [],
-        startBoundary: pendingUserBoundary,
-      };
+      group = { entries: [], startBoundary: pendingUserBoundary };
       pendingUserBoundary = null;
       groupsByTurnId.set(turnId, group);
     }
@@ -1191,17 +1193,31 @@ function deriveThreadFeedTurnFolds(
 
   const unsettledTurnId = deriveUnsettledTurnId(latestTurn);
   const foldsByAnchorId = new Map<string, ThreadFeedTurnFold>();
+  const settledTurnOpeningAssistantMessageIds = new Set<string>();
   for (const [turnId, group] of groupsByTurnId) {
     const { entries } = group;
     if (turnId === unsettledTurnId) {
       continue;
     }
-    if (entries.some((entry) => entry.type === "message" && entry.message.streaming)) {
+    if (
+      entries.some(
+        (entry) =>
+          entry.type === "message" && entry.message.role === "assistant" && entry.message.streaming,
+      )
+    ) {
       continue;
     }
 
     const firstAssistantMessageId = firstAssistantMessageIdByTurn.get(turnId);
     const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
+    if (
+      firstAssistantMessageId &&
+      terminalAssistantMessageId &&
+      firstAssistantMessageId !== terminalAssistantMessageId
+    ) {
+      settledTurnOpeningAssistantMessageIds.add(firstAssistantMessageId);
+    }
+
     const hiddenEntryIds = new Set(
       entries
         .filter(
@@ -1248,26 +1264,36 @@ function deriveThreadFeedTurnFolds(
 
     foldsByAnchorId.set(firstHiddenEntry.id, {
       turnId,
-      createdAt: firstHiddenEntry.createdAt,
+      // Keep insertion in source order, but do not let page prepends change the
+      // row's timestamp and invalidate the virtualized anchor.
+      createdAt: terminalEntry?.createdAt ?? lastEntry.createdAt,
       hiddenEntryIds,
       label,
     });
   }
-  return foldsByAnchorId;
+  return { foldsByAnchorId, settledTurnOpeningAssistantMessageIds };
 }
 
-export function deriveThreadFeedPresentation(
+export interface ThreadFeedPresentationState {
+  readonly entries: ThreadFeedEntry[];
+  readonly settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
+}
+
+export function deriveThreadFeedPresentationState(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
   expandedTurnIds: ReadonlySet<TurnId>,
   expandedWorkGroupIds: ReadonlySet<string> = new Set(),
   activeWorkStartedAt: string | null = null,
-): ThreadFeedEntry[] {
+): ThreadFeedPresentationState {
   const sourceFeed = feed.filter(
-    (entry) =>
+    (entry): entry is PresentableThreadFeedEntry =>
       entry.type !== "turn-fold" && entry.type !== "work-toggle" && entry.type !== "working",
   );
-  const foldsByAnchorId = deriveThreadFeedTurnFolds(sourceFeed, latestTurn);
+  const { foldsByAnchorId, settledTurnOpeningAssistantMessageIds } = deriveThreadFeedTurnFolds(
+    sourceFeed,
+    latestTurn,
+  );
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedTurnIds.has(fold.turnId)) {
@@ -1277,11 +1303,11 @@ export function deriveThreadFeedPresentation(
     }
   }
 
-  const result: ThreadFeedEntry[] = [];
+  const entries: ThreadFeedEntry[] = [];
   for (const entry of sourceFeed) {
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
-      result.push({
+      entries.push({
         type: "turn-fold",
         id: `turn-fold:${fold.turnId}`,
         createdAt: fold.createdAt,
@@ -1291,22 +1317,43 @@ export function deriveThreadFeedPresentation(
       });
     }
     if (!collapsedEntryIds.has(entry.id)) {
-      appendPresentedFeedEntry(result, entry, expandedWorkGroupIds);
+      appendPresentedFeedEntry(entries, entry, expandedWorkGroupIds);
     }
   }
   if (activeWorkStartedAt !== null) {
-    result.push({
+    entries.push({
       type: "working",
       id: "working-indicator-row",
       createdAt: activeWorkStartedAt,
     });
   }
-  return result;
+  return { entries, settledTurnOpeningAssistantMessageIds };
 }
+
+export function deriveThreadFeedPresentation(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  latestTurn: ThreadFeedLatestTurn | null,
+  expandedTurnIds: ReadonlySet<TurnId>,
+  expandedWorkGroupIds: ReadonlySet<string> = new Set(),
+  activeWorkStartedAt: string | null = null,
+): ThreadFeedEntry[] {
+  return deriveThreadFeedPresentationState(
+    feed,
+    latestTurn,
+    expandedTurnIds,
+    expandedWorkGroupIds,
+    activeWorkStartedAt,
+  ).entries;
+}
+
+type PresentableThreadFeedEntry = Exclude<
+  ThreadFeedEntry,
+  { readonly type: "turn-fold" | "work-toggle" | "working" }
+>;
 
 function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
-  entry: Exclude<ThreadFeedEntry, { readonly type: "turn-fold" | "work-toggle" | "working" }>,
+  entry: PresentableThreadFeedEntry,
   expandedWorkGroupIds: ReadonlySet<string>,
 ): void {
   if (entry.type !== "activity-group") {

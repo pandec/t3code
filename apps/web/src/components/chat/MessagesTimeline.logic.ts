@@ -17,7 +17,6 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
-export const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 
 export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
@@ -82,19 +81,6 @@ export function resolveTimelineMinimapTopPercent(index: number, itemCount: numbe
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
 }
 
-export function resolveTimelineMinimapTooltipTranslate(
-  positionIndex: number,
-  positionCount: number,
-): string {
-  if (positionIndex === 0) {
-    return "0%";
-  }
-  if (positionIndex === positionCount - 1) {
-    return "-100%";
-  }
-  return "-50%";
-}
-
 export function resolveTimelineMinimapIndexFromPointer(input: {
   readonly itemCount: number;
   readonly railTop: number;
@@ -110,35 +96,6 @@ export function resolveTimelineMinimapIndexFromPointer(input: {
 
   const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
   return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
-}
-
-export function resolveTimelineMinimapItemIndexFromPointer(input: {
-  readonly items: ReadonlyArray<Pick<TimelineMinimapItem, "positionCount" | "positionIndex">>;
-  readonly railTop: number;
-  readonly railHeight: number;
-  readonly pointerY: number;
-}): number | null {
-  const firstItem = input.items[0];
-  if (!firstItem || input.railHeight <= 0) {
-    return null;
-  }
-  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
-  const targetPosition = progress * Math.max(0, firstItem.positionCount - 1);
-
-  let nearestItemIndex = 0;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < input.items.length; index += 1) {
-    const item = input.items[index];
-    if (!item) {
-      continue;
-    }
-    const distance = Math.abs(item.positionIndex - targetPosition);
-    if (distance < nearestDistance) {
-      nearestItemIndex = index;
-      nearestDistance = distance;
-    }
-  }
-  return nearestItemIndex;
 }
 
 export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number): boolean {
@@ -293,108 +250,6 @@ export type MessagesTimelineRow =
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];
-}
-
-export type TimelineMinimapKind = "user-turn" | "final-assistant";
-
-export interface TimelineMinimapItem {
-  readonly id: string;
-  readonly rowIndex: number;
-  readonly positionIndex: number;
-  readonly positionCount: number;
-  readonly primaryText: string | null;
-  readonly secondaryText: string | null;
-}
-
-export function deriveTimelineMinimapItems(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  kind: TimelineMinimapKind,
-): TimelineMinimapItem[] {
-  const items: TimelineMinimapItem[] = [];
-  const positionCount = Math.max(
-    1,
-    rows.filter((row) => row.kind === "message" && row.message.role === "user").length,
-  );
-  let positionIndex = -1;
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "user") {
-      positionIndex += 1;
-    }
-
-    if (kind === "final-assistant") {
-      if (row.message.role !== "assistant" || !row.isFinalAssistantResponse) {
-        continue;
-      }
-      items.push({
-        id: row.id,
-        rowIndex: index,
-        positionIndex: Math.max(0, positionIndex),
-        positionCount,
-        primaryText: compactMinimapPreview(row.message.text),
-        secondaryText: null,
-      });
-      continue;
-    }
-
-    if (row.message.role !== "user") {
-      continue;
-    }
-    items.push({
-      id: row.id,
-      rowIndex: index,
-      positionIndex: Math.max(0, positionIndex),
-      positionCount,
-      primaryText: compactMinimapPreview(row.message.text),
-      secondaryText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
-    });
-  }
-  return items;
-}
-
-function resolveFinalAssistantTextForTurn(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  userRowIndex: number,
-) {
-  let finalAssistantText: string | null = null;
-  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "user") {
-      break;
-    }
-    if (row.message.role === "assistant") {
-      finalAssistantText = row.message.text ?? null;
-    }
-  }
-  return finalAssistantText;
-}
-
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
-}
-
-export function resolveTimelineMinimapAriaLabel(input: {
-  readonly activeIndex: number | null;
-  readonly itemCount: number;
-  readonly primaryText: string | null;
-  readonly side: "left" | "right";
-}): string {
-  const fallback = input.side === "left" ? "User message" : "Agent response";
-  if (input.activeIndex === null) {
-    return `Jump to message: ${fallback}`;
-  }
-
-  const role = input.side === "left" ? "user message" : "agent response";
-  const position = `${input.activeIndex + 1} of ${input.itemCount}`;
-  const excerpt = input.primaryText?.slice(0, TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH) ?? null;
-  return excerpt ? `Jump to ${role} ${position}: ${excerpt}` : `Jump to ${role} ${position}`;
 }
 
 export function computeMessageDurationStart(
@@ -671,13 +526,20 @@ function timelineEntryTurnId(entry: TimelineEntry): TurnId | null {
  * Everything between them folds behind a "Worked for ..." row anchored at
  * the first hidden entry. Keeping both ends prevents a short follow-up from
  * hiding a substantive opening response while still bounding noisy turns.
+ *
+ * Also reports which preserved opening responses differ from their turn's
+ * terminal message, so they can carry the assistant meta row like the
+ * first-class answers they are.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   terminalAssistantMessageIds: ReadonlySet<string>;
   latestTurn: TimelineLatestTurn | null;
   unsettledTurnId: TurnId | null;
-}): ReadonlyMap<string, TurnFold> {
+}): {
+  foldsByAnchorEntryId: ReadonlyMap<string, TurnFold>;
+  settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
+} {
   interface TurnGroup {
     entries: Array<TimelineEntry>;
     terminalEntry: Extract<TimelineEntry, { kind: "message" }> | null;
@@ -733,6 +595,7 @@ function deriveTurnFolds(input: {
   }
 
   const foldsByAnchorEntryId = new Map<string, TurnFold>();
+  const settledTurnOpeningAssistantMessageIds = new Set<string>();
   for (const [turnId, group] of groupsByTurnId) {
     if (turnId === input.unsettledTurnId) {
       continue;
@@ -743,6 +606,9 @@ function deriveTurnFolds(input: {
     const firstAssistantEntry = group.entries.find(
       (entry): entry is Extract<TimelineEntry, { kind: "message" }> => entry.kind === "message",
     );
+    if (firstAssistantEntry && firstAssistantEntry.message.id !== group.terminalEntry?.message.id) {
+      settledTurnOpeningAssistantMessageIds.add(firstAssistantEntry.message.id);
+    }
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {
       if (entry.id === firstAssistantEntry?.id || entry.id === group.terminalEntry?.id) {
@@ -800,7 +666,7 @@ function deriveTurnFolds(input: {
       label,
     });
   }
-  return foldsByAnchorEntryId;
+  return { foldsByAnchorEntryId, settledTurnOpeningAssistantMessageIds };
 }
 
 export function deriveMessagesTimelineRows(input: {
@@ -824,7 +690,7 @@ export function deriveMessagesTimelineRows(input: {
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
-  const foldsByAnchorEntryId = deriveTurnFolds({
+  const { foldsByAnchorEntryId, settledTurnOpeningAssistantMessageIds } = deriveTurnFolds({
     timelineEntries: input.timelineEntries,
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
@@ -1151,10 +1017,13 @@ export function deriveMessagesTimelineRows(input: {
 
     // While the turn is still running, the latest assistant message is only
     // provisionally terminal — withhold the metadata row until the turn
-    // settles so commentary doesn't flash timestamps mid-work.
+    // settles so commentary doesn't flash timestamps mid-work. Once settled,
+    // the turn's opening response earns the row too whenever it differs from
+    // the terminal message — with or without a fold between them.
     const showAssistantMeta =
       timelineEntry.message.role === "assistant" &&
-      terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      (terminalAssistantMessageIds.has(timelineEntry.message.id) ||
+        settledTurnOpeningAssistantMessageIds.has(timelineEntry.message.id)) &&
       !assistantTurnStillInProgress;
     const assistantTurnDiffSummary =
       timelineEntry.message.role === "assistant"

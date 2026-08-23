@@ -36,6 +36,7 @@ import {
   isOpenCodeNotFound,
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
+  makeOpenCodeUnexpectedRuntimeErrorPayload,
   mergeOpenCodeAssistantText,
 } from "./OpenCodeAdapter.ts";
 
@@ -247,7 +248,8 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
@@ -294,6 +296,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       NodeAssert.equal(session.provider, "opencode");
       NodeAssert.equal(session.threadId, "thread-opencode");
+      NodeAssert.ok(session.sessionGenerationId);
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
       NodeAssert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
       NodeAssert.deepEqual(runtimeMock.state.authHeaders, [
@@ -614,7 +617,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
+      const session = yield* adapter.startSession({
         provider: ProviderDriverKind.make("opencode"),
         threadId,
         runtimeMode: "full-access",
@@ -625,6 +628,12 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(
         events.map((event) => event.type),
         ["session.started", "thread.started", "session.exited"],
+      );
+      const exited = events.at(-1);
+      NodeAssert.ok(session.sessionGenerationId);
+      NodeAssert.equal(
+        exited?.type === "session.exited" ? exited.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
       );
     }),
   );
@@ -657,6 +666,19 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         "http://127.0.0.1:9999",
       ]);
       NodeAssert.deepEqual(sessions, []);
+    }),
+  );
+
+  it.effect("stamps unexpected runtime errors with the session generation", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(
+        makeOpenCodeUnexpectedRuntimeErrorPayload("server exited", "generation-1"),
+        {
+          message: "server exited",
+          class: "transport_error",
+          sessionGenerationId: "generation-1",
+        },
+      );
     }),
   );
 

@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -23,7 +24,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../../config.ts";
-import { makeHermesAdapter } from "./HermesAdapter.ts";
+import { hermesPromptSettlementBelongsToContext, makeHermesAdapter } from "./HermesAdapter.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -82,6 +83,32 @@ const makeTestAdapter = (binaryPath: string) =>
   makeHermesAdapter(
     decodeHermesSettings({ enabled: true, binaryPath, requireGateway: false }),
   ).pipe(Effect.orDie);
+
+it("requires a settlement to match the originating Hermes generation", () => {
+  const turnId = TurnId.make("turn-1");
+  assert.isFalse(
+    hermesPromptSettlementBelongsToContext({
+      liveAcpSessionId: "shared-session",
+      expectedAcpSessionId: "shared-session",
+      liveSessionGenerationId: "generation-2",
+      originatingSessionGenerationId: "generation-1",
+      liveActiveTurnId: turnId,
+      liveSessionActiveTurnId: turnId,
+      turnId,
+    }),
+  );
+  assert.isTrue(
+    hermesPromptSettlementBelongsToContext({
+      liveAcpSessionId: "shared-session",
+      expectedAcpSessionId: "shared-session",
+      liveSessionGenerationId: "generation-1",
+      originatingSessionGenerationId: "generation-1",
+      liveActiveTurnId: turnId,
+      liveSessionActiveTurnId: turnId,
+      turnId,
+    }),
+  );
+});
 
 it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
   it.effect("surfaces terminal-only Hermes authentication during session startup", () =>
@@ -155,12 +182,49 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
         turnStarted?.type === "turn.started" ? turnStarted.payload.model : undefined,
         "anthropic:claude-sonnet-5",
       );
+      const turnCompleted = events.find((event) => event.type === "turn.completed");
+      assert.isString(session.sessionGenerationId);
+      assert.equal(
+        turnCompleted?.type === "turn.completed"
+          ? turnCompleted.payload.sessionGenerationId
+          : undefined,
+        session.sessionGenerationId,
+      );
       assert.includeMembers(
         events.map((event) => event.type),
         ["session.started", "thread.started", "turn.started", "content.delta", "turn.completed"],
       );
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("stamps session exit events with the session generation", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-exit-generation");
+      const adapter = yield* makeTestAdapter(yield* Effect.promise(() => makeMockHermesWrapper()));
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.stopSession(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")));
+      const exited = events.find((event) => event.type === "session.exited");
+      assert.isString(session.sessionGenerationId);
+      assert.equal(
+        exited?.type === "session.exited" ? exited.payload.sessionGenerationId : undefined,
+        session.sessionGenerationId,
+      );
     }),
   );
 

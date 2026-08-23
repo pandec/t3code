@@ -12,7 +12,6 @@ import type {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
-  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -23,6 +22,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, describe, vi } from "@effect/vitest";
 
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -134,9 +134,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   let sessionGeneration = 0;
+  let beforeSessionStored: ((session: ProviderSession) => Effect.Effect<void>) | undefined;
 
   const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
       const session: ProviderSession = {
         provider,
@@ -154,6 +155,9 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
         createdAt: now,
         updatedAt: now,
       };
+      if (beforeSessionStored !== undefined) {
+        yield* beforeSessionStored(session);
+      }
       sessions.set(session.threadId, session);
       return session;
     }),
@@ -293,6 +297,11 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     adapter,
     emit,
     updateSession,
+    setBeforeSessionStored: (
+      hook: ((session: ProviderSession) => Effect.Effect<void>) | undefined,
+    ) => {
+      beforeSessionStored = hook;
+    },
     startSession,
     forkSession,
     sendTurn,
@@ -2564,6 +2573,170 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         ),
         true,
       );
+    }),
+  );
+
+  it.effect("rejects a superseded generation while its replacement is starting", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-replacement-generation-decision");
+      const initialSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.isString(initialSession.sessionGenerationId);
+
+      const staleExitEventId = asEventId("evt-exit-during-replacement-start");
+      const replacementEventId = asEventId("evt-replacement-generation-during-start");
+      const guardedEventFiber = yield* provider.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.eventId === staleExitEventId || event.eventId === replacementEventId,
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* advanceTestClock(50);
+      fanout.codex.setBeforeSessionStored((replacementSession) =>
+        Effect.sync(() => {
+          fanout.codex.emit({
+            type: "session.exited",
+            eventId: staleExitEventId,
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            threadId,
+            payload: {
+              exitKind: "graceful",
+              sessionGenerationId: initialSession.sessionGenerationId,
+            },
+          });
+          fanout.codex.emit({
+            type: "runtime.error",
+            eventId: replacementEventId,
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:02.000Z",
+            threadId,
+            payload: {
+              message: "replacement generation sentinel",
+              sessionGenerationId: replacementSession.sessionGenerationId,
+            },
+          });
+        }).pipe(Effect.andThen(Effect.yieldNow)),
+      );
+
+      const replacementSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      fanout.codex.setBeforeSessionStored(undefined);
+      yield* advanceTestClock(50);
+
+      const guardedEvent = Option.getOrThrow(yield* Fiber.join(guardedEventFiber));
+      assert.notEqual(replacementSession.sessionGenerationId, initialSession.sessionGenerationId);
+      assert.equal(guardedEvent.eventId, replacementEventId);
+    }),
+  );
+
+  it.effect("clears the pending replacement marker when startup is interrupted", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-interrupted-replacement-marker");
+      const initialSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const replacementReached = yield* Deferred.make<ProviderSession>();
+      const holdReplacement = yield* Deferred.make<void>();
+      fanout.codex.setBeforeSessionStored((replacementSession) =>
+        Deferred.succeed(replacementReached, replacementSession).pipe(
+          Effect.andThen(Deferred.await(holdReplacement)),
+        ),
+      );
+
+      const replacementStartFiber = yield* provider
+        .startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      const interruptedReplacement = yield* Deferred.await(replacementReached);
+      yield* Fiber.interrupt(replacementStartFiber);
+      fanout.codex.setBeforeSessionStored(undefined);
+
+      const currentEventId = asEventId("evt-current-after-interrupted-replacement");
+      const currentEventFiber = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === currentEventId),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      fanout.codex.emit({
+        type: "runtime.error",
+        eventId: asEventId("evt-stale-after-interrupted-replacement"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        threadId,
+        payload: {
+          message: "interrupted replacement sentinel",
+          sessionGenerationId: interruptedReplacement.sessionGenerationId,
+        },
+      });
+      fanout.codex.emit({
+        type: "runtime.error",
+        eventId: currentEventId,
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:04.000Z",
+        threadId,
+        payload: {
+          message: "current generation sentinel",
+          sessionGenerationId: initialSession.sessionGenerationId,
+        },
+      });
+
+      assert.equal(Option.getOrThrow(yield* Fiber.join(currentEventFiber)).eventId, currentEventId);
+    }),
+  );
+
+  it.effect("accepts a stamped exit when no session is live", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-stopped-generation-compatibility");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopSession({ threadId });
+
+      const eventId = asEventId("evt-exit-after-session-stopped");
+      const eventFiber = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === eventId),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* advanceTestClock(50);
+      fanout.codex.emit({
+        type: "session.exited",
+        eventId,
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        threadId,
+        payload: {
+          exitKind: "graceful",
+          sessionGenerationId: "superseded-generation",
+        },
+      });
+      yield* advanceTestClock(50);
+
+      assert.equal(Option.getOrThrow(yield* Fiber.join(eventFiber)).eventId, eventId);
     }),
   );
 

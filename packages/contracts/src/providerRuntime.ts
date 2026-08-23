@@ -789,6 +789,7 @@ const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
+  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 

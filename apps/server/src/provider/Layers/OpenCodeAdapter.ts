@@ -221,7 +221,19 @@ function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
 
+export function makeOpenCodeUnexpectedRuntimeErrorPayload(
+  message: string,
+  sessionGenerationId: string,
+): Extract<ProviderRuntimeEvent, { type: "runtime.error" }>["payload"] {
+  return {
+    message,
+    class: "transport_error",
+    sessionGenerationId,
+  };
+}
+
 interface OpenCodeSessionContext {
+  readonly sessionGenerationId: string;
   session: ProviderSession;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
@@ -706,10 +718,7 @@ export function makeOpenCodeAdapter(
           turnId,
         })),
         type: "runtime.error",
-        payload: {
-          message,
-          class: "transport_error",
-        },
+        payload: makeOpenCodeUnexpectedRuntimeErrorPayload(message, context.sessionGenerationId),
       }).pipe(Effect.ignore);
       yield* emit({
         ...(yield* buildEventBase({
@@ -721,6 +730,7 @@ export function makeOpenCodeAdapter(
           reason: message,
           recoverable: false,
           exitKind: "error",
+          sessionGenerationId: context.sessionGenerationId,
         },
       }).pipe(Effect.ignore);
       // Inline the teardown that `stopOpenCodeContext` would do; we can't
@@ -1085,6 +1095,7 @@ export function makeOpenCodeAdapter(
               type: "turn.completed",
               payload: {
                 state: "completed",
+                sessionGenerationId: context.sessionGenerationId,
               },
             });
           }
@@ -1114,6 +1125,7 @@ export function makeOpenCodeAdapter(
               payload: {
                 state: "failed",
                 errorMessage: message,
+                sessionGenerationId: context.sessionGenerationId,
               },
             });
           }
@@ -1208,6 +1220,7 @@ export function makeOpenCodeAdapter(
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        const sessionGenerationId = yield* randomUUIDv4;
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1382,11 +1395,13 @@ export function makeOpenCodeAdapter(
             schemaVersion: OPENCODE_RESUME_VERSION,
             sessionId: started.openCodeSession.id,
           },
+          sessionGenerationId,
           createdAt,
           updatedAt: createdAt,
         };
 
         const context: OpenCodeSessionContext = {
+          sessionGenerationId,
           session,
           client: started.client,
           server: started.server,
@@ -1638,6 +1653,7 @@ export function makeOpenCodeAdapter(
             reason: "Session stopped.",
             recoverable: false,
             exitKind: "graceful",
+            sessionGenerationId: context.sessionGenerationId,
           },
         });
       },

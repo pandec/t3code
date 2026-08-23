@@ -96,6 +96,7 @@ import {
   collectClaudeSkillReferenceNames,
 } from "../Drivers/ClaudeSkillReferences.ts";
 import {
+  buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
   getClaudeModelCapabilities,
   gateClaudeSkillsByUserInvocation,
@@ -5201,25 +5202,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 );
               }
             })(),
-            options: {
-              cwd: canonicalCwd,
-              persistSession: false,
-              pathToClaudeCodeExecutable: claudeSdkExecutablePath,
+            // Same isolation as the capability probe, from the same builder:
+            // project settings load so project skills appear, but a metadata
+            // lookup must not run hooks or boot filesystem/claude.ai MCP
+            // servers every time the picker opens.
+            options: buildClaudeCapabilitiesProbeQueryOptions({
+              executablePath: claudeSdkExecutablePath,
               abortController,
-              settingSources: ["user", "project", "local"],
-              // Same reason the capability probe disables them: this runs every
-              // time the picker opens or refreshes, and a SessionStart hook has
-              // no business firing for a metadata lookup.
-              settings: { disableAllHooks: true },
-              // Project settings must be loaded to see project skills, but a
-              // metadata lookup must not boot the workspace's `.mcp.json`
-              // servers. Strict mode keeps discovery to the skills we asked
-              // for instead of spawning arbitrary project subprocesses.
-              strictMcpConfig: true,
-              allowedTools: [],
-              env: claudeEnvironment,
-              stderr: () => {},
-            },
+              environment: claudeEnvironment,
+              cwd: canonicalCwd,
+            }),
           });
           const initialization = await claudeQuery.initializationResult();
           const commandNames = new Set(

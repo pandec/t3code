@@ -15,6 +15,7 @@ import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
   deriveThreadFeedPresentation,
+  deriveThreadFeedPresentationState,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -445,6 +446,185 @@ describe("buildThreadFeed", () => {
     ]);
   });
 
+  it("keeps a settled turn fold anchored when an older page prepends entries", () => {
+    const turnId = TurnId.make("turn-windowed-fold");
+    const thread = makeThread({
+      id: ThreadId.make("thread-windowed-fold"),
+      projectId: ProjectId.make("project-1"),
+      title: "Windowed fold",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:10.000Z",
+        assistantMessageId: MessageId.make("assistant-final"),
+      },
+      messages: [
+        {
+          id: MessageId.make("assistant-first"),
+          role: "assistant",
+          text: "Starting.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:02.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("assistant-middle"),
+          role: "assistant",
+          text: "Still working.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:06.000Z",
+          updatedAt: "2026-04-01T00:00:06.000Z",
+        },
+        {
+          id: MessageId.make("assistant-final"),
+          role: "assistant",
+          text: "Done.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:10.000Z",
+          updatedAt: "2026-04-01T00:00:10.000Z",
+        },
+      ],
+      activities: [
+        makeActivity({
+          id: EventId.make("work-early"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Early work",
+          createdAt: "2026-04-01T00:00:04.000Z",
+          turnId,
+          payload: { title: "Early work", itemType: "file_read", status: "completed" },
+        }),
+        makeActivity({
+          id: EventId.make("work-late"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Late work",
+          createdAt: "2026-04-01T00:00:08.000Z",
+          turnId,
+          payload: { title: "Late work", itemType: "file_read", status: "completed" },
+        }),
+      ],
+    });
+
+    const initialWindow = buildThreadFeed(thread, { loadedMessages: thread.messages.slice(1) });
+    const prependedWindow = buildThreadFeed(thread, { loadedMessages: thread.messages });
+    const initialFold = deriveThreadFeedPresentation(
+      initialWindow,
+      thread.latestTurn,
+      new Set(),
+    ).find((entry) => entry.type === "turn-fold");
+    const prependedFold = deriveThreadFeedPresentation(
+      prependedWindow,
+      thread.latestTurn,
+      new Set(),
+    ).find((entry) => entry.type === "turn-fold");
+
+    expect(initialFold).toMatchObject({
+      id: "turn-fold:turn-windowed-fold",
+    });
+    expect(prependedFold).toMatchObject({
+      id: initialFold?.id,
+      createdAt: initialFold?.createdAt,
+    });
+  });
+
+  it("derives metadata controls for settled opening assistant messages", () => {
+    const settledTurnId = TurnId.make("turn-settled");
+    const streamingTurnId = TurnId.make("turn-streaming");
+    const unsettledTurnId = TurnId.make("turn-unsettled");
+    const thread = makeThread({
+      id: ThreadId.make("thread-opening-meta"),
+      projectId: ProjectId.make("project-1"),
+      title: "Opening response metadata",
+      latestTurn: {
+        turnId: unsettledTurnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:10.000Z",
+        startedAt: "2026-04-01T00:00:10.000Z",
+        completedAt: null,
+        assistantMessageId: MessageId.make("unsettled-final"),
+      },
+      messages: [
+        {
+          id: MessageId.make("settled-opening"),
+          role: "assistant",
+          text: "Substantive opening.",
+          turnId: settledTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:01.000Z",
+        },
+        {
+          id: MessageId.make("settled-final"),
+          role: "assistant",
+          text: "Done.",
+          turnId: settledTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:02.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("single-response"),
+          role: "assistant",
+          text: "Only response.",
+          turnId: TurnId.make("turn-single"),
+          streaming: false,
+          createdAt: "2026-04-01T00:00:03.000Z",
+          updatedAt: "2026-04-01T00:00:03.000Z",
+        },
+        {
+          id: MessageId.make("streaming-opening"),
+          role: "assistant",
+          text: "Streaming opening.",
+          turnId: streamingTurnId,
+          streaming: true,
+          createdAt: "2026-04-01T00:00:04.000Z",
+          updatedAt: "2026-04-01T00:00:04.000Z",
+        },
+        {
+          id: MessageId.make("streaming-final"),
+          role: "assistant",
+          text: "Streaming final.",
+          turnId: streamingTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:05.000Z",
+          updatedAt: "2026-04-01T00:00:05.000Z",
+        },
+        {
+          id: MessageId.make("unsettled-opening"),
+          role: "assistant",
+          text: "Unsettled opening.",
+          turnId: unsettledTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:11.000Z",
+          updatedAt: "2026-04-01T00:00:11.000Z",
+        },
+        {
+          id: MessageId.make("unsettled-final"),
+          role: "assistant",
+          text: "Unsettled final.",
+          turnId: unsettledTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:12.000Z",
+          updatedAt: "2026-04-01T00:00:12.000Z",
+        },
+      ],
+    });
+
+    const state = deriveThreadFeedPresentationState(
+      buildThreadFeed(thread),
+      thread.latestTurn,
+      new Set(),
+    );
+
+    expect([...state.settledTurnOpeningAssistantMessageIds]).toEqual(["settled-opening"]);
+  });
+
   it("folds assistant messages between the first and terminal messages", () => {
     const turnId = TurnId.make("turn-1");
     const thread = makeThread({
@@ -555,7 +735,20 @@ describe("buildThreadFeed", () => {
       ],
       activities: [
         makeActivity({
-          id: EventId.make("work-1"),
+          id: EventId.make("work-before-response"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Read inputs",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId: firstTurnId,
+          payload: {
+            title: "Read inputs",
+            itemType: "file_read",
+            status: "completed",
+          },
+        }),
+        makeActivity({
+          id: EventId.make("work-after-response"),
           kind: "tool.completed",
           tone: "tool",
           summary: "Ran command",
@@ -576,6 +769,24 @@ describe("buildThreadFeed", () => {
       turnId: firstTurnId,
       label: "Worked for 12s",
     });
+    expect(collapsed.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "turn-fold:turn-1",
+      "assistant-commentary",
+      "user-2",
+      "assistant-next",
+    ]);
+
+    const expanded = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set([firstTurnId]));
+    expect(expanded.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "turn-fold:turn-1",
+      "work-before-response",
+      "assistant-commentary",
+      "work-after-response",
+      "user-2",
+      "assistant-next",
+    ]);
   });
 
   it("keeps an active turn expanded and classifies error-shaped tool output", () => {

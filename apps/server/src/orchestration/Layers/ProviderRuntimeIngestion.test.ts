@@ -46,6 +46,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Lay
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
   ProviderService,
+  shouldApplySessionScopedRuntimeEvent,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
@@ -105,7 +106,12 @@ function isLegacyTurnCompletedEvent(
 }
 
 function createProviderServiceHarness() {
-  const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const runtimeEventPubSub = Effect.runSync(
+    PubSub.unbounded<{
+      readonly event: ProviderRuntimeEvent;
+      readonly eventIsStaleGeneration: boolean;
+    }>(),
+  );
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -135,7 +141,12 @@ function createProviderServiceHarness() {
     },
     rollbackConversation: () => unsupported(),
     get streamEvents() {
-      return Stream.fromPubSub(runtimeEventPubSub);
+      return Stream.fromPubSub(runtimeEventPubSub).pipe(
+        Stream.filter(({ eventIsStaleGeneration }) =>
+          shouldApplySessionScopedRuntimeEvent(eventIsStaleGeneration, true),
+        ),
+        Stream.map(({ event }) => event),
+      );
     },
   };
 
@@ -146,6 +157,10 @@ function createProviderServiceHarness() {
       return;
     }
     runtimeSessions.push(session);
+  };
+
+  const clearSessions = (): void => {
+    runtimeSessions.length = 0;
   };
 
   const normalizeLegacyEvent = (event: LegacyProviderRuntimeEvent): ProviderRuntimeEvent => {
@@ -163,14 +178,23 @@ function createProviderServiceHarness() {
     return event as ProviderRuntimeEvent;
   };
 
-  const emit = (event: LegacyProviderRuntimeEvent): void => {
-    Effect.runSync(PubSub.publish(runtimeEventPubSub, normalizeLegacyEvent(event)));
+  const emit = (
+    event: LegacyProviderRuntimeEvent,
+    options?: { readonly eventIsStaleGeneration?: boolean },
+  ): void => {
+    Effect.runSync(
+      PubSub.publish(runtimeEventPubSub, {
+        event: normalizeLegacyEvent(event),
+        eventIsStaleGeneration: options?.eventIsStaleGeneration ?? false,
+      }),
+    );
   };
 
   return {
     service,
     emit,
     setSession,
+    clearSessions,
   };
 }
 
@@ -384,11 +408,44 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      clearProviderSessions: provider.clearSessions,
       drain,
       getRateLimitState,
       listUsageSnapshots,
       getThreadBackgroundLiveness,
     };
+  }
+
+  async function setRunningLiveSession(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    sessionGenerationId: string,
+  ) {
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-live-generation");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId,
+      activeTurnId: turnId,
+      sessionGenerationId,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-live-generation"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+    return { threadId, turnId };
   }
 
   it("maps turn started/completed events into thread session updates", async () => {
@@ -744,6 +801,159 @@ describe("ProviderRuntimeIngestion", () => {
       expect(thread?.session?.activeTurnId).toBeNull();
     }),
   );
+
+  it("ignores a session exit from a superseded session generation", async () => {
+    const harness = await createHarness();
+    const { threadId, turnId } = await setRunningLiveSession(harness, "generation-2");
+
+    harness.emit(
+      {
+        type: "session.exited",
+        eventId: asEventId("evt-session-exited-stale-generation"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: { sessionGenerationId: "generation-1" },
+      },
+      { eventIsStaleGeneration: true },
+    );
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("does not apply a stale exit over a replacement that is still starting", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    harness.clearProviderSessions();
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-starting-replacement"),
+      threadId,
+      session: {
+        threadId,
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+
+    harness.emit(
+      {
+        type: "session.exited",
+        eventId: asEventId("evt-session-exited-during-replacement-start"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        payload: { sessionGenerationId: "generation-1" },
+      },
+      { eventIsStaleGeneration: true },
+    );
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("starting");
+  });
+
+  it("ignores a turn completion from a superseded session generation", async () => {
+    const harness = await createHarness();
+    const { threadId, turnId } = await setRunningLiveSession(harness, "generation-2");
+
+    harness.emit(
+      {
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-completed-stale-generation"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: { state: "completed", sessionGenerationId: "generation-1" },
+      },
+      { eventIsStaleGeneration: true },
+    );
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("ignores a runtime error from a superseded session generation", async () => {
+    const harness = await createHarness();
+    const { threadId, turnId } = await setRunningLiveSession(harness, "generation-2");
+
+    harness.emit(
+      {
+        type: "runtime.error",
+        eventId: asEventId("evt-runtime-error-stale-generation"),
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: {
+          message: "old transport failed",
+          class: "transport_error",
+          sessionGenerationId: "generation-1",
+        },
+      },
+      { eventIsStaleGeneration: true },
+    );
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("uses the strict lifecycle flag for the shared generation decision", () => {
+    expect(shouldApplySessionScopedRuntimeEvent(true, true)).toBe(false);
+    expect(shouldApplySessionScopedRuntimeEvent(true, false)).toBe(true);
+    expect(shouldApplySessionScopedRuntimeEvent(false, true)).toBe(true);
+  });
+
+  it("accepts a session exit from the live session generation", async () => {
+    const harness = await createHarness();
+    const { threadId } = await setRunningLiveSession(harness, "generation-2");
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-live-generation"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: { sessionGenerationId: "generation-2" },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("stopped");
+    expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("accepts an unstamped legacy session exit", async () => {
+    const harness = await createHarness();
+    const { threadId } = await setRunningLiveSession(harness, "generation-2");
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-legacy"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: {},
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("stopped");
+    expect(thread?.session?.activeTurnId).toBeNull();
+  });
 
   it("does not clear active turn when session/thread started arrives mid-turn", async () => {
     const harness = await createHarness();
@@ -3042,17 +3252,20 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
-    harness.emit({
-      type: "session.cwd.changed",
-      eventId: asEventId("evt-session-cwd-stale"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      payload: {
-        cwd: worktreePath,
-        sessionGenerationId: "generation-1",
+    harness.emit(
+      {
+        type: "session.cwd.changed",
+        eventId: asEventId("evt-session-cwd-stale"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          cwd: worktreePath,
+          sessionGenerationId: "generation-1",
+        },
       },
-    });
+      { eventIsStaleGeneration: true },
+    );
     await harness.drain();
 
     const thread = (await harness.readModel()).threads.find(

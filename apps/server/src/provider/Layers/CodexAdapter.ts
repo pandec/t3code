@@ -96,10 +96,31 @@ export interface CodexAdapterLiveOptions {
 
 interface CodexAdapterSessionContext {
   readonly threadId: ThreadId;
+  readonly sessionGenerationId: string;
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
   stopped: boolean;
+}
+
+function stampSessionGeneration(
+  event: ProviderRuntimeEvent,
+  sessionGenerationId: string,
+): ProviderRuntimeEvent {
+  switch (event.type) {
+    case "session.exited":
+      return {
+        ...event,
+        payload: { ...event.payload, sessionGenerationId },
+      };
+    case "turn.completed":
+      return {
+        ...event,
+        payload: { ...event.payload, sessionGenerationId },
+      };
+    default:
+      return event;
+  }
 }
 
 function mapCodexRuntimeError(
@@ -1645,6 +1666,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const randomUUIDv4 = crypto.randomUUIDv4.pipe(
+    Effect.mapError(
+      (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "crypto/randomUUIDv4",
+          detail: "Failed to generate Codex runtime identifier.",
+          cause,
+        }),
+    ),
+  );
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -1666,6 +1698,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
+        const sessionGenerationId = yield* randomUUIDv4;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
@@ -1726,7 +1759,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+            const runtimeEvents = mapToRuntimeEvents(event, event.threadId).map((runtimeEvent) =>
+              stampSessionGeneration(runtimeEvent, sessionGenerationId),
+            );
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
@@ -1759,8 +1794,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
+        const session = { ...started, sessionGenerationId };
         sessions.set(input.threadId, {
           threadId: input.threadId,
+          sessionGenerationId,
           scope: sessionScope,
           runtime,
           eventFiber,
@@ -1768,7 +1805,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         });
         sessionScopeTransferred = true;
 
-        return started;
+        return session;
       }),
     );
 
@@ -2032,7 +2069,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
       Array.from(sessions.values()).filter((session) => !session.stopped),
-      (session) => session.runtime.getSession,
+      (session) =>
+        session.runtime.getSession.pipe(
+          Effect.map((runtimeSession) => ({
+            ...runtimeSession,
+            sessionGenerationId: session.sessionGenerationId,
+          })),
+        ),
       { concurrency: 1 },
     );
 

@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -65,7 +66,9 @@ import { isExistingDirectory } from "../../pathExpansion.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+
 const isModelSelection = Schema.is(ModelSelection);
+const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -181,6 +184,18 @@ function readSessionGenerationId(runtimePayload: unknown | null | undefined): st
   }
   const value = "sessionGenerationId" in runtimePayload ? runtimePayload.sessionGenerationId : null;
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readRuntimeEventSessionGenerationId(event: ProviderRuntimeEvent): string | undefined {
+  const value =
+    "sessionGenerationId" in event.payload ? event.payload.sessionGenerationId : undefined;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+interface PendingSessionReplacement {
+  readonly targetInstanceId: ProviderInstanceId;
+  readonly previousGenerationId: string;
+  readonly settled: Deferred.Deferred<void>;
 }
 
 function readPersistedModelSelection(
@@ -353,6 +368,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const revokeMcpCredential =
     options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const pendingSessionReplacements = yield* Ref.make(
+    new Map<ThreadId, PendingSessionReplacement>(),
+  );
   const threadLocksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
   const getThreadLock = Effect.fn("ProviderService.getThreadLock")(function* (threadId: ThreadId) {
     const existing = (yield* Ref.get(threadLocksRef)).get(threadId);
@@ -455,14 +473,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
     );
 
-  const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+  const publishRuntimeEvent = (
+    event: ProviderRuntimeEvent,
+    eventIsStaleGeneration: boolean,
+  ): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
       Effect.tap((canonicalEvent) =>
         canonicalEventLogger
           ? canonicalEventLogger.write(canonicalEvent, canonicalEvent.threadId)
           : Effect.void,
       ),
-      Effect.flatMap((canonicalEvent) => PubSub.publish(runtimeEventPubSub, canonicalEvent)),
+      Effect.flatMap((canonicalEvent) =>
+        ProviderService.shouldApplySessionScopedRuntimeEvent(
+          eventIsStaleGeneration,
+          STRICT_PROVIDER_LIFECYCLE_GUARD,
+        )
+          ? PubSub.publish(runtimeEventPubSub, canonicalEvent)
+          : Effect.void,
+      ),
       Effect.asVoid,
     );
 
@@ -475,33 +503,64 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
     event: ProviderRuntimeEvent,
   ) {
-    if (
-      event.type !== "turn.completed" &&
-      event.type !== "session.exited" &&
-      event.type !== "session.cwd.changed"
-    ) {
-      return;
+    const eventGenerationId = readRuntimeEventSessionGenerationId(event);
+    const refreshesBinding =
+      event.type === "turn.completed" ||
+      event.type === "session.exited" ||
+      event.type === "session.cwd.changed";
+    if (!refreshesBinding && eventGenerationId === undefined) {
+      return false;
     }
 
     // A cwd observation is one-shot and cannot be reconstructed from a later
-    // event: if it is dropped, the binding keeps a directory the session has
-    // already left. `refreshIfUnchanged` reports a lost compare-and-swap by
-    // returning false rather than failing, so `Effect.retry` never sees it —
-    // re-read the binding and reapply instead.
-    const conflictAttempts = event.type === "session.cwd.changed" ? 3 : 1;
+    // event. Terminal events get one re-read as well so a replacement binding
+    // that wins the compare-and-swap race can still mark the event stale before
+    // it is published.
+    const conflictAttempts = event.type === "session.cwd.changed" ? 3 : 2;
 
     for (let attempt = 1; attempt <= conflictAttempts; attempt += 1) {
+      const pendingReplacement = (yield* Ref.get(pendingSessionReplacements)).get(event.threadId);
+      if (
+        eventGenerationId !== undefined &&
+        pendingReplacement !== undefined &&
+        eventGenerationId === pendingReplacement.previousGenerationId
+      ) {
+        yield* Effect.logDebug("provider.session.runtime-event-stale-replacement-generation", {
+          threadId: event.threadId,
+          eventProvider: source.provider,
+          eventProviderInstanceId: source.instanceId,
+          eventGenerationId,
+          targetProviderInstanceId: pendingReplacement.targetInstanceId,
+        });
+        return true;
+      }
+
       const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
       if (!binding) {
-        return;
+        return false;
       }
-      const eventGenerationId = event.payload.sessionGenerationId;
+      if (binding.status === "stopped" && pendingReplacement === undefined) {
+        return false;
+      }
       const bindingGenerationId = readSessionGenerationId(binding.runtimePayload);
-      if (
-        binding.provider !== source.provider ||
-        binding.providerInstanceId !== source.instanceId ||
-        bindingGenerationId !== eventGenerationId
-      ) {
+      const bindingMatchesEvent =
+        binding.provider === source.provider &&
+        binding.providerInstanceId === source.instanceId &&
+        bindingGenerationId === eventGenerationId;
+      if (!bindingMatchesEvent) {
+        const eventMayBeFromPendingReplacement =
+          eventGenerationId !== undefined &&
+          pendingReplacement !== undefined &&
+          source.instanceId === pendingReplacement.targetInstanceId;
+        if (eventMayBeFromPendingReplacement) {
+          yield* Deferred.await(pendingReplacement.settled);
+          // Waiting for replacement settlement does not consume a binding
+          // compare-and-swap retry.
+          attempt -= 1;
+          continue;
+        }
+
+        const eventIsStaleGeneration = eventGenerationId !== undefined;
         yield* Effect.logDebug("provider.session.runtime-event-binding-mismatch", {
           threadId: event.threadId,
           eventProvider: source.provider,
@@ -510,11 +569,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           bindingProviderInstanceId: binding.providerInstanceId,
           bindingGenerationId,
           eventGenerationId,
+          eventIsStaleGeneration,
         });
-        return;
+        return eventIsStaleGeneration;
       }
 
-      if (binding.status === "stopped") return;
+      if (!refreshesBinding || binding.status === "stopped") {
+        return false;
+      }
 
       const hasPendingWork = event.type === "turn.completed" ? event.payload.hasPendingWork : false;
       const runtimePayloadPatch =
@@ -536,7 +598,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         })
         .pipe(Effect.retry({ times: 2 }));
       if (refreshed) {
-        return;
+        return false;
       }
 
       yield* Effect.logDebug("provider.session.runtime-event-binding-changed", {
@@ -548,6 +610,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         remainingAttempts: conflictAttempts - attempt,
       });
     }
+    return false;
   });
 
   const requireBindingInstanceId = (
@@ -650,15 +713,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               provider: canonicalEvent.provider,
               providerInstanceId: source.instanceId,
               cause,
-            }),
+            }).pipe(Effect.as(false)),
           ),
-          Effect.andThen(
+          Effect.flatMap((eventIsStaleGeneration) =>
             increment(providerRuntimeEventsTotal, {
               provider: canonicalEvent.provider,
               eventType: canonicalEvent.type,
-            }),
+            }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent, eventIsStaleGeneration))),
           ),
-          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
         ),
       ),
     );
@@ -1070,36 +1132,74 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
-        const session = yield* adapter
-          .startSession({
-            ...input,
+        const previousGenerationId = readSessionGenerationId(persistedBinding?.runtimePayload);
+        const pendingReplacement =
+          previousGenerationId !== undefined
+            ? {
+                targetInstanceId: resolvedInstanceId,
+                previousGenerationId,
+                settled: yield* Deferred.make<void>(),
+              }
+            : undefined;
+        const sessionWithInstance = yield* Effect.gen(function* () {
+          if (pendingReplacement !== undefined) {
+            yield* Ref.update(pendingSessionReplacements, (current) => {
+              const next = new Map(current);
+              next.set(threadId, pendingReplacement);
+              return next;
+            });
+          }
+          yield* prepareMcpSession(threadId, resolvedInstanceId);
+          const session = yield* adapter
+            .startSession({
+              ...input,
+              providerInstanceId: resolvedInstanceId,
+              ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+              ...(effectiveResumeCursor !== undefined
+                ? { resumeCursor: effectiveResumeCursor }
+                : {}),
+            })
+            .pipe(Effect.onError(() => clearMcpSession(threadId)));
+
+          if (session.provider !== adapter.provider) {
+            yield* clearMcpSession(threadId);
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
+            );
+          }
+          const boundSession = {
+            ...session,
             providerInstanceId: resolvedInstanceId,
-            ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-            ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
-          })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
+          };
 
-        if (session.provider !== adapter.provider) {
-          yield* clearMcpSession(threadId);
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
-          );
-        }
-        const sessionWithInstance = {
-          ...session,
-          providerInstanceId: resolvedInstanceId,
-        };
-
-        yield* stopStaleSessionsForThread({
-          threadId,
-          currentInstanceId: resolvedInstanceId,
-        });
-        yield* upsertSessionBinding(sessionWithInstance, threadId, {
-          modelSelection: input.modelSelection,
-          clearHasPendingWork: true,
-        });
+          yield* stopStaleSessionsForThread({
+            threadId,
+            currentInstanceId: resolvedInstanceId,
+          });
+          yield* upsertSessionBinding(boundSession, threadId, {
+            modelSelection: input.modelSelection,
+            clearHasPendingWork: true,
+          });
+          return boundSession;
+        }).pipe(
+          Effect.ensuring(
+            pendingReplacement === undefined
+              ? Effect.void
+              : Ref.update(pendingSessionReplacements, (current) => {
+                  if (current.get(threadId) !== pendingReplacement) {
+                    return current;
+                  }
+                  const next = new Map(current);
+                  next.delete(threadId);
+                  return next;
+                }).pipe(
+                  Effect.andThen(
+                    Deferred.succeed(pendingReplacement.settled, undefined).pipe(Effect.ignore),
+                  ),
+                ),
+          ),
+        );
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
           runtimeMode: input.runtimeMode,
@@ -1814,9 +1914,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation: (input) => withThreadLock(input.threadId, rollbackConversation(input)),
-    // Each access creates a fresh PubSub subscription so that multiple
-    // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
-    // independently receive all runtime events.
+    // Each access creates a fresh PubSub subscription so multiple consumers
+    // independently receive every generation-accepted runtime event.
     get streamEvents(): ProviderServiceMethod<"streamEvents"> {
       return Stream.fromPubSub(runtimeEventPubSub);
     },

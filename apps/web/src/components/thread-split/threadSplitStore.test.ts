@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import type { ComposerHandleRef } from "../../composerHandleContext";
@@ -127,5 +127,51 @@ describe("clampSplitRatio", () => {
     expect(clampSplitRatio(0.9)).toBe(MAX_SPLIT_RATIO);
     expect(clampSplitRatio(0.6)).toBe(0.6);
     expect(clampSplitRatio(Number.NaN)).toBe(0.5);
+  });
+});
+
+// This suite runs without a DOM; the store only touches `window` through
+// guarded accessors, so a plain stub is enough to model restricted hosts.
+describe("blocked storage", () => {
+  const globalWithWindow = globalThis as { window?: unknown };
+
+  const importFreshStore = async () => {
+    vi.resetModules();
+    return import("./threadSplitStore");
+  };
+
+  afterEach(() => {
+    delete globalWithWindow.window;
+    vi.resetModules();
+  });
+
+  it("falls back to the default ratio when the localStorage property throws", async () => {
+    globalWithWindow.window = {
+      get localStorage(): Storage {
+        throw new Error("SecurityError");
+      },
+    };
+    const store = await importFreshStore();
+    expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.5);
+    // Writes must stay silent too.
+    store.useThreadSplitStore.getState().setSplitRatio(0.6);
+    expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.6);
+  });
+
+  it("survives a storage whose operations throw after resolving", async () => {
+    globalWithWindow.window = {
+      localStorage: {
+        getItem(): string | null {
+          throw new Error("SecurityError");
+        },
+        setItem(): void {
+          throw new Error("SecurityError");
+        },
+      },
+    };
+    const store = await importFreshStore();
+    expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.5);
+    store.useThreadSplitStore.getState().setSplitRatio(0.6);
+    expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.6);
   });
 });

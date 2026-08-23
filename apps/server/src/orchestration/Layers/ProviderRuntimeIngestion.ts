@@ -1491,30 +1491,6 @@ const make = Effect.gen(function* () {
   }) {
     const { event, thread } = input;
 
-    // Events are drained asynchronously, so one emitted by a session generation
-    // that has since been replaced can arrive after the thread was rebound. The
-    // provider binding rejects those; the thread's metadata must too, or the UI
-    // ends up describing a directory no live session is using.
-    const sessions = yield* providerService.listSessions();
-    const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-    // Reject only against a *different* live generation. Requiring a live
-    // session would discard the most important case of all: the agent leaves a
-    // worktree as its last act, the session exits, and the event drains after
-    // the adapter has already dropped it — leaving the thread pointing at a
-    // directory nothing uses. Events drain in order, so when no session is live
-    // the newest observation is still the correct one.
-    if (
-      liveSession !== undefined &&
-      liveSession.sessionGenerationId !== event.payload.sessionGenerationId
-    ) {
-      yield* Effect.logDebug("provider.session.cwd-changed-stale-generation", {
-        threadId: thread.id,
-        eventGenerationId: event.payload.sessionGenerationId,
-        liveGenerationId: liveSession.sessionGenerationId,
-      });
-      return;
-    }
-
     const workspace = yield* projectionSnapshotQuery
       .getThreadCheckpointContext(thread.id)
       .pipe(Effect.map(Option.getOrUndefined));
@@ -1721,7 +1697,6 @@ const make = Effect.gen(function* () {
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
-
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
       // provider session already tracks the event's turn as its active turn:
@@ -2088,7 +2063,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "session.exited") {
+      if (event.type === "session.exited" && shouldApplyThreadLifecycle) {
         yield* clearTurnStateForSession(thread.id);
       }
 
@@ -2225,28 +2200,6 @@ const make = Effect.gen(function* () {
           break;
         }
         case "session.exited": {
-          // Events drain asynchronously, so an exit emitted by a session
-          // generation that has since been replaced can arrive after the
-          // replacement session already recorded fresh liveness. Clearing on
-          // that stale exit would wipe the live session's state, mirroring the
-          // generation guard in mirrorSessionCwdOntoThread: reject only
-          // against a *different* live generation, and treat a missing event
-          // generation (older adapters) or no live session as clearable.
-          const exitedGenerationId = event.payload.sessionGenerationId;
-          const sessions = yield* providerService.listSessions();
-          const liveSession = sessions.find((entry) => entry.threadId === thread.id);
-          if (
-            liveSession !== undefined &&
-            exitedGenerationId !== undefined &&
-            liveSession.sessionGenerationId !== exitedGenerationId
-          ) {
-            yield* Effect.logDebug("provider.session.exited-stale-generation-liveness", {
-              threadId: thread.id,
-              eventGenerationId: exitedGenerationId,
-              liveGenerationId: liveSession.sessionGenerationId,
-            });
-            break;
-          }
           threadBackgroundLiveness.clearThreadLiveness(thread.id);
           threadPlanProgress.clearThreadPlanProgress(thread.id);
           break;
