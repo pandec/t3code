@@ -4,11 +4,14 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { ComposerHandleRef } from "../../composerHandleContext";
 
 import {
+  activateThreadPane,
+  capturePaletteOwnerPane,
   clampSplitRatio,
   focusOtherThreadPane,
   isThreadPaneActive,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
+  paletteOwnerPane,
   registerThreadPaneComposer,
   useThreadSplitStore,
 } from "./threadSplitStore";
@@ -32,6 +35,7 @@ beforeEach(() => {
     splitMounted: false,
     activePaneId: "primary",
     splitRatio: 0.5,
+    pendingSwap: null,
   });
   registerThreadPaneComposer("primary", null);
   registerThreadPaneComposer("secondary", null);
@@ -118,6 +122,107 @@ describe("focusOtherThreadPane", () => {
 
     expect(focusOtherThreadPane()).toBe(true);
     expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+  });
+});
+
+describe("pane swap latch", () => {
+  const ROUTE_REF = threadRef("env-a", "thread-route");
+
+  function openMountedSplit() {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+  }
+
+  it("swaps the secondary, returns the navigation target, and keeps the active side", () => {
+    openMountedSplit();
+    useThreadSplitStore.getState().setActivePane("secondary");
+
+    const target = useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    expect(target).toEqual(REF_A);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(ROUTE_REF);
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+    expect(useThreadSplitStore.getState().pendingSwap).not.toBeNull();
+  });
+
+  it("refuses without a secondary, while unmounted, or while a swap is in flight", () => {
+    expect(useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF)).toBeNull();
+
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF)).toBeNull();
+
+    mountSplit();
+    expect(useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF)).not.toBeNull();
+    expect(useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF)).toBeNull();
+  });
+
+  it("settle clears the latch and keeps the swapped secondary", () => {
+    openMountedSplit();
+    useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    useThreadSplitStore.getState().settlePaneSwap();
+    expect(useThreadSplitStore.getState().pendingSwap).toBeNull();
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(ROUTE_REF);
+  });
+
+  it("abort restores the old secondary", () => {
+    openMountedSplit();
+    useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    useThreadSplitStore.getState().abortPaneSwap();
+    expect(useThreadSplitStore.getState().pendingSwap).toBeNull();
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_A);
+  });
+
+  it("abort keeps a secondary the user replaced mid-flight", () => {
+    openMountedSplit();
+    useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    useThreadSplitStore.getState().openSecondaryThread(REF_B);
+    // The explicit pick already cleared the latch; a late abort is inert.
+    useThreadSplitStore.getState().abortPaneSwap();
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_B);
+  });
+
+  it("closeSplit and openSecondaryThread clear an in-flight latch", () => {
+    openMountedSplit();
+    useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    useThreadSplitStore.getState().openSecondaryThread(REF_B);
+    expect(useThreadSplitStore.getState().pendingSwap).toBeNull();
+
+    useThreadSplitStore.getState().beginPaneSwap(ROUTE_REF);
+    expect(useThreadSplitStore.getState().pendingSwap).not.toBeNull();
+    useThreadSplitStore.getState().closeSplit();
+    expect(useThreadSplitStore.getState().pendingSwap).toBeNull();
+  });
+});
+
+describe("activateThreadPane", () => {
+  it("activates the pane and focuses its composer handle", () => {
+    const focused: string[] = [];
+    const secondaryComposerRef = {
+      current: { focusAtEnd: () => focused.push("secondary") },
+    } as unknown as ComposerHandleRef;
+    registerThreadPaneComposer("secondary", secondaryComposerRef);
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    useThreadSplitStore.getState().setActivePane("primary");
+
+    activateThreadPane("secondary");
+    expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+    expect(focused).toEqual(["secondary"]);
+  });
+});
+
+describe("paletteOwnerPane", () => {
+  it("round-trips the active pane captured at palette open", () => {
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    capturePaletteOwnerPane();
+    expect(paletteOwnerPane()).toBe("secondary");
+
+    // Live pane moves (dialog focus traffic) must not leak into the snapshot.
+    useThreadSplitStore.getState().setActivePane("primary");
+    expect(paletteOwnerPane()).toBe("secondary");
+
+    capturePaletteOwnerPane();
+    expect(paletteOwnerPane()).toBe("primary");
   });
 });
 

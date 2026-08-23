@@ -67,6 +67,8 @@ import {
   EyeOffIcon,
   ListFilterIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
+  PanelRightIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -151,6 +153,11 @@ import {
 import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
+import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
+import {
+  useSplitSecondaryThreadKey,
+  type SplitPaneMarker,
+} from "./thread-split/useSplitPaneMarkers";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
@@ -831,6 +838,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  // Which split pane shows this thread, while the split view is on screen.
+  splitPaneMarker: SplitPaneMarker | null;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
@@ -1351,6 +1360,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <TerminalIcon className={cn("size-3.5", terminalStatus.pulse && "animate-status-pulse")} />
     </span>
   ) : null;
+  // Static glyph naming the split pane this thread occupies. Only the two
+  // affected rows ever get a non-null marker, so the list stays quiet.
+  const splitPaneIcon = props.splitPaneMarker ? (
+    <span
+      role="img"
+      aria-label={
+        props.splitPaneMarker === "left" ? "Open in left split pane" : "Open in right split pane"
+      }
+      className="inline-flex shrink-0 items-center justify-center text-muted-foreground"
+    >
+      {props.splitPaneMarker === "left" ? (
+        <PanelLeftIcon className="size-3.5" />
+      ) : (
+        <PanelRightIcon className="size-3.5" />
+      )}
+    </span>
+  ) : null;
   const diff = latestTurnDiff(thread);
   const cardTrailingMetadata = !isRenaming ? (
     <>
@@ -1358,6 +1384,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           cards do not render. Carrying it here covers both card shapes instead
           of only the expanded one. Slim rows (settled, snoozed) build their own
           metadata below and stay unmarked, as they do upstream. */}
+      {splitPaneIcon}
       <ThreadWorktreeIndicator thread={thread} />
       {terminalStatusIcon}
       {prBadge}
@@ -2167,6 +2194,7 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const splitSecondaryKey = useSplitSecondaryThreadKey();
   // Post-settle navigation validates against the CURRENT route, not the one
   // captured when the settle started: if the user navigated elsewhere while
   // the command was in flight, completing it must not yank them away.
@@ -3066,6 +3094,32 @@ export default function Sidebar() {
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  // Direct picks (row clicks, search results) route through the split-aware
+  // helper so the thread lands in the active pane; forward navigation after
+  // settle/archive keeps using navigateToThread — it must always retarget
+  // the primary route. The sidebar sits outside both pane roots, so the
+  // click's own pointerdown never changes which pane is active.
+  const openThreadFromSidebar = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
+        clearSelection();
+      }
+      setSelectionAnchor(scopedThreadKey(threadRef));
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      openThreadInActivePane({
+        targetRef: threadRef,
+        routeThreadRef,
+        navigateToPrimary: () =>
+          router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(threadRef),
+          }),
+      });
+    },
+    [clearSelection, isMobile, routeThreadRef, router, setOpenMobile, setSelectionAnchor],
+  );
   const attemptUnarchive = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -3144,9 +3198,9 @@ export default function Sidebar() {
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell) => {
       clearThreadSearch();
-      navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
+      openThreadFromSidebar(scopeThreadRef(thread.environmentId, thread.id));
     },
-    [clearThreadSearch, navigateToThread],
+    [clearThreadSearch, openThreadFromSidebar],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -3242,9 +3296,9 @@ export default function Sidebar() {
       if (isTrailingDoubleClick(event.detail)) {
         return;
       }
-      navigateToThread(threadRef);
+      openThreadFromSidebar(threadRef);
     },
-    [navigateToThread, rangeSelectTo, toggleThreadSelection],
+    [openThreadFromSidebar, rangeSelectTo, toggleThreadSelection],
   );
 
   const attemptArchive = useCallback(
@@ -4692,6 +4746,15 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
+                        splitPaneMarker={
+                          splitSecondaryKey === null
+                            ? null
+                            : threadKey === splitSecondaryKey
+                              ? "right"
+                              : threadKey === routeThreadKey
+                                ? "left"
+                                : null
+                        }
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null}
                         currentEnvironmentId={primaryEnvironmentId}

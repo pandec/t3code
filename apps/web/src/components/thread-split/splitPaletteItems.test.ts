@@ -3,7 +3,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import type { CommandPaletteActionItem } from "../CommandPalette.logic";
 import { buildOpenInSplitThreadItems } from "./splitPaletteItems";
-import { useThreadSplitStore } from "./threadSplitStore";
+import { capturePaletteOwnerPane, useThreadSplitStore } from "./threadSplitStore";
 
 const threadRef = (environmentId: string, threadId: string) => ({
   environmentId: EnvironmentId.make(environmentId),
@@ -27,6 +27,7 @@ beforeEach(() => {
     splitMounted: false,
     activePaneId: "primary",
     splitRatio: 0.5,
+    pendingSwap: null,
   });
 });
 
@@ -42,6 +43,21 @@ describe("buildOpenInSplitThreadItems", () => {
     await items[0]?.run();
     expect(useThreadSplitStore.getState().secondaryRef).toEqual(threadRef("env-a", "thread-1"));
     expect(useThreadSplitStore.getState().activePaneId).toBe("secondary");
+  });
+
+  it("opens in the secondary pane regardless of the palette owner snapshot", async () => {
+    // The generic thread list routes picks by owner pane; the explicit
+    // open-in-split submenu must stay pinned to the secondary pane.
+    useThreadSplitStore.getState().setSplitMounted(true);
+    capturePaletteOwnerPane();
+
+    const items = buildOpenInSplitThreadItems({
+      threadItems: [threadItem("thread:env-a:thread-1")],
+      routeThreadRef: null,
+      secondaryRef: null,
+    });
+    await items[0]?.run();
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(threadRef("env-a", "thread-1"));
   });
 
   it("excludes the routed thread and the current secondary thread", () => {

@@ -73,6 +73,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.newLocal",
   "editor.openFavorite",
   "threadPane.focusOther",
+  "threadPane.swap",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
 ] as const;
