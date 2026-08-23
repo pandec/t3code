@@ -112,6 +112,7 @@ const ISOLATED_TEST_FILES = [
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
   "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
+  "src/components/settings/PromptsSettings.test.tsx",
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/Sidebar.logic.test.ts",

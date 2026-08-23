@@ -1,9 +1,9 @@
 import type { SavedPrompt } from "@t3tools/contracts/settings";
-import { PencilIcon, PlusIcon } from "lucide-react";
-import React, { type FormEvent, useEffect, useState } from "react";
+import { ChevronDownIcon, PencilIcon, PlusIcon } from "lucide-react";
+import React, { type FormEvent, useEffect, useId, useState } from "react";
 
 import { useSavedPrompts } from "~/hooks/useSavedPrompts";
-import { randomUUID } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { searchableSetting } from "./settingsSearch";
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import {
   Dialog,
   DialogDescription,
@@ -27,7 +28,7 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 interface SavedPromptInput {
   readonly title: string;
@@ -91,33 +92,15 @@ export function PromptsSettings() {
           </p>
         ) : (
           prompts.map((prompt) => (
-            <SettingsRow
+            <SavedPromptRow
               key={prompt.id}
-              className="group py-2"
-              title={
-                <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="max-w-60 shrink-0 truncate">{prompt.title}</span>
-                  <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
-                    {promptPreview(prompt)}
-                  </span>
-                </span>
-              }
-              control={
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0 text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-                  aria-label={`Edit ${prompt.title}`}
-                  disabled={!canEdit}
-                  onClick={() =>
-                    setEditorRequest({
-                      promptId: prompt.id,
-                      initial: { title: prompt.title, content: prompt.content },
-                    })
-                  }
-                >
-                  <PencilIcon className="size-3.5" />
-                </Button>
+              prompt={prompt}
+              canEdit={canEdit}
+              onEdit={() =>
+                setEditorRequest({
+                  promptId: prompt.id,
+                  initial: { title: prompt.title, content: prompt.content },
+                })
               }
             />
           ))
@@ -135,6 +118,69 @@ export function PromptsSettings() {
 
 function promptPreview(prompt: SavedPrompt): string {
   return prompt.content.split("\n", 1)[0] ?? "";
+}
+
+/**
+ * Compact saved-prompt row (title + first-line preview), expandable in place
+ * to the full content even while the library is read-only. Exported for tests.
+ */
+export function SavedPromptRow({
+  prompt,
+  canEdit,
+  onEdit,
+}: {
+  prompt: SavedPrompt;
+  canEdit: boolean;
+  onEdit: () => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const contentId = useId();
+  return (
+    <div className="group rounded-xl px-3 py-2 sm:px-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+        <h3 className="flex min-h-5 min-w-0 flex-1 items-baseline gap-2 text-sm font-medium tracking-[-0.005em] text-foreground">
+          <span className="max-w-60 shrink-0 truncate">{prompt.title}</span>
+          {!isExpanded && (
+            <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
+              {promptPreview(prompt)}
+            </span>
+          )}
+        </h3>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            className="shrink-0"
+            aria-controls={contentId}
+            aria-expanded={isExpanded}
+            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${prompt.title}`}
+            onClick={() => setIsExpanded((open) => !open)}
+          >
+            <ChevronDownIcon
+              className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
+            />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className="shrink-0 text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+            aria-label={`Edit ${prompt.title}`}
+            disabled={!canEdit}
+            onClick={onEdit}
+          >
+            <PencilIcon className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+      <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
+        <CollapsibleContent id={contentId} keepMounted>
+          <p className="pt-1.5 pb-1 text-[13px] leading-[1.45] break-words whitespace-pre-wrap text-muted-foreground">
+            {prompt.content}
+          </p>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
 }
 
 /**
