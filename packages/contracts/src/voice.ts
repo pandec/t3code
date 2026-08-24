@@ -101,9 +101,14 @@ export type AgentVoiceReplyResult = typeof AgentVoiceReplyResult.Type;
 export class AgentVoiceReplyError extends Schema.TaggedErrorClass<AgentVoiceReplyError>()(
   "AgentVoiceReplyError",
   {
+    // turn_unavailable: the thread has no identifiable active turn, or the
+    // active turn changed while the recording was being synthesized (the turn
+    // was steered or aborted), so the recording has no turn to attach to.
     reason: Schema.Literals([
       "unavailable",
+      "empty_script",
       "script_too_long",
+      "turn_unavailable",
       "provider_failed",
       "storage_failed",
     ]),

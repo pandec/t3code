@@ -2084,24 +2084,34 @@ const make = Effect.gen(function* () {
 
           // A recording staged through the voice_reply MCP tool attaches to
           // the turn's last assistant message once ITS turn completes
-          // normally. A completion for some other turn (a stale event, or a
-          // steered/superseded turn) leaves the entry alone, and a failed or
-          // interrupted outcome throws the recording away, since it no longer
-          // matches what actually happened. The entry is cleared only after
-          // the attach commands land, so a failed dispatch does not silently
-          // lose the recording.
-          const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
-          if (
-            stagedVoiceReply &&
-            (stagedVoiceReply.turnId === null || sameId(stagedVoiceReply.turnId, turnId))
-          ) {
+          // normally. The lifecycle gate keeps stale completions for
+          // superseded turns from touching the staged entry, and claiming is
+          // atomic: the entry leaves the map before dispatch, so a concurrent
+          // re-stage can neither be mistakenly consumed nor delete the file
+          // this dispatch is about to reference. A failed or interrupted
+          // outcome throws the recording away, since it no longer matches
+          // what actually happened.
+          if (shouldApplyThreadLifecycle) {
             if (normalizeRuntimeTurnState(event.payload.state) === "completed") {
-              const speech = stagedVoiceReply.attachment;
-              const finalizedMessageIds = Array.from(assistantMessageIds);
-              const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
-              const lastProjectedMessageId = findLastAssistantMessageForTurn(messages, turnId)?.id;
-              const targetMessageId = lastFinalizedMessageId ?? lastProjectedMessageId;
-              if (targetMessageId !== undefined) {
+              const stagedVoiceReply = yield* agentVoiceReply.claimStagedForTurn(thread.id, turnId);
+              if (stagedVoiceReply) {
+                const speech = stagedVoiceReply.attachment;
+                const finalizedMessageIds = Array.from(assistantMessageIds);
+                const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
+                const lastProjectedMessageId = findLastAssistantMessageForTurn(
+                  messages,
+                  turnId,
+                )?.id;
+                // The transcript rides along as fallback text: if the target
+                // message never materialized (a voice-only turn, or a
+                // remembered ID whose whitespace-only text was never
+                // finalized), the decider publishes the transcript as the
+                // message text in the same atomic command, so the recording
+                // always lands with a durable, searchable home.
+                const targetMessageId =
+                  lastFinalizedMessageId ??
+                  lastProjectedMessageId ??
+                  MessageId.make(`assistant:voice-reply:${event.eventId}`);
                 yield* orchestrationEngine.dispatch({
                   type: "thread.message.assistant.complete",
                   commandId: yield* providerCommandId(event, "agent-voice-reply-attach"),
@@ -2109,56 +2119,24 @@ const make = Effect.gen(function* () {
                   messageId: targetMessageId,
                   turnId,
                   speech,
-                  createdAt: now,
-                });
-              } else {
-                // A voice-only turn: surface the transcript as the message
-                // text so the recording has a durable, searchable home.
-                const voiceMessageId = MessageId.make(`assistant:voice-reply:${event.eventId}`);
-                yield* orchestrationEngine.dispatch({
-                  type: "thread.message.assistant.delta",
-                  commandId: yield* providerCommandId(event, "agent-voice-reply-message"),
-                  threadId: thread.id,
-                  messageId: voiceMessageId,
-                  delta: speech.transcript,
-                  turnId,
-                  createdAt: now,
-                });
-                yield* orchestrationEngine.dispatch({
-                  type: "thread.message.assistant.complete",
-                  commandId: yield* providerCommandId(event, "agent-voice-reply-complete"),
-                  threadId: thread.id,
-                  messageId: voiceMessageId,
-                  turnId,
-                  speech,
+                  fallbackText: speech.transcript,
                   createdAt: now,
                 });
               }
-              yield* agentVoiceReply.clearStaged(thread.id);
             } else {
-              yield* agentVoiceReply.discardStaged(thread.id);
+              yield* agentVoiceReply.discardStagedForTurn(thread.id, turnId);
             }
-          }
-        } else {
-          // An untargeted completion cannot prove which turn it ends; only a
-          // wildcard entry (staged with no observable turn) is dropped.
-          const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
-          if (stagedVoiceReply && stagedVoiceReply.turnId === null) {
-            yield* agentVoiceReply.discardStaged(thread.id);
           }
         }
       }
 
       if (event.type === "turn.aborted") {
         // An aborted turn's recording no longer matches what happened; drop
-        // it when it belongs to the aborted turn (or cannot be attributed).
-        const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
-        if (
-          stagedVoiceReply &&
-          (stagedVoiceReply.turnId === null ||
-            eventTurnId === undefined ||
-            sameId(stagedVoiceReply.turnId, eventTurnId))
-        ) {
+        // it when it belongs to the aborted turn (or the abort cannot be
+        // attributed to any turn).
+        if (eventTurnId !== undefined) {
+          yield* agentVoiceReply.discardStagedForTurn(thread.id, eventTurnId);
+        } else {
           yield* agentVoiceReply.discardStaged(thread.id);
         }
       }

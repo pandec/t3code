@@ -1135,6 +1135,10 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   // An agent-staged voice recording to attach to the completed message. The
   // MP3 already sits in the attachments directory; this is metadata only.
   speech: Schema.optional(MessageSpeechAttachment),
+  // Text the decider publishes only when the target message does not exist
+  // (or has no text of its own), so a voice reply for a turn that produced
+  // no written message still lands as one atomic command.
+  fallbackText: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 

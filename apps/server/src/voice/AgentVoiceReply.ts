@@ -34,26 +34,26 @@ import {
 
 /**
  * A recording staged by the voice_reply MCP tool, bound to the turn that was
- * active when it was staged. `turnId` is null only when the thread had no
- * observable active turn at stage time; ingestion then treats it as "attach
- * to the next completed turn".
+ * active when it was staged. Staging fails when no active turn can be
+ * identified, so a recording can never attach to a turn other than its own.
  */
 export interface StagedAgentVoiceReply {
-  readonly turnId: TurnId | null;
+  readonly turnId: TurnId;
   readonly attachment: MessageSpeechAttachment;
 }
 
 /**
  * Agent-staged voice replies. The `voice_reply` MCP tool synthesizes a
- * recording mid-turn and parks it here; provider-runtime ingestion collects it
+ * recording mid-turn and parks it here; provider-runtime ingestion claims it
  * when its turn completes and attaches it to that turn's final assistant
  * message. One staged reply per thread — a second call replaces the first.
  *
  * The MP3 is written to the attachments directory at stage time so the later
  * attach command can stay metadata-only, mirroring how user image attachments
- * are persisted by the normalizer before their event is recorded. The entry
- * itself is removed only after the attach commands land (`clearStaged`), so a
- * failed dispatch does not silently drop the recording from memory.
+ * are persisted by the normalizer before their event is recorded. Consumers
+ * take entries with the atomic claim/discard operations below — never
+ * peek-then-remove, which would race a concurrent re-stage and cross-wire
+ * two recordings.
  */
 export interface AgentVoiceReplyShape {
   readonly available: boolean;
@@ -61,11 +61,17 @@ export interface AgentVoiceReplyShape {
     readonly threadId: ThreadId;
     readonly script: string;
   }) => Effect.Effect<MessageSpeechAttachment, AgentVoiceReplyError>;
-  /** Reads the staged reply without removing it. */
-  readonly peekStaged: (threadId: ThreadId) => Effect.Effect<StagedAgentVoiceReply | undefined>;
-  /** Removes the staged reply, keeping its audio file (it has been attached). */
-  readonly clearStaged: (threadId: ThreadId) => Effect.Effect<void>;
-  /** Removes the staged reply and deletes its audio file. */
+  /**
+   * Atomically removes and returns the reply staged for exactly this turn.
+   * The caller owns the entry (and its audio file) from then on.
+   */
+  readonly claimStagedForTurn: (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) => Effect.Effect<StagedAgentVoiceReply | undefined>;
+  /** Claims the turn's staged reply, if any, and deletes its audio file. */
+  readonly discardStagedForTurn: (threadId: ThreadId, turnId: TurnId) => Effect.Effect<void>;
+  /** Removes whatever reply is staged for the thread and deletes its audio file. */
   readonly discardStaged: (threadId: ThreadId) => Effect.Effect<void>;
 }
 
@@ -77,8 +83,8 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 export const layerNoop = Layer.succeed(AgentVoiceReply, {
   available: false,
   stage: () => Effect.fail(new AgentVoiceReplyError({ reason: "unavailable" })),
-  peekStaged: () => Effect.succeed(undefined),
-  clearStaged: () => Effect.void,
+  claimStagedForTurn: () => Effect.succeed(undefined),
+  discardStagedForTurn: () => Effect.void,
   discardStaged: () => Effect.void,
 });
 
@@ -114,10 +120,10 @@ export const layer = Layer.effect(
     };
 
     /**
-     * Best-effort read of the thread's active turn so the staged reply can be
-     * bound to it. A missing or unreadable session degrades to null rather
-     * than failing the stage: the recording then attaches to the thread's
-     * next completed turn.
+     * The thread's active turn, read from the projection. Fails closed: a
+     * missing or unreadable session yields null and staging refuses to
+     * proceed, because a recording bound to a guessed turn can attach to the
+     * wrong one.
      */
     const resolveActiveTurnId = (threadId: ThreadId) =>
       sql<{ readonly activeTurnId: string | null }>`
@@ -130,10 +136,10 @@ export const layer = Layer.effect(
         Effect.orElseSucceed((): TurnId | null => null),
       );
 
-    const takeEntry = (threadId: ThreadId) =>
+    const takeMatching = (threadId: ThreadId, matches: (entry: StagedAgentVoiceReply) => boolean) =>
       SynchronizedRef.modify(staged, (entries) => {
         const current = entries.get(threadId);
-        if (!current) return [undefined, entries] as const;
+        if (!current || !matches(current)) return [undefined, entries] as const;
         const next = new Map(entries);
         next.delete(threadId);
         return [current, next] as const;
@@ -160,15 +166,21 @@ export const layer = Layer.effect(
         );
 
         const script = input.script.trim();
+        if (script.length === 0) {
+          return yield* new AgentVoiceReplyError({ reason: "empty_script" });
+        }
         const characterLimit = Math.min(
           AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS,
           getElevenLabsTtsCharacterLimit(ttsModel),
         );
-        if (script.length === 0 || script.length > characterLimit) {
+        if (script.length > characterLimit) {
           return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
         }
 
         const turnId = yield* resolveActiveTurnId(input.threadId);
+        if (turnId === null) {
+          return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
+        }
         const audioBytes = yield* synthesizeElevenLabsSpeech({
           httpClient,
           apiKey: apiKey.value,
@@ -176,6 +188,15 @@ export const layer = Layer.effect(
           ttsModel,
           text: script,
         }).pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "provider_failed" })));
+
+        // Synthesis can take a while; if the thread was steered to a
+        // different turn in the meantime, this recording belongs to a turn
+        // that will never complete normally — refuse instead of staging a
+        // reply that could attach to the wrong turn.
+        const turnIdAfterSynthesis = yield* resolveActiveTurnId(input.threadId);
+        if (turnIdAfterSynthesis === null || turnIdAfterSynthesis !== turnId) {
+          return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
+        }
 
         const speechId = createAttachmentId(input.threadId);
         const speechPath = speechId ? resolveSpeechPath(speechId) : null;
@@ -202,6 +223,9 @@ export const layer = Layer.effect(
           createdAt: createdAt as MessageSpeechAttachment["createdAt"],
         };
 
+        // Replacing a still-staged entry deletes its file. This cannot race a
+        // consumer: ingestion claims an entry (removing it from the map)
+        // before dispatching, so anything still present here is unclaimed.
         const replaced = yield* SynchronizedRef.modify(staged, (entries) => {
           const previous = entries.get(input.threadId);
           const next = new Map(entries);
@@ -215,18 +239,20 @@ export const layer = Layer.effect(
       },
     );
 
+    const discardEntry = (entry: StagedAgentVoiceReply | undefined) =>
+      entry ? removeAudioFile(entry.attachment.speechId) : Effect.void;
+
     return AgentVoiceReply.of({
       available,
       stage,
-      peekStaged: (threadId) =>
-        SynchronizedRef.get(staged).pipe(Effect.map((entries) => entries.get(threadId))),
-      clearStaged: (threadId) => takeEntry(threadId).pipe(Effect.asVoid),
-      discardStaged: (threadId) =>
-        takeEntry(threadId).pipe(
-          Effect.flatMap((entry) =>
-            entry ? removeAudioFile(entry.attachment.speechId) : Effect.void,
-          ),
+      claimStagedForTurn: (threadId, turnId) =>
+        takeMatching(threadId, (entry) => entry.turnId === turnId),
+      discardStagedForTurn: (threadId, turnId) =>
+        takeMatching(threadId, (entry) => entry.turnId === turnId).pipe(
+          Effect.flatMap(discardEntry),
         ),
+      discardStaged: (threadId) =>
+        takeMatching(threadId, () => true).pipe(Effect.flatMap(discardEntry)),
     });
   }),
 );

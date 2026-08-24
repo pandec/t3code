@@ -44,6 +44,7 @@ interface MessageSpeechCacheRow {
   readonly scriptRecipeHash: string;
   readonly voiceId: string;
   readonly ttsModel: string;
+  readonly origin: string;
   readonly createdAt: string;
 }
 
@@ -195,6 +196,7 @@ export const layer = Layer.effect(
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
           tts_model AS "ttsModel",
+          origin,
           created_at AS "createdAt"
         FROM projection_message_speech
         WHERE message_id = ${messageId}
@@ -207,6 +209,7 @@ export const layer = Layer.effect(
       transcript: row.transcript as MessageSpeechSynthesisResult["transcript"],
       mimeType: SPEECH_MIME_TYPE,
       sizeBytes: row.sizeBytes as MessageSpeechSynthesisResult["sizeBytes"],
+      origin: row.origin === "agent" ? "agent" : "user",
       createdAt: row.createdAt as MessageSpeechSynthesisResult["createdAt"],
     });
 
@@ -283,6 +286,13 @@ export const layer = Layer.effect(
         .digest("hex");
       const cachedRows = yield* findCachedSpeech(request.messageId);
       const cached = cachedRows[0];
+      // An agent recording is event-owned: a projection replay rebuilds its
+      // row from the original thread.message-sent event, so this on-demand
+      // path must never overwrite it (or delete its file). Serve it as-is —
+      // it already is the spoken form of this message.
+      if (cached && cached.origin === "agent") {
+        return toResult(cached);
+      }
       if (
         cached &&
         isMessageSpeechCacheReusable({
@@ -406,6 +416,7 @@ export const layer = Layer.effect(
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
           tts_model AS "ttsModel",
+          origin,
           created_at AS "createdAt"
         `.pipe(Effect.mapError(storageError));
 
@@ -434,6 +445,7 @@ export const layer = Layer.effect(
         transcript,
         mimeType: SPEECH_MIME_TYPE,
         sizeBytes: audioBytes.byteLength,
+        origin: "user",
         createdAt,
       } satisfies MessageSpeechSynthesisResult;
     });

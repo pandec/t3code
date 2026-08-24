@@ -1364,24 +1364,28 @@ describe("ProviderRuntimeIngestion", () => {
 
   function makeFakeAgentVoiceReply(
     initialStaged: MessageSpeechAttachment | null,
-    stagedTurnId: TurnId | null = null,
+    stagedTurnId: TurnId,
   ) {
     let staged: AgentVoiceReply.StagedAgentVoiceReply | null =
       initialStaged === null ? null : { turnId: stagedTurnId, attachment: initialStaged };
     const removedAudio: string[] = [];
+    const take = (matches: (entry: AgentVoiceReply.StagedAgentVoiceReply) => boolean) =>
+      Effect.sync(() => {
+        if (staged === null || !matches(staged)) return undefined;
+        const entry = staged;
+        staged = null;
+        return entry;
+      });
+    const discard = (entry: AgentVoiceReply.StagedAgentVoiceReply | undefined) => {
+      if (entry) removedAudio.push(entry.attachment.speechId);
+    };
     const shape: AgentVoiceReply.AgentVoiceReplyShape = {
       available: true,
       stage: () => Effect.die(new Error("stage is not exercised by ingestion tests")),
-      peekStaged: () => Effect.sync(() => staged ?? undefined),
-      clearStaged: () =>
-        Effect.sync(() => {
-          staged = null;
-        }),
-      discardStaged: () =>
-        Effect.sync(() => {
-          if (staged !== null) removedAudio.push(staged.attachment.speechId);
-          staged = null;
-        }),
+      claimStagedForTurn: (_threadId, turnId) => take((entry) => entry.turnId === turnId),
+      discardStagedForTurn: (_threadId, turnId) =>
+        take((entry) => entry.turnId === turnId).pipe(Effect.map(discard)),
+      discardStaged: () => take(() => true).pipe(Effect.map(discard)),
     };
     return { shape, removedAudio, hasStaged: () => staged !== null };
   }
@@ -1440,7 +1444,7 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("publishes the transcript as the message when a voice-only turn completes", async () => {
     const staged = makeStagedVoiceReply({ speechId: "thread-1-agent-voice-only" });
-    const fake = makeFakeAgentVoiceReply(staged);
+    const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-voice-only"));
     const harness = await createHarness({ agentVoiceReply: fake.shape });
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -1509,7 +1513,7 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("drops a staged voice reply when the turn does not complete normally", async () => {
     const staged = makeStagedVoiceReply({ speechId: "thread-1-agent-voice-dropped" });
-    const fake = makeFakeAgentVoiceReply(staged);
+    const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-voice-dropped"));
     const harness = await createHarness({ agentVoiceReply: fake.shape });
     const now = "2026-01-01T00:00:00.000Z";
 
