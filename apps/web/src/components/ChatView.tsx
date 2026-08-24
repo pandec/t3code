@@ -29,7 +29,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
-  changeRequestAutoSettles,
+  changeRequestMutesWakeSignal,
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
@@ -4590,13 +4590,12 @@ function ChatViewContent(props: ChatViewProps) {
   // upstream's second declaration here is deliberately not carried.
   const activeThreadWokeVisible = useMemo(() => {
     if (activeThreadWokeAt === null) return false;
-    // Suppression only applies while the settle would actually happen: with
-    // the fork's auto-settle master gate off, the thread stays in the active
-    // list and the wake signal has to carry through.
     if (
-      autoSettleEnabled &&
-      changeRequestAutoSettles(activeThreadChangeRequest, {
+      changeRequestMutesWakeSignal({
+        settlementSupported: supportsSettlement,
+        autoSettleEnabled,
         autoSettleOnMerge,
+        changeRequest: activeThreadChangeRequest,
         thread: activeThreadShell,
       })
     ) {
@@ -4626,6 +4625,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadWokeAt,
     autoSettleEnabled,
     autoSettleOnMerge,
+    supportsSettlement,
   ]);
   const activeThreadSettled = useMemo(() => {
     if (activeThreadShell === null || !supportsSettlement) return false;

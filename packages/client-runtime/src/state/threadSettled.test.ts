@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canSettle,
   changeRequestAutoSettles,
+  changeRequestMutesWakeSignal,
   effectiveSettled,
   hasQueuedTurnStart,
   threadLastActivityAt,
@@ -119,6 +120,44 @@ describe("changeRequestAutoSettles", () => {
         { thread: idleThread },
       ),
     ).toBe(true);
+  });
+});
+
+describe("changeRequestMutesWakeSignal", () => {
+  const wokeThread = {
+    createdAt: "2026-04-01T00:00:00.000Z",
+    latestUserMessageAt: null,
+    latestTurn: null,
+    settledOverride: null,
+  };
+  const base = {
+    settlementSupported: true,
+    autoSettleEnabled: true,
+    changeRequest: { state: "merged" as const },
+    thread: wokeThread,
+  };
+
+  it("mutes only while the settle would actually happen", () => {
+    expect(changeRequestMutesWakeSignal(base)).toBe(true);
+    // No settlement capability, master gate off, or an explicit keep-active
+    // pin: the thread never settles, so the wake signal must carry through.
+    expect(changeRequestMutesWakeSignal({ ...base, settlementSupported: false })).toBe(false);
+    expect(changeRequestMutesWakeSignal({ ...base, autoSettleEnabled: false })).toBe(false);
+    expect(
+      changeRequestMutesWakeSignal({
+        ...base,
+        thread: { ...wokeThread, settledOverride: "active" },
+      }),
+    ).toBe(false);
+  });
+
+  it("defers to the change-request settle rule past the gates", () => {
+    expect(changeRequestMutesWakeSignal({ ...base, changeRequest: { state: "open" } })).toBe(false);
+    expect(changeRequestMutesWakeSignal({ ...base, changeRequest: null })).toBe(false);
+    expect(changeRequestMutesWakeSignal({ ...base, autoSettleOnMerge: false })).toBe(false);
+    expect(changeRequestMutesWakeSignal({ ...base, changeRequest: { state: "closed" } })).toBe(
+      true,
+    );
   });
 });
 

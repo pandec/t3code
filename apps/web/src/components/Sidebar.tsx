@@ -20,7 +20,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import {
   canSnooze,
-  changeRequestAutoSettles,
+  changeRequestMutesWakeSignal,
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
@@ -950,9 +950,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // rather than upstream's sticky-woke semantics, so mobile stays in step and
   // the comparison lives in the shared helper. Work that finished outright
   // also clears it: no wake-up call is needed for a thread the change-request
-  // state already settles, which is now the same parameterized rule the
-  // settle path uses (a merged PR only counts when merge auto-settling is on,
-  // and nothing counts while the auto-settle master gate is off).
+  // state is about to settle — but only when that settle would actually
+  // happen (settlement supported, master gate on, thread not pinned active);
+  // the shared mute rule owns that judgment.
   // An unparseable visit timestamp counts as never-visited — corrupt local
   // data must not eat the wake signal.
   const isWoke =
@@ -960,13 +960,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       wokeAt: props.wokeAt,
       ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
     }) &&
-    !(
-      props.autoSettleEnabled &&
-      changeRequestAutoSettles(pr, {
-        autoSettleOnMerge: props.autoSettleOnMerge,
-        thread,
-      })
-    );
+    !changeRequestMutesWakeSignal({
+      settlementSupported: props.settlementSupported,
+      autoSettleEnabled: props.autoSettleEnabled,
+      autoSettleOnMerge: props.autoSettleOnMerge,
+      changeRequest: pr,
+      thread,
+    });
   // In-flight rows (working, or waiting on approval/input) fade as a whole:
   // there is nothing for the user to do yet, so prominence is reserved for
   // rows that need a human — done (unread), read-but-unsettled, failed, and
@@ -1518,8 +1518,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     {props.snoozeWakeLabelText}
                   </span>
                 ) : isWoke ? (
-                  // A wake can land straight in the settled tail (e.g. PR
-                  // merged while snoozed); the signal must survive the trip.
+                  // A wake can land straight in the settled tail (an explicit
+                  // settle, or a merge the wake-mute rule lets through, e.g.
+                  // with auto-settling off); the signal must survive the trip.
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -4757,8 +4758,9 @@ export default function Sidebar() {
                             : null
                         }
                         // All sections: a woken thread can classify straight
-                        // into the settled tail (PR merged while snoozed), and
-                        // the wake signal must survive the trip. Still-snoozed
+                        // into the settled tail (an explicit settle, or a
+                        // merge the wake-mute rule lets through), and the
+                        // wake signal must survive the trip. Still-snoozed
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
