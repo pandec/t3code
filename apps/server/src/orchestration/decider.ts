@@ -1404,6 +1404,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // Compare-and-set writes are speculative: the writer decided the new
+      // session from a read it took before dispatching, and another writer
+      // (e.g. interrupt-failure recovery stopping the session) may have won
+      // the race in between. Commands are decided serially against this read
+      // model, so checking here — not at the writer's read — closes that race.
+      if (command.expectedSession !== undefined) {
+        const currentStatus = thread.session?.status ?? null;
+        const currentActiveTurnId = thread.session?.activeTurnId ?? null;
+        if (
+          currentStatus !== command.expectedSession.status ||
+          currentActiveTurnId !== command.expectedSession.activeTurnId
+        ) {
+          return yield* Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `thread ${command.threadId} session is ${currentStatus ?? "none"}/${currentActiveTurnId ?? "no-turn"} but the write expected ${command.expectedSession.status ?? "none"}/${command.expectedSession.activeTurnId ?? "no-turn"}; dropping stale session set`,
+            }),
+          );
+        }
+      }
       const sessionSetEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",

@@ -1113,6 +1113,19 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  // Compare-and-set guard for recovery writers that derive `session` from a
+  // read taken outside the decider: the write applies only while the thread's
+  // current session still matches this observed pair (null status = no
+  // session). Commands are decided serially against the read model, so a
+  // mismatch means the writer lost a race — the decider rejects the command
+  // instead of letting the stale write revive a session another recovery
+  // path already stopped.
+  expectedSession: Schema.optional(
+    Schema.Struct({
+      status: Schema.NullOr(OrchestrationSessionStatus),
+      activeTurnId: Schema.NullOr(TurnId),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 

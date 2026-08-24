@@ -447,6 +447,10 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly createdAt: string;
+    readonly expectedSession?: {
+      readonly status: OrchestrationSession["status"] | null;
+      readonly activeTurnId: OrchestrationSession["activeTurnId"];
+    };
   }) =>
     serverCommandId("provider-session-set").pipe(
       Effect.flatMap((commandId) =>
@@ -455,6 +459,9 @@ const make = Effect.gen(function* () {
           commandId,
           threadId: input.threadId,
           session: input.session,
+          ...(input.expectedSession !== undefined
+            ? { expectedSession: input.expectedSession }
+            : {}),
           createdAt: input.createdAt,
         }),
       ),
@@ -489,7 +496,24 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
-    });
+      // The write above encodes a decision taken from the session read at the
+      // top of this function. Interrupt-failure recovery can stop the session
+      // between that read and this dispatch; without the guard the stale write
+      // would revive the dead provider as running with its old turn. A CAS
+      // mismatch means the newer state already carries the truth, so the drop
+      // is silent — the failure activity below still lands either way.
+      expectedSession: {
+        status: session?.status ?? null,
+        activeTurnId: session?.activeTurnId ?? null,
+      },
+    }).pipe(
+      Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+        Effect.logDebug("skipped stale turn-start-failure session write", {
+          threadId: input.threadId,
+          detail: error.detail,
+        }),
+      ),
+    );
   });
 
   const resolveProject = Effect.fnUntraced(function* (projectId: ProjectId) {

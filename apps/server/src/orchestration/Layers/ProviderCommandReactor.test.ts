@@ -1941,6 +1941,81 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect("drops a stale guarded session write instead of reviving a stopped session", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-stale-write"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-stale-write"),
+          role: "user",
+          text: "start work",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stopped-before-stale-write"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "Interrupt failed; session stopped.",
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      // A failed-steer recovery that observed the session while it was still
+      // running dispatches with that observation as its guard. The decider
+      // must reject it now that interrupt recovery stopped the session.
+      const error = yield* harness.engine
+        .dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-stale-guarded-write"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("stale-turn"),
+            lastError: "The active review turn cannot accept same-turn steering.",
+            updatedAt: now,
+          },
+          expectedSession: {
+            status: "running",
+            activeTurnId: asTurnId("stale-turn"),
+          },
+          createdAt: now,
+        })
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.session).toMatchObject({
+        status: "stopped",
+        activeTurnId: null,
+        lastError: "Interrupt failed; session stopped.",
+      });
+    }),
+  );
+
   it("preserves the active session model when in-session model switching is unsupported", async () => {
     const harness = await createHarness({ sessionModelSwitch: "unsupported" });
     const now = "2026-01-01T00:00:00.000Z";
