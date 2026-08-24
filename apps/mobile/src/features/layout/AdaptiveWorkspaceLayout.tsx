@@ -45,6 +45,7 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
+import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { ThreadAttentionFilterProvider } from "../threads/use-thread-attention-filter";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
@@ -436,6 +437,10 @@ function AdaptiveWorkspaceLayoutContent(
     });
   }, [navigation]);
 
+  const handleStartNewTask = useCallback(() => {
+    navigation.navigate("NewTaskSheet", { screen: "NewTask" });
+  }, [navigation]);
+
   const handleOpenArchivedThreads = useCallback(() => {
     navigation.navigate("SettingsSheet", {
       screen: "SettingsContent",
@@ -542,20 +547,24 @@ function AdaptiveWorkspaceLayoutContent(
                 pointerEvents={panes.primarySidebarVisible ? "auto" : "none"}
                 style={sidebarAnimatedStyle}
               >
-                <ThreadNavigationSidebar
-                  width={layout.listPaneWidth}
-                  visible={panes.primarySidebarVisible}
-                  onRequestVisibility={revealPrimarySidebar}
-                  selectedThreadKey={selectedThreadKey}
-                  onOpenSettings={handleOpenSettings}
-                  onOpenArchivedThreads={handleOpenArchivedThreads}
-                  onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
-                  onNewThreadInProject={handleNewThreadInProject}
-                  onSelectThread={handleSelectThread}
-                  onSelectedThreadRemoved={handleSelectedThreadRemoved}
-                  onSearchQueryChange={setPrimarySidebarSearchQuery}
-                  searchQuery={primarySidebarSearchQuery}
-                />
+                <View className="flex-1" style={{ width: layout.listPaneWidth }}>
+                  <AndroidHomeFabLayout onStartNewTask={handleStartNewTask}>
+                    <ThreadNavigationSidebar
+                      width={layout.listPaneWidth}
+                      visible={panes.primarySidebarVisible}
+                      onRequestVisibility={revealPrimarySidebar}
+                      selectedThreadKey={selectedThreadKey}
+                      onOpenSettings={handleOpenSettings}
+                      onOpenArchivedThreads={handleOpenArchivedThreads}
+                      onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onNewThreadInProject={handleNewThreadInProject}
+                      onSelectThread={handleSelectThread}
+                      onSelectedThreadRemoved={handleSelectedThreadRemoved}
+                      onSearchQueryChange={setPrimarySidebarSearchQuery}
+                      searchQuery={primarySidebarSearchQuery}
+                    />
+                  </AndroidHomeFabLayout>
+                </View>
               </Animated.View>
             ) : null}
             <View className="flex-1 overflow-hidden bg-screen" collapsable={false}>

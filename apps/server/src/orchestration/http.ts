@@ -13,7 +13,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -152,15 +152,19 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           // HTTP clients (the CLI) get worktree preparation, setup script
           // launch, and thread cleanup — identical to the WebSocket path.
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
-            return yield* turnStartBootstrap
-              .dispatchTurnStart(normalizedCommand)
-              .pipe(
-                Effect.catch((cause) =>
-                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
-                ),
-              );
+            return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
+              Effect.tapError(() =>
+                cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+              ),
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
           }
           return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+            Effect.tapError(() =>
+              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+            ),
             Effect.catch((cause) =>
               Effect.gen(function* () {
                 if (

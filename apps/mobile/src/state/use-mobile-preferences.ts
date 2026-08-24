@@ -13,7 +13,7 @@ import {
   type SidebarOlderSectionAfterDays,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
@@ -114,9 +114,10 @@ export function useOlderSectionSettings(): OlderSectionSettings {
  */
 export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   readonly expanded: boolean;
+  readonly loaded: boolean;
   readonly toggle: () => void;
 } {
-  const { preferences } = useMobilePreferences();
+  const { preferences, hydrated } = useMobilePreferences();
   const { collapsedByDefault } = useOlderSectionSettings();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const expanded = resolveThreadShelfExpanded({
@@ -124,11 +125,17 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
     preferences,
     olderCollapsedByDefault: collapsedByDefault,
   });
-  const toggle = useCallback(
-    () => savePreferences(threadShelfExpandedPatch(shelf, !expanded)),
-    [expanded, savePreferences, shelf],
-  );
-  return useMemo(() => ({ expanded, toggle }), [expanded, toggle]);
+  // The ref advances before the write starts, so two presses in one render
+  // pass still toggle twice; reading `expanded` alone would make the second
+  // press rewrite the value the first one already chose.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const toggle = useCallback(() => {
+    const next = !expandedRef.current;
+    expandedRef.current = next;
+    savePreferences(threadShelfExpandedPatch(shelf, next));
+  }, [savePreferences, shelf]);
+  return useMemo(() => ({ expanded, loaded: hydrated, toggle }), [expanded, hydrated, toggle]);
 }
 
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {

@@ -238,6 +238,40 @@ describe("mobile connection storage", () => {
     expect(fallback.updatedAt).toEqual(expect.any(Number));
   });
 
+  it("persists thread shelf expansion preferences", async () => {
+    await expect(
+      savePreferencesPatch({
+        sidebarSettledShelfExpanded: false,
+        sidebarSnoozedShelfExpanded: true,
+      }),
+    ).resolves.toEqual({
+      sidebarSettledShelfExpanded: false,
+      sidebarSnoozedShelfExpanded: true,
+    });
+
+    await expect(loadPreferences()).resolves.toEqual({
+      sidebarSettledShelfExpanded: false,
+      sidebarSnoozedShelfExpanded: true,
+    });
+    expect(JSON.parse(mocks.getPreferencesJson() ?? "")).toEqual({
+      sidebarSettledShelfExpanded: false,
+      sidebarSnoozedShelfExpanded: true,
+    });
+  });
+
+  it("ignores invalid thread shelf expansion preference types", async () => {
+    mocks.setPreferencesJson(
+      JSON.stringify({
+        baseFontSize: 17,
+        sidebarSettledShelfExpanded: "false",
+        sidebarSnoozedShelfExpanded: 1,
+      }),
+      10,
+    );
+
+    await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 17 });
+  });
+
   it("reconciles fallback preferences after SQLite recovers", async () => {
     mocks.setPreferencesJson(JSON.stringify({ baseFontSize: 15 }), 10);
     await mocks.setItemAsync(

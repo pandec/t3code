@@ -119,12 +119,14 @@ const ISOLATED_TEST_FILES = [
   "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
   "src/hooks/useTheme.test.ts",
+  "src/lib/attachmentUploadQueue.test.ts",
   "src/lib/syntaxHighlighting.test.ts",
   "src/lib/terminalCloseConfirm.test.ts",
   "src/localApi.test.ts",
   "src/notifications/turnCompletion.test.ts",
   "src/rpc/requestLatencyState.test.ts",
   "src/timestampFormat.test.ts",
+  "src/versionSkew.test.ts",
 ];
 
 const unitTestProject = {

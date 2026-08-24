@@ -702,8 +702,11 @@ export function HomeScreen(props: HomeScreenProps) {
     () => setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT),
     [],
   );
-  const { expanded: snoozedShelfExpanded, toggle: toggleSnoozedShelf } =
-    useThreadShelfExpansion("snoozed");
+  const {
+    expanded: snoozedShelfExpanded,
+    loaded: shelfPreferencesLoaded,
+    toggle: toggleSnoozedShelf,
+  } = useThreadShelfExpansion("snoozed");
   const { expanded: settledShelfExpanded, toggle: toggleSettledShelf } =
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
@@ -993,6 +996,7 @@ export function HomeScreen(props: HomeScreenProps) {
         return (
           <ThreadListV2SnoozedShelfHeader
             count={item.count}
+            disabled={!shelfPreferencesLoaded}
             expanded={item.expanded}
             onToggle={toggleSnoozedShelf}
           />
@@ -1002,6 +1006,7 @@ export function HomeScreen(props: HomeScreenProps) {
         return (
           <ThreadListV2SettledShelfHeader
             count={item.count}
+            disabled={!shelfPreferencesLoaded}
             expanded={item.expanded}
             onToggle={toggleSettledShelf}
           />
@@ -1097,6 +1102,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectThread,
       props.savedConnectionsById,
       serverConfigs,
+      shelfPreferencesLoaded,
       settlementEnvironmentIds,
       v2ProjectAccentByProjectKey,
       snoozeEnvironmentIds,

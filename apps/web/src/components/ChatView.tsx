@@ -402,6 +402,13 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
+import {
+  awaitAttachmentUploads,
+  getUploadedAttachments,
+  releaseAttachmentUpload,
+  releaseAttachmentUploads,
+  startAttachmentUpload,
+} from "../lib/attachmentUploadQueue";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
@@ -2243,6 +2250,10 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
+  const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
+  const supportsAttachmentUploads =
+    attachmentEnvironmentConfig?.environment.capabilities.attachmentUploads === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -5895,6 +5906,15 @@ function ChatViewContent(props: ChatViewProps) {
           for (const image of composerImagesSnapshot) {
             revokeBlobPreviewUrl(image.previewUrl);
           }
+          // The queued row carries inline data URLs, so images the composer has
+          // just given up are unreferenced. Upstream only releases after a
+          // successful direct turn start, which the queue path never reaches.
+          // This belongs inside the drain branch: when the snapshot no longer
+          // matches, the draft still owns these images, and releasing their
+          // uploads would strand them as permanently "still uploading".
+          if (supportsAttachmentUploads) {
+            releaseAttachmentUploads(composerImagesSnapshot);
+          }
           composerRef.current?.resetCursorState();
         }
       } catch (error) {
@@ -5905,11 +5925,23 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
+    sendInFlightRef.current = true;
+    if (supportsAttachmentUploads && composerImagesSnapshot.length > 0) {
+      for (const image of composerImagesSnapshot) {
+        startAttachmentUpload({ environmentId, image });
+      }
+      await awaitAttachmentUploads(composerImagesSnapshot.map((image) => image.id));
+      if (getUploadedAttachments({ environmentId, images: composerImagesSnapshot }) === null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, "Retry or remove failed image uploads before sending.");
+        return;
+      }
+    }
+
     const resolvedSubmissionIntent =
       requestedSubmissionIntent === "background" && isLocalDraftThread
         ? "background"
         : "foreground";
-    sendInFlightRef.current = true;
     if (draftId) {
       draftSubmissionTracker.begin(draftId);
     }
@@ -5941,13 +5973,22 @@ function ChatViewContent(props: ChatViewProps) {
     });
 
     const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
+      composerImagesSnapshot.map(async (image) => {
+        if (supportsAttachmentUploads) {
+          const uploaded = getUploadedAttachments({ environmentId, images: [image] })?.[0];
+          if (!uploaded) {
+            throw new Error(`Image '${image.name}' did not finish uploading.`);
+          }
+          return uploaded;
+        }
+        return {
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        };
+      }),
     );
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: "image" as const,
@@ -6138,6 +6179,9 @@ function ChatViewContent(props: ChatViewProps) {
         turnStartSucceeded = true;
         if (activeThread.archivedAt !== null) {
           refreshArchivedThreadsForEnvironment(activeThread.environmentId);
+        }
+        if (supportsAttachmentUploads) {
+          releaseAttachmentUploads(composerImagesSnapshot);
         }
         acknowledgeActiveThreadWoke();
         if (backgroundThreadRef) {
@@ -6395,6 +6439,10 @@ function ChatViewContent(props: ChatViewProps) {
         revertComposerLoad = () => {
           for (const image of hydratedImages) {
             if (imageIdsBeforeLoad.has(image.id)) continue;
+            // Hydrating the queued row starts a speculative upload; dropping
+            // the image without releasing it leaks that upload until the
+            // server's sweep. Same pairing the composer's own remove uses.
+            releaseAttachmentUpload(image.id);
             removeComposerDraftImage(composerDraftTarget, image.id);
           }
           const latestPrompt = readDraft()?.prompt ?? "";
@@ -7649,6 +7697,8 @@ function ChatViewContent(props: ChatViewProps) {
                                   ? `${activeProject.environmentId}:${activeProject.id}`
                                   : environmentId
                             }
+                            attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
+                            supportsAttachmentUploads={supportsAttachmentUploads}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}
