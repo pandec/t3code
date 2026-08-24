@@ -145,19 +145,28 @@ known.
 ### Reading messages
 
 `t3 thread messages <thread-id>` prints the conversation as a transcript, user and assistant
-messages only, without tool calls or file activity. `--json` returns each message with its id,
-role, text, timestamps, and attachment metadata instead. Unlike the other thread commands, this one
-also reads archived threads; the output marks those with `"archived": true` and a `null` title.
+messages only, without tool calls or file activity. `--json` returns a document with `threadId`,
+`title`, `state`, `archived`, `machine`, `messages`, `hasMoreOlder`, and `nextBefore`; each message
+carries its id, role, text, `createdAt` timestamp, turn id, and attachment metadata. Unlike the
+other thread commands, this one also reads archived threads; the output marks those with
+`"archived": true` and a `null` title and state. On servers that predate the dedicated messages
+route (including upstream ones), the command falls back to the full thread snapshot and windows it
+client-side, so paging flags keep working.
 
 The default is the full history, paged from the server internally. `--limit N` returns only the
 newest N messages; when older ones remain, the JSON sets `hasMoreOlder` and provides a `nextBefore`
-message id to pass as `--before` on the next call. `--role user|assistant|system` narrows to one
-role. System messages only appear when requested that way.
+message id to pass as `--before` on the next call. A `--before` id that matches no message in the
+thread fails with an explicit cursor error rather than printing an empty transcript. `--role
+user|assistant|system` narrows to one role; system messages only appear when requested that way.
+The `--limit` window is counted before any role filtering — including the default exclusion of
+system messages — so a filtered result can contain fewer than N messages, or none, while older
+history still exists.
 
 Attachments are files on the machine that runs the server. Each one resolves to an absolute `path`
-on that machine plus an `exists` flag, and the output names the machine itself: `machine.hostname`,
-with the environment id and label when the server reports them. When you run this command over SSH
-on another machine, the paths belong to that host, not yours. Fetch the files over SSH rather than
+on that machine plus an `exists` flag (`path` is `null` in the rare case the record cannot be
+resolved to a file location), and the output names the machine itself: `machine.hostname`, with the
+environment id and label when the server reports them. When you run this command over SSH on
+another machine, the paths belong to that host, not yours. Fetch the files over SSH rather than
 concluding they are missing.
 
 ### Waiting for turns

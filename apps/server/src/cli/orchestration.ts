@@ -129,6 +129,7 @@ export const CliLiveServerReadPhase = Schema.Literals([
   "discovery",
   "descriptor",
   "snapshot",
+  "messages",
   "wait",
 ]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
@@ -484,7 +485,39 @@ export const fetchLiveOrchestrationThreadMessages = (
           })
         : cliOrchestrationErrorFromRequest(cause),
     ),
-    withLiveServerReadTimeout("snapshot", timeouts.read),
+    withLiveServerReadTimeout("messages", timeouts.read),
+  );
+
+// A matched thread route always answers a missing thread with a typed
+// not-found body, so a bare 404 means the server predates the route itself.
+export const isLiveServerRouteMissing = (error: unknown): boolean =>
+  isCliOrchestrationUndeclaredStatusError(error) && error.status === 404;
+
+/** Full-history thread detail read, the fallback for servers that predate the
+    dedicated `/messages` route (including upstream ones). */
+export const fetchLiveOrchestrationThreadDetail = (
+  origin: string,
+  bearerToken: string,
+  threadId: ThreadId,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadSnapshot({
+      params: { threadId },
+      query: {},
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.mapError((cause) =>
+      isEnvironmentResourceNotFoundError(cause)
+        ? new CliOrchestrationThreadNotFoundError({
+            operation: "fetchThreadMessages",
+            threadId,
+          })
+        : cliOrchestrationErrorFromRequest(cause),
+    ),
+    withLiveServerReadTimeout("messages", timeouts.read),
   );
 
 export const fetchLiveEnvironmentDescriptor = (

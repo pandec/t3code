@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import {
@@ -18,6 +17,8 @@ import {
   type OrchestrationMessage,
   type OrchestrationMessageRole,
   type OrchestrationProjectShell,
+  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadMessagePage,
   type OrchestrationThreadShell,
   type ThreadEnvMode,
   type ThreadTurnStartBootstrap,
@@ -40,6 +41,7 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
+import type * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -57,12 +59,16 @@ import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationOutcomeUnknownError,
   CliOrchestrationServerUnavailableError,
+  CliOrchestrationThreadNotFoundError,
   type CliLiveOrchestrationServer,
   type CliLiveServerReadTimeouts,
+  type CliOrchestrationCallError,
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
+  fetchLiveOrchestrationThreadDetail,
   fetchLiveOrchestrationThreadMessages,
+  isLiveServerRouteMissing,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
@@ -110,6 +116,22 @@ export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNot
 ) {
   override get message(): string {
     return `No active thread found for '${this.threadId}'.`;
+  }
+}
+
+export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadCliMessageCursorError>()(
+  "ThreadCliMessageCursorError",
+  {
+    operation: Schema.Literal("fetchThreadMessages"),
+    threadId: Schema.String,
+    cursor: Schema.String,
+    reason: Schema.Literals(["empty", "not-found"]),
+  },
+) {
+  override get message(): string {
+    return this.reason === "empty"
+      ? "The --before cursor must not be empty."
+      : `No message '${this.cursor}' exists in thread '${this.threadId}' to page from. The cursor may be stale; rerun without --before.`;
   }
 }
 
@@ -1158,37 +1180,141 @@ const threadWaitCommand = Command.make("wait", {
 // the `before` cursor.
 const THREAD_MESSAGES_PAGE_LIMIT = 500;
 
-const collectThreadMessages = Effect.fn("collectThreadMessages")(function* (input: {
-  readonly live: CliLiveOrchestrationServer;
-  readonly token: string;
-  readonly timeouts: CliLiveServerReadTimeouts;
+export interface ThreadMessagesFetchDeps<R = never> {
+  readonly fetchPage: (input: {
+    readonly threadId: ThreadId;
+    readonly before: MessageId | null;
+    readonly limit: number | null;
+  }) => Effect.Effect<
+    OrchestrationThreadMessagePage,
+    CliOrchestrationCallError | CliOrchestrationThreadNotFoundError,
+    R
+  >;
+  readonly fetchFullThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    OrchestrationThreadDetailSnapshot,
+    CliOrchestrationCallError | CliOrchestrationThreadNotFoundError,
+    R
+  >;
+}
+
+export interface ThreadMessagesWindow {
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly hasMoreOlder: boolean;
+}
+
+interface CollectThreadMessagesInput {
   readonly threadId: ThreadId;
   readonly before: MessageId | null;
   readonly limit: number | null;
-}) {
-  let collected: ReadonlyArray<OrchestrationMessage> = [];
+}
+
+const collectPagedThreadMessages = Effect.fn("collectPagedThreadMessages")(function* <R>(
+  input: CollectThreadMessagesInput,
+  deps: ThreadMessagesFetchDeps<R>,
+) {
+  // Pages arrive newest window first, each internally ascending; reversing the
+  // page order at the end restores one ascending history.
+  const pagesNewestFirst: Array<ReadonlyArray<OrchestrationMessage>> = [];
+  let collectedCount = 0;
   let cursor = input.before;
   let hasMoreOlder = false;
   for (;;) {
-    const remaining = input.limit === null ? null : input.limit - collected.length;
-    const page = yield* fetchLiveOrchestrationThreadMessages(
-      input.live.origin,
-      input.token,
-      {
+    const remaining = input.limit === null ? null : input.limit - collectedCount;
+    const page = yield* deps.fetchPage({
+      threadId: input.threadId,
+      before: cursor,
+      limit: remaining === null ? null : Math.min(remaining, THREAD_MESSAGES_PAGE_LIMIT),
+    });
+    // The server tolerates a cursor that matches no message (a typo, or a
+    // deep revert since the cursor was issued) by answering an empty page
+    // with hasMoreOlder still set. Surface that instead of reporting an
+    // empty thread with no way to page.
+    if (page.messages.length === 0 && page.hasMoreOlder && cursor !== null) {
+      return yield* new ThreadCliMessageCursorError({
+        operation: "fetchThreadMessages",
         threadId: input.threadId,
-        ...(cursor === null ? {} : { before: cursor }),
-        ...(remaining === null ? {} : { limit: Math.min(remaining, THREAD_MESSAGES_PAGE_LIMIT) }),
-      },
-      input.timeouts,
-    );
-    collected = [...page.messages, ...collected];
+        cursor,
+        reason: "not-found",
+      });
+    }
+    pagesNewestFirst.push(page.messages);
+    collectedCount += page.messages.length;
     hasMoreOlder = page.hasMoreOlder;
     const oldest = page.messages[0];
     if (!page.hasMoreOlder || oldest === undefined) break;
-    if (input.limit !== null && collected.length >= input.limit) break;
+    if (input.limit !== null && collectedCount >= input.limit) break;
     cursor = oldest.id;
   }
-  return { messages: collected, hasMoreOlder };
+  const window: ThreadMessagesWindow = {
+    messages: pagesNewestFirst.toReversed().flat(),
+    hasMoreOlder,
+  };
+  return window;
+});
+
+// Fallback for servers that predate the dedicated /messages route (including
+// upstream ones): one full thread snapshot, windowed client-side with the
+// same before/limit semantics as the paged path.
+const collectThreadMessagesFromDetail = Effect.fn("collectThreadMessagesFromDetail")(function* <R>(
+  input: CollectThreadMessagesInput,
+  deps: ThreadMessagesFetchDeps<R>,
+) {
+  const snapshot = yield* deps.fetchFullThread(input.threadId);
+  const all = snapshot.thread.messages;
+  let older = all;
+  if (input.before !== null) {
+    const cursorIndex = all.findIndex((message) => message.id === input.before);
+    if (cursorIndex === -1) {
+      return yield* new ThreadCliMessageCursorError({
+        operation: "fetchThreadMessages",
+        threadId: input.threadId,
+        cursor: input.before,
+        reason: "not-found",
+      });
+    }
+    older = all.slice(0, cursorIndex);
+  }
+  const messages =
+    input.limit === null ? older : older.slice(Math.max(0, older.length - input.limit));
+  const window: ThreadMessagesWindow = {
+    messages,
+    hasMoreOlder: messages.length < older.length,
+  };
+  return window;
+});
+
+export const collectThreadMessages = <R = HttpClient.HttpClient>(
+  input: CollectThreadMessagesInput,
+  deps: ThreadMessagesFetchDeps<R>,
+) =>
+  collectPagedThreadMessages(input, deps).pipe(
+    Effect.catch((error) =>
+      isLiveServerRouteMissing(error)
+        ? collectThreadMessagesFromDetail(input, deps)
+        : Effect.fail(error),
+    ),
+  );
+
+const liveThreadMessagesFetchDeps = (input: {
+  readonly live: CliLiveOrchestrationServer;
+  readonly token: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+}): ThreadMessagesFetchDeps<HttpClient.HttpClient> => ({
+  fetchPage: (page) =>
+    fetchLiveOrchestrationThreadMessages(
+      input.live.origin,
+      input.token,
+      {
+        threadId: page.threadId,
+        ...(page.before === null ? {} : { before: page.before }),
+        ...(page.limit === null ? {} : { limit: page.limit }),
+      },
+      input.timeouts,
+    ),
+  fetchFullThread: (threadId) =>
+    fetchLiveOrchestrationThreadDetail(input.live.origin, input.token, threadId, input.timeouts),
 });
 
 export interface ThreadMessagesMachine {
@@ -1250,9 +1376,19 @@ export const threadMessagesReport = (input: {
 
 export type ThreadMessagesReport = ReturnType<typeof threadMessagesReport>;
 
+// Transcript text carries untrusted content (assistant output, titles,
+// attachment names) straight to a terminal, so strip control characters that
+// could smuggle escape sequences; newlines and tabs stay. JSON mode needs no
+// such pass because JSON.stringify escapes them.
+const stripTerminalControlCharacters = (text: string): string =>
+  // eslint-disable-next-line no-control-regex
+  text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "");
+
 export const renderThreadMessagesText = (report: ThreadMessagesReport): string => {
   const lines: Array<string> = [
-    `Thread: ${report.title ?? report.threadId}${report.archived ? " (archived)" : ""}`,
+    `Thread: ${
+      report.title === null ? report.threadId : `${report.title} (${report.threadId})`
+    }${report.archived ? " (archived)" : ""}`,
     `Machine: ${report.machine.hostname}${
       report.machine.environmentLabel === null ? "" : ` (${report.machine.environmentLabel})`
     }`,
@@ -1264,10 +1400,16 @@ export const renderThreadMessagesText = (report: ThreadMessagesReport): string =
     );
     if (message.text.length > 0) lines.push(message.text);
     for (const attachment of message.attachments) {
+      const marker =
+        attachment.path === null
+          ? " [path could not be resolved]"
+          : attachment.exists
+            ? ""
+            : " [not found on this machine]";
       lines.push(
         `  attachment: ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes) -> ${
           attachment.path ?? "unresolved"
-        }${attachment.exists ? "" : " [not found on this machine]"}`,
+        }${marker}`,
       );
     }
   }
@@ -1284,7 +1426,7 @@ export const renderThreadMessagesText = (report: ThreadMessagesReport): string =
       `Older messages exist. Rerun with --before ${report.nextBefore} to page further back.`,
     );
   }
-  return lines.join("\n");
+  return stripTerminalControlCharacters(lines.join("\n"));
 };
 
 const threadMessagesCommand = Command.make("messages", {
@@ -1313,21 +1455,29 @@ const threadMessagesCommand = Command.make("messages", {
       Effect.gen(function* () {
         const rawThreadId = flags.threadId.trim();
         if (rawThreadId.length === 0) {
-          return yield* new ThreadCliNotFoundError({
-            operation: "resolveThread",
+          return yield* new CliOrchestrationThreadNotFoundError({
+            operation: "fetchThreadMessages",
             threadId: flags.threadId,
           });
         }
         const threadId = ThreadId.make(rawThreadId);
-        const before = Option.getOrNull(flags.before)?.trim() ?? null;
-        const { messages, hasMoreOlder } = yield* collectThreadMessages({
-          live: input.live,
-          token: input.token,
-          timeouts: input.timeouts,
-          threadId,
-          before: before !== null && before.length > 0 ? MessageId.make(before) : null,
-          limit: Option.getOrNull(flags.limit),
-        });
+        const beforeFlag = Option.getOrNull(flags.before);
+        if (beforeFlag !== null && beforeFlag.trim().length === 0) {
+          return yield* new ThreadCliMessageCursorError({
+            operation: "fetchThreadMessages",
+            threadId: rawThreadId,
+            cursor: beforeFlag,
+            reason: "empty",
+          });
+        }
+        const { messages, hasMoreOlder } = yield* collectThreadMessages(
+          {
+            threadId,
+            before: beforeFlag === null ? null : MessageId.make(beforeFlag.trim()),
+            limit: Option.getOrNull(flags.limit),
+          },
+          liveThreadMessagesFetchDeps(input),
+        );
         // Best effort: an old server without the descriptor route still gets
         // messages, just without environment identity.
         const descriptor = yield* Effect.option(
@@ -1337,6 +1487,19 @@ const threadMessagesCommand = Command.make("messages", {
           input.live.shell.threads.find(
             (candidate) => candidate.id === threadId && candidate.archivedAt === null,
           ) ?? null;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const existingAttachmentPaths = new Set<string>();
+        for (const message of messages) {
+          for (const attachment of message.attachments ?? []) {
+            const path = resolveAttachmentPath({
+              attachmentsDir: input.attachmentsDir,
+              attachment,
+            });
+            if (path === null || existingAttachmentPaths.has(path)) continue;
+            const exists = yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false));
+            if (exists) existingAttachmentPaths.add(path);
+          }
+        }
         const report = threadMessagesReport({
           threadId,
           thread,
@@ -1350,7 +1513,7 @@ const threadMessagesCommand = Command.make("messages", {
             platform: Option.isSome(descriptor) ? descriptor.value.platform.os : null,
           },
           attachmentsDir: input.attachmentsDir,
-          attachmentFileExists: (path) => NodeFS.existsSync(path),
+          attachmentFileExists: (path) => existingAttachmentPaths.has(path),
         });
         yield* Console.log(flags.json ? jsonOutput(report) : renderThreadMessagesText(report));
       }),
