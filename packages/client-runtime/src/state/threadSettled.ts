@@ -69,6 +69,33 @@ export function changeRequestAutoSettles(
   return updatedAtMs >= anchorAtMs;
 }
 
+/**
+ * Whether a terminal change request should mute the thread's wake signal
+ * (the Woke pill / banner): finished work needs no wake-up call, but only
+ * while the settle would actually happen. A thread on a server without
+ * settlement, behind the fork's auto-settle master gate, or explicitly
+ * pinned active never settles on its change request — it stays in the
+ * active list, so the wake signal has to carry through. Shared by both web
+ * surfaces so the pill and the banner can never disagree.
+ */
+export function changeRequestMutesWakeSignal(options: {
+  readonly settlementSupported: boolean;
+  readonly autoSettleEnabled: boolean;
+  readonly autoSettleOnMerge?: boolean | undefined;
+  readonly changeRequest: ChangeRequestSettleSource | null | undefined;
+  readonly thread:
+    | (ThreadActivitySource & Pick<OrchestrationThreadShell, "settledOverride">)
+    | null
+    | undefined;
+}): boolean {
+  if (!options.settlementSupported || !options.autoSettleEnabled) return false;
+  if (options.thread?.settledOverride === "active") return false;
+  return changeRequestAutoSettles(options.changeRequest, {
+    autoSettleOnMerge: options.autoSettleOnMerge,
+    thread: options.thread,
+  });
+}
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function threadLastActivityAt(

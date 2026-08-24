@@ -29,7 +29,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
-  changeRequestAutoSettles,
+  changeRequestMutesWakeSignal,
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
@@ -4591,8 +4591,11 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThreadWokeVisible = useMemo(() => {
     if (activeThreadWokeAt === null) return false;
     if (
-      changeRequestAutoSettles(activeThreadChangeRequest, {
+      changeRequestMutesWakeSignal({
+        settlementSupported: supportsSettlement,
+        autoSettleEnabled,
         autoSettleOnMerge,
+        changeRequest: activeThreadChangeRequest,
         thread: activeThreadShell,
       })
     ) {
@@ -4620,7 +4623,9 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadChangeRequest,
     activeThreadShell,
     activeThreadWokeAt,
+    autoSettleEnabled,
     autoSettleOnMerge,
+    supportsSettlement,
   ]);
   const activeThreadSettled = useMemo(() => {
     if (activeThreadShell === null || !supportsSettlement) return false;

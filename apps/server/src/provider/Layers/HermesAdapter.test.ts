@@ -24,7 +24,11 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../../config.ts";
-import { hermesPromptSettlementBelongsToContext, makeHermesAdapter } from "./HermesAdapter.ts";
+import {
+  hermesPromptSettlementBelongsToContext,
+  makeHermesAdapter,
+  selectPermissionOptionId,
+} from "./HermesAdapter.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -108,6 +112,24 @@ it("requires a settlement to match the originating Hermes generation", () => {
       turnId,
     }),
   );
+});
+
+it("maps every accept-shaped decision to an accept-shaped permission option", () => {
+  const request = {
+    sessionId: "session-1",
+    options: [
+      { optionId: "opt-always", kind: "allow_always", name: "Always allow" },
+      { optionId: "opt-once", kind: "allow_once", name: "Allow once" },
+      { optionId: "opt-reject", kind: "reject_once", name: "Reject" },
+    ],
+    toolCall: { toolCallId: "tool-1" },
+  } as const;
+  assert.equal(selectPermissionOptionId(request, "accept"), "opt-once");
+  assert.equal(selectPermissionOptionId(request, "acceptForSession"), "opt-always");
+  // acceptAlways is not offered by Hermes today, but a client sending it must
+  // never fall through to a rejection.
+  assert.equal(selectPermissionOptionId(request, "acceptAlways"), "opt-always");
+  assert.equal(selectPermissionOptionId(request, "decline"), "opt-reject");
 });
 
 it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
