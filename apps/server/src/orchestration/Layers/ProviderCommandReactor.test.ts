@@ -160,6 +160,14 @@ describe("ProviderCommandReactor", () => {
     readonly forkConversation?: ProviderServiceShape["forkConversation"];
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    /**
+     * Simulates interrupt-failure recovery winning the session-write race:
+     * when turn-start-failure recovery dispatches its session write (the
+     * first `thread.session.set` carrying a `lastError`), a competing
+     * stopped write lands first — after the recovery's read, before its
+     * guarded write is decided.
+     */
+    readonly stopSessionBeforeRecoverySessionWrite?: boolean;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly startSessionEffect?: (
@@ -405,6 +413,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
+    let recoverySessionWriteStopInjected = false;
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -420,6 +429,32 @@ describe("ProviderCommandReactor", () => {
               ) {
                 return Effect.die(new Error("Injected title regeneration completion failure"));
               }
+            }
+            if (
+              input?.stopSessionBeforeRecoverySessionWrite === true &&
+              !recoverySessionWriteStopInjected &&
+              command.type === "thread.session.set" &&
+              command.session.lastError !== null
+            ) {
+              recoverySessionWriteStopInjected = true;
+              return engine
+                .dispatch({
+                  type: "thread.session.set",
+                  commandId: CommandId.make("cmd-injected-interrupt-stop"),
+                  threadId: command.threadId,
+                  session: {
+                    threadId: command.threadId,
+                    status: "stopped",
+                    providerName: "codex",
+                    providerInstanceId: ProviderInstanceId.make("codex"),
+                    runtimeMode: "approval-required",
+                    activeTurnId: null,
+                    lastError: "Interrupt failed; session stopped.",
+                    updatedAt: command.createdAt,
+                  },
+                  createdAt: command.createdAt,
+                })
+                .pipe(Effect.flatMap(() => engine.dispatch(command)));
             }
             return engine.dispatch(command);
           },
@@ -1941,9 +1976,13 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
-  effectIt.effect("drops a stale guarded session write instead of reviving a stopped session", () =>
+  effectIt.effect("drops a stale steer-recovery write instead of reviving a stopped session", () =>
     Effect.gen(function* () {
-      const harness = yield* Effect.promise(() => createHarness());
+      // The harness injects a competing stopped write between the recovery's
+      // session read and its guarded dispatch — the interrupt-recovery race.
+      const harness = yield* Effect.promise(() =>
+        createHarness({ stopSessionBeforeRecoverySessionWrite: true }),
+      );
       const now = "2026-01-01T00:00:00.000Z";
 
       yield* harness.engine.dispatch({
@@ -1964,47 +2003,57 @@ describe("ProviderCommandReactor", () => {
 
       yield* harness.engine.dispatch({
         type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-stopped-before-stale-write"),
+        commandId: CommandId.make("cmd-session-set-running-before-stale-write"),
         threadId: ThreadId.make("thread-1"),
         session: {
           threadId: ThreadId.make("thread-1"),
-          status: "stopped",
+          status: "running",
           providerName: "codex",
           providerInstanceId: ProviderInstanceId.make("codex"),
           runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: "Interrupt failed; session stopped.",
+          activeTurnId: asTurnId("active-turn"),
+          lastError: null,
           updatedAt: now,
         },
         createdAt: now,
       });
 
-      // A failed-steer recovery that observed the session while it was still
-      // running dispatches with that observation as its guard. The decider
-      // must reject it now that interrupt recovery stopped the session.
-      const error = yield* harness.engine
-        .dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.make("cmd-session-set-stale-guarded-write"),
-          threadId: ThreadId.make("thread-1"),
-          session: {
-            threadId: ThreadId.make("thread-1"),
-            status: "running",
-            providerName: "codex",
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("stale-turn"),
-            lastError: "The active review turn cannot accept same-turn steering.",
-            updatedAt: now,
-          },
-          expectedSession: {
-            status: "running",
-            activeTurnId: asTurnId("stale-turn"),
-          },
-          createdAt: now,
-        })
-        .pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      harness.sendTurn.mockImplementation(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: ProviderDriverKind.make("codex"),
+            method: "turn/start",
+            detail: "The active review turn cannot accept same-turn steering.",
+          }),
+        ),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-stale-write-steer"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stale-write-steer"),
+          role: "user",
+          text: "additional context",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+      // The dropped session write must not swallow the failure activity.
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+          return (
+            thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
+      );
 
       const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));

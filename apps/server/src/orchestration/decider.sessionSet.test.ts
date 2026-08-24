@@ -6,6 +6,7 @@ import {
   TurnId,
   type OrchestrationReadModel,
   type OrchestrationSession,
+  type ThreadSessionExpectation,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -68,10 +69,7 @@ function makeSession(
 
 function makeSessionSetCommand(
   session: OrchestrationSession,
-  expectedSession?: {
-    readonly status: OrchestrationSession["status"] | null;
-    readonly activeTurnId: OrchestrationSession["activeTurnId"];
-  },
+  expectedSession?: ThreadSessionExpectation,
 ) {
   return {
     type: "thread.session.set",
@@ -112,6 +110,15 @@ it.layer(NodeServices.layer)("session set compare-and-set decider", (it) => {
         readModel: makeReadModel(makeSession("stopped", null)),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
+
+      const absentError = yield* decideOrchestrationCommand({
+        command: makeSessionSetCommand(makeSession("running", turnId), {
+          status: "running",
+          activeTurnId: turnId,
+        }),
+        readModel: makeReadModel(null),
+      }).pipe(Effect.flip);
+      expect(absentError._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
 
@@ -128,23 +135,17 @@ it.layer(NodeServices.layer)("session set compare-and-set decider", (it) => {
     }),
   );
 
-  it.effect("treats a null expected status as 'no session yet'", () =>
+  it.effect("treats a null expectation as 'no session yet'", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
-        command: makeSessionSetCommand(makeSession("error"), {
-          status: null,
-          activeTurnId: null,
-        }),
+        command: makeSessionSetCommand(makeSession("error"), null),
         readModel: makeReadModel(null),
       });
       const events = Array.isArray(result) ? result : [result];
       expect(events.map((event) => event.type)).toEqual(["thread.session-set"]);
 
       const error = yield* decideOrchestrationCommand({
-        command: makeSessionSetCommand(makeSession("error"), {
-          status: null,
-          activeTurnId: null,
-        }),
+        command: makeSessionSetCommand(makeSession("error"), null),
         readModel: makeReadModel(makeSession("running", TurnId.make("turn-1"))),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");

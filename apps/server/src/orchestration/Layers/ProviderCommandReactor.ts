@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type ThreadSessionExpectation,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -447,10 +448,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly createdAt: string;
-    readonly expectedSession?: {
-      readonly status: OrchestrationSession["status"] | null;
-      readonly activeTurnId: OrchestrationSession["activeTurnId"];
-    };
+    readonly expectedSession?: ThreadSessionExpectation;
   }) =>
     serverCommandId("provider-session-set").pipe(
       Effect.flatMap((commandId) =>
@@ -496,19 +494,18 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
-      // The write above encodes a decision taken from the session read at the
-      // top of this function. Interrupt-failure recovery can stop the session
-      // between that read and this dispatch; without the guard the stale write
-      // would revive the dead provider as running with its old turn. A CAS
-      // mismatch means the newer state already carries the truth, so the drop
-      // is silent — the failure activity below still lands either way.
-      expectedSession: {
-        status: session?.status ?? null,
-        activeTurnId: session?.activeTurnId ?? null,
-      },
+      // Interrupt-failure recovery can stop the session between the read above
+      // and this write; without the guard the stale write revives the dead
+      // provider as running with its old turn.
+      expectedSession: session
+        ? { status: session.status, activeTurnId: session.activeTurnId }
+        : null,
     }).pipe(
+      // A rejected write means the session moved on (or the thread vanished)
+      // and the newer state carries the truth; the caller still appends the
+      // failure activity after this settles.
       Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
-        Effect.logDebug("skipped stale turn-start-failure session write", {
+        Effect.logDebug("turn-start-failure session write rejected", {
           threadId: input.threadId,
           detail: error.detail,
         }),

@@ -1108,24 +1108,26 @@ export const ClientOrchestrationCommand = Schema.Union([
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
+// Compare-and-set guard for `thread.session.set` writers that derive the new
+// session from a read taken outside the decider: the write applies only while
+// the thread's current session still matches this observed state (null = the
+// writer observed no session). The decider checks it serially against the
+// read model, so a writer that lost a race is rejected instead of reviving a
+// session another recovery path already stopped.
+export const ThreadSessionExpectation = Schema.NullOr(
+  Schema.Struct({
+    status: OrchestrationSessionStatus,
+    activeTurnId: Schema.NullOr(TurnId),
+  }),
+);
+export type ThreadSessionExpectation = typeof ThreadSessionExpectation.Type;
+
 const ThreadSessionSetCommand = Schema.Struct({
   type: Schema.Literal("thread.session.set"),
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
-  // Compare-and-set guard for recovery writers that derive `session` from a
-  // read taken outside the decider: the write applies only while the thread's
-  // current session still matches this observed pair (null status = no
-  // session). Commands are decided serially against the read model, so a
-  // mismatch means the writer lost a race — the decider rejects the command
-  // instead of letting the stale write revive a session another recovery
-  // path already stopped.
-  expectedSession: Schema.optional(
-    Schema.Struct({
-      status: Schema.NullOr(OrchestrationSessionStatus),
-      activeTurnId: Schema.NullOr(TurnId),
-    }),
-  ),
+  expectedSession: Schema.optional(ThreadSessionExpectation),
   createdAt: IsoDateTime,
 });
 

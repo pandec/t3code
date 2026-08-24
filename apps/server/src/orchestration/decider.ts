@@ -1404,22 +1404,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      // Compare-and-set writes are speculative: the writer decided the new
-      // session from a read it took before dispatching, and another writer
-      // (e.g. interrupt-failure recovery stopping the session) may have won
-      // the race in between. Commands are decided serially against this read
-      // model, so checking here — not at the writer's read — closes that race.
+      // Guarded writes are speculative: the writer derived `session` from a
+      // read it took before dispatching. Commands are decided serially against
+      // this read model, so checking here — not at the writer's read — closes
+      // that read-write race (see ThreadSessionExpectation in contracts).
       if (command.expectedSession !== undefined) {
-        const currentStatus = thread.session?.status ?? null;
-        const currentActiveTurnId = thread.session?.activeTurnId ?? null;
-        if (
-          currentStatus !== command.expectedSession.status ||
-          currentActiveTurnId !== command.expectedSession.activeTurnId
-        ) {
+        const current = thread.session ?? null;
+        const matches =
+          command.expectedSession === null
+            ? current === null
+            : current !== null &&
+              current.status === command.expectedSession.status &&
+              current.activeTurnId === command.expectedSession.activeTurnId;
+        if (!matches) {
+          const describe = (
+            observed: { readonly status: string; readonly activeTurnId: string | null } | null,
+          ) => (observed ? `${observed.status}/${observed.activeTurnId ?? "no-turn"}` : "absent");
           return yield* Effect.fail(
             new OrchestrationCommandInvariantError({
               commandType: command.type,
-              detail: `thread ${command.threadId} session is ${currentStatus ?? "none"}/${currentActiveTurnId ?? "no-turn"} but the write expected ${command.expectedSession.status ?? "none"}/${command.expectedSession.activeTurnId ?? "no-turn"}; dropping stale session set`,
+              detail: `thread ${command.threadId} session is ${describe(current)} but the write expected ${describe(command.expectedSession)}; dropping stale session set`,
             }),
           );
         }
