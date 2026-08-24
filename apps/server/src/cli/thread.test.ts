@@ -2,11 +2,12 @@ import {
   ProjectId,
   ProviderInstanceId,
   TurnId,
+  type OrchestrationMessage,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -25,8 +26,10 @@ import {
   buildNewWorktreeBootstrap,
   compensateFailedThreadStart,
   decideThreadCliWorkspace,
+  renderThreadMessagesText,
   resolveThreadCliDefaultWorkspace,
   resolveThreadCliWorkspaceSelection,
+  threadMessagesReport,
   threadSummary,
   threadWaitDrainFlag,
   threadWaitSummary,
@@ -573,4 +576,143 @@ it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
       assert.deepEqual(selection, { mode: "checkout" });
     }),
   );
+});
+
+describe("thread messages report", () => {
+  const messageWith = (
+    input: Partial<Record<keyof OrchestrationMessage, unknown>>,
+  ): OrchestrationMessage =>
+    ({
+      id: "message-1",
+      role: "assistant",
+      text: "Hello",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-08-20T10:00:00.000Z",
+      updatedAt: "2026-08-20T10:00:00.000Z",
+      ...input,
+    }) as OrchestrationMessage;
+
+  const machine = {
+    hostname: "spacemac",
+    environmentId: "env-1",
+    environmentLabel: "SpaceMac",
+    platform: "darwin",
+  };
+
+  const reportWith = (input: Partial<Parameters<typeof threadMessagesReport>[0]>) =>
+    threadMessagesReport({
+      threadId: "thread-1",
+      thread: threadWith({}),
+      messages: [],
+      hasMoreOlder: false,
+      role: null,
+      machine,
+      attachmentsDir: "/data/attachments",
+      attachmentFileExists: () => true,
+      ...input,
+    });
+
+  it("excludes system messages by default and keeps user and assistant", () => {
+    const report = reportWith({
+      messages: [
+        messageWith({ id: "m1", role: "system", text: "internal" }),
+        messageWith({ id: "m2", role: "user", text: "question" }),
+        messageWith({ id: "m3", role: "assistant", text: "answer" }),
+      ],
+    });
+
+    assert.deepEqual(
+      report.messages.map((message) => message.id),
+      ["m2", "m3"],
+    );
+    assert.equal(report.archived, false);
+    assert.equal(report.title, "Thread");
+  });
+
+  it("narrows to a single role when requested", () => {
+    const report = reportWith({
+      role: "assistant",
+      messages: [
+        messageWith({ id: "m1", role: "user" }),
+        messageWith({ id: "m2", role: "assistant" }),
+      ],
+    });
+
+    assert.deepEqual(
+      report.messages.map((message) => message.id),
+      ["m2"],
+    );
+  });
+
+  it("marks threads outside the active shell as archived and pages from the unfiltered oldest message", () => {
+    const report = reportWith({
+      thread: null,
+      hasMoreOlder: true,
+      messages: [
+        messageWith({ id: "m1", role: "system", text: "oldest, filtered out" }),
+        messageWith({ id: "m2", role: "user" }),
+      ],
+    });
+
+    assert.equal(report.archived, true);
+    assert.isNull(report.title);
+    assert.isNull(report.state);
+    assert.equal(report.nextBefore, "m1");
+  });
+
+  it("resolves attachment paths against the attachments directory and reports missing files", () => {
+    const report = reportWith({
+      attachmentFileExists: (path) => path.endsWith("thread-1-present.png"),
+      messages: [
+        messageWith({
+          id: "m1",
+          role: "user",
+          attachments: [
+            {
+              type: "image",
+              id: "thread-1-present",
+              name: "present.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
+            {
+              type: "image",
+              id: "thread-1-missing",
+              name: "missing.png",
+              mimeType: "image/png",
+              sizeBytes: 20,
+            },
+          ] as unknown as OrchestrationMessage["attachments"],
+        }),
+      ],
+    });
+
+    const attachments = report.messages[0]?.attachments ?? [];
+    assert.equal(attachments[0]?.path, "/data/attachments/thread-1-present.png");
+    assert.isTrue(attachments[0]?.exists);
+    assert.equal(attachments[1]?.path, "/data/attachments/thread-1-missing.png");
+    assert.isFalse(attachments[1]?.exists);
+
+    const text = renderThreadMessagesText(report);
+    assert.include(text, "-> /data/attachments/thread-1-missing.png [not found on this machine]");
+    assert.include(text, "Attachment paths are local to spacemac.");
+  });
+
+  it("renders a transcript with machine identity and a paging hint", () => {
+    const report = reportWith({
+      hasMoreOlder: true,
+      messages: [
+        messageWith({ id: "m1", role: "user", text: "question" }),
+        messageWith({ id: "m2", role: "assistant", text: "answer", streaming: true }),
+      ],
+    });
+
+    const text = renderThreadMessagesText(report);
+    assert.include(text, "Thread: Thread");
+    assert.include(text, "Machine: spacemac (SpaceMac)");
+    assert.include(text, "[user] 2026-08-20T10:00:00.000Z\nquestion");
+    assert.include(text, "[assistant, streaming] 2026-08-20T10:00:00.000Z\nanswer");
+    assert.include(text, "Rerun with --before m1");
+  });
 });

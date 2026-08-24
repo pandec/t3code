@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -11,6 +15,8 @@ import {
   ThreadId,
   type ClientOrchestrationCommand,
   type ModelSelection,
+  type OrchestrationMessage,
+  type OrchestrationMessageRole,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   type ThreadEnvMode,
@@ -35,6 +41,7 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
@@ -55,6 +62,7 @@ import {
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
+  fetchLiveOrchestrationThreadMessages,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
@@ -498,6 +506,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
     readonly token: string;
     readonly timeouts: CliLiveServerReadTimeouts;
     readonly settingsPath: string;
+    readonly attachmentsDir: string;
   }) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
@@ -509,7 +518,14 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
       const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
       const outcome = yield* withResolvedLiveOrchestrationServer(
         { environmentAuth, config, label: "t3 thread cli", timeouts },
-        (live, token) => run({ live, token, timeouts, settingsPath: config.settingsPath }),
+        (live, token) =>
+          run({
+            live,
+            token,
+            timeouts,
+            settingsPath: config.settingsPath,
+            attachmentsDir: config.attachmentsDir,
+          }),
       );
       if (Option.isNone(outcome)) {
         return yield* new CliOrchestrationServerUnavailableError({
@@ -1138,6 +1154,210 @@ const threadWaitCommand = Command.make("wait", {
   ),
 );
 
+// One server request returns at most 500 messages; older history pages via
+// the `before` cursor.
+const THREAD_MESSAGES_PAGE_LIMIT = 500;
+
+const collectThreadMessages = Effect.fn("collectThreadMessages")(function* (input: {
+  readonly live: CliLiveOrchestrationServer;
+  readonly token: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+  readonly threadId: ThreadId;
+  readonly before: MessageId | null;
+  readonly limit: number | null;
+}) {
+  let collected: ReadonlyArray<OrchestrationMessage> = [];
+  let cursor = input.before;
+  let hasMoreOlder = false;
+  for (;;) {
+    const remaining = input.limit === null ? null : input.limit - collected.length;
+    const page = yield* fetchLiveOrchestrationThreadMessages(
+      input.live.origin,
+      input.token,
+      {
+        threadId: input.threadId,
+        ...(cursor === null ? {} : { before: cursor }),
+        ...(remaining === null ? {} : { limit: Math.min(remaining, THREAD_MESSAGES_PAGE_LIMIT) }),
+      },
+      input.timeouts,
+    );
+    collected = [...page.messages, ...collected];
+    hasMoreOlder = page.hasMoreOlder;
+    const oldest = page.messages[0];
+    if (!page.hasMoreOlder || oldest === undefined) break;
+    if (input.limit !== null && collected.length >= input.limit) break;
+    cursor = oldest.id;
+  }
+  return { messages: collected, hasMoreOlder };
+});
+
+export interface ThreadMessagesMachine {
+  readonly hostname: string;
+  readonly environmentId: string | null;
+  readonly environmentLabel: string | null;
+  readonly platform: string | null;
+}
+
+export const threadMessagesReport = (input: {
+  readonly threadId: string;
+  // Null when the thread is not in the active shell — the messages endpoint
+  // still served it, so it exists but is archived.
+  readonly thread: OrchestrationThreadShell | null;
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly hasMoreOlder: boolean;
+  readonly role: OrchestrationMessageRole | null;
+  readonly machine: ThreadMessagesMachine;
+  readonly attachmentsDir: string;
+  readonly attachmentFileExists: (path: string) => boolean;
+}) => {
+  const visible = input.messages.filter((message) =>
+    input.role === null ? message.role !== "system" : message.role === input.role,
+  );
+  // Paging cursor from the unfiltered page, so --before composes with --role.
+  const oldest = input.messages[0];
+  return {
+    threadId: input.threadId,
+    title: input.thread?.title ?? null,
+    state: input.thread === null ? null : threadCliState(input.thread),
+    archived: input.thread === null,
+    machine: input.machine,
+    messages: visible.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      turnId: message.turnId,
+      ...(message.streaming ? { streaming: true } : {}),
+      attachments: (message.attachments ?? []).map((attachment) => {
+        const path = resolveAttachmentPath({
+          attachmentsDir: input.attachmentsDir,
+          attachment,
+        });
+        return {
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          path,
+          exists: path !== null && input.attachmentFileExists(path),
+        };
+      }),
+    })),
+    hasMoreOlder: input.hasMoreOlder,
+    nextBefore: input.hasMoreOlder && oldest !== undefined ? oldest.id : null,
+  };
+};
+
+export type ThreadMessagesReport = ReturnType<typeof threadMessagesReport>;
+
+export const renderThreadMessagesText = (report: ThreadMessagesReport): string => {
+  const lines: Array<string> = [
+    `Thread: ${report.title ?? report.threadId}${report.archived ? " (archived)" : ""}`,
+    `Machine: ${report.machine.hostname}${
+      report.machine.environmentLabel === null ? "" : ` (${report.machine.environmentLabel})`
+    }`,
+  ];
+  for (const message of report.messages) {
+    lines.push(
+      "",
+      `[${message.role}${message.streaming ? ", streaming" : ""}] ${message.createdAt}`,
+    );
+    if (message.text.length > 0) lines.push(message.text);
+    for (const attachment of message.attachments) {
+      lines.push(
+        `  attachment: ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes) -> ${
+          attachment.path ?? "unresolved"
+        }${attachment.exists ? "" : " [not found on this machine]"}`,
+      );
+    }
+  }
+  if (report.messages.length === 0) lines.push("", "No messages.");
+  if (report.messages.some((message) => message.attachments.length > 0)) {
+    lines.push(
+      "",
+      `Attachment paths are local to ${report.machine.hostname}. When reading this thread from another machine, fetch them over SSH.`,
+    );
+  }
+  if (report.hasMoreOlder && report.nextBefore !== null) {
+    lines.push(
+      "",
+      `Older messages exist. Rerun with --before ${report.nextBefore} to page further back.`,
+    );
+  }
+  return lines.join("\n");
+};
+
+const threadMessagesCommand = Command.make("messages", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  limit: Flag.integer("limit").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
+    Flag.withDescription("Only the newest N messages (counted before role filtering)."),
+    Flag.optional,
+  ),
+  before: Flag.string("before").pipe(
+    Flag.withDescription("Only messages older than this message id."),
+    Flag.optional,
+  ),
+  role: Flag.choice("role", ["user", "assistant", "system"] as const).pipe(
+    Flag.withDescription("Only messages with this role. Default: user and assistant."),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Print a thread's conversation messages, without tool calls. Includes archived threads.",
+  ),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const rawThreadId = flags.threadId.trim();
+        if (rawThreadId.length === 0) {
+          return yield* new ThreadCliNotFoundError({
+            operation: "resolveThread",
+            threadId: flags.threadId,
+          });
+        }
+        const threadId = ThreadId.make(rawThreadId);
+        const before = Option.getOrNull(flags.before)?.trim() ?? null;
+        const { messages, hasMoreOlder } = yield* collectThreadMessages({
+          live: input.live,
+          token: input.token,
+          timeouts: input.timeouts,
+          threadId,
+          before: before !== null && before.length > 0 ? MessageId.make(before) : null,
+          limit: Option.getOrNull(flags.limit),
+        });
+        // Best effort: an old server without the descriptor route still gets
+        // messages, just without environment identity.
+        const descriptor = yield* Effect.option(
+          fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts),
+        );
+        const thread =
+          input.live.shell.threads.find(
+            (candidate) => candidate.id === threadId && candidate.archivedAt === null,
+          ) ?? null;
+        const report = threadMessagesReport({
+          threadId,
+          thread,
+          messages,
+          hasMoreOlder,
+          role: Option.getOrNull(flags.role),
+          machine: {
+            hostname: NodeOS.hostname(),
+            environmentId: Option.isSome(descriptor) ? descriptor.value.environmentId : null,
+            environmentLabel: Option.isSome(descriptor) ? descriptor.value.label : null,
+            platform: Option.isSome(descriptor) ? descriptor.value.platform.os : null,
+          },
+          attachmentsDir: input.attachmentsDir,
+          attachmentFileExists: (path) => NodeFS.existsSync(path),
+        });
+        yield* Console.log(flags.json ? jsonOutput(report) : renderThreadMessagesText(report));
+      }),
+    ),
+  ),
+);
+
 const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
@@ -1176,6 +1396,7 @@ export const threadCommand = Command.make("thread").pipe(
     threadRenameCommand,
     threadInterruptCommand,
     threadStatusCommand,
+    threadMessagesCommand,
     threadWaitCommand,
     threadArchiveCommand,
   ]),

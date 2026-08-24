@@ -5,7 +5,10 @@ import {
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
   EnvironmentHttpConflictError,
+  EnvironmentResourceNotFoundError,
+  type MessageId,
   type OrchestrationShellSnapshot,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -436,6 +439,52 @@ export const fetchLiveOrchestrationShell = (
       options?.phase ?? "discovery",
       options?.timeout ?? timeouts.discovery,
     ),
+  );
+
+const isEnvironmentResourceNotFoundError = Schema.is(EnvironmentResourceNotFoundError);
+
+export class CliOrchestrationThreadNotFoundError extends Schema.TaggedErrorClass<CliOrchestrationThreadNotFoundError>()(
+  "CliOrchestrationThreadNotFoundError",
+  {
+    operation: Schema.Literal("fetchThreadMessages"),
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `No thread found for '${this.threadId}'.`;
+  }
+}
+
+export const fetchLiveOrchestrationThreadMessages = (
+  origin: string,
+  bearerToken: string,
+  input: {
+    readonly threadId: ThreadId;
+    readonly before?: MessageId;
+    readonly limit?: number;
+  },
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadMessages({
+      params: { threadId: input.threadId },
+      query: {
+        ...(input.before === undefined ? {} : { before: input.before }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      },
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.mapError((cause) =>
+      isEnvironmentResourceNotFoundError(cause)
+        ? new CliOrchestrationThreadNotFoundError({
+            operation: "fetchThreadMessages",
+            threadId: input.threadId,
+          })
+        : cliOrchestrationErrorFromRequest(cause),
+    ),
+    withLiveServerReadTimeout("snapshot", timeouts.read),
   );
 
 export const fetchLiveEnvironmentDescriptor = (

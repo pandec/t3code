@@ -123,6 +123,7 @@ t3 thread new --project /absolute/path/to/repository --message "Continue the ref
 t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
+t3 thread messages <thread-id> --json
 t3 thread interrupt <thread-id> --json
 t3 thread wait <thread-id> --json
 t3 thread archive <thread-id> --json
@@ -140,6 +141,24 @@ commands intentionally require a thread id so automation cannot act on an ambigu
 list and status summaries also include `backgroundLiveness`: `"working"` for native subagents or
 workflows, `"monitoring"` when only watch loops remain, and `null` when no native background work is
 known.
+
+### Reading messages
+
+`t3 thread messages <thread-id>` prints the conversation as a transcript, user and assistant
+messages only, without tool calls or file activity. `--json` returns each message with its id,
+role, text, timestamps, and attachment metadata instead. Unlike the other thread commands, this one
+also reads archived threads; the output marks those with `"archived": true` and a `null` title.
+
+The default is the full history, paged from the server internally. `--limit N` returns only the
+newest N messages; when older ones remain, the JSON sets `hasMoreOlder` and provides a `nextBefore`
+message id to pass as `--before` on the next call. `--role user|assistant|system` narrows to one
+role. System messages only appear when requested that way.
+
+Attachments are files on the machine that runs the server. Each one resolves to an absolute `path`
+on that machine plus an `exists` flag, and the output names the machine itself: `machine.hostname`,
+with the environment id and label when the server reports them. When you run this command over SSH
+on another machine, the paths belong to that host, not yours. Fetch the files over SSH rather than
+concluding they are missing.
 
 ### Waiting for turns
 
