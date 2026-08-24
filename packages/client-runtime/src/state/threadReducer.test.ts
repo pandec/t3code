@@ -619,6 +619,62 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("maps agent voice-reply speech from a completion onto the existing message", () => {
+      const threadWithMessage: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("msg-voice"),
+            role: "assistant",
+            text: "Written reply",
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:00:00.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(threadWithMessage, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-01T06:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-voice"),
+          role: "assistant",
+          text: "",
+          speech: {
+            speechId: "speech-1",
+            transcript: "Spoken version",
+            mimeType: "audio/mpeg",
+            sizeBytes: 4321,
+            sourceTextHash: "hash",
+            voiceId: "voice-1",
+            ttsModel: "eleven_flash_v2_5",
+            origin: "agent",
+            createdAt: "2026-04-01T06:01:00.000Z",
+          },
+          turnId: TurnId.make("turn-1"),
+          streaming: false,
+          createdAt: "2026-04-01T06:01:00.000Z",
+          updatedAt: "2026-04-01T06:01:00.000Z",
+        },
+      } as Parameters<typeof applyThreadDetailEvent>[1]);
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        const updated = result.thread.messages[0];
+        expect(updated?.text).toBe("Written reply");
+        expect(updated?.speech?.origin).toBe("agent");
+        expect(updated?.speech?.speechId).toBe("speech-1");
+        expect(updated?.speech?.transcript).toBe("Spoken version");
+      }
+    });
+
     it("updates latestTurn for assistant messages with a turn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
