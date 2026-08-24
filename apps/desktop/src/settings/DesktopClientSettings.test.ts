@@ -44,6 +44,7 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   maskProviderUsageEmails: false,
   planModeEnabled: false,
+  showSkillsInSlashMenu: false,
   providerModelPreferences: {},
   providerUsageWarningPercent: 80,
   providerUsageCriticalPercent: 95,

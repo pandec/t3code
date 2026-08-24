@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   isProviderDriverKind,
+  type MessageId,
   type ModelSelection,
   type OrchestrationSessionStatus,
   type ProviderDriverKind,
@@ -22,6 +23,7 @@ import {
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 import type { ComposerSubmissionIntent } from "../composer-logic";
+import type { TimelineEntry } from "../session-logic";
 
 // v2: keyed by scoped `environmentId:projectId`. Bare project ids collide
 // across environments (cloned state), so v1 entries were ambiguous and are
@@ -43,6 +45,31 @@ export function shouldDockDraftHeroForSubmission(input: {
     input.isDraftHeroState &&
     input.activeThreadKey !== null
   );
+}
+
+export function shouldReleaseTimelineAnchorForToolActivity(input: {
+  anchorMessageId: MessageId | null;
+  liveFollowEnabled: boolean;
+  runningTurnId: TurnId | null;
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+}): boolean {
+  if (input.anchorMessageId === null || !input.liveFollowEnabled || input.runningTurnId === null) {
+    return false;
+  }
+
+  return input.timelineEntries.some((timelineEntry) => {
+    if (timelineEntry.kind !== "work" || timelineEntry.entry.turnId !== input.runningTurnId) {
+      return false;
+    }
+
+    const entry = timelineEntry.entry;
+    return (
+      entry.tone === "tool" ||
+      entry.itemType !== undefined ||
+      entry.requestKind !== undefined ||
+      (entry.command?.trim().length ?? 0) > 0
+    );
+  });
 }
 
 export function resolveDraftHeroState(input: {
