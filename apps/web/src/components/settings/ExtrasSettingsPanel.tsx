@@ -942,6 +942,7 @@ function VoiceExtrasSection() {
       />
 
       <SettingsRow
+        {...searchableSetting("agent-voice-replies")}
         title="Agent voice replies"
         description="Give agents a voice_reply tool that answers with a spoken recording shown as the main message. Applies to sessions started from now on."
         resetAction={

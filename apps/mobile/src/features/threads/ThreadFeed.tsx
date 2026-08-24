@@ -1231,14 +1231,15 @@ function renderFeedEntry(
       );
     }
 
-    // Skip empty assistant messages (no text, no attachments) — they would
-    // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (message.text.trim().length === 0 && attachments.length === 0) {
+    const agentVoiceReply = message.speech?.origin === "agent" ? message.speech : null;
+    // Skip empty assistant messages (no text, no attachments, no voice
+    // reply) — they would render as an orphaned timestamp and break adjacent
+    // activity-group merging.
+    if (message.text.trim().length === 0 && attachments.length === 0 && agentVoiceReply === null) {
       return null;
     }
 
     const enterAnimated = isFreshTimestamp(message.createdAt);
-    const agentVoiceReply = message.speech?.origin === "agent" ? message.speech : null;
     const writtenReply =
       message.text.trim().length > 0 ? (
         hasNativeSelectableMarkdownText() ? (
@@ -1271,7 +1272,9 @@ function renderFeedEntry(
             speech={agentVoiceReply}
             iconSubtleColor={iconSubtleColor}
           >
-            {writtenReply}
+            {/* A voice-only turn's text is the transcript itself; the
+                player's "View transcript" already covers it. */}
+            {message.text.trim() === agentVoiceReply.transcript.trim() ? null : writtenReply}
           </AssistantAgentVoiceReply>
         ) : (
           writtenReply
@@ -1337,6 +1340,10 @@ function AssistantAgentVoiceReply(props: {
 }) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
+  // When the recording's file is gone, the written reply becomes the message
+  // content and is forced visible instead of hiding behind the toggle.
+  const [audioUnavailable, setAudioUnavailable] = useState(false);
+  const onAudioUnavailable = useCallback(() => setAudioUnavailable(true), []);
   const hasWrittenReply = props.children !== null;
 
   return (
@@ -1348,9 +1355,10 @@ function AssistantAgentVoiceReply(props: {
         transcriptExpanded={transcriptExpanded}
         onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
         onRetry={null}
+        onAudioUnavailable={onAudioUnavailable}
         primary
       />
-      {hasWrittenReply ? (
+      {hasWrittenReply && !audioUnavailable ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: writtenReplyExpanded }}
@@ -1368,7 +1376,7 @@ function AssistantAgentVoiceReply(props: {
           />
         </Pressable>
       ) : null}
-      {writtenReplyExpanded ? props.children : null}
+      {hasWrittenReply && (writtenReplyExpanded || audioUnavailable) ? props.children : null}
     </View>
   );
 }
@@ -1602,6 +1610,8 @@ function AssistantSpeechPlayer(props: {
   readonly onToggleTranscript: () => void;
   /** null hides the regenerate action (agent recordings cannot be re-made client-side). */
   readonly onRetry: (() => void) | null;
+  /** Lets the row fall back to the written reply when the audio is gone. */
+  readonly onAudioUnavailable?: () => void;
   /** Agent voice replies render the player as the message's main content. */
   readonly primary?: boolean;
 }) {
@@ -1617,8 +1627,19 @@ function AssistantSpeechPlayer(props: {
     attachmentId: props.speech.speechId,
   });
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
-  const player = useAudioPlayer(audioUrl, { updateInterval: 250 });
+  // Primary players mount for every voice-reply row in the feed, so they must
+  // not fetch their MP3 until the user asks to play — a thread can hold many
+  // recordings and the app may be on a remote or cellular link. Secondary
+  // players only mount after an explicit expand, which is consent enough.
+  const [activated, setActivated] = useState(props.primary !== true);
+  const [pendingPlay, setPendingPlay] = useState(false);
+  const player = useAudioPlayer(activated ? audioUrl : null, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
+  const audioUnavailable = audioUrlState._tag === "Failure";
+  const onAudioUnavailableProp = props.onAudioUnavailable;
+  useEffect(() => {
+    if (audioUnavailable) onAudioUnavailableProp?.();
+  }, [audioUnavailable, onAudioUnavailableProp]);
   const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
 
   const pausePlayer = useCallback(() => {
@@ -1650,32 +1671,48 @@ function AssistantSpeechPlayer(props: {
     [pausePlayer, props.speech.speechId],
   );
 
+  const startPlayback = useCallback(
+    () =>
+      startListeningPlayback({
+        id: props.speech.speechId,
+        pause: pausePlayer,
+        restartFromBeginning: status.duration > 0 && status.currentTime >= status.duration - 0.1,
+        seekToBeginning: () => player.seekTo(0),
+        prepareAudioMode: () =>
+          setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
+        applyPlaybackRate,
+        play: () => player.play(),
+      }),
+    [
+      applyPlaybackRate,
+      pausePlayer,
+      player,
+      props.speech.speechId,
+      status.currentTime,
+      status.duration,
+    ],
+  );
+
   const onTogglePlayback = useCallback(async () => {
     if (status.playing) {
       pausePlayer();
       return;
     }
     if (blocked) return;
-    await startListeningPlayback({
-      id: props.speech.speechId,
-      pause: pausePlayer,
-      restartFromBeginning: status.duration > 0 && status.currentTime >= status.duration - 0.1,
-      seekToBeginning: () => player.seekTo(0),
-      prepareAudioMode: () =>
-        setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
-      applyPlaybackRate,
-      play: () => player.play(),
-    });
-  }, [
-    applyPlaybackRate,
-    blocked,
-    pausePlayer,
-    player,
-    props.speech.speechId,
-    status.currentTime,
-    status.duration,
-    status.playing,
-  ]);
+    if (!activated) {
+      setActivated(true);
+      setPendingPlay(true);
+      return;
+    }
+    await startPlayback();
+  }, [activated, blocked, pausePlayer, startPlayback, status.playing]);
+
+  // First tap on a deferred player: wait for the source to attach, then play.
+  useEffect(() => {
+    if (!pendingPlay || !activated || audioUrl === null) return;
+    setPendingPlay(false);
+    void startPlayback();
+  }, [activated, audioUrl, pendingPlay, startPlayback]);
 
   return (
     <View
@@ -1708,7 +1745,7 @@ function AssistantSpeechPlayer(props: {
             </Pressable>
           ) : null}
         </View>
-      ) : audioUrl === null ? (
+      ) : audioUrl === null && activated ? (
         <View className="flex-row items-center gap-2 py-1">
           <ActivityIndicator size="small" color={props.iconSubtleColor} />
           <Text className="text-xs text-foreground-muted">Loading audio…</Text>
@@ -1720,10 +1757,10 @@ function AssistantSpeechPlayer(props: {
               accessibilityRole="button"
               accessibilityLabel={
                 blocked
-                  ? "Play listening version unavailable while recording"
+                  ? `Play ${props.primary ? "voice reply" : "listening version"} unavailable while recording`
                   : status.playing
-                    ? "Pause listening version"
-                    : "Play listening version"
+                    ? `Pause ${props.primary ? "voice reply" : "listening version"}`
+                    : `Play ${props.primary ? "voice reply" : "listening version"}`
               }
               accessibilityState={{ disabled: blocked }}
               className={cn(

@@ -298,6 +298,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/extras",
   },
   {
+    id: "agent-voice-replies",
+    title: "Agent voice replies",
+    to: "/settings/extras",
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",

@@ -1292,9 +1292,22 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
   const isAgentVoiceReply = speech !== null && speech.origin === "agent";
   const speechExpanded = speechExpandedState ?? isAgentVoiceReply;
-  // Never leave the row content-less: when the player is hidden, the written
-  // reply always shows.
-  const showMessageText = !isAgentVoiceReply || writtenReplyExpanded || !speechExpanded;
+  const [voiceReplyAudioUnavailable, setVoiceReplyAudioUnavailable] = useState(false);
+  const onVoiceReplyAudioUnavailable = useCallback(() => setVoiceReplyAudioUnavailable(true), []);
+  // A voice-only turn publishes its transcript as the message text; a
+  // "written reply" that merely duplicates the transcript is not offered.
+  const hasDistinctWrittenReply =
+    isAgentVoiceReply &&
+    speech !== null &&
+    row.message.text.trim().length > 0 &&
+    row.message.text.trim() !== speech.transcript.trim();
+  // Never leave the row content-less: when the player is hidden or its audio
+  // cannot load, the written reply always shows.
+  const showMessageText =
+    !isAgentVoiceReply ||
+    !speechExpanded ||
+    voiceReplyAudioUnavailable ||
+    (writtenReplyExpanded && hasDistinctWrittenReply);
 
   const canShowSpeech =
     speech !== null ||
@@ -1385,10 +1398,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             environmentId={ctx.activeThreadEnvironmentId}
             speech={speech}
             onRetry={null}
+            onAudioUnavailable={onVoiceReplyAudioUnavailable}
             primary
           />
         ) : null}
-        {isAgentVoiceReply && speechExpanded ? (
+        {isAgentVoiceReply &&
+        speechExpanded &&
+        hasDistinctWrittenReply &&
+        !voiceReplyAudioUnavailable ? (
           <Button
             variant="ghost"
             size="xs"
@@ -1536,6 +1553,7 @@ function AssistantSpeechPlayer({
   environmentId,
   speech,
   onRetry,
+  onAudioUnavailable,
   primary = false,
 }: {
   environmentId: EnvironmentId;
@@ -1546,6 +1564,8 @@ function AssistantSpeechPlayer({
    * version and destroy the agent's recording.
    */
   onRetry: (() => void) | null;
+  /** Lets the row fall back to the written reply when the audio is gone. */
+  onAudioUnavailable?: () => void;
   /** Agent voice replies render the player as the message's main content. */
   primary?: boolean;
 }) {
@@ -1555,6 +1575,10 @@ function AssistantSpeechPlayer({
     _tag: "attachment",
     attachmentId: speech.speechId,
   });
+  const audioUnavailable = audioUrlState._tag === "Failure";
+  useEffect(() => {
+    if (audioUnavailable) onAudioUnavailable?.();
+  }, [audioUnavailable, onAudioUnavailable]);
 
   const pauseAudio = useCallback(() => {
     audioRef.current?.pause();
