@@ -5,7 +5,10 @@ import {
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
   EnvironmentHttpConflictError,
+  EnvironmentResourceNotFoundError,
+  type MessageId,
   type OrchestrationShellSnapshot,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -126,6 +129,7 @@ export const CliLiveServerReadPhase = Schema.Literals([
   "discovery",
   "descriptor",
   "snapshot",
+  "messages",
   "wait",
 ]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
@@ -436,6 +440,84 @@ export const fetchLiveOrchestrationShell = (
       options?.phase ?? "discovery",
       options?.timeout ?? timeouts.discovery,
     ),
+  );
+
+const isEnvironmentResourceNotFoundError = Schema.is(EnvironmentResourceNotFoundError);
+
+export class CliOrchestrationThreadNotFoundError extends Schema.TaggedErrorClass<CliOrchestrationThreadNotFoundError>()(
+  "CliOrchestrationThreadNotFoundError",
+  {
+    operation: Schema.Literal("fetchThreadMessages"),
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `No thread found for '${this.threadId}'.`;
+  }
+}
+
+export const fetchLiveOrchestrationThreadMessages = (
+  origin: string,
+  bearerToken: string,
+  input: {
+    readonly threadId: ThreadId;
+    readonly before?: MessageId;
+    readonly limit?: number;
+  },
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadMessages({
+      params: { threadId: input.threadId },
+      query: {
+        ...(input.before === undefined ? {} : { before: input.before }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      },
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.mapError((cause) =>
+      isEnvironmentResourceNotFoundError(cause)
+        ? new CliOrchestrationThreadNotFoundError({
+            operation: "fetchThreadMessages",
+            threadId: input.threadId,
+          })
+        : cliOrchestrationErrorFromRequest(cause),
+    ),
+    withLiveServerReadTimeout("messages", timeouts.read),
+  );
+
+// A matched thread route always answers a missing thread with a typed
+// not-found body, so a bare 404 means the server predates the route itself.
+export const isLiveServerRouteMissing = (error: unknown): boolean =>
+  isCliOrchestrationUndeclaredStatusError(error) && error.status === 404;
+
+/** Full-history thread detail read, the fallback for servers that predate the
+    dedicated `/messages` route (including upstream ones). */
+export const fetchLiveOrchestrationThreadDetail = (
+  origin: string,
+  bearerToken: string,
+  threadId: ThreadId,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadSnapshot({
+      params: { threadId },
+      query: {},
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.mapError((cause) =>
+      isEnvironmentResourceNotFoundError(cause)
+        ? new CliOrchestrationThreadNotFoundError({
+            operation: "fetchThreadMessages",
+            threadId,
+          })
+        : cliOrchestrationErrorFromRequest(cause),
+    ),
+    withLiveServerReadTimeout("messages", timeouts.read),
   );
 
 export const fetchLiveEnvironmentDescriptor = (

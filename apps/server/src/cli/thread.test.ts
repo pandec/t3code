@@ -1,12 +1,17 @@
 import {
+  MessageId,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
   TurnId,
+  type OrchestrationMessage,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadMessagePage,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -20,16 +25,22 @@ import {
   CliOrchestrationDeclaredResponseError,
   CliOrchestrationOutcomeUnknownError,
   CliOrchestrationRequestError,
+  CliOrchestrationUndeclaredStatusError,
 } from "./orchestration.ts";
 import {
   buildNewWorktreeBootstrap,
+  collectThreadMessages,
   compensateFailedThreadStart,
   decideThreadCliWorkspace,
+  renderThreadMessagesText,
   resolveThreadCliDefaultWorkspace,
   resolveThreadCliWorkspaceSelection,
+  ThreadCliMessageCursorError,
+  threadMessagesReport,
   threadSummary,
   threadWaitDrainFlag,
   threadWaitSummary,
+  type ThreadMessagesFetchDeps,
 } from "./thread.ts";
 import type { WaitForThreadResult } from "./threadWait.ts";
 
@@ -573,4 +584,418 @@ it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
       assert.deepEqual(selection, { mode: "checkout" });
     }),
   );
+});
+
+describe("thread messages report", () => {
+  const messageWith = (
+    input: Partial<Record<keyof OrchestrationMessage, unknown>>,
+  ): OrchestrationMessage =>
+    ({
+      id: "message-1",
+      role: "assistant",
+      text: "Hello",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-08-20T10:00:00.000Z",
+      updatedAt: "2026-08-20T10:00:00.000Z",
+      ...input,
+    }) as OrchestrationMessage;
+
+  const machine = {
+    hostname: "spacemac",
+    environmentId: "env-1",
+    environmentLabel: "SpaceMac",
+    platform: "darwin",
+  };
+
+  const reportWith = (input: Partial<Parameters<typeof threadMessagesReport>[0]>) =>
+    threadMessagesReport({
+      threadId: "thread-1",
+      thread: threadWith({}),
+      messages: [],
+      hasMoreOlder: false,
+      role: null,
+      machine,
+      attachmentsDir: "/data/attachments",
+      attachmentFileExists: () => true,
+      ...input,
+    });
+
+  it("excludes system messages by default and keeps user and assistant", () => {
+    const report = reportWith({
+      messages: [
+        messageWith({ id: "m1", role: "system", text: "internal" }),
+        messageWith({ id: "m2", role: "user", text: "question" }),
+        messageWith({ id: "m3", role: "assistant", text: "answer" }),
+      ],
+    });
+
+    assert.deepEqual(
+      report.messages.map((message) => message.id),
+      ["m2", "m3"],
+    );
+    assert.equal(report.archived, false);
+    assert.equal(report.title, "Thread");
+  });
+
+  it("narrows to a single role when requested", () => {
+    const report = reportWith({
+      role: "assistant",
+      messages: [
+        messageWith({ id: "m1", role: "user" }),
+        messageWith({ id: "m2", role: "assistant" }),
+      ],
+    });
+
+    assert.deepEqual(
+      report.messages.map((message) => message.id),
+      ["m2"],
+    );
+  });
+
+  it("marks threads outside the active shell as archived and pages from the unfiltered oldest message", () => {
+    const report = reportWith({
+      thread: null,
+      hasMoreOlder: true,
+      messages: [
+        messageWith({ id: "m1", role: "system", text: "oldest, filtered out" }),
+        messageWith({ id: "m2", role: "user" }),
+      ],
+    });
+
+    assert.equal(report.archived, true);
+    assert.isNull(report.title);
+    assert.isNull(report.state);
+    assert.equal(report.nextBefore, "m1");
+  });
+
+  it("resolves attachment paths against the attachments directory and reports missing files", () => {
+    const report = reportWith({
+      attachmentFileExists: (path) => path.endsWith("thread-1-present.png"),
+      messages: [
+        messageWith({
+          id: "m1",
+          role: "user",
+          attachments: [
+            {
+              type: "image",
+              id: "thread-1-present",
+              name: "present.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
+            {
+              type: "image",
+              id: "thread-1-missing",
+              name: "missing.png",
+              mimeType: "image/png",
+              sizeBytes: 20,
+            },
+          ] as unknown as OrchestrationMessage["attachments"],
+        }),
+      ],
+    });
+
+    const attachments = report.messages[0]?.attachments ?? [];
+    assert.equal(attachments[0]?.path, "/data/attachments/thread-1-present.png");
+    assert.isTrue(attachments[0]?.exists);
+    assert.equal(attachments[1]?.path, "/data/attachments/thread-1-missing.png");
+    assert.isFalse(attachments[1]?.exists);
+
+    const text = renderThreadMessagesText(report);
+    assert.include(text, "-> /data/attachments/thread-1-missing.png [not found on this machine]");
+    assert.include(text, "Attachment paths are local to spacemac.");
+  });
+
+  it("renders a transcript with machine identity and a paging hint", () => {
+    const report = reportWith({
+      hasMoreOlder: true,
+      messages: [
+        messageWith({ id: "m1", role: "user", text: "question" }),
+        messageWith({ id: "m2", role: "assistant", text: "answer", streaming: true }),
+      ],
+    });
+
+    const text = renderThreadMessagesText(report);
+    assert.include(text, "Thread: Thread (thread-1)");
+    assert.include(text, "Machine: spacemac (SpaceMac)");
+    assert.include(text, "[user] 2026-08-20T10:00:00.000Z\nquestion");
+    assert.include(text, "[assistant, streaming] 2026-08-20T10:00:00.000Z\nanswer");
+    assert.include(text, "Rerun with --before m1");
+  });
+
+  it("strips terminal control sequences from transcript output but not from JSON fields", () => {
+    const report = reportWith({
+      messages: [
+        messageWith({
+          id: "m1",
+          role: "assistant",
+          text: "safe\u001B]0;owned\u0007tail\nnext line\tindented",
+        }),
+      ],
+    });
+
+    assert.include(report.messages[0]?.text, "\u001B");
+    const text = renderThreadMessagesText(report);
+    assert.notInclude(text, "\u001B");
+    assert.notInclude(text, "\u0007");
+    assert.include(text, "next line\tindented");
+  });
+
+  it("marks an unresolvable attachment path instead of claiming the file is missing", () => {
+    const report = reportWith({
+      attachmentFileExists: () => true,
+      messages: [
+        messageWith({
+          id: "m1",
+          role: "user",
+          attachments: [
+            {
+              type: "image",
+              id: "../escape",
+              name: "escape.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
+          ] as unknown as OrchestrationMessage["attachments"],
+        }),
+      ],
+    });
+
+    const attachment = report.messages[0]?.attachments[0];
+    assert.isNull(attachment?.path);
+    assert.isFalse(attachment?.exists);
+    const text = renderThreadMessagesText(report);
+    assert.include(text, "-> unresolved [path could not be resolved]");
+    assert.notInclude(text, "[not found on this machine]");
+  });
+
+  describe("collectThreadMessages", () => {
+    const threadId = ThreadId.make("thread-1");
+
+    const pageWith = (input: {
+      readonly messages: ReadonlyArray<OrchestrationMessage>;
+      readonly hasMoreOlder: boolean;
+    }): OrchestrationThreadMessagePage =>
+      ({
+        threadId,
+        messages: input.messages,
+        hasMoreOlder: input.hasMoreOlder,
+        snapshotSequence: 1,
+      }) as unknown as OrchestrationThreadMessagePage;
+
+    const detailWith = (
+      messages: ReadonlyArray<OrchestrationMessage>,
+    ): OrchestrationThreadDetailSnapshot =>
+      ({
+        snapshotSequence: 1,
+        thread: { messages },
+      }) as unknown as OrchestrationThreadDetailSnapshot;
+
+    const depsWith = (input: Partial<ThreadMessagesFetchDeps>): ThreadMessagesFetchDeps => ({
+      fetchPage: () => Effect.die("unexpected fetchPage call"),
+      fetchFullThread: () => Effect.die("unexpected fetchFullThread call"),
+      ...input,
+    });
+
+    const messageRange = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, offset) => messageWith({ id: `m${from + offset}` }));
+
+    it.effect("pages older history, clamping each request to the server page limit", () =>
+      Effect.gen(function* () {
+        const requests: Array<{ before: string | null; limit: number | null }> = [];
+        const deps = depsWith({
+          fetchPage: (page) => {
+            requests.push({ before: page.before, limit: page.limit });
+            return Effect.succeed(
+              page.before === null
+                ? pageWith({ messages: messageRange(200, 700), hasMoreOlder: true })
+                : pageWith({ messages: messageRange(0, 200), hasMoreOlder: true }),
+            );
+          },
+        });
+
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: 700, pagedRouteAvailable: true },
+          deps,
+        );
+
+        assert.deepEqual(requests, [
+          { before: null, limit: 500 },
+          { before: "m200", limit: 200 },
+        ]);
+        assert.equal(window.messages.length, 700);
+        assert.equal(window.messages[0]?.id, "m0");
+        assert.equal(window.messages[699]?.id, "m699");
+        assert.isTrue(window.hasMoreOlder);
+      }),
+    );
+
+    it.effect("collects the full history until the server reports no older messages", () =>
+      Effect.gen(function* () {
+        const deps = depsWith({
+          fetchPage: (page) =>
+            Effect.succeed(
+              page.before === null
+                ? pageWith({ messages: messageRange(2, 4), hasMoreOlder: true })
+                : pageWith({ messages: messageRange(0, 2), hasMoreOlder: false }),
+            ),
+        });
+
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: null, pagedRouteAvailable: true },
+          deps,
+        );
+
+        assert.deepEqual(
+          window.messages.map((message) => message.id),
+          ["m0", "m1", "m2", "m3"],
+        );
+        assert.isFalse(window.hasMoreOlder);
+      }),
+    );
+
+    it.effect(
+      "fails on a --before cursor the server cannot resolve instead of reporting an empty thread",
+      () =>
+        Effect.gen(function* () {
+          const deps = depsWith({
+            fetchPage: () => Effect.succeed(pageWith({ messages: [], hasMoreOlder: true })),
+          });
+
+          const error = yield* Effect.flip(
+            collectThreadMessages(
+              { threadId, before: MessageId.make("gone"), limit: null, pagedRouteAvailable: true },
+              deps,
+            ),
+          );
+
+          assert.instanceOf(error, ThreadCliMessageCursorError);
+          assert.equal((error as ThreadCliMessageCursorError).reason, "not-found");
+          assert.equal((error as ThreadCliMessageCursorError).cursor, "gone");
+        }),
+    );
+
+    it.effect("falls back to the full thread snapshot when the messages route is missing", () =>
+      Effect.gen(function* () {
+        const deps = depsWith({
+          fetchPage: () =>
+            Effect.fail(
+              new CliOrchestrationUndeclaredStatusError({
+                operation: "callLiveServer",
+                status: 404,
+                cause: new Error("route not found"),
+              }),
+            ),
+          fetchFullThread: () => Effect.succeed(detailWith(messageRange(0, 5))),
+        });
+
+        const window = yield* collectThreadMessages(
+          { threadId, before: MessageId.make("m3"), limit: 2, pagedRouteAvailable: true },
+          deps,
+        );
+
+        assert.deepEqual(
+          window.messages.map((message) => message.id),
+          ["m1", "m2"],
+        );
+        assert.isTrue(window.hasMoreOlder);
+
+        const staleCursor = yield* Effect.flip(
+          collectThreadMessages(
+            { threadId, before: MessageId.make("zz"), limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
+        );
+        assert.instanceOf(staleCursor, ThreadCliMessageCursorError);
+      }),
+    );
+
+    it.effect("does not fall back on server errors other than a missing route", () =>
+      Effect.gen(function* () {
+        const failure = new CliOrchestrationUndeclaredStatusError({
+          operation: "callLiveServer",
+          status: 500,
+          cause: new Error("boom"),
+        });
+        const deps = depsWith({
+          fetchPage: () => Effect.fail(failure),
+        });
+
+        const error = yield* Effect.flip(
+          collectThreadMessages(
+            { threadId, before: null, limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
+        );
+
+        assert.equal(error, failure);
+      }),
+    );
+
+    it.effect("skips the paged route entirely when the server does not advertise it", () =>
+      Effect.gen(function* () {
+        let pagedCalls = 0;
+        const deps = depsWith({
+          fetchPage: () => {
+            pagedCalls += 1;
+            return Effect.die("paged route must not be called");
+          },
+          fetchFullThread: () => Effect.succeed(detailWith(messageRange(0, 3))),
+        });
+
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: 2, pagedRouteAvailable: false },
+          deps,
+        );
+
+        assert.equal(pagedCalls, 0);
+        assert.deepEqual(
+          window.messages.map((message) => message.id),
+          ["m1", "m2"],
+        );
+        assert.isTrue(window.hasMoreOlder);
+      }),
+    );
+
+    it.effect("reports a mid-paging history change distinctly from a bad --before", () =>
+      Effect.gen(function* () {
+        const deps = depsWith({
+          fetchPage: (page) =>
+            Effect.succeed(
+              page.before === null
+                ? pageWith({ messages: messageRange(2, 4), hasMoreOlder: true })
+                : pageWith({ messages: [], hasMoreOlder: true }),
+            ),
+        });
+
+        const error = yield* Effect.flip(
+          collectThreadMessages(
+            { threadId, before: null, limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
+        );
+
+        assert.instanceOf(error, ThreadCliMessageCursorError);
+        assert.equal((error as ThreadCliMessageCursorError).reason, "changed");
+      }),
+    );
+
+    it.effect(
+      "treats a cursor on a message-less thread as empty in the snapshot fallback, matching the paged path",
+      () =>
+        Effect.gen(function* () {
+          const deps = depsWith({
+            fetchFullThread: () => Effect.succeed(detailWith([])),
+          });
+
+          const window = yield* collectThreadMessages(
+            { threadId, before: MessageId.make("gone"), limit: null, pagedRouteAvailable: false },
+            deps,
+          );
+
+          assert.deepEqual(window, { messages: [], hasMoreOlder: false });
+        }),
+    );
+  });
 });
