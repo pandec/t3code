@@ -274,12 +274,15 @@ function parseHermesResume(raw: unknown):
   };
 }
 
-function selectPermissionOptionId(
+export function selectPermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
+  // Hermes never offers an acceptAlways option today, but the decision union
+  // is provider-agnostic: a client sending it must land on the closest
+  // accept-shaped option, never fall through to a silent rejection.
   const kind =
-    decision === "acceptForSession"
+    decision === "acceptForSession" || decision === "acceptAlways"
       ? "allow_always"
       : decision === "accept"
         ? "allow_once"
