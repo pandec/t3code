@@ -1458,7 +1458,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                       variant="ghost"
                       size="icon-xs"
                       aria-label={
-                        speech === null ? "Create listening version" : "Toggle listening version"
+                        speech === null
+                          ? "Create listening version"
+                          : isAgentVoiceReply
+                            ? "Toggle voice reply"
+                            : "Toggle listening version"
                       }
                       aria-expanded={speech === null ? undefined : speechExpanded}
                       aria-busy={speechPhase === "preparing"}
@@ -1479,8 +1483,12 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                     : speech === null
                       ? "Listen to this response"
                       : speechExpanded
-                        ? "Hide listening version"
-                        : "Show listening version"}
+                        ? isAgentVoiceReply
+                          ? "Hide voice reply"
+                          : "Hide listening version"
+                        : isAgentVoiceReply
+                          ? "Show voice reply"
+                          : "Show listening version"}
                 </TooltipPopup>
               </Tooltip>
             ) : null}
