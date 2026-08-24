@@ -858,6 +858,10 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 export const VoiceSettings = Schema.Struct({
   ttsModelId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   ttsVoiceId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Exposes the voice_reply MCP tool to agent sessions so they can answer
+  // with a staged recording. Only effective while the server has an
+  // ELEVENLABS_API_KEY; defaults to on so setting the key is enough.
+  enableAgentVoiceReplies: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type VoiceSettings = typeof VoiceSettings.Type;
 
@@ -1244,6 +1248,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       ttsModelId: Schema.optionalKey(TrimmedString),
       ttsVoiceId: Schema.optionalKey(TrimmedString),
+      enableAgentVoiceReplies: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   providers: Schema.optionalKey(

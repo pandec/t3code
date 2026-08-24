@@ -489,6 +489,21 @@ function applyThreadDetailEventUnretained(
     }
 
     case "thread.message-sent": {
+      // An agent-staged voice recording arrives as speech metadata on the
+      // completion event; map it onto the message so the live timeline shows
+      // the player without waiting for a snapshot refresh.
+      const speech: OrchestrationMessage["speech"] =
+        event.payload.speech !== undefined
+          ? {
+              messageId: event.payload.messageId,
+              speechId: event.payload.speech.speechId,
+              transcript: event.payload.speech.transcript,
+              mimeType: event.payload.speech.mimeType,
+              sizeBytes: event.payload.speech.sizeBytes,
+              origin: event.payload.speech.origin,
+              createdAt: event.payload.speech.createdAt,
+            }
+          : undefined;
       const message: OrchestrationMessage = {
         id: event.payload.messageId,
         role: event.payload.role,
@@ -496,6 +511,7 @@ function applyThreadDetailEventUnretained(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(speech !== undefined ? { speech } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,
@@ -520,6 +536,7 @@ function applyThreadDetailEventUnretained(
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
                     : {}),
+                  ...(speech !== undefined ? { speech } : {}),
                 },
           )
         : Arr.append(thread.messages, message);

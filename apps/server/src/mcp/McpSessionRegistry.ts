@@ -14,6 +14,7 @@ import * as McpProviderSession from "./McpProviderSession.ts";
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly capabilities: ReadonlySet<McpInvocationContext.McpCapability>;
 }
 
 export interface McpIssuedCredential {
@@ -98,10 +99,25 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
-  const endpoint =
+  const endpointBase =
     httpServer.address._tag === "TcpAddress"
-      ? `http://${getHttpMcpEndpointHost(httpServer.address.hostname)}:${httpServer.address.port}/mcp`
-      : "http://127.0.0.1/mcp";
+      ? `http://${getHttpMcpEndpointHost(httpServer.address.hostname)}:${httpServer.address.port}`
+      : "http://127.0.0.1";
+  // Each capability combination is served by its own MCP server (see
+  // McpHttpServer), so tools/list only ever advertises what this credential
+  // can actually call. The endpoint path selects the matching server.
+  const endpointForCapabilities = (
+    capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
+  ): string => {
+    const path = capabilities.has("preview")
+      ? capabilities.has("voice")
+        ? "/mcp"
+        : "/mcp/preview"
+      : capabilities.has("voice")
+        ? "/mcp/voice"
+        : "/mcp";
+    return `${endpointBase}${path}`;
+  };
 
   const hashToken = (token: string) =>
     crypto
@@ -128,7 +144,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities: new Set(request.capabilities),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -142,7 +158,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: scope.threadId,
           providerSessionId,
           providerInstanceId: scope.providerInstanceId,
-          endpoint,
+          endpoint: endpointForCapabilities(scope.capabilities),
           authorizationHeader: `Bearer ${rawToken}`,
         },
       };

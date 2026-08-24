@@ -87,6 +87,7 @@ import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";
+import * as AgentVoiceReply from "../src/voice/AgentVoiceReply.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -406,6 +407,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(ProviderInstanceHealthLive),
+      Layer.provideMerge(AgentVoiceReply.layerNoop),
       Layer.provideMerge(NodeServices.layer),
     );
 

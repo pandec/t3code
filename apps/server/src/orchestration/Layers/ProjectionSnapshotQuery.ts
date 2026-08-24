@@ -4,6 +4,7 @@ import {
   IsoDateTime,
   MessageId,
   MessageInputOrigin,
+  MessageSpeechOrigin,
   NonNegativeInt,
   OrchestrationCheckpointFile,
   OrchestrationProposedPlanId,
@@ -125,6 +126,7 @@ const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
   speechSizeBytes: Schema.NullOr(NonNegativeInt),
   speechCreatedAt: Schema.NullOr(IsoDateTime),
   speechSourceTextHash: Schema.NullOr(Schema.String),
+  speechOrigin: Schema.NullOr(MessageSpeechOrigin),
 });
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -446,7 +448,10 @@ function mapMessageRow(
     row.speechMimeType === "audio/mpeg" &&
     row.speechSizeBytes !== null &&
     row.speechCreatedAt !== null &&
-    row.speechSourceTextHash === currentSourceTextHash
+    // An agent recording's transcript is authored independently of the
+    // message text, so the staleness gate that protects user-requested
+    // listening versions does not apply to it.
+    (row.speechOrigin === "agent" || row.speechSourceTextHash === currentSourceTextHash)
       ? {
           speech: {
             messageId: row.messageId,
@@ -454,6 +459,7 @@ function mapMessageRow(
             transcript: row.speechTranscript,
             mimeType: row.speechMimeType,
             sizeBytes: row.speechSizeBytes,
+            origin: row.speechOrigin ?? "user",
             createdAt: row.speechCreatedAt,
           },
         }
@@ -1215,7 +1221,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       speech.mime_type AS "speechMimeType",
       speech.size_bytes AS "speechSizeBytes",
       speech.created_at AS "speechCreatedAt",
-      speech.source_text_hash AS "speechSourceTextHash"
+      speech.source_text_hash AS "speechSourceTextHash",
+      speech.origin AS "speechOrigin"
     FROM projection_thread_messages AS messages
     LEFT JOIN projection_message_summary AS summary
       ON summary.message_id = messages.message_id

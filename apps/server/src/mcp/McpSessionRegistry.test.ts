@@ -39,8 +39,9 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"] as const),
     });
-    expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
+    expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp/preview");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     expect(token.length).toBeGreaterThan(20);
 
@@ -57,10 +58,10 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 it.effect("builds MCP endpoints from the bound server host", () =>
   Effect.gen(function* () {
     const cases = [
-      ["100.64.0.40", "http://100.64.0.40:43123/mcp"],
-      ["0.0.0.0", "http://127.0.0.1:43123/mcp"],
-      ["localhost", "http://localhost:43123/mcp"],
-      ["127.0.0.1", "http://127.0.0.1:43123/mcp"],
+      ["100.64.0.40", "http://100.64.0.40:43123/mcp/preview"],
+      ["0.0.0.0", "http://127.0.0.1:43123/mcp/preview"],
+      ["localhost", "http://localhost:43123/mcp/preview"],
+      ["127.0.0.1", "http://127.0.0.1:43123/mcp/preview"],
     ] as const;
 
     for (const [hostname, expectedEndpoint] of cases) {
@@ -68,6 +69,27 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       const issued = yield* registry.issue({
         threadId: ThreadId.make(`thread-${hostname}`),
         providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["preview"] as const),
+      });
+      expect(issued.config.endpoint).toBe(expectedEndpoint);
+    }
+  }),
+);
+
+it.effect("routes each capability combination to its own MCP endpoint", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const cases = [
+      [new Set(["preview", "voice"] as const), "http://127.0.0.1:43123/mcp"],
+      [new Set(["preview"] as const), "http://127.0.0.1:43123/mcp/preview"],
+      [new Set(["voice"] as const), "http://127.0.0.1:43123/mcp/voice"],
+    ] as const;
+
+    for (const [capabilities, expectedEndpoint] of cases) {
+      const issued = yield* registry.issue({
+        threadId: ThreadId.make("thread-capabilities"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities,
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
     }
@@ -81,6 +103,7 @@ it.effect("expires credentials once their session stops showing signs of life", 
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-2"),
       providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: new Set(["preview"] as const),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;
@@ -96,6 +119,7 @@ it.effect("keeps a credential alive across turns that never touch an MCP tool", 
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: new Set(["preview"] as const),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
 
@@ -117,6 +141,7 @@ it.effect("does not keep credentials of other threads alive", () =>
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-4"),
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"] as const),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
 

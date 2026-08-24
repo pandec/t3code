@@ -55,6 +55,7 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { AgentVoiceReply } from "../../voice/AgentVoiceReply.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -169,6 +170,19 @@ function findMessageById(
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message?.id === messageId) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function findLastAssistantMessageForTurn(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  turnId: TurnId,
+): OrchestrationMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && sameId(message.turnId, turnId)) {
       return message;
     }
   }
@@ -931,6 +945,7 @@ const make = Effect.gen(function* () {
   const providerInstanceRegistry = yield* ProviderInstanceRegistry;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const agentVoiceReply = yield* AgentVoiceReply;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -2066,7 +2081,70 @@ const make = Effect.gen(function* () {
             turnId,
             updatedAt: now,
           });
+
+          // A recording staged through the voice_reply MCP tool attaches to
+          // the turn's last assistant message once ITS turn completes
+          // normally. The lifecycle gate keeps stale completions for
+          // superseded turns from touching the staged entry, and claiming is
+          // atomic: the entry leaves the map before dispatch, so a concurrent
+          // re-stage can neither be mistakenly consumed nor delete the file
+          // this dispatch is about to reference. A failed or interrupted
+          // outcome throws the recording away, since it no longer matches
+          // what actually happened.
+          if (shouldApplyThreadLifecycle) {
+            if (normalizeRuntimeTurnState(event.payload.state) === "completed") {
+              const stagedVoiceReply = yield* agentVoiceReply.claimStagedForTurn(thread.id, turnId);
+              if (stagedVoiceReply) {
+                const speech = stagedVoiceReply.attachment;
+                const finalizedMessageIds = Array.from(assistantMessageIds);
+                const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
+                const lastProjectedMessageId = findLastAssistantMessageForTurn(
+                  messages,
+                  turnId,
+                )?.id;
+                // The transcript rides along as fallback text: if the target
+                // message never materialized (a voice-only turn, or a
+                // remembered ID whose whitespace-only text was never
+                // finalized), the decider publishes the transcript as the
+                // message text in the same atomic command, so the recording
+                // always lands with a durable, searchable home.
+                const targetMessageId =
+                  lastFinalizedMessageId ??
+                  lastProjectedMessageId ??
+                  MessageId.make(`assistant:voice-reply:${event.eventId}`);
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.message.assistant.complete",
+                  commandId: yield* providerCommandId(event, "agent-voice-reply-attach"),
+                  threadId: thread.id,
+                  messageId: targetMessageId,
+                  turnId,
+                  speech,
+                  fallbackText: speech.transcript,
+                  createdAt: now,
+                });
+              }
+            } else {
+              yield* agentVoiceReply.discardStagedForTurn(thread.id, turnId);
+            }
+          }
         }
+      }
+
+      if (event.type === "turn.aborted") {
+        // An aborted turn's recording no longer matches what happened; drop
+        // it when it belongs to the aborted turn (or the abort cannot be
+        // attributed to any turn).
+        if (eventTurnId !== undefined) {
+          yield* agentVoiceReply.discardStagedForTurn(thread.id, eventTurnId);
+        } else {
+          yield* agentVoiceReply.discardStaged(thread.id);
+        }
+      }
+
+      if (event.type === "session.exited") {
+        // A staged voice reply cannot outlive its session: the turn that
+        // staged it will never complete now.
+        yield* agentVoiceReply.discardStaged(thread.id);
       }
 
       if (event.type === "session.exited" && shouldApplyThreadLifecycle) {

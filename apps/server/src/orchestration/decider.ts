@@ -1477,11 +1477,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.assistant.complete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // fallbackText only lands when the message does not exist yet or has no
+      // renderable text of its own — a completion carrying empty text on an
+      // existing message merely finalizes it, matching the projectors, which
+      // keep the existing text when a non-streaming event's text is empty.
+      const existingMessage = thread.messages.find((entry) => entry.id === command.messageId);
+      const text =
+        command.fallbackText !== undefined &&
+        (existingMessage === undefined || existingMessage.text.trim().length === 0)
+          ? command.fallbackText
+          : "";
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1494,7 +1504,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           role: "assistant",
-          text: "",
+          text,
+          ...(command.speech !== undefined ? { speech: command.speech } : {}),
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,

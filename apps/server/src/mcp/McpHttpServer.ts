@@ -22,6 +22,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
+import { VoiceToolkit } from "./toolkits/voice/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -216,11 +218,36 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
-const McpTransportLive = McpServer.layerHttp({
-  name: "T3 Code",
-  version: packageJson.version,
-  path: "/mcp",
-  protocols: [McpProtocol.v2025_06_18],
-}).pipe(Layer.provide(McpAuthMiddlewareLive));
+const VoiceToolkitRegistrationLive = McpServer.toolkit(VoiceToolkit).pipe(
+  Layer.provide(VoiceToolkitHandlersLive),
+);
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+const makeMcpTransport = (path: `/${string}`) =>
+  McpServer.layerHttp({
+    name: "T3 Code",
+    version: packageJson.version,
+    path,
+    protocols: [McpProtocol.v2025_06_18],
+  }).pipe(Layer.provide(McpAuthMiddlewareLive));
+
+/**
+ * Tool registration is per McpServer instance and tools/list has no per-token
+ * filter, so each capability combination gets its own server island at its
+ * own path — a session's credential (whose endpoint McpSessionRegistry picks
+ * from its capabilities) then only ever sees the tools it can call. Layer
+ * boundaries: Layer.fresh un-memoizes the McpServer inside each island while
+ * the handlers' dependencies (broker, voice staging, session registry) stay
+ * requirements satisfied by the shared runtime, so all islands share one
+ * instance of each.
+ */
+const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
+  Layer.fresh(registrations.pipe(Layer.provideMerge(makeMcpTransport(path))));
+
+export const layer = Layer.mergeAll(
+  mcpToolkitIsland(
+    "/mcp",
+    Layer.mergeAll(PreviewToolkitRegistrationLive, VoiceToolkitRegistrationLive),
+  ),
+  mcpToolkitIsland("/mcp/preview", PreviewToolkitRegistrationLive),
+  mcpToolkitIsland("/mcp/voice", VoiceToolkitRegistrationLive),
+);

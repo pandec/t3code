@@ -132,6 +132,7 @@ import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
+import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
@@ -430,6 +431,10 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
         ),
       ),
       CheckpointingLayerLive,
+      // Shared between the voice_reply MCP handler (stages recordings) and
+      // provider-runtime ingestion (attaches them at turn completion), so it
+      // must be one instance below both.
+      AgentVoiceReply.layer,
     ),
   ),
   // Shared bootstrap program for thread.turn.start commands, consumed by both

@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient } from "effect/unstable/http";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
@@ -25,14 +25,12 @@ import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
+import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
 
 export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
 
-const ELEVENLABS_TEXT_TO_SPEECH_URL = "https://api.elevenlabs.io/v1/text-to-speech";
-const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
 export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
 export const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
-const SPEECH_MIME_TYPE = "audio/mpeg" as const;
 const SPEECH_SCRIPT_RECIPE_VERSION = 2;
 
 interface MessageSpeechCacheRow {
@@ -46,6 +44,7 @@ interface MessageSpeechCacheRow {
   readonly scriptRecipeHash: string;
   readonly voiceId: string;
   readonly ttsModel: string;
+  readonly origin: string;
   readonly createdAt: string;
 }
 
@@ -197,6 +196,7 @@ export const layer = Layer.effect(
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
           tts_model AS "ttsModel",
+          origin,
           created_at AS "createdAt"
         FROM projection_message_speech
         WHERE message_id = ${messageId}
@@ -209,6 +209,7 @@ export const layer = Layer.effect(
       transcript: row.transcript as MessageSpeechSynthesisResult["transcript"],
       mimeType: SPEECH_MIME_TYPE,
       sizeBytes: row.sizeBytes as MessageSpeechSynthesisResult["sizeBytes"],
+      origin: row.origin === "agent" ? "agent" : "user",
       createdAt: row.createdAt as MessageSpeechSynthesisResult["createdAt"],
     });
 
@@ -285,6 +286,13 @@ export const layer = Layer.effect(
         .digest("hex");
       const cachedRows = yield* findCachedSpeech(request.messageId);
       const cached = cachedRows[0];
+      // An agent recording is event-owned: a projection replay rebuilds its
+      // row from the original thread.message-sent event, so this on-demand
+      // path must never overwrite it (or delete its file). Serve it as-is —
+      // it already is the spoken form of this message.
+      if (cached && cached.origin === "agent") {
+        return toResult(cached);
+      }
       if (
         cached &&
         isMessageSpeechCacheReusable({
@@ -322,24 +330,13 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "script_failed" });
       }
 
-      const audioBuffer = yield* httpClient
-        .post(
-          `${ELEVENLABS_TEXT_TO_SPEECH_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
-          {
-            headers: { "xi-api-key": Redacted.value(apiKey.value) },
-            body: HttpBody.jsonUnsafe({ text: transcript, model_id: ttsModel }),
-          },
-        )
-        .pipe(
-          Effect.flatMap(HttpClientResponse.filterStatusOk),
-          Effect.flatMap((response) => response.arrayBuffer),
-          Effect.timeout(ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT),
-          Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })),
-        );
-      const audioBytes = new Uint8Array(audioBuffer);
-      if (audioBytes.byteLength === 0) {
-        return yield* new MessageSpeechError({ reason: "provider_failed" });
-      }
+      const audioBytes = yield* synthesizeElevenLabsSpeech({
+        httpClient,
+        apiKey: apiKey.value,
+        voiceId,
+        ttsModel,
+        text: transcript,
+      }).pipe(Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })));
 
       const speechId = createAttachmentId(message.threadId);
       const speechPath = speechId ? resolveSpeechPath(speechId) : null;
@@ -348,7 +345,7 @@ export const layer = Layer.effect(
       }
       const createdAt = DateTime.formatIso(yield* DateTime.now);
 
-      yield* Effect.gen(function* () {
+      const upserted = yield* Effect.gen(function* () {
         yield* fileSystem
           .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
           .pipe(
@@ -368,6 +365,7 @@ export const layer = Layer.effect(
           script_recipe_hash,
           voice_id,
           tts_model,
+          origin,
           created_at
         )
         SELECT
@@ -381,6 +379,7 @@ export const layer = Layer.effect(
           ${scriptRecipeHash},
           ${voiceId},
           ${ttsModel},
+          ${"user"},
           ${createdAt}
         WHERE EXISTS (
           SELECT 1
@@ -404,7 +403,9 @@ export const layer = Layer.effect(
           script_recipe_hash = excluded.script_recipe_hash,
           voice_id = excluded.voice_id,
           tts_model = excluded.tts_model,
+          origin = excluded.origin,
           created_at = excluded.created_at
+        WHERE projection_message_speech.origin <> 'agent'
         RETURNING
           message_id AS "messageId",
           thread_id AS "threadId",
@@ -416,10 +417,21 @@ export const layer = Layer.effect(
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
           tts_model AS "ttsModel",
+          origin,
           created_at AS "createdAt"
         `.pipe(Effect.mapError(storageError));
 
         if (rows.length === 0) {
+          // Either the message vanished (the WHERE EXISTS guard failed) or an
+          // agent recording claimed this message while we were synthesizing
+          // and the conflict guard above refused to overwrite it. In the
+          // second case ours loses: serve the agent recording instead.
+          const currentRows = yield* findCachedSpeech(request.messageId);
+          const current = currentRows[0];
+          if (current && current.origin === "agent") {
+            yield* fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore);
+            return [current];
+          }
           return yield* new MessageSpeechError({ reason: "message_unavailable" });
         }
         return rows;
@@ -430,6 +442,11 @@ export const layer = Layer.effect(
             : fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore),
         ),
       );
+
+      const upsertedRow = upserted[0];
+      if (upsertedRow && upsertedRow.origin === "agent") {
+        return toResult(upsertedRow);
+      }
 
       if (cached && cached.speechId !== speechId) {
         const previousPath = resolveSpeechPath(cached.speechId);
@@ -444,6 +461,7 @@ export const layer = Layer.effect(
         transcript,
         mimeType: SPEECH_MIME_TYPE,
         sizeBytes: audioBytes.byteLength,
+        origin: "user",
         createdAt,
       } satisfies MessageSpeechSynthesisResult;
     });
