@@ -345,7 +345,7 @@ export const layer = Layer.effect(
       }
       const createdAt = DateTime.formatIso(yield* DateTime.now);
 
-      yield* Effect.gen(function* () {
+      const upserted = yield* Effect.gen(function* () {
         yield* fileSystem
           .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
           .pipe(
@@ -405,6 +405,7 @@ export const layer = Layer.effect(
           tts_model = excluded.tts_model,
           origin = excluded.origin,
           created_at = excluded.created_at
+        WHERE projection_message_speech.origin <> 'agent'
         RETURNING
           message_id AS "messageId",
           thread_id AS "threadId",
@@ -421,6 +422,16 @@ export const layer = Layer.effect(
         `.pipe(Effect.mapError(storageError));
 
         if (rows.length === 0) {
+          // Either the message vanished (the WHERE EXISTS guard failed) or an
+          // agent recording claimed this message while we were synthesizing
+          // and the conflict guard above refused to overwrite it. In the
+          // second case ours loses: serve the agent recording instead.
+          const currentRows = yield* findCachedSpeech(request.messageId);
+          const current = currentRows[0];
+          if (current && current.origin === "agent") {
+            yield* fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore);
+            return [current];
+          }
           return yield* new MessageSpeechError({ reason: "message_unavailable" });
         }
         return rows;
@@ -431,6 +442,11 @@ export const layer = Layer.effect(
             : fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore),
         ),
       );
+
+      const upsertedRow = upserted[0];
+      if (upsertedRow && upsertedRow.origin === "agent") {
+        return toResult(upsertedRow);
+      }
 
       if (cached && cached.speechId !== speechId) {
         const previousPath = resolveSpeechPath(cached.speechId);

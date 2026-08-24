@@ -1271,10 +1271,11 @@ function renderFeedEntry(
             environmentId={props.environmentId}
             speech={agentVoiceReply}
             iconSubtleColor={iconSubtleColor}
+            writtenReplyDuplicatesTranscript={
+              message.text.trim() === agentVoiceReply.transcript.trim()
+            }
           >
-            {/* A voice-only turn's text is the transcript itself; the
-                player's "View transcript" already covers it. */}
-            {message.text.trim() === agentVoiceReply.transcript.trim() ? null : writtenReply}
+            {writtenReply}
           </AssistantAgentVoiceReply>
         ) : (
           writtenReply
@@ -1336,6 +1337,12 @@ function AssistantAgentVoiceReply(props: {
   readonly environmentId: EnvironmentId;
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
+  /**
+   * A voice-only turn's text is the transcript itself; the toggle is skipped
+   * for it (the player's "View transcript" already covers it), but a dead
+   * recording still forces the text visible — it is the message then.
+   */
+  readonly writtenReplyDuplicatesTranscript: boolean;
   readonly children: ReactNode;
 }) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
@@ -1358,7 +1365,7 @@ function AssistantAgentVoiceReply(props: {
         onAudioUnavailable={onAudioUnavailable}
         primary
       />
-      {hasWrittenReply && !audioUnavailable ? (
+      {hasWrittenReply && !props.writtenReplyDuplicatesTranscript && !audioUnavailable ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: writtenReplyExpanded }}
@@ -1376,7 +1383,10 @@ function AssistantAgentVoiceReply(props: {
           />
         </Pressable>
       ) : null}
-      {hasWrittenReply && (writtenReplyExpanded || audioUnavailable) ? props.children : null}
+      {hasWrittenReply &&
+      (audioUnavailable || (writtenReplyExpanded && !props.writtenReplyDuplicatesTranscript))
+        ? props.children
+        : null}
     </View>
   );
 }
