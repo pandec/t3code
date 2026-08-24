@@ -4590,7 +4590,11 @@ function ChatViewContent(props: ChatViewProps) {
   // upstream's second declaration here is deliberately not carried.
   const activeThreadWokeVisible = useMemo(() => {
     if (activeThreadWokeAt === null) return false;
+    // Suppression only applies while the settle would actually happen: with
+    // the fork's auto-settle master gate off, the thread stays in the active
+    // list and the wake signal has to carry through.
     if (
+      autoSettleEnabled &&
       changeRequestAutoSettles(activeThreadChangeRequest, {
         autoSettleOnMerge,
         thread: activeThreadShell,
@@ -4620,6 +4624,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadChangeRequest,
     activeThreadShell,
     activeThreadWokeAt,
+    autoSettleEnabled,
     autoSettleOnMerge,
   ]);
   const activeThreadSettled = useMemo(() => {

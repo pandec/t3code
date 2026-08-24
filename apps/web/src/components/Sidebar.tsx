@@ -814,6 +814,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // False on environments whose server predates thread.settle/unsettle:
   // the lifecycle affordances hide entirely rather than fail on click.
   settlementSupported: boolean;
+  // The fork's auto-settle master gate. The Woke pill's change-request
+  // suppression only applies while the settle would actually happen.
+  autoSettleEnabled: boolean;
   autoSettleOnMerge: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
@@ -948,7 +951,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the comparison lives in the shared helper. Work that finished outright
   // also clears it: no wake-up call is needed for a thread the change-request
   // state already settles, which is now the same parameterized rule the
-  // settle path uses (a merged PR only counts when merge auto-settling is on).
+  // settle path uses (a merged PR only counts when merge auto-settling is on,
+  // and nothing counts while the auto-settle master gate is off).
   // An unparseable visit timestamp counts as never-visited — corrupt local
   // data must not eat the wake signal.
   const isWoke =
@@ -956,10 +960,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       wokeAt: props.wokeAt,
       ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
     }) &&
-    !changeRequestAutoSettles(pr, {
-      autoSettleOnMerge: props.autoSettleOnMerge,
-      thread,
-    });
+    !(
+      props.autoSettleEnabled &&
+      changeRequestAutoSettles(pr, {
+        autoSettleOnMerge: props.autoSettleOnMerge,
+        thread,
+      })
+    );
   // In-flight rows (working, or waiting on approval/input) fade as a whole:
   // there is nothing for the user to do yet, so prominence is reserved for
   // rows that need a human — done (unread), read-but-unsettled, failed, and
@@ -4724,6 +4731,7 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSettlement === true
                         }
+                        autoSettleEnabled={autoSettleEnabled}
                         autoSettleOnMerge={autoSettleOnMerge}
                         snoozeSupported={
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
