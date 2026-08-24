@@ -125,13 +125,18 @@ export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadC
     operation: Schema.Literal("fetchThreadMessages"),
     threadId: Schema.String,
     cursor: Schema.String,
-    reason: Schema.Literals(["empty", "not-found"]),
+    reason: Schema.Literals(["empty", "not-found", "changed"]),
   },
 ) {
   override get message(): string {
-    return this.reason === "empty"
-      ? "The --before cursor must not be empty."
-      : `No message '${this.cursor}' exists in thread '${this.threadId}' to page from. The cursor may be stale; rerun without --before.`;
+    switch (this.reason) {
+      case "empty":
+        return "The --before cursor must not be empty.";
+      case "not-found":
+        return `No message '${this.cursor}' exists in thread '${this.threadId}' to page from. The cursor may be stale; rerun without --before.`;
+      case "changed":
+        return `The history of thread '${this.threadId}' changed while reading it. Rerun the command.`;
+    }
   }
 }
 
@@ -1208,6 +1213,11 @@ interface CollectThreadMessagesInput {
   readonly threadId: ThreadId;
   readonly before: MessageId | null;
   readonly limit: number | null;
+  /** Whether the server advertised the paged /messages route via its
+      descriptor. A packaged server answers unmatched /api GETs with the
+      static index.html (status 200), so the route cannot be probed by status
+      code; without the capability the CLI reads the full snapshot instead. */
+  readonly pagedRouteAvailable: boolean;
 }
 
 const collectPagedThreadMessages = Effect.fn("collectPagedThreadMessages")(function* <R>(
@@ -1230,13 +1240,15 @@ const collectPagedThreadMessages = Effect.fn("collectPagedThreadMessages")(funct
     // The server tolerates a cursor that matches no message (a typo, or a
     // deep revert since the cursor was issued) by answering an empty page
     // with hasMoreOlder still set. Surface that instead of reporting an
-    // empty thread with no way to page.
+    // empty thread with no way to page. An internal cursor (chosen while
+    // paging) failing means the history changed mid-read, so the --before
+    // advice would be wrong there.
     if (page.messages.length === 0 && page.hasMoreOlder && cursor !== null) {
       return yield* new ThreadCliMessageCursorError({
         operation: "fetchThreadMessages",
         threadId: input.threadId,
         cursor,
-        reason: "not-found",
+        reason: cursor === input.before ? "not-found" : "changed",
       });
     }
     pagesNewestFirst.push(page.messages);
@@ -1256,7 +1268,9 @@ const collectPagedThreadMessages = Effect.fn("collectPagedThreadMessages")(funct
 
 // Fallback for servers that predate the dedicated /messages route (including
 // upstream ones): one full thread snapshot, windowed client-side with the
-// same before/limit semantics as the paged path.
+// same before/limit semantics as the paged path. The snapshot hydrates the
+// whole thread regardless of --limit — acceptable for a compatibility path
+// that runs once per command.
 const collectThreadMessagesFromDetail = Effect.fn("collectThreadMessagesFromDetail")(function* <R>(
   input: CollectThreadMessagesInput,
   deps: ThreadMessagesFetchDeps<R>,
@@ -1267,6 +1281,12 @@ const collectThreadMessagesFromDetail = Effect.fn("collectThreadMessagesFromDeta
   if (input.before !== null) {
     const cursorIndex = all.findIndex((message) => message.id === input.before);
     if (cursorIndex === -1) {
+      // Match the paged path, which only reports a cursor error when the
+      // thread has messages at all.
+      if (all.length === 0) {
+        const empty: ThreadMessagesWindow = { messages: [], hasMoreOlder: false };
+        return empty;
+      }
       return yield* new ThreadCliMessageCursorError({
         operation: "fetchThreadMessages",
         threadId: input.threadId,
@@ -1289,13 +1309,17 @@ export const collectThreadMessages = <R = HttpClient.HttpClient>(
   input: CollectThreadMessagesInput,
   deps: ThreadMessagesFetchDeps<R>,
 ) =>
-  collectPagedThreadMessages(input, deps).pipe(
-    Effect.catch((error) =>
-      isLiveServerRouteMissing(error)
-        ? collectThreadMessagesFromDetail(input, deps)
-        : Effect.fail(error),
-    ),
-  );
+  input.pagedRouteAvailable
+    ? collectPagedThreadMessages(input, deps).pipe(
+        // Belt and braces: a dev server without a static root does answer an
+        // unmatched route with a bare 404, so honor that signal too.
+        Effect.catch((error) =>
+          isLiveServerRouteMissing(error)
+            ? collectThreadMessagesFromDetail(input, deps)
+            : Effect.fail(error),
+        ),
+      )
+    : collectThreadMessagesFromDetail(input, deps);
 
 const liveThreadMessagesFetchDeps = (input: {
   readonly live: CliLiveOrchestrationServer;
@@ -1470,18 +1494,21 @@ const threadMessagesCommand = Command.make("messages", {
             reason: "empty",
           });
         }
+        // Best effort: an old server without the descriptor route still gets
+        // messages (via the snapshot fallback), just without environment
+        // identity.
+        const descriptor = yield* Effect.option(
+          fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts),
+        );
         const { messages, hasMoreOlder } = yield* collectThreadMessages(
           {
             threadId,
             before: beforeFlag === null ? null : MessageId.make(beforeFlag.trim()),
             limit: Option.getOrNull(flags.limit),
+            pagedRouteAvailable:
+              Option.isSome(descriptor) && descriptor.value.capabilities.threadMessages === true,
           },
           liveThreadMessagesFetchDeps(input),
-        );
-        // Best effort: an old server without the descriptor route still gets
-        // messages, just without environment identity.
-        const descriptor = yield* Effect.option(
-          fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts),
         );
         const thread =
           input.live.shell.threads.find(

@@ -105,6 +105,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       to the engine untouched, silently skipping worktree creation — HTTP
       clients (the CLI) must not send bootstrap payloads without this. */
   turnStartBootstrap: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes the paged thread-messages route
+      (`GET /threads/:threadId/messages`). Clients cannot probe the route by
+      status code — a packaged server answers unmatched /api GETs with the
+      static index.html — so the CLI reads the full thread snapshot instead
+      unless this is advertised. */
+  threadMessages: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

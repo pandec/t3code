@@ -815,7 +815,10 @@ describe("thread messages report", () => {
           },
         });
 
-        const window = yield* collectThreadMessages({ threadId, before: null, limit: 700 }, deps);
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: 700, pagedRouteAvailable: true },
+          deps,
+        );
 
         assert.deepEqual(requests, [
           { before: null, limit: 500 },
@@ -839,7 +842,10 @@ describe("thread messages report", () => {
             ),
         });
 
-        const window = yield* collectThreadMessages({ threadId, before: null, limit: null }, deps);
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: null, pagedRouteAvailable: true },
+          deps,
+        );
 
         assert.deepEqual(
           window.messages.map((message) => message.id),
@@ -858,7 +864,10 @@ describe("thread messages report", () => {
           });
 
           const error = yield* Effect.flip(
-            collectThreadMessages({ threadId, before: MessageId.make("gone"), limit: null }, deps),
+            collectThreadMessages(
+              { threadId, before: MessageId.make("gone"), limit: null, pagedRouteAvailable: true },
+              deps,
+            ),
           );
 
           assert.instanceOf(error, ThreadCliMessageCursorError);
@@ -882,7 +891,7 @@ describe("thread messages report", () => {
         });
 
         const window = yield* collectThreadMessages(
-          { threadId, before: MessageId.make("m3"), limit: 2 },
+          { threadId, before: MessageId.make("m3"), limit: 2, pagedRouteAvailable: true },
           deps,
         );
 
@@ -893,7 +902,10 @@ describe("thread messages report", () => {
         assert.isTrue(window.hasMoreOlder);
 
         const staleCursor = yield* Effect.flip(
-          collectThreadMessages({ threadId, before: MessageId.make("zz"), limit: null }, deps),
+          collectThreadMessages(
+            { threadId, before: MessageId.make("zz"), limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
         );
         assert.instanceOf(staleCursor, ThreadCliMessageCursorError);
       }),
@@ -911,11 +923,79 @@ describe("thread messages report", () => {
         });
 
         const error = yield* Effect.flip(
-          collectThreadMessages({ threadId, before: null, limit: null }, deps),
+          collectThreadMessages(
+            { threadId, before: null, limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
         );
 
         assert.equal(error, failure);
       }),
+    );
+
+    it.effect("skips the paged route entirely when the server does not advertise it", () =>
+      Effect.gen(function* () {
+        let pagedCalls = 0;
+        const deps = depsWith({
+          fetchPage: () => {
+            pagedCalls += 1;
+            return Effect.die("paged route must not be called");
+          },
+          fetchFullThread: () => Effect.succeed(detailWith(messageRange(0, 3))),
+        });
+
+        const window = yield* collectThreadMessages(
+          { threadId, before: null, limit: 2, pagedRouteAvailable: false },
+          deps,
+        );
+
+        assert.equal(pagedCalls, 0);
+        assert.deepEqual(
+          window.messages.map((message) => message.id),
+          ["m1", "m2"],
+        );
+        assert.isTrue(window.hasMoreOlder);
+      }),
+    );
+
+    it.effect("reports a mid-paging history change distinctly from a bad --before", () =>
+      Effect.gen(function* () {
+        const deps = depsWith({
+          fetchPage: (page) =>
+            Effect.succeed(
+              page.before === null
+                ? pageWith({ messages: messageRange(2, 4), hasMoreOlder: true })
+                : pageWith({ messages: [], hasMoreOlder: true }),
+            ),
+        });
+
+        const error = yield* Effect.flip(
+          collectThreadMessages(
+            { threadId, before: null, limit: null, pagedRouteAvailable: true },
+            deps,
+          ),
+        );
+
+        assert.instanceOf(error, ThreadCliMessageCursorError);
+        assert.equal((error as ThreadCliMessageCursorError).reason, "changed");
+      }),
+    );
+
+    it.effect(
+      "treats a cursor on a message-less thread as empty in the snapshot fallback, matching the paged path",
+      () =>
+        Effect.gen(function* () {
+          const deps = depsWith({
+            fetchFullThread: () => Effect.succeed(detailWith([])),
+          });
+
+          const window = yield* collectThreadMessages(
+            { threadId, before: MessageId.make("gone"), limit: null, pagedRouteAvailable: false },
+            deps,
+          );
+
+          assert.deepEqual(window, { messages: [], hasMoreOlder: false });
+        }),
     );
   });
 });
