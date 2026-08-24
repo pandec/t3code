@@ -2083,12 +2083,20 @@ const make = Effect.gen(function* () {
           });
 
           // A recording staged through the voice_reply MCP tool attaches to
-          // the turn's last assistant message once the turn completes
-          // normally; any other outcome throws the recording away, since an
-          // interrupted or failed turn no longer matches its script.
-          const stagedVoiceReply = yield* agentVoiceReply.takeStaged(thread.id);
-          if (stagedVoiceReply) {
+          // the turn's last assistant message once ITS turn completes
+          // normally. A completion for some other turn (a stale event, or a
+          // steered/superseded turn) leaves the entry alone, and a failed or
+          // interrupted outcome throws the recording away, since it no longer
+          // matches what actually happened. The entry is cleared only after
+          // the attach commands land, so a failed dispatch does not silently
+          // lose the recording.
+          const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
+          if (
+            stagedVoiceReply &&
+            (stagedVoiceReply.turnId === null || sameId(stagedVoiceReply.turnId, turnId))
+          ) {
             if (normalizeRuntimeTurnState(event.payload.state) === "completed") {
+              const speech = stagedVoiceReply.attachment;
               const finalizedMessageIds = Array.from(assistantMessageIds);
               const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
               const lastProjectedMessageId = findLastAssistantMessageForTurn(messages, turnId)?.id;
@@ -2100,7 +2108,7 @@ const make = Effect.gen(function* () {
                   threadId: thread.id,
                   messageId: targetMessageId,
                   turnId,
-                  speech: stagedVoiceReply,
+                  speech,
                   createdAt: now,
                 });
               } else {
@@ -2112,7 +2120,7 @@ const make = Effect.gen(function* () {
                   commandId: yield* providerCommandId(event, "agent-voice-reply-message"),
                   threadId: thread.id,
                   messageId: voiceMessageId,
-                  delta: stagedVoiceReply.transcript,
+                  delta: speech.transcript,
                   turnId,
                   createdAt: now,
                 });
@@ -2122,17 +2130,35 @@ const make = Effect.gen(function* () {
                   threadId: thread.id,
                   messageId: voiceMessageId,
                   turnId,
-                  speech: stagedVoiceReply,
+                  speech,
                   createdAt: now,
                 });
               }
+              yield* agentVoiceReply.clearStaged(thread.id);
             } else {
-              yield* agentVoiceReply.removeStagedAudio(stagedVoiceReply);
+              yield* agentVoiceReply.discardStaged(thread.id);
             }
           }
         } else {
-          // An untargeted completion cannot prove which turn it ends, so a
-          // staged recording has nothing safe to bind to.
+          // An untargeted completion cannot prove which turn it ends; only a
+          // wildcard entry (staged with no observable turn) is dropped.
+          const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
+          if (stagedVoiceReply && stagedVoiceReply.turnId === null) {
+            yield* agentVoiceReply.discardStaged(thread.id);
+          }
+        }
+      }
+
+      if (event.type === "turn.aborted") {
+        // An aborted turn's recording no longer matches what happened; drop
+        // it when it belongs to the aborted turn (or cannot be attributed).
+        const stagedVoiceReply = yield* agentVoiceReply.peekStaged(thread.id);
+        if (
+          stagedVoiceReply &&
+          (stagedVoiceReply.turnId === null ||
+            eventTurnId === undefined ||
+            sameId(stagedVoiceReply.turnId, eventTurnId))
+        ) {
           yield* agentVoiceReply.discardStaged(thread.id);
         }
       }

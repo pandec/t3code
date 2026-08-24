@@ -1384,7 +1384,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             speech={speech}
-            onRetry={() => void prepareSpeech()}
+            onRetry={null}
             primary
           />
         ) : null}
@@ -1532,7 +1532,12 @@ function AssistantSpeechPlayer({
 }: {
   environmentId: EnvironmentId;
   speech: MessageSpeechSynthesisResult;
-  onRetry: () => void;
+  /**
+   * null hides the regenerate action. Agent recordings must not offer it:
+   * regenerating would synthesize the written text as a user listening
+   * version and destroy the agent's recording.
+   */
+  onRetry: (() => void) | null;
   /** Agent voice replies render the player as the message's main content. */
   primary?: boolean;
 }) {
@@ -1572,10 +1577,16 @@ function AssistantSpeechPlayer({
       </div>
       {audioUrlState._tag === "Failure" ? (
         <div className="space-y-2 text-xs text-muted-foreground">
-          <p>The audio file is unavailable. Regenerate it to listen again.</p>
-          <Button variant="outline" size="xs" onClick={onRetry}>
-            Regenerate
-          </Button>
+          <p>
+            {onRetry === null
+              ? "The audio file is unavailable."
+              : "The audio file is unavailable. Regenerate it to listen again."}
+          </p>
+          {onRetry !== null ? (
+            <Button variant="outline" size="xs" onClick={onRetry}>
+              Regenerate
+            </Button>
+          ) : null}
         </div>
       ) : audioUrlState._tag === "Loading" ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

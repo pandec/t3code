@@ -6,6 +6,7 @@ import {
   AgentVoiceReplyError,
   type MessageSpeechAttachment,
   type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -17,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient } from "effect/unstable/http";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
@@ -31,14 +33,27 @@ import {
 } from "./MessageSpeech.ts";
 
 /**
+ * A recording staged by the voice_reply MCP tool, bound to the turn that was
+ * active when it was staged. `turnId` is null only when the thread had no
+ * observable active turn at stage time; ingestion then treats it as "attach
+ * to the next completed turn".
+ */
+export interface StagedAgentVoiceReply {
+  readonly turnId: TurnId | null;
+  readonly attachment: MessageSpeechAttachment;
+}
+
+/**
  * Agent-staged voice replies. The `voice_reply` MCP tool synthesizes a
  * recording mid-turn and parks it here; provider-runtime ingestion collects it
- * when the turn completes and attaches it to the turn's final assistant
+ * when its turn completes and attaches it to that turn's final assistant
  * message. One staged reply per thread — a second call replaces the first.
  *
  * The MP3 is written to the attachments directory at stage time so the later
  * attach command can stay metadata-only, mirroring how user image attachments
- * are persisted by the normalizer before their event is recorded.
+ * are persisted by the normalizer before their event is recorded. The entry
+ * itself is removed only after the attach commands land (`clearStaged`), so a
+ * failed dispatch does not silently drop the recording from memory.
  */
 export interface AgentVoiceReplyShape {
   readonly available: boolean;
@@ -46,12 +61,12 @@ export interface AgentVoiceReplyShape {
     readonly threadId: ThreadId;
     readonly script: string;
   }) => Effect.Effect<MessageSpeechAttachment, AgentVoiceReplyError>;
-  /** Removes and returns the staged reply without touching its audio file. */
-  readonly takeStaged: (threadId: ThreadId) => Effect.Effect<MessageSpeechAttachment | undefined>;
-  /** Removes the staged reply and deletes its audio file, if any. */
+  /** Reads the staged reply without removing it. */
+  readonly peekStaged: (threadId: ThreadId) => Effect.Effect<StagedAgentVoiceReply | undefined>;
+  /** Removes the staged reply, keeping its audio file (it has been attached). */
+  readonly clearStaged: (threadId: ThreadId) => Effect.Effect<void>;
+  /** Removes the staged reply and deletes its audio file. */
   readonly discardStaged: (threadId: ThreadId) => Effect.Effect<void>;
-  /** Deletes the audio file behind a reply that will never be attached. */
-  readonly removeStagedAudio: (staged: MessageSpeechAttachment) => Effect.Effect<void>;
 }
 
 export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoiceReplyShape>()(
@@ -62,9 +77,9 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 export const layerNoop = Layer.succeed(AgentVoiceReply, {
   available: false,
   stage: () => Effect.fail(new AgentVoiceReplyError({ reason: "unavailable" })),
-  takeStaged: () => Effect.succeed(undefined),
+  peekStaged: () => Effect.succeed(undefined),
+  clearStaged: () => Effect.void,
   discardStaged: () => Effect.void,
-  removeStagedAudio: () => Effect.void,
 });
 
 export const layer = Layer.effect(
@@ -80,9 +95,10 @@ export const layer = Layer.effect(
     const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
     const httpClient = yield* HttpClient.HttpClient;
     const fileSystem = yield* FileSystem.FileSystem;
+    const sql = yield* SqlClient.SqlClient;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettingsService;
-    const staged = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, MessageSpeechAttachment>>(
+    const staged = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, StagedAgentVoiceReply>>(
       new Map(),
     );
 
@@ -96,6 +112,32 @@ export const layer = Layer.effect(
       const path = resolveSpeechPath(speechId);
       return path ? fileSystem.remove(path, { force: true }).pipe(Effect.ignore) : Effect.void;
     };
+
+    /**
+     * Best-effort read of the thread's active turn so the staged reply can be
+     * bound to it. A missing or unreadable session degrades to null rather
+     * than failing the stage: the recording then attaches to the thread's
+     * next completed turn.
+     */
+    const resolveActiveTurnId = (threadId: ThreadId) =>
+      sql<{ readonly activeTurnId: string | null }>`
+        SELECT active_turn_id AS "activeTurnId"
+        FROM projection_thread_sessions
+        WHERE thread_id = ${threadId}
+        LIMIT 1
+      `.pipe(
+        Effect.map((rows) => (rows[0]?.activeTurnId ?? null) as TurnId | null),
+        Effect.orElseSucceed((): TurnId | null => null),
+      );
+
+    const takeEntry = (threadId: ThreadId) =>
+      SynchronizedRef.modify(staged, (entries) => {
+        const current = entries.get(threadId);
+        if (!current) return [undefined, entries] as const;
+        const next = new Map(entries);
+        next.delete(threadId);
+        return [current, next] as const;
+      });
 
     const stage: AgentVoiceReplyShape["stage"] = Effect.fn("AgentVoiceReply.stage")(
       function* (input) {
@@ -126,6 +168,7 @@ export const layer = Layer.effect(
           return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
         }
 
+        const turnId = yield* resolveActiveTurnId(input.threadId);
         const audioBytes = yield* synthesizeElevenLabsSpeech({
           httpClient,
           apiKey: apiKey.value,
@@ -162,34 +205,28 @@ export const layer = Layer.effect(
         const replaced = yield* SynchronizedRef.modify(staged, (entries) => {
           const previous = entries.get(input.threadId);
           const next = new Map(entries);
-          next.set(input.threadId, attachment);
+          next.set(input.threadId, { turnId, attachment });
           return [previous, next] as const;
         });
         if (replaced) {
-          yield* removeAudioFile(replaced.speechId);
+          yield* removeAudioFile(replaced.attachment.speechId);
         }
         return attachment;
       },
     );
 
-    const takeStaged: AgentVoiceReplyShape["takeStaged"] = (threadId) =>
-      SynchronizedRef.modify(staged, (entries) => {
-        const current = entries.get(threadId);
-        if (!current) return [undefined, entries] as const;
-        const next = new Map(entries);
-        next.delete(threadId);
-        return [current, next] as const;
-      });
-
     return AgentVoiceReply.of({
       available,
       stage,
-      takeStaged,
+      peekStaged: (threadId) =>
+        SynchronizedRef.get(staged).pipe(Effect.map((entries) => entries.get(threadId))),
+      clearStaged: (threadId) => takeEntry(threadId).pipe(Effect.asVoid),
       discardStaged: (threadId) =>
-        takeStaged(threadId).pipe(
-          Effect.flatMap((entry) => (entry ? removeAudioFile(entry.speechId) : Effect.void)),
+        takeEntry(threadId).pipe(
+          Effect.flatMap((entry) =>
+            entry ? removeAudioFile(entry.attachment.speechId) : Effect.void,
+          ),
         ),
-      removeStagedAudio: (entry) => removeAudioFile(entry.speechId),
     });
   }),
 );

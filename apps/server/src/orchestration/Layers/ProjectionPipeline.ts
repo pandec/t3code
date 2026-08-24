@@ -550,6 +550,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
      * `thread.message-sent` event. The MP3 was written to the attachments
      * directory before the command was dispatched, so this only records
      * metadata — which also makes event replay rebuild the row correctly.
+     * Deliberately no file deletion here: a projector apply can run inside a
+     * transaction that later rolls back, and replay revisits old events, so
+     * destroying a replaced recording's file from this path would be unsafe.
+     * A superseded MP3 is left for thread-deletion cleanup instead.
      */
     const upsertMessageSpeechFromEvent = Effect.fn("upsertMessageSpeechFromEvent")(
       function* (input: {
@@ -558,18 +562,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         readonly speech: MessageSpeechAttachment;
       }) {
         const { messageId, threadId, speech } = input;
-        const previousRows = yield* sql<{ readonly speechId: string }>`
-        SELECT speech_id AS "speechId"
-        FROM projection_message_speech
-        WHERE message_id = ${messageId}
-        LIMIT 1
-      `.pipe(
-          Effect.catchTag("SqlError", (sqlError) =>
-            Effect.fail(
-              toPersistenceSqlError("ProjectionPipeline.upsertMessageSpeech:query")(sqlError),
-            ),
-          ),
-        );
         yield* sql`
         INSERT INTO projection_message_speech (
           message_id,
@@ -617,22 +609,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ),
           ),
         );
-        const previous = previousRows[0];
-        if (previous && previous.speechId !== speech.speechId) {
-          // Same guard as the stale-speech prune: only remove a file whose id
-          // provably belongs to this thread's attachment namespace.
-          const threadSegment = toSafeThreadAttachmentSegment(threadId);
-          const relativePath = `${previous.speechId}.mp3`;
-          const parsedId = parseAttachmentIdFromRelativePath(relativePath);
-          const parsedThreadSegment = parsedId
-            ? parseThreadSegmentFromAttachmentId(parsedId)
-            : null;
-          if (threadSegment && parsedThreadSegment === threadSegment) {
-            yield* fileSystem
-              .remove(path.join(serverConfig.attachmentsDir, relativePath), { force: true })
-              .pipe(Effect.ignore);
-          }
-        }
       },
     );
 

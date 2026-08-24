@@ -1362,26 +1362,25 @@ describe("ProviderRuntimeIngestion", () => {
     } as MessageSpeechAttachment;
   }
 
-  function makeFakeAgentVoiceReply(initialStaged: MessageSpeechAttachment | null) {
-    let staged = initialStaged;
+  function makeFakeAgentVoiceReply(
+    initialStaged: MessageSpeechAttachment | null,
+    stagedTurnId: TurnId | null = null,
+  ) {
+    let staged: AgentVoiceReply.StagedAgentVoiceReply | null =
+      initialStaged === null ? null : { turnId: stagedTurnId, attachment: initialStaged };
     const removedAudio: string[] = [];
     const shape: AgentVoiceReply.AgentVoiceReplyShape = {
       available: true,
       stage: () => Effect.die(new Error("stage is not exercised by ingestion tests")),
-      takeStaged: () =>
+      peekStaged: () => Effect.sync(() => staged ?? undefined),
+      clearStaged: () =>
         Effect.sync(() => {
-          const current = staged ?? undefined;
           staged = null;
-          return current;
         }),
       discardStaged: () =>
         Effect.sync(() => {
-          if (staged !== null) removedAudio.push(staged.speechId);
+          if (staged !== null) removedAudio.push(staged.attachment.speechId);
           staged = null;
-        }),
-      removeStagedAudio: (entry) =>
-        Effect.sync(() => {
-          removedAudio.push(entry.speechId);
         }),
     };
     return { shape, removedAudio, hasStaged: () => staged !== null };
@@ -1389,7 +1388,7 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("attaches a staged agent voice reply to the turn's final assistant message", async () => {
     const staged = makeStagedVoiceReply();
-    const fake = makeFakeAgentVoiceReply(staged);
+    const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-voice"));
     const harness = await createHarness({ agentVoiceReply: fake.shape });
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -1467,6 +1466,45 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.text).toBe("spoken summary");
     expect(message?.streaming).toBe(false);
     expect(message?.speech?.speechId).toBe("thread-1-agent-voice-only");
+  });
+
+  it("leaves a staged voice reply alone when a different turn completes", async () => {
+    const staged = makeStagedVoiceReply({ speechId: "thread-1-agent-voice-other-turn" });
+    const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-actually-mine"));
+    const harness = await createHarness({ agentVoiceReply: fake.shape });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-other-turn-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-someone-else"),
+      itemId: asItemId("item-other-turn"),
+      payload: { streamKind: "assistant_text", delta: "unrelated reply" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-other-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-someone-else"),
+      status: "completed",
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-other-turn" && !message.streaming,
+      ),
+    );
+    expect(
+      thread.messages.every((message: ProviderRuntimeTestMessage) => message.speech === undefined),
+    ).toBe(true);
+    expect(fake.hasStaged()).toBe(true);
+    expect(fake.removedAudio).toEqual([]);
   });
 
   it("drops a staged voice reply when the turn does not complete normally", async () => {
