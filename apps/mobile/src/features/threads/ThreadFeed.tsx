@@ -1238,31 +1238,44 @@ function renderFeedEntry(
     }
 
     const enterAnimated = isFreshTimestamp(message.createdAt);
+    const agentVoiceReply = message.speech?.origin === "agent" ? message.speech : null;
+    const writtenReply =
+      message.text.trim().length > 0 ? (
+        hasNativeSelectableMarkdownText() ? (
+          <SelectableMarkdownText
+            markdown={message.text}
+            skills={props.skills}
+            textStyle={styles.nativeTextStyle}
+            onLinkPress={props.onMarkdownLinkPress}
+            renderImage={props.renderMarkdownImage}
+          />
+        ) : (
+          <Markdown
+            options={{ gfm: true }}
+            renderers={styles.renderers}
+            styles={styles.styles}
+            theme={styles.theme}
+          >
+            {message.text}
+          </Markdown>
+        )
+      ) : null;
     return (
       <Animated.View
         className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
-        {message.text.trim().length > 0 ? (
-          hasNativeSelectableMarkdownText() ? (
-            <SelectableMarkdownText
-              markdown={message.text}
-              skills={props.skills}
-              textStyle={styles.nativeTextStyle}
-              onLinkPress={props.onMarkdownLinkPress}
-              renderImage={props.renderMarkdownImage}
-            />
-          ) : (
-            <Markdown
-              options={{ gfm: true }}
-              renderers={styles.renderers}
-              styles={styles.styles}
-              theme={styles.theme}
-            >
-              {message.text}
-            </Markdown>
-          )
-        ) : null}
+        {agentVoiceReply !== null ? (
+          <AssistantAgentVoiceReply
+            environmentId={props.environmentId}
+            speech={agentVoiceReply}
+            iconSubtleColor={iconSubtleColor}
+          >
+            {writtenReply}
+          </AssistantAgentVoiceReply>
+        ) : (
+          writtenReply
+        )}
         {attachments.map((attachment) => {
           return (
             <MessageAttachmentImage
@@ -1312,6 +1325,54 @@ function formatPlaybackTime(seconds: number): string {
   return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
+/**
+ * An agent-staged voice recording rendered as the message's main content:
+ * player first, the written reply collapsed behind a toggle.
+ */
+function AssistantAgentVoiceReply(props: {
+  readonly environmentId: EnvironmentId;
+  readonly speech: MessageSpeechSynthesisResult;
+  readonly iconSubtleColor: ColorValue;
+  readonly children: ReactNode;
+}) {
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
+  const hasWrittenReply = props.children !== null;
+
+  return (
+    <View>
+      <AssistantSpeechPlayer
+        environmentId={props.environmentId}
+        speech={props.speech}
+        iconSubtleColor={props.iconSubtleColor}
+        transcriptExpanded={transcriptExpanded}
+        onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
+        onRetry={null}
+        primary
+      />
+      {hasWrittenReply ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: writtenReplyExpanded }}
+          className="min-h-8 flex-row items-center gap-1 px-0.5"
+          onPress={() => setWrittenReplyExpanded((current) => !current)}
+        >
+          <Text className="font-t3-medium text-xs text-foreground-muted">
+            {writtenReplyExpanded ? "Hide written reply" : "Show written reply"}
+          </Text>
+          <SymbolView
+            name={writtenReplyExpanded ? "chevron.up" : "chevron.down"}
+            size={13}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </Pressable>
+      ) : null}
+      {writtenReplyExpanded ? props.children : null}
+    </View>
+  );
+}
+
 function AssistantMessageMetaAndArtifacts(props: {
   readonly environmentId: EnvironmentId;
   readonly messageId: MessageId;
@@ -1349,6 +1410,10 @@ function AssistantMessageMetaAndArtifacts(props: {
   );
   const speech = sessionArtifacts.speech ?? props.persistedSpeech;
   const summary = sessionArtifacts.summary ?? props.persistedSummary;
+  // Agent voice replies render their own player above the message; the meta
+  // row must not offer a second one (or a regeneration that would replace the
+  // agent's recording with a synthesized listening version).
+  const isAgentVoiceReply = speech !== null && speech.origin === "agent";
 
   const prepareSpeech = useCallback(async () => {
     if (preparing) return;
@@ -1453,7 +1518,7 @@ function AssistantMessageMetaAndArtifacts(props: {
             )}
           </Pressable>
         ) : null}
-        {props.textToSpeechAvailable || speech !== null ? (
+        {(props.textToSpeechAvailable || speech !== null) && !isAgentVoiceReply ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={
@@ -1515,7 +1580,7 @@ function AssistantMessageMetaAndArtifacts(props: {
           )}
         </View>
       ) : null}
-      {speech !== null && expanded ? (
+      {speech !== null && expanded && !isAgentVoiceReply ? (
         <AssistantSpeechPlayer
           environmentId={props.environmentId}
           speech={speech}
@@ -1535,7 +1600,10 @@ function AssistantSpeechPlayer(props: {
   readonly iconSubtleColor: ColorValue;
   readonly transcriptExpanded: boolean;
   readonly onToggleTranscript: () => void;
-  readonly onRetry: () => void;
+  /** null hides the regenerate action (agent recordings cannot be re-made client-side). */
+  readonly onRetry: (() => void) | null;
+  /** Agent voice replies render the player as the message's main content. */
+  readonly primary?: boolean;
 }) {
   const { blocked, speed } = useListeningPlaybackSnapshot();
   // The transport sits on `bg-foreground`, so its glyph has to come from the
@@ -1610,7 +1678,12 @@ function AssistantSpeechPlayer(props: {
   ]);
 
   return (
-    <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
+    <View
+      className={cn(
+        "gap-2 rounded-2xl border border-border bg-subtle p-3",
+        props.primary ? "mb-1" : "mt-2",
+      )}
+    >
       <View className="flex-row items-center gap-2">
         <SymbolView
           name="headphones"
@@ -1618,16 +1691,22 @@ function AssistantSpeechPlayer(props: {
           tintColor={props.iconSubtleColor}
           type="monochrome"
         />
-        <Text className="font-t3-bold text-xs text-foreground">Listening version</Text>
+        <Text className="font-t3-bold text-xs text-foreground">
+          {props.primary ? "Voice reply" : "Listening version"}
+        </Text>
       </View>
       {audioUrlState._tag === "Failure" ? (
         <View className="gap-2 py-1">
           <Text className="text-xs text-foreground-muted">
-            The audio file is unavailable. Regenerate it to listen again.
+            {props.onRetry === null
+              ? "The audio file is unavailable."
+              : "The audio file is unavailable. Regenerate it to listen again."}
           </Text>
-          <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onRetry}>
-            <Text className="font-t3-medium text-xs text-foreground">Regenerate</Text>
-          </Pressable>
+          {props.onRetry !== null ? (
+            <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onRetry}>
+              <Text className="font-t3-medium text-xs text-foreground">Regenerate</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : audioUrl === null ? (
         <View className="flex-row items-center gap-2 py-1">
@@ -1689,7 +1768,7 @@ function AssistantSpeechPlayer(props: {
         onPress={props.onToggleTranscript}
       >
         <Text className="font-t3-medium text-xs text-foreground-muted">
-          View listening transcript
+          {props.primary ? "View transcript" : "View listening transcript"}
         </Text>
         <SymbolView
           name={props.transcriptExpanded ? "chevron.up" : "chevron.down"}

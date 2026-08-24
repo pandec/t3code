@@ -38,6 +38,15 @@ export const MESSAGE_SPEECH_MAX_SCRIPT_CHARS = 40_000;
 export const MESSAGE_SUMMARY_MAX_SOURCE_CHARS = 120_000;
 export const MESSAGE_SUMMARY_MAX_TEXT_CHARS = 12_000;
 
+/**
+ * Who produced a message's speech artifact. "user" is the on-demand listening
+ * version a client requested; "agent" is a recording the agent staged itself
+ * through the voice_reply MCP tool. Agent recordings are presented as the
+ * primary form of the message; user ones stay an opt-in secondary artifact.
+ */
+export const MessageSpeechOrigin = Schema.Literals(["user", "agent"]);
+export type MessageSpeechOrigin = typeof MessageSpeechOrigin.Type;
+
 export const MessageSpeechSynthesisRequest = Schema.Struct({
   messageId: MessageId,
 });
@@ -49,9 +58,57 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
   mimeType: Schema.Literal("audio/mpeg"),
   sizeBytes: NonNegativeInt,
+  // Optional so payloads persisted before agent voice replies still decode;
+  // absent means "user".
+  origin: Schema.optional(MessageSpeechOrigin),
   createdAt: IsoDateTime,
 });
 export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.Type;
+
+export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
+
+/**
+ * Speech metadata carried on an assistant-message completion. The audio bytes
+ * live in the server attachments directory under `<speechId>.mp3` (written
+ * before the command is dispatched, mirroring how user image attachments are
+ * persisted by the normalizer); the event stream only ever sees metadata.
+ */
+export const MessageSpeechAttachment = Schema.Struct({
+  speechId: TrimmedNonEmptyString,
+  transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
+  mimeType: Schema.Literal("audio/mpeg"),
+  sizeBytes: NonNegativeInt,
+  sourceTextHash: TrimmedNonEmptyString,
+  voiceId: TrimmedNonEmptyString,
+  ttsModel: TrimmedNonEmptyString,
+  origin: MessageSpeechOrigin,
+  createdAt: IsoDateTime,
+});
+export type MessageSpeechAttachment = typeof MessageSpeechAttachment.Type;
+
+export const AgentVoiceReplyInput = Schema.Struct({
+  script: TrimmedNonEmptyString.check(Schema.isMaxLength(AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS)),
+});
+export type AgentVoiceReplyInput = typeof AgentVoiceReplyInput.Type;
+
+export const AgentVoiceReplyResult = Schema.Struct({
+  status: Schema.Literal("staged"),
+  transcriptChars: NonNegativeInt,
+  audioSizeBytes: NonNegativeInt,
+});
+export type AgentVoiceReplyResult = typeof AgentVoiceReplyResult.Type;
+
+export class AgentVoiceReplyError extends Schema.TaggedErrorClass<AgentVoiceReplyError>()(
+  "AgentVoiceReplyError",
+  {
+    reason: Schema.Literals([
+      "unavailable",
+      "script_too_long",
+      "provider_failed",
+      "storage_failed",
+    ]),
+  },
+) {}
 
 export const MessageSummaryRequest = Schema.Struct({
   messageId: MessageId,

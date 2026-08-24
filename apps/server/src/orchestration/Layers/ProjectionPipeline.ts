@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   type MessageId,
+  type MessageSpeechAttachment,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -543,6 +544,97 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
+
+    /**
+     * Materializes an agent-staged voice recording carried on a
+     * `thread.message-sent` event. The MP3 was written to the attachments
+     * directory before the command was dispatched, so this only records
+     * metadata — which also makes event replay rebuild the row correctly.
+     */
+    const upsertMessageSpeechFromEvent = Effect.fn("upsertMessageSpeechFromEvent")(
+      function* (input: {
+        readonly messageId: MessageId;
+        readonly threadId: ThreadId;
+        readonly speech: MessageSpeechAttachment;
+      }) {
+        const { messageId, threadId, speech } = input;
+        const previousRows = yield* sql<{ readonly speechId: string }>`
+        SELECT speech_id AS "speechId"
+        FROM projection_message_speech
+        WHERE message_id = ${messageId}
+        LIMIT 1
+      `.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.fail(
+              toPersistenceSqlError("ProjectionPipeline.upsertMessageSpeech:query")(sqlError),
+            ),
+          ),
+        );
+        yield* sql`
+        INSERT INTO projection_message_speech (
+          message_id,
+          thread_id,
+          speech_id,
+          transcript,
+          mime_type,
+          size_bytes,
+          source_text_hash,
+          script_recipe_hash,
+          voice_id,
+          tts_model,
+          origin,
+          created_at
+        ) VALUES (
+          ${messageId},
+          ${threadId},
+          ${speech.speechId},
+          ${speech.transcript},
+          ${speech.mimeType},
+          ${speech.sizeBytes},
+          ${speech.sourceTextHash},
+          ${"agent-voice-reply"},
+          ${speech.voiceId},
+          ${speech.ttsModel},
+          ${speech.origin},
+          ${speech.createdAt}
+        )
+        ON CONFLICT(message_id) DO UPDATE SET
+          thread_id = excluded.thread_id,
+          speech_id = excluded.speech_id,
+          transcript = excluded.transcript,
+          mime_type = excluded.mime_type,
+          size_bytes = excluded.size_bytes,
+          source_text_hash = excluded.source_text_hash,
+          script_recipe_hash = excluded.script_recipe_hash,
+          voice_id = excluded.voice_id,
+          tts_model = excluded.tts_model,
+          origin = excluded.origin,
+          created_at = excluded.created_at
+      `.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.fail(
+              toPersistenceSqlError("ProjectionPipeline.upsertMessageSpeech:upsert")(sqlError),
+            ),
+          ),
+        );
+        const previous = previousRows[0];
+        if (previous && previous.speechId !== speech.speechId) {
+          // Same guard as the stale-speech prune: only remove a file whose id
+          // provably belongs to this thread's attachment namespace.
+          const threadSegment = toSafeThreadAttachmentSegment(threadId);
+          const relativePath = `${previous.speechId}.mp3`;
+          const parsedId = parseAttachmentIdFromRelativePath(relativePath);
+          const parsedThreadSegment = parsedId
+            ? parseThreadSegmentFromAttachmentId(parsedId)
+            : null;
+          if (threadSegment && parsedThreadSegment === threadSegment) {
+            yield* fileSystem
+              .remove(path.join(serverConfig.attachmentsDir, relativePath), { force: true })
+              .pipe(Effect.ignore);
+          }
+        }
+      },
+    );
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -1171,6 +1263,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               messageId: event.payload.messageId,
               threadId: event.payload.threadId,
               eventSequence: event.sequence,
+            });
+          }
+          if (event.payload.speech !== undefined && event.payload.role === "assistant") {
+            yield* upsertMessageSpeechFromEvent({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              speech: event.payload.speech,
             });
           }
           return;

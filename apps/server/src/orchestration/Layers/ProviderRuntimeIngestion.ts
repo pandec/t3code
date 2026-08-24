@@ -55,6 +55,7 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { AgentVoiceReply } from "../../voice/AgentVoiceReply.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -169,6 +170,19 @@ function findMessageById(
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message?.id === messageId) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function findLastAssistantMessageForTurn(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  turnId: TurnId,
+): OrchestrationMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && sameId(message.turnId, turnId)) {
       return message;
     }
   }
@@ -931,6 +945,7 @@ const make = Effect.gen(function* () {
   const providerInstanceRegistry = yield* ProviderInstanceRegistry;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const agentVoiceReply = yield* AgentVoiceReply;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -2066,7 +2081,66 @@ const make = Effect.gen(function* () {
             turnId,
             updatedAt: now,
           });
+
+          // A recording staged through the voice_reply MCP tool attaches to
+          // the turn's last assistant message once the turn completes
+          // normally; any other outcome throws the recording away, since an
+          // interrupted or failed turn no longer matches its script.
+          const stagedVoiceReply = yield* agentVoiceReply.takeStaged(thread.id);
+          if (stagedVoiceReply) {
+            if (normalizeRuntimeTurnState(event.payload.state) === "completed") {
+              const finalizedMessageIds = Array.from(assistantMessageIds);
+              const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
+              const lastProjectedMessageId = findLastAssistantMessageForTurn(messages, turnId)?.id;
+              const targetMessageId = lastFinalizedMessageId ?? lastProjectedMessageId;
+              if (targetMessageId !== undefined) {
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.message.assistant.complete",
+                  commandId: yield* providerCommandId(event, "agent-voice-reply-attach"),
+                  threadId: thread.id,
+                  messageId: targetMessageId,
+                  turnId,
+                  speech: stagedVoiceReply,
+                  createdAt: now,
+                });
+              } else {
+                // A voice-only turn: surface the transcript as the message
+                // text so the recording has a durable, searchable home.
+                const voiceMessageId = MessageId.make(`assistant:voice-reply:${event.eventId}`);
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.message.assistant.delta",
+                  commandId: yield* providerCommandId(event, "agent-voice-reply-message"),
+                  threadId: thread.id,
+                  messageId: voiceMessageId,
+                  delta: stagedVoiceReply.transcript,
+                  turnId,
+                  createdAt: now,
+                });
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.message.assistant.complete",
+                  commandId: yield* providerCommandId(event, "agent-voice-reply-complete"),
+                  threadId: thread.id,
+                  messageId: voiceMessageId,
+                  turnId,
+                  speech: stagedVoiceReply,
+                  createdAt: now,
+                });
+              }
+            } else {
+              yield* agentVoiceReply.removeStagedAudio(stagedVoiceReply);
+            }
+          }
+        } else {
+          // An untargeted completion cannot prove which turn it ends, so a
+          // staged recording has nothing safe to bind to.
+          yield* agentVoiceReply.discardStaged(thread.id);
         }
+      }
+
+      if (event.type === "session.exited") {
+        // A staged voice reply cannot outlive its session: the turn that
+        // staged it will never complete now.
+        yield* agentVoiceReply.discardStaged(thread.id);
       }
 
       if (event.type === "session.exited" && shouldApplyThreadLifecycle) {

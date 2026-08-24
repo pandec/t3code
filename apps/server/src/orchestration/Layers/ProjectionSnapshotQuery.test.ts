@@ -546,6 +546,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 transcript: "A persisted transcript.",
                 mimeType: "audio/mpeg",
                 sizeBytes: 42,
+                origin: "user",
                 createdAt: "2026-02-24T00:00:05.500Z",
               },
             },

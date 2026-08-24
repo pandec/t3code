@@ -361,17 +361,36 @@ describe("ClientSettings extras", () => {
 
 describe("ServerSettings.voice", () => {
   it("defaults to unset, so the server keeps its env/default resolution", () => {
-    expect(DEFAULT_SERVER_SETTINGS.voice).toEqual({ ttsModelId: "", ttsVoiceId: "" });
-    expect(decodeServerSettings({}).voice).toEqual({ ttsModelId: "", ttsVoiceId: "" });
+    expect(DEFAULT_SERVER_SETTINGS.voice).toEqual({
+      ttsModelId: "",
+      ttsVoiceId: "",
+      enableAgentVoiceReplies: true,
+    });
+    expect(decodeServerSettings({}).voice).toEqual({
+      ttsModelId: "",
+      ttsVoiceId: "",
+      enableAgentVoiceReplies: true,
+    });
   });
 
   it("trims values in both the settings and the patch", () => {
     expect(decodeServerSettings({ voice: { ttsModelId: "  eleven_v3  " } }).voice).toEqual({
       ttsModelId: "eleven_v3",
       ttsVoiceId: "",
+      enableAgentVoiceReplies: true,
     });
     expect(decodeServerSettingsPatch({ voice: { ttsVoiceId: "  abc  " } })).toEqual({
       voice: { ttsVoiceId: "abc" },
+    });
+  });
+
+  it("round-trips the agent voice replies toggle through the patch", () => {
+    expect(
+      decodeServerSettings({ voice: { enableAgentVoiceReplies: false } }).voice
+        .enableAgentVoiceReplies,
+    ).toBe(false);
+    expect(decodeServerSettingsPatch({ voice: { enableAgentVoiceReplies: false } })).toEqual({
+      voice: { enableAgentVoiceReplies: false },
     });
   });
 });

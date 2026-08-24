@@ -1264,7 +1264,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
   const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
-  const [speechExpanded, setSpeechExpanded] = useState(false);
+  // null = untouched: agent voice replies start expanded, listening versions
+  // start collapsed.
+  const [speechExpandedState, setSpeechExpandedState] = useState<boolean | null>(null);
+  const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
   const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const readSessionArtifacts = useCallback(
@@ -1287,6 +1290,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   );
   const speech = sessionArtifacts.speech ?? row.message.speech ?? null;
   const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
+  const isAgentVoiceReply = speech !== null && speech.origin === "agent";
+  const speechExpanded = speechExpandedState ?? isAgentVoiceReply;
+  // Never leave the row content-less: when the player is hidden, the written
+  // reply always shows.
+  const showMessageText = !isAgentVoiceReply || writtenReplyExpanded || !speechExpanded;
 
   const canShowSpeech =
     speech !== null ||
@@ -1312,7 +1320,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       setSpeechPhase("idle");
       if (result._tag === "Success") {
         rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
-        setSpeechExpanded(true);
+        setSpeechExpandedState(true);
         return;
       }
       toastManager.add({
@@ -1327,11 +1335,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
   const onToggleSpeech = useCallback(async () => {
     if (speech !== null) {
-      setSpeechExpanded((expanded) => !expanded);
+      setSpeechExpandedState(!speechExpanded);
       return;
     }
     await prepareSpeech();
-  }, [prepareSpeech, speech]);
+  }, [prepareSpeech, speech, speechExpanded]);
 
   const onToggleSummary = useCallback(async () => {
     if (summary !== null) {
@@ -1372,14 +1380,35 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
-        <ChatMarkdown
-          text={messageText}
-          cwd={ctx.markdownCwd}
-          threadRef={ctx.threadRef ?? undefined}
-          isStreaming={Boolean(row.message.streaming)}
-          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-          skills={ctx.skills}
-        />
+        {isAgentVoiceReply && speech !== null && speechExpanded ? (
+          <AssistantSpeechPlayer
+            environmentId={ctx.activeThreadEnvironmentId}
+            speech={speech}
+            onRetry={() => void prepareSpeech()}
+            primary
+          />
+        ) : null}
+        {isAgentVoiceReply && speechExpanded ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="mb-1 text-xs text-muted-foreground"
+            aria-expanded={writtenReplyExpanded}
+            onClick={() => setWrittenReplyExpanded((expanded) => !expanded)}
+          >
+            {writtenReplyExpanded ? "Hide written reply" : "Show written reply"}
+          </Button>
+        ) : null}
+        {showMessageText ? (
+          <ChatMarkdown
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        ) : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
@@ -1483,7 +1512,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             />
           </div>
         ) : null}
-        {speech !== null && speechExpanded ? (
+        {speech !== null && speechExpanded && !isAgentVoiceReply ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             speech={speech}
@@ -1499,10 +1528,13 @@ function AssistantSpeechPlayer({
   environmentId,
   speech,
   onRetry,
+  primary = false,
 }: {
   environmentId: EnvironmentId;
   speech: MessageSpeechSynthesisResult;
   onRetry: () => void;
+  /** Agent voice replies render the player as the message's main content. */
+  primary?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const { blocked, speed } = useListeningPlaybackSnapshot();
@@ -1528,10 +1560,15 @@ function AssistantSpeechPlayer({
   );
 
   return (
-    <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
+    <div
+      className={cn(
+        "rounded-xl border border-border/70 bg-secondary/35 p-3",
+        primary ? "mb-1.5" : "mt-2",
+      )}
+    >
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
         <HeadphonesIcon className="size-3.5 text-muted-foreground" />
-        <span>Listening version</span>
+        <span>{primary ? "Voice reply" : "Listening version"}</span>
       </div>
       {audioUrlState._tag === "Failure" ? (
         <div className="space-y-2 text-xs text-muted-foreground">
@@ -1573,7 +1610,7 @@ function AssistantSpeechPlayer({
       )}
       <details className="mt-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer select-none hover:text-foreground">
-          View listening transcript
+          {primary ? "View transcript" : "View listening transcript"}
         </summary>
         <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
           {speech.transcript}

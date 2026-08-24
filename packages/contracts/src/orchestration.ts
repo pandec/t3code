@@ -23,7 +23,11 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { MessageSpeechSynthesisResult, MessageSummaryResult } from "./voice.ts";
+import {
+  MessageSpeechAttachment,
+  MessageSpeechSynthesisResult,
+  MessageSummaryResult,
+} from "./voice.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -1128,6 +1132,9 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   turnId: Schema.optional(TurnId),
+  // An agent-staged voice recording to attach to the completed message. The
+  // MP3 already sits in the attachments directory; this is metadata only.
+  speech: Schema.optional(MessageSpeechAttachment),
   createdAt: IsoDateTime,
 });
 
@@ -1403,6 +1410,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   inputOrigin: Schema.optional(MessageInputOrigin),
+  speech: Schema.optional(MessageSpeechAttachment),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,

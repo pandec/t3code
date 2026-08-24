@@ -941,10 +941,39 @@ function VoiceExtrasSection() {
         }
       />
 
+      <SettingsRow
+        title="Agent voice replies"
+        description="Give agents a voice_reply tool that answers with a spoken recording shown as the main message. Applies to sessions started from now on."
+        resetAction={
+          settings.voice.enableAgentVoiceReplies !==
+          DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies ? (
+            <SettingResetButton
+              label="agent voice replies"
+              onClick={() =>
+                updateSettings({
+                  voice: {
+                    enableAgentVoiceReplies: DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies,
+                  },
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.voice.enableAgentVoiceReplies}
+            onCheckedChange={(checked) =>
+              updateSettings({ voice: { enableAgentVoiceReplies: Boolean(checked) } })
+            }
+            aria-label="Allow agent voice replies"
+          />
+        }
+      />
+
       <p className="max-w-xl px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
-        Speech playback needs <code>ELEVENLABS_API_KEY</code> in the server's environment. When set,
-        these fields override the server's <code>ELEVENLABS_TTS_MODEL</code> and{" "}
-        <code>ELEVENLABS_TTS_VOICE_ID</code> environment variables.
+        Speech playback and agent voice replies need <code>ELEVENLABS_API_KEY</code> in the server's
+        environment. When set, these fields override the server's <code>ELEVENLABS_TTS_MODEL</code>{" "}
+        and <code>ELEVENLABS_TTS_VOICE_ID</code> environment variables.
       </p>
     </SettingsSection>
   );

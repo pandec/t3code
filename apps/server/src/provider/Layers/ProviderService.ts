@@ -26,12 +26,14 @@ import {
   type ProviderSession,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -64,6 +66,7 @@ import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { isExistingDirectory } from "../../pathExpansion.ts";
+import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -440,19 +443,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
    * "off" silently becoming "on" would violate the user's stated choice,
    * whereas the reverse costs an agent one toolset and is visible immediately.
    */
-  const agentBrowserAccessEnabled = serverSettings.getSettings.pipe(
-    Effect.map((settings) => settings.enableAgentBrowserAccess),
+  // Whether the server can synthesize agent voice replies at all. Read once;
+  // per-session enablement additionally consults the settings toggle below.
+  const elevenLabsApiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
+  const agentVoiceReplyAvailable =
+    Option.isSome(elevenLabsApiKey) && Redacted.value(elevenLabsApiKey.value).trim().length > 0;
+
+  const mcpSessionCapabilities = serverSettings.getSettings.pipe(
+    Effect.map(
+      (settings): ReadonlySet<McpInvocationContext.McpCapability> =>
+        new Set<McpInvocationContext.McpCapability>([
+          ...(settings.enableAgentBrowserAccess ? (["preview"] as const) : []),
+          ...(agentVoiceReplyAvailable && settings.voice.enableAgentVoiceReplies
+            ? (["voice"] as const)
+            : []),
+        ]),
+    ),
     Effect.catch((cause) =>
       Effect.logWarning(
-        "Could not read server settings; withholding agent browser access for this session.",
+        "Could not read server settings; withholding agent MCP toolsets for this session.",
         { cause },
-      ).pipe(Effect.as(false)),
+      ).pipe(Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set())),
     ),
   );
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
-      if (!(yield* agentBrowserAccessEnabled)) {
+      const capabilities = yield* mcpSessionCapabilities;
+      if (capabilities.size === 0) {
         // Revoke as well as clear. Every other prepare path reaches
         // `issueActiveMcpCredential`, which revokes the thread first, so
         // skipping it here would leave a previously issued bearer token valid
@@ -463,7 +481,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId));
         return undefined;
       }
-      const credential = yield* issueMcpCredential({ threadId, providerInstanceId });
+      const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {
         yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));
       }

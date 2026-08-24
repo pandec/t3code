@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient } from "effect/unstable/http";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
@@ -25,14 +25,12 @@ import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
+import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
 
 export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
 
-const ELEVENLABS_TEXT_TO_SPEECH_URL = "https://api.elevenlabs.io/v1/text-to-speech";
-const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
 export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
 export const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
-const SPEECH_MIME_TYPE = "audio/mpeg" as const;
 const SPEECH_SCRIPT_RECIPE_VERSION = 2;
 
 interface MessageSpeechCacheRow {
@@ -322,24 +320,13 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "script_failed" });
       }
 
-      const audioBuffer = yield* httpClient
-        .post(
-          `${ELEVENLABS_TEXT_TO_SPEECH_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
-          {
-            headers: { "xi-api-key": Redacted.value(apiKey.value) },
-            body: HttpBody.jsonUnsafe({ text: transcript, model_id: ttsModel }),
-          },
-        )
-        .pipe(
-          Effect.flatMap(HttpClientResponse.filterStatusOk),
-          Effect.flatMap((response) => response.arrayBuffer),
-          Effect.timeout(ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT),
-          Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })),
-        );
-      const audioBytes = new Uint8Array(audioBuffer);
-      if (audioBytes.byteLength === 0) {
-        return yield* new MessageSpeechError({ reason: "provider_failed" });
-      }
+      const audioBytes = yield* synthesizeElevenLabsSpeech({
+        httpClient,
+        apiKey: apiKey.value,
+        voiceId,
+        ttsModel,
+        text: transcript,
+      }).pipe(Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })));
 
       const speechId = createAttachmentId(message.threadId);
       const speechPath = speechId ? resolveSpeechPath(speechId) : null;
@@ -368,6 +355,7 @@ export const layer = Layer.effect(
           script_recipe_hash,
           voice_id,
           tts_model,
+          origin,
           created_at
         )
         SELECT
@@ -381,6 +369,7 @@ export const layer = Layer.effect(
           ${scriptRecipeHash},
           ${voiceId},
           ${ttsModel},
+          ${"user"},
           ${createdAt}
         WHERE EXISTS (
           SELECT 1
@@ -404,6 +393,7 @@ export const layer = Layer.effect(
           script_recipe_hash = excluded.script_recipe_hash,
           voice_id = excluded.voice_id,
           tts_model = excluded.tts_model,
+          origin = excluded.origin,
           created_at = excluded.created_at
         RETURNING
           message_id AS "messageId",
