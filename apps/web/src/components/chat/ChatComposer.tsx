@@ -527,6 +527,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onInterrupt: () => void;
   onQueue: () => void;
   onImplementPlanInNewThread: () => void;
+  onCompactContext?: (() => void) | undefined;
+  compactDisabled: boolean;
+  compactDisabledReason: string | null;
 }) {
   return (
     <>
@@ -546,6 +549,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           onRefreshProviderUsage={props.onRefreshProviderUsage}
           onProbeThreadAccount={props.onProbeThreadAccount}
           modelDisplayName={props.activeThreadModelDisplayName}
+          onCompact={props.onCompactContext}
+          compactDisabled={props.compactDisabled}
+          compactDisabledReason={props.compactDisabledReason}
         />
       ) : null}
       {props.isPreparingWorktree ? (
@@ -585,6 +591,7 @@ export interface ChatComposerHandle {
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
+  compactContext: () => void;
   readSnapshot: () => {
     value: string;
     cursor: number;
@@ -699,7 +706,15 @@ export interface ChatComposerProps {
   activeThreadModelSelection: ModelSelection | null | undefined;
 
   // Context window
+  //
+  // The fork derives the snapshot inside the composer rather than taking
+  // upstream's hoisted `activeContextWindow` prop: its fallback to an empty
+  // snapshot needs the picker's own `selectedModelSelection`, which is
+  // composer-local state, and the provider-usage rings read the same
+  // activity list.
   activeThreadActivities: Thread["activities"] | undefined;
+  compactDisabled: boolean;
+  compactDisabledReason: string | null;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -798,6 +813,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeThreadActivities,
+    compactDisabled,
+    compactDisabledReason,
     resolvedTheme,
     settings,
     keybindings,
@@ -1011,6 +1028,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [providerInstanceEntries, selectedInstanceId],
   );
   const noProviderAvailable = selectedProviderEntry === undefined;
+  const resolvedCompactDisabledReason =
+    compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
   // The driver kind follows the instance that will actually run the turn,
   // which can differ from the persisted selection when that selection is
   // disabled.
@@ -1125,9 +1144,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Context window
   // ------------------------------------------------------------------
+  // The reported snapshot, before the fork's empty-state fallback. Compaction
+  // reads this one: a thread that has never reported usage has nothing to
+  // compact, and the fallback below would otherwise offer the action on a
+  // synthesized zero-token reading.
+  const reportedContextWindow = useMemo(
+    () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
+    [activeThreadActivities],
+  );
   const activeContextWindow = useMemo(() => {
-    const latest = deriveLatestContextWindowSnapshot(activeThreadActivities ?? []);
-    if (latest !== null) return latest;
+    if (reportedContextWindow !== null) return reportedContextWindow;
 
     const modelSelection = activeThread?.session
       ? (activeThreadModelSelection ?? selectedModelSelection)
@@ -1145,9 +1171,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
   }, [
     activeThread?.session,
-    activeThreadActivities,
     activeThreadModelSelection,
     providerStatuses,
+    reportedContextWindow,
     selectedModelSelection,
   ]);
   const activeProviderUsageInstanceId = resolveProviderUsageInstanceId({
@@ -1577,8 +1603,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   /**
    * Count of pasted images still being compressed, per thread. Reserved
    * against the attachment limit so concurrent pastes can't overshoot it,
-   * and checked by `submitComposer` so a send can't race an image into the
-   * next draft.
+   * and checked before sending or compacting so an image cannot move into
+   * the next draft.
    */
   const pendingImageCompressionsRef = useRef<Map<ThreadId, number>>(new Map());
 
@@ -2638,6 +2664,58 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       shouldBlurMobileComposerOnSubmit,
     ],
   );
+  const compactThreadContext = useCallback(() => {
+    if (
+      compactDisabled ||
+      noProviderAvailable ||
+      composerSendState.hasSendableContent ||
+      activePendingApproval !== null ||
+      pendingUserInputs.length > 0 ||
+      phase === "running" ||
+      isSendBusy ||
+      isConnecting ||
+      !activeThreadId
+    ) {
+      return;
+    }
+    // The compact buttons cannot see the compression counter (it lives in
+    // a ref), so they render enabled during a paste; toast instead of
+    // silently ignoring the click.
+    if ((pendingImageCompressionsRef.current.get(activeThreadId) ?? 0) > 0) {
+      toastManager.add({
+        type: "info",
+        title: "Still compressing a pasted image.",
+        description: "Compact again once its thumbnail appears.",
+      });
+      return;
+    }
+
+    promptRef.current = "/compact";
+    setComposerDraftPrompt(composerDraftTarget, "/compact");
+    submitComposer();
+    // A blocked dispatch (busy send ref, provider preflight rejection)
+    // would leave the injected "/compact" behind as if the user typed it.
+    // Clearing here is safe even when the send did dispatch: the send
+    // snapshots its prompt synchronously and clears the draft itself.
+    if (promptRef.current === "/compact") {
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+    }
+  }, [
+    activePendingApproval,
+    activeThreadId,
+    compactDisabled,
+    composerDraftTarget,
+    composerSendState.hasSendableContent,
+    isConnecting,
+    isSendBusy,
+    noProviderAvailable,
+    pendingUserInputs.length,
+    phase,
+    promptRef,
+    setComposerDraftPrompt,
+    submitComposer,
+  ]);
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
@@ -3450,6 +3528,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       toggleModelPicker: () => {
         setIsComposerModelPickerOpen((open) => !open);
       },
+      compactContext: compactThreadContext,
       isModelPickerOpen: () => isComposerModelPickerOpen,
       readSnapshot: () => {
         return readComposerSnapshot();
@@ -3564,6 +3643,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
+      compactThreadContext,
     ],
   );
 
@@ -4277,6 +4357,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onInterrupt={handleInterruptPrimaryAction}
                     onQueue={handleQueuePrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                    compactDisabled={
+                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                    }
+                    compactDisabledReason={resolvedCompactDisabledReason}
+                    {...(selectedProvider === "claudeAgent" && reportedContextWindow !== null
+                      ? { onCompactContext: compactThreadContext }
+                      : {})}
                   />
                 </div>
               </div>

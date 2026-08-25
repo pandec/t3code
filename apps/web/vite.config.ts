@@ -96,6 +96,7 @@ const ISOLATED_TEST_FILES = [
   "src/cloud/linkEnvironment.test.ts",
   "src/cloud/managedAuth.test.ts",
   "src/components/chat/ComposerPrimaryActions.test.tsx",
+  "src/components/chat/ContextWindowMeter.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
   "src/components/ChatMarkdown.test.tsx",
   "src/components/ChatMarkdown.workspace-images.test.tsx",

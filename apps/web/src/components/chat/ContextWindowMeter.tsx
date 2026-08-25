@@ -28,6 +28,7 @@ import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/con
 import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
+import { Minimize2Icon } from "lucide-react";
 
 /**
  * Two concentric rings in one control: the outer ring is the thread's context
@@ -199,8 +200,11 @@ export function ContextWindowMeter(props: {
    * button passes `force` because an explicit ask outranks the cadence cap.
    */
   onProbeThreadAccount?: (options?: { readonly force?: boolean }) => void;
+  onCompact?: (() => void) | undefined;
+  compactDisabled?: boolean | undefined;
+  compactDisabledReason?: string | null | undefined;
 }) {
-  const { usage, modelDisplayName } = props;
+  const { usage, modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
   // change applies to whatever is already on screen.
   const usageThresholds = useProviderUsageThresholds();
@@ -308,7 +312,7 @@ export function ContextWindowMeter(props: {
       <PopoverTrigger
         openOnHover
         delay={150}
-        closeDelay={0}
+        closeDelay={onCompact ? 150 : 0}
         render={
           <Button
             size="icon-sm"
@@ -549,8 +553,30 @@ export function ContextWindowMeter(props: {
                 ) : null}
                 {usage.compactsAutomatically ? (
                   <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
-                    {formatContextWindowCompactionMessage(modelDisplayName)}
+                    {formatContextWindowCompactionMessage(
+                      modelDisplayName,
+                      usage.autoCompactThreshold,
+                    )}
                   </div>
+                ) : null}
+                {onCompact ? (
+                  <>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="mt-1 w-full justify-center"
+                      disabled={compactDisabled}
+                      onClick={onCompact}
+                    >
+                      <Minimize2Icon aria-hidden="true" />
+                      Compact context
+                    </Button>
+                    {compactDisabled && compactDisabledReason ? (
+                      <div className="text-pretty text-secondary-label text-[11px]">
+                        {compactDisabledReason}
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             ) : null}
