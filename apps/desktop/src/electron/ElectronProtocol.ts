@@ -87,6 +87,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     `script-src ${scriptSources.join(" ")}`,
     `connect-src ${connectSources.join(" ")}`,
     `img-src 'self' ${input.scheme}: blob: data: http: https:`,
+    // Message-speech and voice-reply audio streams from environment origins,
+    // which are unknown here for the same reason as connect-src.
+    "media-src 'self' http: https:",
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
