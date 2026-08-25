@@ -18,6 +18,7 @@ import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
   resolveThreadListV2ArchiveQueueEnabled,
+  resolveThreadListV2ChangeRequestState,
   resolveThreadListV2MenuActionIds,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
@@ -56,6 +57,48 @@ function makeThread(
 }
 
 const NOW = "2026-06-02T00:00:00.000Z";
+const linkedPullRequest = {
+  projectId: ProjectId.make("project-1"),
+  repository: "pingdotgg/t3code",
+  number: 42,
+  url: "https://github.com/pingdotgg/t3code/pull/42",
+};
+
+describe("resolveThreadListV2ChangeRequestState", () => {
+  it("preserves the previous state while a linked pull request reloads", () => {
+    expect(
+      resolveThreadListV2ChangeRequestState({
+        linkedPullRequest,
+        state: null,
+        updatedAt: null,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clears the previous state after a pull request is unlinked", () => {
+    expect(
+      resolveThreadListV2ChangeRequestState({
+        linkedPullRequest: null,
+        state: null,
+        updatedAt: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("reports a loaded linked pull request", () => {
+    expect(
+      resolveThreadListV2ChangeRequestState({
+        linkedPullRequest,
+        state: "merged",
+        updatedAt: "2026-06-02T00:00:00.000Z",
+      }),
+    ).toEqual({
+      state: "merged",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+      linkedPullRequestKey: '["project-1","pingdotgg/t3code",42]',
+    });
+  });
+});
 
 describe("resolveThreadListV2MenuActionIds", () => {
   it("keeps archive available across active, settled, and legacy rows", () => {
@@ -506,6 +549,58 @@ describe("buildThreadListV2Items", () => {
       "snoozed",
       "settled",
     ]);
+  });
+
+  it("ignores the previous pull request state after a different pull request is linked", () => {
+    const thread = makeThread({
+      id: ThreadId.make("linked"),
+      title: "Linked pull request",
+      linkedPullRequest,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [thread],
+      environmentId: null,
+      searchQuery: "",
+      changeRequestByKey: new Map([
+        [
+          `${environmentId}:${thread.id}`,
+          {
+            state: "merged" as const,
+            linkedPullRequestKey: '["project-1","pingdotgg/t3code",41]',
+          },
+        ],
+      ]),
+      now: NOW,
+    });
+
+    expect(layout.settledCount).toBe(0);
+    expect(layout.items[0]?.variant).toBe("card");
+  });
+
+  it("settles a thread only when the cached pull request identity matches", () => {
+    const thread = makeThread({
+      id: ThreadId.make("linked-merged"),
+      title: "Linked merged pull request",
+      linkedPullRequest,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [thread],
+      environmentId: null,
+      searchQuery: "",
+      changeRequestByKey: new Map([
+        [
+          `${environmentId}:${thread.id}`,
+          {
+            state: "merged" as const,
+            linkedPullRequestKey: '["project-1","pingdotgg/t3code",42]',
+          },
+        ],
+      ]),
+      now: NOW,
+    });
+
+    expect(layout.settledCount).toBe(1);
+    expect(layout.items[0]?.variant).toBe("slim");
   });
 
   it("keeps a merged thread active when auto-settle on merge is off", () => {

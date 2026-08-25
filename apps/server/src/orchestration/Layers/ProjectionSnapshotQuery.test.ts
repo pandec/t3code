@@ -214,6 +214,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           interaction_mode,
           branch,
           worktree_path,
+          linked_pull_request_json,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
@@ -234,6 +235,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'default',
           NULL,
           NULL,
+          '{"projectId":"project-1","repository":"pingdotgg/t3code","number":42,"url":"https://github.com/pingdotgg/t3code/pull/42"}',
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
@@ -501,6 +503,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          linkedPullRequest: {
+            projectId: asProjectId("project-1"),
+            repository: "pingdotgg/t3code",
+            number: 42,
+            url: "https://github.com/pingdotgg/t3code/pull/42",
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -637,6 +645,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          linkedPullRequest: {
+            projectId: asProjectId("project-1"),
+            repository: "pingdotgg/t3code",
+            number: 42,
+            url: "https://github.com/pingdotgg/t3code/pull/42",
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

@@ -68,6 +68,8 @@ import Migration0048 from "./Migrations/048_ProjectionProjectFaviconPath.ts";
 // Upstream shipped this as 041; renumbered after the fork's migration history.
 import Migration0049 from "./Migrations/049_AuthSessionClientConnection.ts";
 import Migration0050 from "./Migrations/050_ProjectionMessageSpeechOrigin.ts";
+// Upstream shipped this as 042; renumbered after the fork's migration history.
+import Migration0051 from "./Migrations/051_ProjectionThreadLinkedPullRequest.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -130,6 +132,7 @@ export const migrationEntries = [
   [48, "ProjectionProjectFaviconPath", Migration0048],
   [49, "AuthSessionClientConnection", Migration0049],
   [50, "ProjectionMessageSpeechOrigin", Migration0050],
+  [51, "ProjectionThreadLinkedPullRequest", Migration0051],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -382,6 +382,9 @@ function applyThreadDetailEventUnretained(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          ...(event.payload.linkedPullRequest !== undefined
+            ? { linkedPullRequest: event.payload.linkedPullRequest }
+            : {}),
           updatedAt: event.payload.updatedAt,
         },
       };
