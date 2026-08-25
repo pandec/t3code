@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS,
   AgentVoiceReplyError,
+  MESSAGE_SPEECH_MAX_SCRIPT_CHARS,
   type MessageSpeechAttachment,
   type ThreadId,
   type TurnId,
@@ -46,7 +47,9 @@ export interface StagedAgentVoiceReply {
  * Agent-staged voice replies. The `voice_reply` MCP tool synthesizes a
  * recording mid-turn and parks it here; provider-runtime ingestion claims it
  * when its turn completes and attaches it to that turn's final assistant
- * message. One staged reply per thread — a second call replaces the first.
+ * message. One staged reply per thread — a second call in the same turn
+ * appends to it (the segments play in call order as one recording), while a
+ * call from a newer turn replaces it.
  *
  * The MP3 is written to the attachments directory at stage time so the later
  * attach command can stay metadata-only, mirroring how user image attachments
@@ -78,6 +81,81 @@ export interface AgentVoiceReplyShape {
 export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoiceReplyShape>()(
   "t3/voice/AgentVoiceReply",
 ) {}
+
+/**
+ * Joins two MP3 segments from the same synthesis pipeline into one playable
+ * stream. Every ElevenLabs response here is CBR 44.1kHz mono, so bare frame
+ * streams concatenate cleanly — but each segment leads with an ID3v2 tag and
+ * a Xing/Info header frame that declares that segment's frame count. Both are
+ * dropped from both sides (a no-op on an already merged left side): a header
+ * frame surviving into the merge caps the reported duration at the first
+ * segment, and without one, CBR players derive the correct duration from the
+ * file size.
+ */
+export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8Array {
+  const left = stripLeadingXingFrame(stripLeadingId3v2Tag(previous));
+  const right = stripLeadingXingFrame(stripLeadingId3v2Tag(next));
+  const merged = new Uint8Array(left.byteLength + right.byteLength);
+  merged.set(left, 0);
+  merged.set(right, left.byteLength);
+  return merged;
+}
+
+/**
+ * Drops a leading Xing/Info header frame. Only the shape this pipeline emits
+ * is parsed — MPEG1 Layer III without CRC; anything else needs different
+ * bitrate tables and fourcc offsets, so it is returned untouched rather than
+ * guessed at. The fourcc sits right after the side info, whose size is fixed
+ * per channel mode, so only that offset is probed — matching arbitrary audio
+ * bytes by content alone could false-positive.
+ */
+export function stripLeadingXingFrame(bytes: Uint8Array): Uint8Array {
+  if (bytes.byteLength < 4 || bytes[0] !== 0xff || (bytes[1]! & 0xe0) !== 0xe0) {
+    return bytes;
+  }
+  const isMpeg1 = (bytes[1]! & 0x18) === 0x18;
+  const isLayer3 = (bytes[1]! & 0x06) === 0x02;
+  const hasCrc = (bytes[1]! & 0x01) === 0;
+  if (!isMpeg1 || !isLayer3 || hasCrc) {
+    return bytes;
+  }
+  const bitrateIndex = (bytes[2]! >> 4) & 0x0f;
+  const sampleRateIndex = (bytes[2]! >> 2) & 0x03;
+  if (bitrateIndex === 0 || bitrateIndex === 0x0f || sampleRateIndex === 3) {
+    return bytes;
+  }
+  const bitrate = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][bitrateIndex]!;
+  const sampleRate = [44100, 48000, 32000][sampleRateIndex]!;
+  const padding = (bytes[2]! >> 1) & 0x01;
+  const frameLength = Math.floor((144 * bitrate * 1000) / sampleRate) + padding;
+  if (frameLength > bytes.byteLength) {
+    return bytes;
+  }
+  const isMono = (bytes[3]! & 0xc0) === 0xc0;
+  const fourccOffset = 4 + (isMono ? 17 : 32);
+  const fourcc = String.fromCharCode(...bytes.subarray(fourccOffset, fourccOffset + 4));
+  return fourcc === "Xing" || fourcc === "Info" ? bytes.subarray(frameLength) : bytes;
+}
+
+export function stripLeadingId3v2Tag(bytes: Uint8Array): Uint8Array {
+  if (
+    bytes.byteLength < 10 ||
+    bytes[0] !== 0x49 || // "I"
+    bytes[1] !== 0x44 || // "D"
+    bytes[2] !== 0x33 // "3"
+  ) {
+    return bytes;
+  }
+  // The tag size is a 28-bit syncsafe integer and excludes the 10-byte header
+  // and the optional 10-byte footer signalled by flag bit 0x10.
+  const size =
+    ((bytes[6]! & 0x7f) << 21) |
+    ((bytes[7]! & 0x7f) << 14) |
+    ((bytes[8]! & 0x7f) << 7) |
+    (bytes[9]! & 0x7f);
+  const tagLength = 10 + size + ((bytes[5]! & 0x10) !== 0 ? 10 : 0);
+  return tagLength >= bytes.byteLength ? bytes : bytes.subarray(tagLength);
+}
 
 /** Inert instance for tests and harnesses that do not exercise voice replies. */
 export const layerNoop = Layer.succeed(AgentVoiceReply, {
@@ -198,44 +276,99 @@ export const layer = Layer.effect(
           return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
         }
 
-        const speechId = createAttachmentId(input.threadId);
-        const speechPath = speechId ? resolveSpeechPath(speechId) : null;
-        if (!speechId || !speechPath) {
-          return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
-        }
-        yield* fileSystem.makeDirectory(serverConfig.attachmentsDir, { recursive: true }).pipe(
-          Effect.andThen(fileSystem.writeFile(speechPath, audioBytes)),
-          Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
+        yield* fileSystem
+          .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
+          .pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })));
+
+        const storeSegment = (bytes: Uint8Array) =>
+          Effect.gen(function* () {
+            const speechId = createAttachmentId(input.threadId);
+            const speechPath = speechId ? resolveSpeechPath(speechId) : null;
+            if (!speechId || !speechPath) {
+              return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
+            }
+            yield* fileSystem
+              .writeFile(speechPath, bytes)
+              .pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })));
+            return speechId;
+          });
+
+        // The whole read-merge-write runs while holding the map's semaphore,
+        // which the claim/discard operations also take: a consumer either
+        // sees the fully merged entry or none at all. Touching a still-staged
+        // entry cannot race a consumer for the same reason as before —
+        // ingestion claims an entry (removing it from the map) before
+        // dispatching, so anything still present here is unclaimed. The
+        // superseded file is deleted only after the new entry is committed,
+        // so an interrupt can at worst orphan a file, never leave the map
+        // pointing at a deleted one.
+        const staged_ = yield* SynchronizedRef.modifyEffect(staged, (entries) =>
+          Effect.gen(function* () {
+            const previous = entries.get(input.threadId);
+            const supersededSpeechId = previous?.attachment.speechId;
+
+            // A second call in the same turn appends: the recordings play in
+            // call order as one stream. An entry left by an older turn is
+            // replaced instead.
+            if (previous !== undefined && previous.turnId === turnId) {
+              const transcript = `${previous.attachment.transcript}\n\n${script}`;
+              if (transcript.length > MESSAGE_SPEECH_MAX_SCRIPT_CHARS) {
+                return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
+              }
+              const previousPath = resolveSpeechPath(previous.attachment.speechId);
+              if (!previousPath) {
+                return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
+              }
+              const previousBytes = yield* fileSystem
+                .readFile(previousPath)
+                .pipe(
+                  Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
+                );
+              const mergedBytes = appendSpeechAudio(previousBytes, audioBytes);
+              // The merge lands under a fresh id so a failed write leaves the
+              // already staged recording intact. voiceId, ttsModel and
+              // createdAt stay those of the first segment — deliberate: they
+              // describe where the recording started, even if the voice
+              // settings changed between calls.
+              const speechId = yield* storeSegment(mergedBytes);
+              const attachment: MessageSpeechAttachment = {
+                ...previous.attachment,
+                speechId,
+                transcript: transcript as MessageSpeechAttachment["transcript"],
+                sizeBytes: mergedBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
+                sourceTextHash: NodeCrypto.createHash("sha256")
+                  .update(transcript, "utf8")
+                  .digest("hex") as MessageSpeechAttachment["sourceTextHash"],
+              };
+              const next = new Map(entries);
+              next.set(input.threadId, { turnId, attachment });
+              return [{ attachment, supersededSpeechId }, next] as const;
+            }
+
+            const speechId = yield* storeSegment(audioBytes);
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            const attachment: MessageSpeechAttachment = {
+              speechId,
+              transcript: script as MessageSpeechAttachment["transcript"],
+              mimeType: SPEECH_MIME_TYPE,
+              sizeBytes: audioBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
+              sourceTextHash: NodeCrypto.createHash("sha256")
+                .update(script, "utf8")
+                .digest("hex") as MessageSpeechAttachment["sourceTextHash"],
+              voiceId: voiceId as MessageSpeechAttachment["voiceId"],
+              ttsModel: ttsModel as MessageSpeechAttachment["ttsModel"],
+              origin: "agent",
+              createdAt: createdAt as MessageSpeechAttachment["createdAt"],
+            };
+            const next = new Map(entries);
+            next.set(input.threadId, { turnId, attachment });
+            return [{ attachment, supersededSpeechId }, next] as const;
+          }),
         );
-
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
-        const attachment: MessageSpeechAttachment = {
-          speechId,
-          transcript: script as MessageSpeechAttachment["transcript"],
-          mimeType: SPEECH_MIME_TYPE,
-          sizeBytes: audioBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
-          sourceTextHash: NodeCrypto.createHash("sha256")
-            .update(script, "utf8")
-            .digest("hex") as MessageSpeechAttachment["sourceTextHash"],
-          voiceId: voiceId as MessageSpeechAttachment["voiceId"],
-          ttsModel: ttsModel as MessageSpeechAttachment["ttsModel"],
-          origin: "agent",
-          createdAt: createdAt as MessageSpeechAttachment["createdAt"],
-        };
-
-        // Replacing a still-staged entry deletes its file. This cannot race a
-        // consumer: ingestion claims an entry (removing it from the map)
-        // before dispatching, so anything still present here is unclaimed.
-        const replaced = yield* SynchronizedRef.modify(staged, (entries) => {
-          const previous = entries.get(input.threadId);
-          const next = new Map(entries);
-          next.set(input.threadId, { turnId, attachment });
-          return [previous, next] as const;
-        });
-        if (replaced) {
-          yield* removeAudioFile(replaced.attachment.speechId);
+        if (staged_.supersededSpeechId !== undefined) {
+          yield* removeAudioFile(staged_.supersededSpeechId);
         }
-        return attachment;
+        return staged_.attachment;
       },
     );
 
