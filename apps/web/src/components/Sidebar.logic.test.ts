@@ -1143,6 +1143,33 @@ describe("sortThreadsForSidebar", () => {
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
+
+  it("surfaces an un-settled thread at the top via its re-entry stamp", () => {
+    const sorted = sortThreadsForSidebar([
+      {
+        id: "old-unsettled",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        unsettledAt: "2026-03-09T13:00:00.000Z",
+      },
+      sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
+      sortable({ id: "middle", createdAt: "2026-03-09T10:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["old-unsettled", "newest", "middle"]);
+  });
+
+  it("ignores a re-entry stamp older than the thread's creation", () => {
+    const sorted = sortThreadsForSidebar([
+      {
+        id: "stale-stamp",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        unsettledAt: "2026-03-09T09:00:00.000Z",
+      },
+      sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
+  });
 });
 
 describe("sortActiveThreadsForSidebar", () => {
@@ -1206,6 +1233,71 @@ describe("sortActiveThreadsForSidebar", () => {
     const bumpedAt = nextSidebarThreadBumpAt(futureThreads, {
       sortByLatestUserMessage: true,
     });
+    expect(Date.parse(bumpedAt)).toBeGreaterThan(Date.parse("2099-03-09T14:00:00.000Z"));
+  });
+
+  // The fast path delegates to sortThreadsForSidebar, which already honours
+  // the un-settle anchor. These cases cover the composed path instead, which
+  // takes over as soon as either fork recency layer is in play.
+  it("re-anchors on un-settle once a manual move puts it on the composed path", () => {
+    const unsettled = sortActiveThreadsForSidebar(
+      threads.map((thread) =>
+        thread.id === "older"
+          ? { ...thread, unsettledAt: "2026-03-09T14:00:00.000Z" }
+          : { ...thread, movedToTopAt: "2026-03-09T09:00:00.000Z" },
+      ),
+      options(),
+    );
+    expect(unsettled.map((thread) => thread.id)).toEqual(["older", "newer"]);
+  });
+
+  // An imported thread carries a fresh createdAt with its original message
+  // timestamps, so folding createdAt into the key would sort every import as
+  // brand new and bury genuinely recent conversations.
+  it("does not floor the latest-user-message key with creation time", () => {
+    const sorted = sortActiveThreadsForSidebar(
+      [
+        {
+          id: "imported",
+          createdAt: "2026-03-09T18:00:00.000Z",
+          latestUserMessageAt: "2026-01-05T10:00:00.000Z",
+          movedToTopAt: null,
+        },
+        {
+          id: "recent",
+          createdAt: "2026-03-08T08:00:00.000Z",
+          latestUserMessageAt: "2026-03-09T09:00:00.000Z",
+          movedToTopAt: null,
+        },
+      ],
+      options(true),
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["recent", "imported"]);
+  });
+
+  it("re-anchors on un-settle when ordering by the latest user message", () => {
+    const unsettled = sortActiveThreadsForSidebar(
+      threads.map((thread) =>
+        thread.id === "newer" ? { ...thread, unsettledAt: "2026-03-09T15:00:00.000Z" } : thread,
+      ),
+      options(true),
+    );
+    expect(unsettled.map((thread) => thread.id)).toEqual(["newer", "older"]);
+  });
+
+  it("generates a manual recency newer than a future-skewed un-settle stamp", () => {
+    const bumpedAt = nextSidebarThreadBumpAt(
+      [
+        {
+          id: "future",
+          createdAt: "2099-03-09T08:00:00.000Z",
+          latestUserMessageAt: null,
+          movedToTopAt: null,
+          unsettledAt: "2099-03-09T14:00:00.000Z",
+        },
+      ],
+      { sortByLatestUserMessage: false },
+    );
     expect(Date.parse(bumpedAt)).toBeGreaterThan(Date.parse("2099-03-09T14:00:00.000Z"));
   });
 });

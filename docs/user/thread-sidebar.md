@@ -12,7 +12,12 @@ are searching, the fold steps aside entirely — both have already narrowed the 
 asked to see, and a pinned match should never sit behind a fold.
 
 Pinned threads still move to **Settled** when they become inactive. They also move when their pull
-request merges if **Auto-settle merged threads** is enabled.
+request merges if **Auto-settle merged threads** is enabled. The pin stays with them underneath, so
+un-settling one puts it back in its own place in the pinned section rather than in the active list.
+
+When you un-settle an unpinned thread, it returns to the top of the active list so you can find it
+right away. The conversation itself is untouched, and its messages and turns keep their own times.
+Other threads keep their positions.
 
 Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
 in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
@@ -36,8 +41,8 @@ threads, with a count on the header while it is folded.
 Quiet means no messages and no agent turns for longer than the window you set — seven days by
 default, anywhere from one day to a year. Nothing is settled, snoozed, or archived on your behalf:
 an Older thread is an ordinary active thread that happens to be grouped, and it returns to the list
-the moment you message it (or move it to the top, on servers that support that). Pinned, snoozed,
-and settled threads stay in their own sections and are never filed here.
+the moment you message it or un-settle it (or move it to the top, on servers that support that).
+Pinned, snoozed, and settled threads stay in their own sections and are never filed here.
 
 Live and waiting work is never folded away, however long it has been sitting there: a thread with a
 running session, background work still going after its turn, an approval or input request, or a

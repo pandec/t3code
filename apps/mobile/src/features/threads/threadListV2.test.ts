@@ -458,6 +458,93 @@ describe("sortThreadsForListV2", () => {
     );
     expect(sorted.map((thread) => thread.id)).toEqual(["bumped", "messaged"]);
   });
+
+  it("surfaces an un-settled thread at the top via its re-entry stamp", () => {
+    const sorted = sortThreadsForListV2([
+      {
+        id: "old-unsettled",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        unsettledAt: "2026-06-01T13:00:00.000Z",
+      },
+      { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
+      { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual(["old-unsettled", "newest", "middle"]);
+  });
+
+  // The un-settle re-anchor and the fork's explicit bump are independent
+  // anchors on the same axis, so the newer of the two wins either way.
+  it("takes the newest of the un-settle stamp and an explicit move-to-top", () => {
+    const bumpedLater = sortThreadsForListV2([
+      {
+        id: "unsettled",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        unsettledAt: "2026-06-01T13:00:00.000Z",
+      },
+      {
+        id: "bumped",
+        createdAt: "2026-06-01T07:00:00.000Z",
+        movedToTopAt: "2026-06-01T14:00:00.000Z",
+      },
+    ]);
+    expect(bumpedLater.map((thread) => thread.id)).toEqual(["bumped", "unsettled"]);
+
+    const unsettledLater = sortThreadsForListV2([
+      {
+        id: "unsettled",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        unsettledAt: "2026-06-01T15:00:00.000Z",
+      },
+      {
+        id: "bumped",
+        createdAt: "2026-06-01T07:00:00.000Z",
+        movedToTopAt: "2026-06-01T14:00:00.000Z",
+      },
+    ]);
+    expect(unsettledLater.map((thread) => thread.id)).toEqual(["unsettled", "bumped"]);
+  });
+
+  // An imported thread carries a fresh createdAt with its original message
+  // timestamps, so folding createdAt into the key would sort every import as
+  // brand new and bury genuinely recent conversations.
+  it("does not floor the latest-user-message key with creation time", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        {
+          id: "imported",
+          createdAt: "2026-06-01T18:00:00.000Z",
+          latestUserMessageAt: "2026-01-05T10:00:00.000Z",
+        },
+        {
+          id: "recent",
+          createdAt: "2026-05-30T08:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T09:00:00.000Z",
+        },
+      ],
+      { sortByLatestUserMessage: true },
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["recent", "imported"]);
+  });
+
+  it("re-anchors on un-settle even when sorting by the latest user message", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        {
+          id: "messaged",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T14:00:00.000Z",
+        },
+        {
+          id: "unsettled",
+          createdAt: "2026-06-01T07:00:00.000Z",
+          latestUserMessageAt: "2026-06-01T09:00:00.000Z",
+          unsettledAt: "2026-06-01T15:00:00.000Z",
+        },
+      ],
+      { sortByLatestUserMessage: true },
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual(["unsettled", "messaged"]);
+  });
 });
 
 describe("buildThreadListV2Items", () => {

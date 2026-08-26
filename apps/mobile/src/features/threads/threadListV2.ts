@@ -272,15 +272,23 @@ export interface ThreadListV2ActiveSortOptions {
 }
 
 /**
- * Active-thread sort: creation recency plus an explicit server-backed move
- * timestamp. Organic activity (agent replies, turn completion) never reorders
- * the list.
+ * Active-thread sort: newest anchor on top. Organic activity (agent replies,
+ * turn completion) never reorders the list — a row holds its position between
+ * lifecycle transitions.
+ *
+ * Three anchors compete and the newest wins: the base key, an un-settle
+ * re-anchor (so a thread returning to the active list surfaces at the top
+ * instead of sinking back to its creation slot), and the fork's explicit
+ * server-backed `movedToTopAt` bump.
  *
  * `sortByLatestUserMessage` swaps the base key for the newest user message,
  * matching `sortActiveThreadsForSidebar` on web — including its fallback
- * chain rather than a max, so a thread with no user message sorts by
- * creation. Both keys are server-projected, so the two surfaces agree on the
- * order regardless of which client sent the message.
+ * chain rather than a max, so a thread with no user message sorts by creation
+ * and an imported thread (fresh createdAt, old messages) still sorts by its
+ * conversation. That rules out upstream's `activeThreadAnchorTimestampMs`
+ * here: it folds `createdAt` back in unconditionally, which would floor the
+ * key. Both keys are server-projected, so the two surfaces agree on the order
+ * regardless of which client sent the message.
  */
 export function sortThreadsForListV2<
   T extends {
@@ -288,6 +296,7 @@ export function sortThreadsForListV2<
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null | undefined;
     readonly movedToTopAt?: string | null | undefined;
+    readonly unsettledAt?: string | null | undefined;
   },
 >(threads: readonly T[], options: ThreadListV2ActiveSortOptions = {}): T[] {
   const sortTimestamp = (thread: T) => {
@@ -295,7 +304,11 @@ export function sortThreadsForListV2<
       options.sortByLatestUserMessage === true
         ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
         : parseTimestampMs(thread.createdAt);
-    return Math.max(base, firstValidTimestampMs(thread.movedToTopAt));
+    return Math.max(
+      base,
+      firstValidTimestampMs(thread.unsettledAt),
+      firstValidTimestampMs(thread.movedToTopAt),
+    );
   };
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.

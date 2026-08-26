@@ -70,6 +70,8 @@ import Migration0049 from "./Migrations/049_AuthSessionClientConnection.ts";
 import Migration0050 from "./Migrations/050_ProjectionMessageSpeechOrigin.ts";
 // Upstream shipped this as 042; renumbered after the fork's migration history.
 import Migration0051 from "./Migrations/051_ProjectionThreadLinkedPullRequest.ts";
+// Upstream shipped this as 043; renumbered after the fork's migration history.
+import Migration0052 from "./Migrations/052_ProjectionThreadsUnsettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -133,6 +135,7 @@ export const migrationEntries = [
   [49, "AuthSessionClientConnection", Migration0049],
   [50, "ProjectionMessageSpeechOrigin", Migration0050],
   [51, "ProjectionThreadLinkedPullRequest", Migration0051],
+  [52, "ProjectionThreadsUnsettledAt", Migration0052],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

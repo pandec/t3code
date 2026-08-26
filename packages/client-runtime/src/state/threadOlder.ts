@@ -18,6 +18,7 @@ export type ThreadOlderSource = Pick<
   | "latestUserMessageAt"
   | "movedToTopAt"
   | "session"
+  | "unsettledAt"
   | "snoozedAt"
   | "snoozedUntil"
 >;
@@ -32,7 +33,10 @@ export type ThreadOlderSource = Pick<
  * user saying the thread matters again, and a row lifted to the top must not
  * fall straight back down. So does a snooze wake: "show me this on the 1st"
  * is answered by the thread reappearing in the list, not by it landing in a
- * folded shelf still aged from the work it was snoozed on top of.
+ * folded shelf still aged from the work it was snoozed on top of. And so does
+ * an un-settle, for the same reason: a thread re-entering the active list is
+ * meant to surface at the top, which the shelf would otherwise undo by filing
+ * it away before the active sorter ever sees it.
  */
 export function threadOlderRecencyAtMs(
   thread: ThreadOlderSource,
@@ -43,6 +47,7 @@ export function threadOlderRecencyAtMs(
     thread.createdAt,
     threadLastActivityAt(thread),
     thread.movedToTopAt ?? null,
+    thread.unsettledAt ?? null,
     threadWokeAt(thread, { now: options.now }),
   ]) {
     if (candidate == null) continue;

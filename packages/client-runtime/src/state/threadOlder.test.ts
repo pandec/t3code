@@ -24,6 +24,7 @@ function thread(overrides: Partial<ThreadOlderSource> = {}): ThreadOlderSource {
     session: null,
     snoozedAt: null,
     snoozedUntil: null,
+    unsettledAt: null,
     ...overrides,
   };
 }
@@ -78,6 +79,18 @@ describe("threadOlderRecencyAtMs", () => {
   it("falls back to creation time for an untouched thread", () => {
     expect(threadOlderRecencyAtMs(thread(), { now: NOW })).toBe(Date.parse(CREATED_AT));
   });
+
+  it("counts an un-settle as recency", () => {
+    expect(
+      threadOlderRecencyAtMs(
+        thread({
+          latestUserMessageAt: "2026-04-02T00:00:00.000Z",
+          unsettledAt: "2026-04-09T00:00:00.000Z",
+        }),
+        { now: NOW },
+      ),
+    ).toBe(Date.parse("2026-04-09T00:00:00.000Z"));
+  });
 });
 
 describe("threadIsOlder", () => {
@@ -115,6 +128,21 @@ describe("threadIsOlder", () => {
         thread({
           latestUserMessageAt: "2026-04-01T00:00:00.000Z",
           movedToTopAt: "2026-04-09T00:00:00.000Z",
+        }),
+        { now: NOW, afterDays: 7 },
+      ),
+    ).toBe(false);
+  });
+
+  // Older classification runs before the active sorter, so a shelf that
+  // ignored the un-settle stamp would file the thread away before the sort
+  // could ever lift it to the top.
+  it("lifts a thread back out as soon as it is un-settled", () => {
+    expect(
+      threadIsOlder(
+        thread({
+          latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+          unsettledAt: "2026-04-09T00:00:00.000Z",
         }),
         { now: NOW, afterDays: 7 },
       ),
