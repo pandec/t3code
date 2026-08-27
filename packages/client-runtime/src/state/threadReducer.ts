@@ -13,6 +13,7 @@ import type {
   OrchestrationThreadMessagePage,
   TurnId,
 } from "@t3tools/contracts";
+import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -632,17 +633,17 @@ function applyThreadDetailEventUnretained(
         kind: "updated",
         thread: {
           ...thread,
-          messages: thread.messages.map((message) =>
-            message.id === event.payload.messageId
-              ? {
-                  ...message,
-                  speechRequest: {
-                    requestId: event.payload.requestId,
-                    startedAt: event.payload.startedAt,
-                  },
-                }
-              : message,
-          ),
+          messages: thread.messages.map((message) => {
+            if (message.id !== event.payload.messageId) return message;
+            const { speechFailureReason: _, ...withoutFailure } = message;
+            return {
+              ...withoutFailure,
+              speechRequest: {
+                requestId: event.payload.requestId,
+                startedAt: event.payload.startedAt,
+              },
+            };
+          }),
         },
       };
     }
@@ -657,16 +658,24 @@ function applyThreadDetailEventUnretained(
           return message;
         }
         changed = true;
-        const { speechRequest: _, ...withoutRequest } = message;
+        const { speechRequest: _, speechFailureReason: __, ...withoutRequestAndFailure } = message;
         const speech = event.payload.speech;
-        if (
-          speech === undefined ||
-          (withoutRequest.speech?.origin === "agent" && speech.origin === "user")
-        ) {
-          return withoutRequest;
+        const speechIsStale =
+          speech?.origin === "user" &&
+          speech.sourceTextHash !== messageArtifactTextHash(message.text.trim());
+        if (speech === undefined || speechIsStale) {
+          return {
+            ...withoutRequestAndFailure,
+            speechFailureReason:
+              event.payload.failureReason ??
+              (speechIsStale ? "message_unavailable" : "provider_failed"),
+          };
+        }
+        if (withoutRequestAndFailure.speech?.origin === "agent" && speech.origin === "user") {
+          return withoutRequestAndFailure;
         }
         return {
-          ...withoutRequest,
+          ...withoutRequestAndFailure,
           speech: {
             messageId: event.payload.messageId,
             speechId: speech.speechId,

@@ -12,6 +12,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
+import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
 import {
   applyThreadDetailEvent,
@@ -810,6 +811,107 @@ describe("applyThreadDetailEvent", () => {
           speechId: "speech-agent",
           origin: "agent",
         });
+      }
+    });
+
+    it("clears pending state without installing stale user speech", () => {
+      const messageId = MessageId.make("msg-stale-speech");
+      const requestId = CommandId.make("cmd-stale-speech");
+      const threadWithRequest: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: messageId,
+            role: "assistant",
+            text: "Current reply",
+            speechRequest: {
+              requestId,
+              startedAt: "2026-04-01T06:01:00.000Z",
+            },
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:00:00.000Z",
+          },
+        ],
+      };
+
+      const completed = applyThreadDetailEvent(threadWithRequest, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:03:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-speech-completed",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId,
+          requestId,
+          speech: {
+            speechId: "speech-stale",
+            transcript: "Old reply",
+            mimeType: "audio/mpeg",
+            sizeBytes: 456,
+            sourceTextHash: messageArtifactTextHash("Old reply"),
+            scriptRecipeHash: "recipe-hash",
+            voiceId: "voice-1",
+            ttsModel: "model-1",
+            origin: "user",
+            createdAt: "2026-04-01T06:03:00.000Z",
+          },
+        },
+      });
+
+      expect(completed.kind).toBe("updated");
+      if (completed.kind === "updated") {
+        expect(completed.thread.messages[0]?.speechRequest).toBeUndefined();
+        expect(completed.thread.messages[0]?.speech).toBeUndefined();
+        expect(completed.thread.messages[0]?.speechFailureReason).toBe("message_unavailable");
+      }
+    });
+
+    it("retains the typed reason for a failed owned completion", () => {
+      const messageId = MessageId.make("msg-failed-speech");
+      const requestId = CommandId.make("cmd-failed-speech");
+      const threadWithRequest: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: messageId,
+            role: "assistant",
+            text: "Long reply",
+            speechRequest: {
+              requestId,
+              startedAt: "2026-04-01T06:01:00.000Z",
+            },
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:00:00.000Z",
+          },
+        ],
+      };
+
+      const completed = applyThreadDetailEvent(threadWithRequest, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:03:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-speech-completed",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId,
+          requestId,
+          failureReason: "source_too_long",
+        },
+      });
+
+      expect(completed.kind).toBe("updated");
+      if (completed.kind === "updated") {
+        expect(completed.thread.messages[0]?.speechRequest).toBeUndefined();
+        expect(completed.thread.messages[0]?.speech).toBeUndefined();
+        expect(completed.thread.messages[0]?.speechFailureReason).toBe("source_too_long");
       }
     });
 

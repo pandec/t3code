@@ -85,7 +85,7 @@ import { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 // and the threadSequence watermark SQL have to read one shared list.
 export { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 import { OrchestrationCommandInvariantError } from "./orchestration/Errors.ts";
-import { validateMessageSpeechRequest } from "./orchestration/messageSpeechRequest.ts";
+import { validateAndDispatchMessageSpeechRequest } from "./orchestration/messageSpeechRequest.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -938,16 +938,6 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              if (normalizedCommand.type === "thread.message.speech.request") {
-                yield* validateMessageSpeechRequest(
-                  projectionThreadMessageRepository,
-                  normalizedCommand,
-                ).pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to validate message speech request"),
-                  ),
-                );
-              }
               // Archive and settle both mean "done with this thread", so a
               // live provider session must not keep running background work
               // (PR monitors, dev servers, subagent fleets) after either
@@ -996,7 +986,18 @@ const makeWsRpcLayer = (
                     ),
                   )
                 : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand).pipe(
+              const dispatchEffect =
+                normalizedCommand.type === "thread.message.speech.request"
+                  ? validateAndDispatchMessageSpeechRequest(
+                      projectionThreadMessageRepository,
+                      normalizedCommand,
+                      dispatchNormalizedCommand(normalizedCommand),
+                    )
+                  : dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* dispatchEffect.pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                ),
                 Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
               );
               yield* recordClientCommandAnalytics(normalizedCommand);

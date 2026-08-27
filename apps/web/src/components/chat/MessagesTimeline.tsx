@@ -136,7 +136,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { useAssetUrlState } from "../../assets/assetUrls";
-import { synthesizeMessageSpeech } from "../../state/voice";
+import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { threadEnvironment } from "../../state/threads";
 import {
@@ -1323,9 +1323,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     toastManager.add({
       type: "error",
       title: "Listening version unavailable",
-      description: "T3 Code could not prepare audio for this message. Try again in a moment.",
+      description: messageSpeechFailureDescription(row.message.speechFailureReason),
     });
-  }, [ctx.textToSpeechPersistentJobs, row.message.speechRequest?.requestId, speech]);
+  }, [
+    ctx.textToSpeechPersistentJobs,
+    row.message.speechFailureReason,
+    row.message.speechRequest?.requestId,
+    speech,
+  ]);
   const [voiceReplyAudioUnavailable, setVoiceReplyAudioUnavailable] = useState(false);
   const onVoiceReplyAudioUnavailable = useCallback(() => setVoiceReplyAudioUnavailable(true), []);
   // A voice-only turn publishes its transcript as the message text; a

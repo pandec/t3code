@@ -30,6 +30,33 @@ layer("053_ProjectionMessageSpeechRequest", (it) => {
           { name: "speech_request_started_at", notnull: 0 },
         ],
       );
+
+      const indexes = yield* sql<{
+        readonly name: string;
+        readonly partial: number;
+      }>`
+        PRAGMA index_list(projection_thread_messages)
+      `;
+      const pendingSpeechIndex = indexes.find(
+        (index) => index.name === "idx_projection_thread_messages_pending_speech_request",
+      );
+      assert.deepStrictEqual(
+        pendingSpeechIndex === undefined
+          ? undefined
+          : { name: pendingSpeechIndex.name, partial: pendingSpeechIndex.partial },
+        {
+          name: "idx_projection_thread_messages_pending_speech_request",
+          partial: 1,
+        },
+      );
+
+      const indexColumns = yield* sql<{ readonly name: string }>`
+        PRAGMA index_info('idx_projection_thread_messages_pending_speech_request')
+      `;
+      assert.deepStrictEqual(
+        indexColumns.map((column) => column.name),
+        ["speech_request_id"],
+      );
     }),
   );
 });

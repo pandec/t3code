@@ -5,6 +5,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
   EnvironmentId,
   MessageId,
+  MessageSpeechFailureReason,
   MessageSpeechRequest,
   MessageSpeechSynthesisResult,
   MessageSummaryResult,
@@ -144,7 +145,7 @@ import {
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
-import { synthesizeMessageSpeech } from "../../state/voice";
+import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { threadEnvironment } from "../../state/threads";
 import {
@@ -1308,6 +1309,7 @@ function renderFeedEntry(
             messageId={message.id}
             messageText={message.text}
             speechRequest={message.speechRequest ?? null}
+            speechFailureReason={message.speechFailureReason}
             persistedSummary={message.generatedSummary ?? null}
             persistedSpeech={message.speech ?? null}
             timestampLabel={timestampLabel}
@@ -1410,6 +1412,7 @@ function AssistantMessageMetaAndArtifacts(props: {
   readonly messageId: MessageId;
   readonly messageText: string;
   readonly speechRequest: MessageSpeechRequest | null;
+  readonly speechFailureReason: MessageSpeechFailureReason | undefined;
   readonly persistedSummary: MessageSummaryResult | null;
   readonly persistedSpeech: MessageSpeechSynthesisResult | null;
   readonly timestampLabel: string;
@@ -1470,9 +1473,14 @@ function AssistantMessageMetaAndArtifacts(props: {
     }
     Alert.alert(
       "Listening version unavailable",
-      "T3 Code could not prepare audio for this message. Try again in a moment.",
+      messageSpeechFailureDescription(props.speechFailureReason),
     );
-  }, [props.speechRequest?.requestId, props.textToSpeechPersistentJobs, speech]);
+  }, [
+    props.speechFailureReason,
+    props.speechRequest?.requestId,
+    props.textToSpeechPersistentJobs,
+    speech,
+  ]);
 
   const prepareSpeech = useCallback(async () => {
     if (preparing) return;

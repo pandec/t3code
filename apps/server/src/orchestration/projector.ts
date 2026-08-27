@@ -673,17 +673,17 @@ export function projectEvent(
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              messages: thread.messages.map((message) =>
-                message.id === payload.messageId
-                  ? {
-                      ...message,
-                      speechRequest: {
-                        requestId: payload.requestId,
-                        startedAt: payload.startedAt,
-                      },
-                    }
-                  : message,
-              ),
+              messages: thread.messages.map((message) => {
+                if (message.id !== payload.messageId) return message;
+                const { speechFailureReason: _, ...withoutFailure } = message;
+                return {
+                  ...withoutFailure,
+                  speechRequest: {
+                    requestId: payload.requestId,
+                    startedAt: payload.startedAt,
+                  },
+                };
+              }),
             }),
           };
         }),
@@ -709,18 +709,31 @@ export function projectEvent(
                 ) {
                   return message;
                 }
-                const { speechRequest: _, ...withoutRequest } = message;
+                const {
+                  speechRequest: _,
+                  speechFailureReason: __,
+                  ...withoutRequestAndFailure
+                } = message;
                 const speech = payload.speech;
+                const speechIsStale =
+                  speech?.origin === "user" &&
+                  speech.sourceTextHash !== messageArtifactTextHash(message.text.trim());
+                if (speech === undefined || speechIsStale) {
+                  return {
+                    ...withoutRequestAndFailure,
+                    speechFailureReason:
+                      payload.failureReason ??
+                      (speechIsStale ? "message_unavailable" : "provider_failed"),
+                  };
+                }
                 if (
-                  speech === undefined ||
-                  (speech.origin === "user" &&
-                    speech.sourceTextHash !== messageArtifactTextHash(message.text.trim())) ||
-                  (withoutRequest.speech?.origin === "agent" && speech.origin === "user")
+                  withoutRequestAndFailure.speech?.origin === "agent" &&
+                  speech.origin === "user"
                 ) {
-                  return withoutRequest;
+                  return withoutRequestAndFailure;
                 }
                 return {
-                  ...withoutRequest,
+                  ...withoutRequestAndFailure,
                   speech: {
                     messageId: payload.messageId,
                     speechId: speech.speechId,

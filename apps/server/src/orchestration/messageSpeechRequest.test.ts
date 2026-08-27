@@ -5,14 +5,21 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 
 import {
   type ProjectionThreadMessage,
   type ProjectionThreadMessageRepositoryShape,
 } from "../persistence/Services/ProjectionThreadMessages.ts";
-import { validateMessageSpeechRequest } from "./messageSpeechRequest.ts";
+import {
+  validateAndDispatchMessageSpeechRequest,
+  validateMessageSpeechRequest,
+} from "./messageSpeechRequest.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const threadId = ThreadId.make("thread-1");
@@ -98,4 +105,53 @@ it.effect("allows a retry with the same command id", () =>
     repository(Option.some(message({ speechRequestId: commandId }))),
     command,
   ),
+);
+
+it.effect("serializes validation with dispatch for the same message", () =>
+  Effect.gen(function* () {
+    const projected = yield* Ref.make(message());
+    const firstEntered = yield* Deferred.make<void>();
+    const releaseFirst = yield* Deferred.make<void>();
+    const sharedRepository = repository(Option.none());
+    const liveRepository: ProjectionThreadMessageRepositoryShape = {
+      ...sharedRepository,
+      getByMessageId: () => Ref.get(projected).pipe(Effect.map(Option.some)),
+    };
+    const secondCommandId = CommandId.make("command-2");
+    const secondCommand = { ...command, commandId: secondCommandId };
+
+    const firstFiber = yield* validateAndDispatchMessageSpeechRequest(
+      liveRepository,
+      command,
+      Deferred.succeed(firstEntered, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseFirst)),
+        Effect.andThen(
+          Ref.update(projected, (current) => ({
+            ...current,
+            speechRequestId: command.commandId,
+          })),
+        ),
+      ),
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(firstEntered);
+
+    const secondFiber = yield* validateAndDispatchMessageSpeechRequest(
+      liveRepository,
+      secondCommand,
+      Ref.update(projected, (current) => ({
+        ...current,
+        speechRequestId: secondCommand.commandId,
+      })),
+    ).pipe(Effect.result, Effect.forkChild);
+
+    yield* Deferred.succeed(releaseFirst, undefined);
+    yield* Fiber.join(firstFiber);
+    const secondResult = yield* Fiber.join(secondFiber);
+
+    assert.isTrue(Result.isFailure(secondResult));
+    if (Result.isFailure(secondResult)) {
+      assert.equal(secondResult.failure._tag, "OrchestrationCommandInvariantError");
+    }
+    assert.equal((yield* Ref.get(projected)).speechRequestId, command.commandId);
+  }),
 );

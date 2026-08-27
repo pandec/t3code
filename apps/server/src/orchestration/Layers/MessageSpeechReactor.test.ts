@@ -21,6 +21,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { messageArtifactTextHash } from "../../messageArtifacts/identity.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import {
   ProjectionThreadMessageRepository,
   type ProjectionMessageSpeech,
@@ -406,6 +407,160 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
       );
 
       assert.deepEqual(yield* Ref.get(deletedSpeechIds), [previous.speechId]);
+    }),
+  );
+
+  it.effect("completes a current request that becomes ineligible", () =>
+    Effect.gen(function* () {
+      const messageId = MessageId.make("message-streaming");
+      const requestId = CommandId.make("request-streaming");
+      const messages = yield* Ref.make<ReadonlyMap<MessageId, ProjectionThreadMessage>>(new Map());
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const events = yield* Queue.unbounded<OrchestrationEvent>();
+      const completionDispatched = yield* Deferred.make<void>();
+      const layer = Layer.mergeAll(
+        Layer.succeed(OrchestrationEngineService, {
+          ...engineService(events, commands),
+          dispatch: (command) =>
+            Ref.update(commands, (current) => [...current, command]).pipe(
+              Effect.tap(() =>
+                command.type === "thread.message.speech.complete"
+                  ? Deferred.succeed(completionDispatched, undefined)
+                  : Effect.void,
+              ),
+              Effect.as({ sequence: 1 }),
+            ),
+        }),
+        Layer.succeed(ProjectionThreadMessageRepository, repositoryService(messages)),
+        Layer.succeed(MessageSpeech, {
+          available: true,
+          synthesize: () =>
+            Effect.gen(function* () {
+              yield* Ref.set(
+                messages,
+                new Map([
+                  [messageId, { ...projectionMessage(messageId, requestId), isStreaming: true }],
+                ]),
+              );
+              return yield* new MessageSpeechError({ reason: "provider_failed" });
+            }),
+          deleteAttachment: () => Effect.void,
+        }),
+        Layer.succeed(RuntimeReceiptBus, {
+          publish: () => Effect.void,
+          streamEventsForTest: Stream.empty,
+        }),
+      );
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* MessageSpeechReactor;
+        yield* reactor.start();
+        yield* Ref.set(messages, new Map([[messageId, projectionMessage(messageId, requestId)]]));
+        yield* Queue.offer(events, requestedEvent(messageId, requestId));
+        yield* Deferred.await(completionDispatched);
+        yield* reactor.drain;
+      }).pipe(
+        Effect.provide(MessageSpeechReactorLive.pipe(Layer.provideMerge(layer))),
+        Effect.scoped,
+      );
+
+      const completion = (yield* Ref.get(commands)).find(
+        (candidate) => candidate.type === "thread.message.speech.complete",
+      );
+      assert.isTrue(completion?.type === "thread.message.speech.complete");
+      if (completion?.type === "thread.message.speech.complete") {
+        assert.equal(completion.requestId, requestId);
+        assert.equal(completion.speech, undefined);
+        assert.equal(completion.failureReason, "message_unavailable");
+      }
+    }),
+  );
+
+  it.effect("cleans generated audio when the post-synthesis projection read fails", () =>
+    Effect.gen(function* () {
+      const messageId = MessageId.make("message-read-failure");
+      const requestId = CommandId.make("request-read-failure");
+      const generated = speech(messageId);
+      const messages = yield* Ref.make<ReadonlyMap<MessageId, ProjectionThreadMessage>>(new Map());
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const events = yield* Queue.unbounded<OrchestrationEvent>();
+      const currentMessageReads = yield* Ref.make(0);
+      const failedReadAttempts = yield* Queue.unbounded<number>();
+      const deletedSpeechIds = yield* Ref.make<ReadonlyArray<string>>([]);
+      const completionDispatched = yield* Deferred.make<void>();
+      const baseRepository = repositoryService(messages);
+      const repository: ProjectionThreadMessageRepositoryShape = {
+        ...baseRepository,
+        getByMessageId: ({ messageId: requestedMessageId }) =>
+          Ref.updateAndGet(currentMessageReads, (count) => count + 1).pipe(
+            Effect.flatMap((attempt) => {
+              if (attempt === 1)
+                return baseRepository.getByMessageId({ messageId: requestedMessageId });
+              return Queue.offer(failedReadAttempts, attempt).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new PersistenceSqlError({
+                      operation: "get message after speech synthesis",
+                    }),
+                  ),
+                ),
+              );
+            }),
+          ),
+      };
+      const layer = Layer.mergeAll(
+        Layer.succeed(OrchestrationEngineService, {
+          ...engineService(events, commands),
+          dispatch: (command) =>
+            Ref.update(commands, (current) => [...current, command]).pipe(
+              Effect.tap(() =>
+                command.type === "thread.message.speech.complete"
+                  ? Deferred.succeed(completionDispatched, undefined)
+                  : Effect.void,
+              ),
+              Effect.as({ sequence: 1 }),
+            ),
+        }),
+        Layer.succeed(ProjectionThreadMessageRepository, repository),
+        Layer.succeed(MessageSpeech, {
+          available: true,
+          synthesize: () => Effect.succeed(generated),
+          deleteAttachment: (speechId) =>
+            Ref.update(deletedSpeechIds, (current) => [...current, speechId]),
+        }),
+        Layer.succeed(RuntimeReceiptBus, {
+          publish: () => Effect.void,
+          streamEventsForTest: Stream.empty,
+        }),
+      );
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* MessageSpeechReactor;
+        yield* reactor.start();
+        yield* Ref.set(messages, new Map([[messageId, projectionMessage(messageId, requestId)]]));
+        yield* Queue.offer(events, requestedEvent(messageId, requestId));
+        assert.equal(yield* Queue.take(failedReadAttempts), 2);
+        yield* TestClock.adjust("50 millis");
+        assert.equal(yield* Queue.take(failedReadAttempts), 3);
+        yield* TestClock.adjust("100 millis");
+        assert.equal(yield* Queue.take(failedReadAttempts), 4);
+        yield* Deferred.await(completionDispatched);
+        yield* reactor.drain;
+      }).pipe(
+        Effect.provide(MessageSpeechReactorLive.pipe(Layer.provideMerge(layer))),
+        Effect.scoped,
+      );
+
+      const completion = (yield* Ref.get(commands)).find(
+        (candidate) => candidate.type === "thread.message.speech.complete",
+      );
+      assert.isTrue(completion?.type === "thread.message.speech.complete");
+      if (completion?.type === "thread.message.speech.complete") {
+        assert.equal(completion.requestId, requestId);
+        assert.equal(completion.speech, undefined);
+        assert.equal(completion.failureReason, "storage_failed");
+      }
+      assert.deepEqual(yield* Ref.get(deletedSpeechIds), [generated.speechId]);
     }),
   );
 

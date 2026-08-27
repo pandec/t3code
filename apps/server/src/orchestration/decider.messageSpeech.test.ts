@@ -5,12 +5,14 @@ import {
   ProviderInstanceId,
   ThreadId,
   type MessageSpeechAttachment,
+  type OrchestrationMessage,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -27,7 +29,7 @@ const speech: MessageSpeechAttachment = {
   createdAt: NOW,
 };
 
-function readModel(): OrchestrationReadModel {
+function readModel(messages: ReadonlyArray<OrchestrationMessage> = []): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
@@ -50,7 +52,7 @@ function readModel(): OrchestrationReadModel {
         snoozedUntil: null,
         snoozedAt: null,
         deletedAt: null,
-        messages: [],
+        messages,
         completedTurnAssistantMessageIds: [],
         proposedPlans: [],
         activities: [],
@@ -100,6 +102,43 @@ it.layer(NodeServices.layer)("message speech decider", (it) => {
       expect(event.type).toBe("thread.message-speech-completed");
       if (event.type === "thread.message-speech-completed") {
         expect(event.payload.speech).toEqual(speech);
+      }
+    }),
+  );
+
+  it.effect("strips stale user speech when the live message text changed", () =>
+    Effect.gen(function* () {
+      const messageId = MessageId.make("message-1");
+      const staleSpeech = {
+        ...speech,
+        sourceTextHash: messageArtifactTextHash("Old reply"),
+      } satisfies MessageSpeechAttachment;
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.message.speech.complete",
+          commandId: CommandId.make("cmd-complete-stale"),
+          threadId: ThreadId.make("thread-1"),
+          messageId,
+          requestId: CommandId.make("cmd-current"),
+          speech: staleSpeech,
+        },
+        readModel: readModel([
+          {
+            id: messageId,
+            role: "assistant",
+            text: "Current reply",
+            turnId: null,
+            streaming: false,
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ]),
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("thread.message-speech-completed");
+      if (event.type === "thread.message-speech-completed") {
+        expect(event.payload.speech).toBeUndefined();
+        expect(event.payload.failureReason).toBe("message_unavailable");
       }
     }),
   );

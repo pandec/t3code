@@ -15,7 +15,7 @@ import { ProjectionThreadMessageRepository } from "../persistence/Services/Proje
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
-import { validateMessageSpeechRequest } from "./messageSpeechRequest.ts";
+import { validateAndDispatchMessageSpeechRequest } from "./messageSpeechRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -151,21 +151,6 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          if (normalizedCommand.type === "thread.message.speech.request") {
-            yield* validateMessageSpeechRequest(
-              projectionThreadMessageRepository,
-              normalizedCommand,
-            ).pipe(
-              Effect.catchTags({
-                OrchestrationCommandInvariantError: () =>
-                  failEnvironmentInvalidRequest("invalid_command"),
-                PersistenceSqlError: (cause) =>
-                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
-                PersistenceDecodeError: (cause) =>
-                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              }),
-            );
-          }
           // Route bootstrap turn starts through the shared bootstrap program so
           // HTTP clients (the CLI) get worktree preparation, setup script
           // launch, and thread cleanup — identical to the WebSocket path.
@@ -179,12 +164,26 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               ),
             );
           }
-          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+          const dispatchEffect =
+            normalizedCommand.type === "thread.message.speech.request"
+              ? validateAndDispatchMessageSpeechRequest(
+                  projectionThreadMessageRepository,
+                  normalizedCommand,
+                  orchestrationEngine.dispatch(normalizedCommand),
+                )
+              : orchestrationEngine.dispatch(normalizedCommand);
+          return yield* dispatchEffect.pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
             ),
             Effect.catch((cause) =>
               Effect.gen(function* () {
+                if (
+                  normalizedCommand.type === "thread.message.speech.request" &&
+                  isOrchestrationCommandInvariantError(cause)
+                ) {
+                  return yield* failEnvironmentInvalidRequest("invalid_command");
+                }
                 if (
                   isOrchestrationCommandInvariantError(cause) &&
                   (cause.code === "project_actions_changed" ||

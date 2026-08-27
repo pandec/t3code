@@ -20,4 +20,10 @@ export default Effect.gen(function* () {
       ADD COLUMN speech_request_started_at TEXT
     `;
   }
+
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_projection_thread_messages_pending_speech_request
+    ON projection_thread_messages(speech_request_id)
+    WHERE speech_request_id IS NOT NULL
+  `;
 });

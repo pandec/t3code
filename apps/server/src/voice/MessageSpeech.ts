@@ -25,6 +25,7 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
 import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
 
@@ -57,19 +58,33 @@ interface AssistantMessageRow {
   readonly isStreaming: number;
 }
 
+export type MessageSpeechSourceFailureReason = Extract<
+  MessageSpeechFailureReason,
+  "message_unavailable" | "source_too_long"
+>;
+
+export function getMessageSpeechSourceFailureReason(input: {
+  readonly role: string;
+  readonly isStreaming: boolean;
+  readonly text: string;
+  readonly maxSourceChars?: number;
+}): MessageSpeechSourceFailureReason | null {
+  const text = input.text.trim();
+  if (input.role !== "assistant" || input.isStreaming || text.length === 0) {
+    return "message_unavailable";
+  }
+  return text.length > (input.maxSourceChars ?? MESSAGE_SPEECH_MAX_SOURCE_CHARS)
+    ? "source_too_long"
+    : null;
+}
+
 export function isMessageSpeechSourceEligible(input: {
   readonly role: string;
   readonly isStreaming: boolean;
   readonly text: string;
   readonly maxSourceChars?: number;
 }): boolean {
-  const text = input.text.trim();
-  return (
-    input.role === "assistant" &&
-    !input.isStreaming &&
-    text.length > 0 &&
-    text.length <= (input.maxSourceChars ?? MESSAGE_SPEECH_MAX_SOURCE_CHARS)
-  );
+  return getMessageSpeechSourceFailureReason(input) === null;
 }
 
 export function getElevenLabsTtsCharacterLimit(model: string): number {
@@ -261,23 +276,17 @@ export const layer = Layer.effect(
 
       const sourceText = message.text.trim();
       const ttsCharacterLimit = getElevenLabsTtsCharacterLimit(ttsModel);
-      if (
-        !isMessageSpeechSourceEligible({
-          role: message.role,
-          isStreaming: message.isStreaming !== 0,
-          text: sourceText,
-          maxSourceChars: ttsCharacterLimit,
-        })
-      ) {
-        if (sourceText.length > ttsCharacterLimit) {
-          return yield* new MessageSpeechError({ reason: "source_too_long" });
-        }
-        return yield* new MessageSpeechError({ reason: "message_unavailable" });
+      const sourceFailureReason = getMessageSpeechSourceFailureReason({
+        role: message.role,
+        isStreaming: message.isStreaming !== 0,
+        text: sourceText,
+        maxSourceChars: ttsCharacterLimit,
+      });
+      if (sourceFailureReason !== null) {
+        return yield* new MessageSpeechError({ reason: sourceFailureReason });
       }
 
-      const sourceTextHash = NodeCrypto.createHash("sha256")
-        .update(sourceText, "utf8")
-        .digest("hex");
+      const sourceTextHash = messageArtifactTextHash(sourceText);
       const scriptRecipeHash = NodeCrypto.createHash("sha256")
         .update(
           // @effect-diagnostics-next-line preferSchemaOverJson:off

@@ -2,13 +2,13 @@ import {
   AuthOrchestrationOperateScope,
   CommandId,
   EnvironmentHttpApi,
-  MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   type MessageSpeechAttachment,
   type MessageSpeechFailureReason,
   type MessageSpeechSynthesisResult,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,15 +25,43 @@ import {
 } from "../auth/http.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
-import { MessageSpeech } from "./MessageSpeech.ts";
+import { getMessageSpeechSourceFailureReason, MessageSpeech } from "./MessageSpeech.ts";
 import { VoiceTranscription } from "./VoiceTranscription.ts";
 
 type MessageSpeechCompletedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.message-speech-completed" }
 >;
+
+export const subscribeToMessageSpeechCompletion = Effect.fn("subscribeToMessageSpeechCompletion")(
+  function* (
+    subscribe: NonNullable<OrchestrationEngineShape["subscribeDomainEvents"]>,
+    threadId: MessageSpeechCompletedEvent["payload"]["threadId"],
+    messageId: MessageSpeechCompletedEvent["payload"]["messageId"],
+  ) {
+    const ready = yield* Deferred.make<void>();
+    const fiber = yield* Effect.gen(function* () {
+      const events = yield* subscribe;
+      yield* Deferred.succeed(ready, undefined);
+      return yield* events.pipe(
+        Stream.filter(
+          (event): event is MessageSpeechCompletedEvent =>
+            event.type === "thread.message-speech-completed" &&
+            event.payload.threadId === threadId &&
+            event.payload.messageId === messageId,
+        ),
+        Stream.runHead,
+      );
+    }).pipe(Effect.scoped, Effect.forkChild);
+    yield* Deferred.await(ready);
+    return fiber;
+  },
+);
 
 const toSynthesisResult = (
   messageId: MessageSpeechSynthesisResult["messageId"],
@@ -83,16 +111,15 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
         .getByMessageId({ messageId })
         .pipe(Effect.catchCause((cause) => failEnvironmentInternal("internal_error", cause)));
       const message = Option.getOrUndefined(messageOption);
-      if (
-        message === undefined ||
-        message.role !== "assistant" ||
-        message.isStreaming ||
-        message.text.trim().length === 0
-      ) {
+      if (message === undefined) {
         return yield* failEnvironmentInvalidRequest("speech_message_unavailable");
       }
-      if (message.text.trim().length > MESSAGE_SPEECH_MAX_SOURCE_CHARS) {
+      const sourceFailureReason = getMessageSpeechSourceFailureReason(message);
+      if (sourceFailureReason === "source_too_long") {
         return yield* failEnvironmentInvalidRequest("speech_source_too_long");
+      }
+      if (sourceFailureReason === "message_unavailable") {
+        return yield* failEnvironmentInvalidRequest("speech_message_unavailable");
       }
 
       const speechOption = yield* projectionThreadMessages
@@ -112,15 +139,11 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
       threadId: MessageSpeechCompletedEvent["payload"]["threadId"],
       messageId: MessageSpeechCompletedEvent["payload"]["messageId"],
     ) =>
-      orchestrationEngine.streamDomainEvents.pipe(
-        Stream.filter(
-          (event): event is MessageSpeechCompletedEvent =>
-            event.type === "thread.message-speech-completed" &&
-            event.payload.threadId === threadId &&
-            event.payload.messageId === messageId,
-        ),
-        Stream.runHead,
-        Effect.forkChild,
+      subscribeToMessageSpeechCompletion(
+        orchestrationEngine.subscribeDomainEvents ??
+          Effect.succeed(orchestrationEngine.streamDomainEvents),
+        threadId,
+        messageId,
       );
 
     const joinPendingSpeech = Effect.fn("joinPendingMessageSpeech")(function* (

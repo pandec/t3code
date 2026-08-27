@@ -289,6 +289,7 @@ export const OrchestrationMessage = Schema.Struct({
   generatedSummary: Schema.optional(MessageSummaryResult),
   speech: Schema.optional(MessageSpeechSynthesisResult),
   speechRequest: Schema.optional(MessageSpeechRequest),
+  speechFailureReason: Schema.optional(MessageSpeechFailureReason),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,

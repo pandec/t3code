@@ -14,6 +14,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as TxRef from "effect/TxRef";
@@ -22,7 +23,7 @@ import { makeMessageArtifactLockCoordinator } from "../../messageArtifacts/lock.
 import { messageArtifactTextHash } from "../../messageArtifacts/identity.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
-import { isMessageSpeechSourceEligible, MessageSpeech } from "../../voice/MessageSpeech.ts";
+import { getMessageSpeechSourceFailureReason, MessageSpeech } from "../../voice/MessageSpeech.ts";
 import {
   MessageSpeechReactor,
   type MessageSpeechReactorShape,
@@ -46,6 +47,8 @@ type MessageSpeechSynthesisOutcome =
   | { readonly speech?: never; readonly failureReason: MessageSpeechFailureReason };
 
 const MESSAGE_SPEECH_JOB_TIMEOUT = Duration.minutes(3);
+const MESSAGE_SPEECH_PROJECTION_READ_RETRIES = 2;
+const MESSAGE_SPEECH_PROJECTION_READ_RETRY_SCHEDULE = Schedule.exponential(Duration.millis(50));
 const MESSAGE_SPEECH_COMPLETION_RETRIES = 5;
 const MESSAGE_SPEECH_COMPLETION_RETRY_SCHEDULE = Schedule.exponential(Duration.millis(100)).pipe(
   Schedule.modifyDelay(({ duration }) =>
@@ -114,13 +117,7 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
     return Option.filter(
       message,
       (projected) =>
-        projected.threadId === input.threadId &&
-        projected.speechRequestId === input.requestId &&
-        isMessageSpeechSourceEligible({
-          role: projected.role,
-          isStreaming: projected.isStreaming,
-          text: projected.text,
-        }),
+        projected.threadId === input.threadId && projected.speechRequestId === input.requestId,
     );
   });
 
@@ -135,6 +132,49 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
       ),
     );
 
+  const readProjection = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.retry({
+        times: MESSAGE_SPEECH_PROJECTION_READ_RETRIES,
+        schedule: MESSAGE_SPEECH_PROJECTION_READ_RETRY_SCHEDULE,
+      }),
+      Effect.result,
+    );
+
+  const completeAfterProjectionFailure = Effect.fn("completeMessageSpeechAfterProjectionFailure")(
+    function* (input: {
+      readonly pending: PendingMessageSpeech;
+      readonly operation: string;
+      readonly cause: unknown;
+      readonly generatedSpeech?: MessageSpeechAttachment;
+      readonly priorSpeechId?: string;
+    }) {
+      yield* Effect.logWarning("message speech reactor projection read failed", {
+        ...input.pending,
+        operation: input.operation,
+        cause: input.cause,
+      });
+      yield* dispatchCompletion({ ...input.pending, failureReason: "storage_failed" }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "message speech reactor failed to clear request after projection error",
+            {
+              ...input.pending,
+              operation: input.operation,
+              cause: Cause.pretty(cause),
+            },
+          ),
+        ),
+      );
+      if (
+        input.generatedSpeech?.origin === "user" &&
+        input.generatedSpeech.speechId !== input.priorSpeechId
+      ) {
+        yield* deleteSpeechAttachment(input.generatedSpeech.speechId, input.pending.messageId);
+      }
+    },
+  );
+
   const processRequest = Effect.fn("processMessageSpeechRequest")(function* (
     event: MessageSpeechRequestedEvent,
   ) {
@@ -143,11 +183,37 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
       messageId: event.payload.messageId,
       requestId: event.payload.requestId,
     } satisfies PendingMessageSpeech;
-    if (Option.isNone(yield* getCurrentRequestMessage(pending))) return;
+    const initialMessageResult = yield* readProjection(getCurrentRequestMessage(pending));
+    if (Result.isFailure(initialMessageResult)) {
+      yield* completeAfterProjectionFailure({
+        pending,
+        operation: "read current request before synthesis",
+        cause: initialMessageResult.failure,
+      });
+      return;
+    }
+    const initialMessage = Option.getOrUndefined(initialMessageResult.success);
+    if (initialMessage === undefined) return;
 
-    const priorSpeech = yield* projectionThreadMessages.getSpeechByMessageId({
-      messageId: pending.messageId,
-    });
+    const initialFailureReason = getMessageSpeechSourceFailureReason(initialMessage);
+    if (initialFailureReason !== null) {
+      yield* dispatchCompletion({ ...pending, failureReason: initialFailureReason });
+      return;
+    }
+
+    const priorSpeechResult = yield* readProjection(
+      projectionThreadMessages.getSpeechByMessageId({ messageId: pending.messageId }),
+    );
+    if (Result.isFailure(priorSpeechResult)) {
+      yield* completeAfterProjectionFailure({
+        pending,
+        operation: "read prior speech before synthesis",
+        cause: priorSpeechResult.failure,
+      });
+      return;
+    }
+    const prior = Option.getOrUndefined(priorSpeechResult.success);
+
     const outcome: MessageSpeechSynthesisOutcome = yield* messageSpeech
       .synthesize({ messageId: event.payload.messageId })
       .pipe(
@@ -172,8 +238,23 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
         }),
       );
 
-    const currentMessage = Option.getOrUndefined(yield* getCurrentRequestMessage(pending));
-    const currentSpeech = currentMessage === undefined ? undefined : outcome.speech;
+    const currentMessageResult = yield* readProjection(getCurrentRequestMessage(pending));
+    if (Result.isFailure(currentMessageResult)) {
+      yield* completeAfterProjectionFailure({
+        pending,
+        operation: "read current request after synthesis",
+        cause: currentMessageResult.failure,
+        ...(outcome.speech !== undefined ? { generatedSpeech: outcome.speech } : {}),
+        ...(prior?.speechId !== undefined ? { priorSpeechId: prior.speechId } : {}),
+      });
+      return;
+    }
+    const currentMessage = Option.getOrUndefined(currentMessageResult.success);
+    const currentFailureReason =
+      currentMessage === undefined
+        ? "message_unavailable"
+        : getMessageSpeechSourceFailureReason(currentMessage);
+    const currentSpeech = currentFailureReason === null ? outcome.speech : undefined;
     const sourceIsCurrent =
       currentMessage !== undefined &&
       currentSpeech?.origin === "user" &&
@@ -181,9 +262,8 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
     const speech = currentSpeech?.origin === "agent" || sourceIsCurrent ? currentSpeech : undefined;
     const failureReason =
       speech === undefined
-        ? (outcome.failureReason ?? ("message_unavailable" as const))
+        ? (currentFailureReason ?? outcome.failureReason ?? ("message_unavailable" as const))
         : undefined;
-    const prior = Option.getOrUndefined(priorSpeech);
 
     yield* dispatchCompletion({
       ...pending,
@@ -197,10 +277,17 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
       ),
     );
 
-    const projectedSpeech = yield* projectionThreadMessages.getSpeechByMessageId({
-      messageId: pending.messageId,
-    });
-    const projected = Option.getOrUndefined(projectedSpeech);
+    const projectedSpeechResult = yield* readProjection(
+      projectionThreadMessages.getSpeechByMessageId({ messageId: pending.messageId }),
+    );
+    if (Result.isFailure(projectedSpeechResult)) {
+      yield* Effect.logWarning("message speech reactor could not confirm projected speech", {
+        ...pending,
+        cause: projectedSpeechResult.failure,
+      });
+      return;
+    }
+    const projected = Option.getOrUndefined(projectedSpeechResult.success);
     if (
       speech?.origin === "user" &&
       projected?.speechId === speech.speechId &&

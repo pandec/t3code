@@ -207,6 +207,10 @@
       "types": "./src/listeningPlayback.ts",
       "import": "./src/listeningPlayback.ts"
     },
+    "./messageArtifactIdentity": {
+      "types": "./src/messageArtifactIdentity.ts",
+      "import": "./src/messageArtifactIdentity.ts"
+    },
     "./conversationFork": {
       "types": "./src/conversationFork.ts",
       "import": "./src/conversationFork.ts"

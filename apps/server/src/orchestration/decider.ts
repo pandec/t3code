@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
@@ -1147,11 +1148,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.speech.complete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const message = thread.messages.find((candidate) => candidate.id === command.messageId);
+      const speechIsStale =
+        command.speech?.origin === "user" &&
+        message !== undefined &&
+        command.speech.sourceTextHash !== messageArtifactTextHash(message.text.trim());
+      const speech = speechIsStale ? undefined : command.speech;
+      const failureReason = speechIsStale ? "message_unavailable" : command.failureReason;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1165,8 +1173,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           requestId: command.requestId,
-          ...(command.speech !== undefined ? { speech: command.speech } : {}),
-          ...(command.failureReason !== undefined ? { failureReason: command.failureReason } : {}),
+          ...(speech !== undefined ? { speech } : {}),
+          ...(failureReason !== undefined ? { failureReason } : {}),
         },
       };
     }
