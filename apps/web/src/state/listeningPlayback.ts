@@ -169,6 +169,12 @@ export function toggleLoadedListeningTrack(): void {
  * loaded and resumable.
  */
 export function pauseListeningForThread(environmentId: string, threadId: string): void {
+  if (isThreadListeningLoaded(listeningPlayback.getSnapshot(), environmentId, threadId)) {
+    // An in-flight sidebar resume would restart the audio when its URL
+    // resolves after the archive hid every surface with a pause control.
+    cancelResumeWatch?.();
+    cancelResumeWatch = null;
+  }
   pauseThreadListening(listeningPlayback, environmentId, threadId);
 }
 
