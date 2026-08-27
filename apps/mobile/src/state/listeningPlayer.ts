@@ -2,6 +2,7 @@ import {
   isThreadListeningLoaded,
   pauseThreadListening,
   planListeningTrackStart,
+  type ListeningTrackMetadata,
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
@@ -22,7 +23,9 @@ import {
  */
 let sharedPlayer: AudioPlayer | null = null;
 let loadedUrl: string | null = null;
+let loadedTrackMetadata: ListeningTrackMetadata | null = null;
 let appliedSpeed: number | null = null;
+let lockScreenActive = false;
 
 const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
 
@@ -46,11 +49,50 @@ function applySharedPlaybackRate(speed: number): void {
   }
 }
 
+function activateLockScreenControls(player: AudioPlayer, metadata: ListeningTrackMetadata): void {
+  try {
+    player.setActiveForLockScreen(
+      true,
+      { title: metadata.title, artist: "T3 Code" },
+      { showSeekForward: true, showSeekBackward: true },
+    );
+    lockScreenActive = true;
+  } catch {
+    // Lock-screen binding is decoration; playback must not depend on it.
+  }
+}
+
+function deactivateLockScreenControls(player: AudioPlayer): void {
+  if (!lockScreenActive) return;
+  try {
+    player.setActiveForLockScreen(false);
+  } catch {
+    // The native player can already be torn down during app shutdown.
+  }
+  lockScreenActive = false;
+}
+
+function clearLockScreenControls(player: AudioPlayer): void {
+  try {
+    player.clearLockScreenControls();
+  } catch {
+    // The native player can already be torn down during app shutdown.
+  }
+  lockScreenActive = false;
+}
+
 function ensureSharedPlayer(): AudioPlayer {
   if (sharedPlayer !== null) return sharedPlayer;
   const player = createAudioPlayer(null, { updateInterval: 250 });
   player.addListener("playbackStatusUpdate", (status) => {
-    listeningPlayback.setTrackPlaying(status.playing);
+    // Native lock-screen play, pause, and seek actions emit this same status,
+    // so every app surface stays bound to the native player's real state.
+    if (status.playing && listeningPlayback.getSnapshot().blocked) {
+      pauseSharedPlayer();
+      listeningPlayback.setTrackPlaying(false);
+    } else {
+      listeningPlayback.setTrackPlaying(status.playing);
+    }
     listeningPlayback.setProgress({
       currentTime: status.currentTime,
       duration: status.duration,
@@ -59,7 +101,11 @@ function ensureSharedPlayer(): AudioPlayer {
   sharedPlayer = player;
   // Speed changes mid-playback land on the native player immediately.
   listeningPlayback.subscribe(() => {
-    if (loadedUrl !== null) applySharedPlaybackRate(listeningPlayback.getSnapshot().speed);
+    const snapshot = listeningPlayback.getSnapshot();
+    if (loadedUrl !== null) applySharedPlaybackRate(snapshot.speed);
+    // Recording pauses playback without auto-resume. Removing the native
+    // controls closes the one path that could otherwise bypass that block.
+    if (snapshot.blocked) deactivateLockScreenControls(player);
   });
   return player;
 }
@@ -73,6 +119,7 @@ function ensureSharedPlayer(): AudioPlayer {
  */
 export async function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
+  readonly metadata: ListeningTrackMetadata;
   readonly url: string;
 }): Promise<void> {
   // Any direct play supersedes a still-pending play-before-URL intent.
@@ -96,16 +143,32 @@ export async function playListeningTrack(input: {
           appliedSpeed = null;
           player.replace(input.url);
           loadedUrl = input.url;
+          loadedTrackMetadata = input.metadata;
           if (plan.resumeAt > 0) await player.seekTo(plan.resumeAt);
         },
     restartFromBeginning: sameSource && plan.finished,
     seekToBeginning: () => player.seekTo(0),
-    prepareAudioMode: () => setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
+    prepareAudioMode: () =>
+      setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: "doNotMix",
+      }),
     applyPlaybackRate: (speed) => {
       appliedSpeed = null;
       applySharedPlaybackRate(speed);
     },
-    play: () => player.play(),
+    play: () => {
+      loadedTrackMetadata = input.metadata;
+      activateLockScreenControls(player, input.metadata);
+      try {
+        player.play();
+      } catch (error) {
+        clearLockScreenControls(player);
+        throw error;
+      }
+    },
   });
 }
 
@@ -116,17 +179,18 @@ export async function playListeningTrack(input: {
  */
 export function requestListeningTrack(input: {
   readonly track: ListeningTrackRef;
+  readonly metadata: ListeningTrackMetadata;
   readonly url: string | null;
   readonly watchUrl: (onResolved: (url: string | null) => void) => () => void;
 }): void {
   if (input.url !== null) {
-    void playListeningTrack({ track: input.track, url: input.url });
+    void playListeningTrack({ track: input.track, metadata: input.metadata, url: input.url });
     return;
   }
   pendingStart.begin({
     track: input.track,
     watch: input.watchUrl,
-    play: (url) => void playListeningTrack({ track: input.track, url }),
+    play: (url) => void playListeningTrack({ track: input.track, metadata: input.metadata, url }),
   });
 }
 
@@ -138,8 +202,8 @@ export function toggleLoadedListeningTrack(): void {
     listeningPlayback.pauseActive();
     return;
   }
-  if (loadedUrl === null) return;
-  void playListeningTrack({ track, url: loadedUrl });
+  if (loadedUrl === null || loadedTrackMetadata === null) return;
+  void playListeningTrack({ track, metadata: loadedTrackMetadata, url: loadedUrl });
 }
 
 /**
@@ -150,6 +214,9 @@ export function toggleLoadedListeningTrack(): void {
  */
 export function pauseListeningForThread(environmentId: string, threadId: string): void {
   pendingStart.cancelForThread(environmentId, threadId);
+  if (isThreadListeningLoaded(listeningPlayback.getSnapshot(), environmentId, threadId)) {
+    if (sharedPlayer !== null) deactivateLockScreenControls(sharedPlayer);
+  }
   pauseThreadListening(listeningPlayback, environmentId, threadId);
 }
 
@@ -165,7 +232,9 @@ export function stopListeningForThread(environmentId: string, threadId: string):
   const track = snapshot.track;
   if (track === null) return;
   pauseSharedPlayer();
+  if (sharedPlayer !== null) clearLockScreenControls(sharedPlayer);
   loadedUrl = null;
+  loadedTrackMetadata = null;
   listeningPlayback.release(track.speechId, pauseSharedPlayer);
   listeningPlayback.setTrack(null);
 }

@@ -192,6 +192,7 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  getThreadTitle: () => string;
   textToSpeechAvailable: boolean;
   textToSpeechPersistentJobs: boolean;
   messageSummariesAvailable: boolean;
@@ -286,6 +287,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  threadTitle: string;
   textToSpeechAvailable?: boolean;
   textToSpeechPersistentJobs?: boolean;
   messageSummariesAvailable?: boolean;
@@ -336,6 +338,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  threadTitle,
   textToSpeechAvailable = false,
   textToSpeechPersistentJobs = false,
   messageSummariesAvailable = false,
@@ -365,6 +368,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const previousContentInsetEndAdjustmentRef = useRef(contentInsetEndAdjustment);
+  const threadTitleRef = useRef(threadTitle);
+  useEffect(() => {
+    threadTitleRef.current = threadTitle;
+  }, [threadTitle]);
+  const getThreadTitle = useCallback(() => threadTitleRef.current, []);
 
   useLayoutEffect(() => {
     keepTimelineEndVisibleAfterOverlayGrowth({
@@ -617,6 +625,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      getThreadTitle,
       textToSpeechAvailable,
       textToSpeechPersistentJobs,
       messageSummariesAvailable,
@@ -636,6 +645,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      getThreadTitle,
       textToSpeechAvailable,
       textToSpeechPersistentJobs,
       messageSummariesAvailable,
@@ -1481,6 +1491,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             threadId={ctx.threadRef?.threadId ?? null}
+            getThreadTitle={ctx.getThreadTitle}
             messageId={row.message.id}
             speech={speech}
             onRetry={null}
@@ -1627,6 +1638,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
             threadId={ctx.threadRef?.threadId ?? null}
+            getThreadTitle={ctx.getThreadTitle}
             messageId={row.message.id}
             speech={speech}
             onRetry={() => void prepareSpeech()}
@@ -1640,6 +1652,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 function AssistantSpeechPlayer({
   environmentId,
   threadId,
+  getThreadTitle,
   messageId,
   speech,
   onRetry,
@@ -1651,6 +1664,7 @@ function AssistantSpeechPlayer({
       app-scoped audio without a thread identity would play with no
       indicator (and no control) anywhere in the thread lists. */
   threadId: string | null;
+  getThreadTitle: () => string;
   messageId: string;
   speech: MessageSpeechSynthesisResult;
   /**
@@ -1694,13 +1708,14 @@ function AssistantSpeechPlayer({
     if (audioUrl === null || playbackUnavailable) return;
     playListeningTrack({
       track: trackRef,
+      metadata: { title: getThreadTitle() },
       url: audioUrl,
       // Kept by the controller so sidebar resume can re-resolve a fresh
       // signed URL long after this row unmounted.
       watchUrl: (onResolved) =>
         watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
     });
-  }, [audioUrl, environmentId, isPlaying, playbackUnavailable, speechId, trackRef]);
+  }, [audioUrl, environmentId, getThreadTitle, isPlaying, playbackUnavailable, speechId, trackRef]);
 
   const playerLabel = primary ? "voice reply" : "listening version";
 

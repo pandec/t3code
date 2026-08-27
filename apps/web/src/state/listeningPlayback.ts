@@ -4,6 +4,7 @@ import {
   pauseThreadListening,
   planListeningTrackStart,
   threadListeningState,
+  type ListeningTrackMetadata,
   type ListeningTrackRef,
   type ThreadListeningState,
 } from "@t3tools/shared/listeningPlayback";
@@ -34,7 +35,91 @@ let lastProgressPublishMs = 0;
 // resume long after the row unmounted and the old URL expired.
 type ListeningUrlWatcher = (onResolved: (url: string | null) => void) => () => void;
 let loadedTrackUrlWatcher: ListeningUrlWatcher | null = null;
+let loadedTrackMetadata: ListeningTrackMetadata | null = null;
 let cancelResumeWatch: (() => void) | null = null;
+let mediaSessionHandlersRegistered = false;
+// Whether our OS media entry should exist (the web twin of mobile's
+// lock-screen activation flag). Archiving disarms it so the element's async
+// pause event cannot resurrect the cleared session and the OS play key cannot
+// resume a thread whose every in-app pause control just left the screen; the
+// next explicit in-app play re-arms.
+let mediaSessionArmed = false;
+
+function getMediaSession(): MediaSession | null {
+  if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return null;
+  return navigator.mediaSession;
+}
+
+function setMediaSessionPlaybackState(state: MediaSessionPlaybackState): void {
+  const mediaSession = getMediaSession();
+  if (mediaSession === null || !mediaSessionArmed) return;
+  mediaSession.playbackState = state;
+}
+
+function publishMediaSessionPosition(element: HTMLAudioElement): void {
+  const mediaSession = getMediaSession();
+  if (mediaSession === null || !mediaSessionArmed) return;
+  if (!Number.isFinite(element.duration) || element.duration <= 0) return;
+  const playbackRate =
+    Number.isFinite(element.playbackRate) && element.playbackRate > 0 ? element.playbackRate : 1;
+  const position = Math.min(
+    element.duration,
+    Math.max(0, Number.isFinite(element.currentTime) ? element.currentTime : 0),
+  );
+  mediaSession.setPositionState({ duration: element.duration, playbackRate, position });
+}
+
+function publishMediaSessionMetadata(metadata: ListeningTrackMetadata): void {
+  const mediaSession = getMediaSession();
+  if (mediaSession === null || !mediaSessionArmed) return;
+  mediaSession.metadata = new MediaMetadata({ title: metadata.title, artist: "T3 Code" });
+}
+
+function clearMediaSession(): void {
+  mediaSessionArmed = false;
+  const mediaSession = getMediaSession();
+  if (mediaSession === null) return;
+  mediaSession.metadata = null;
+  mediaSession.playbackState = "none";
+  mediaSession.setPositionState();
+}
+
+function setMediaSessionActionHandler(
+  action: MediaSessionAction,
+  handler: MediaSessionActionHandler,
+): void {
+  const mediaSession = getMediaSession();
+  if (mediaSession === null) return;
+  try {
+    mediaSession.setActionHandler(action, handler);
+  } catch {
+    // Browsers may expose Media Session without supporting every action.
+  }
+}
+
+function registerMediaSessionActionHandlers(): void {
+  if (mediaSessionHandlersRegistered || getMediaSession() === null) return;
+  mediaSessionHandlersRegistered = true;
+  setMediaSessionActionHandler("play", () => {
+    const { blocked, track } = listeningPlayback.getSnapshot();
+    if (!mediaSessionArmed || blocked || track === null || track.playing) return;
+    toggleLoadedListeningTrack();
+  });
+  setMediaSessionActionHandler("pause", () => listeningPlayback.pauseActive());
+  setMediaSessionActionHandler("seekbackward", (details) => {
+    const element = sharedAudio;
+    if (element !== null) seekListeningTrack(element.currentTime - (details.seekOffset ?? 5));
+  });
+  setMediaSessionActionHandler("seekforward", (details) => {
+    const element = sharedAudio;
+    if (element !== null) seekListeningTrack(element.currentTime + (details.seekOffset ?? 5));
+  });
+  setMediaSessionActionHandler("seekto", (details) => {
+    if (typeof details.seekTime === "number" && Number.isFinite(details.seekTime)) {
+      seekListeningTrack(details.seekTime);
+    }
+  });
+}
 
 const pauseSharedAudio = () => {
   sharedAudio?.pause();
@@ -51,15 +136,37 @@ function ensureSharedAudio(): HTMLAudioElement {
   if (sharedAudio !== null) return sharedAudio;
   const element = new Audio();
   element.preload = "metadata";
-  element.addEventListener("play", () => listeningPlayback.setTrackPlaying(true));
-  element.addEventListener("pause", () => listeningPlayback.setTrackPlaying(false));
+  registerMediaSessionActionHandlers();
+  element.addEventListener("play", () => {
+    listeningPlayback.setTrackPlaying(true);
+    setMediaSessionPlaybackState("playing");
+    // Re-baseline the OS position on every play/pause transition rather than
+    // trusting the UA to rebuild its extrapolation across a resume.
+    publishMediaSessionPosition(element);
+  });
+  element.addEventListener("pause", () => {
+    listeningPlayback.setTrackPlaying(false);
+    setMediaSessionPlaybackState("paused");
+    publishMediaSessionPosition(element);
+  });
   element.addEventListener("ended", () => {
     listeningPlayback.setTrackPlaying(false);
+    setMediaSessionPlaybackState("paused");
     publishProgress(element);
+    publishMediaSessionPosition(element);
   });
-  element.addEventListener("error", () => listeningPlayback.setTrackPlaying(false));
-  element.addEventListener("durationchange", () => publishProgress(element));
-  element.addEventListener("seeked", () => publishProgress(element));
+  element.addEventListener("error", () => {
+    listeningPlayback.setTrackPlaying(false);
+    setMediaSessionPlaybackState("paused");
+  });
+  element.addEventListener("durationchange", () => {
+    publishProgress(element);
+    publishMediaSessionPosition(element);
+  });
+  element.addEventListener("seeked", () => {
+    publishProgress(element);
+    publishMediaSessionPosition(element);
+  });
   element.addEventListener("timeupdate", () => {
     const now = Date.now();
     if (now - lastProgressPublishMs < 200) return;
@@ -72,7 +179,9 @@ function ensureSharedAudio(): HTMLAudioElement {
   listeningPlayback.subscribe(() => {
     const { speed } = listeningPlayback.getSnapshot();
     element.defaultPlaybackRate = speed;
-    if (element.playbackRate !== speed) element.playbackRate = speed;
+    if (element.playbackRate === speed) return;
+    element.playbackRate = speed;
+    publishMediaSessionPosition(element);
   });
   return element;
 }
@@ -86,6 +195,7 @@ function ensureSharedAudio(): HTMLAudioElement {
  */
 export function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
+  readonly metadata: ListeningTrackMetadata;
   readonly url: string;
   /** Re-resolves a fresh signed URL for this track; kept for sidebar resume. */
   readonly watchUrl?: ListeningUrlWatcher;
@@ -100,9 +210,13 @@ export function playListeningTrack(input: {
     durationSeconds: element.duration,
   });
   if (!listeningPlayback.activate(input.track.speechId, pauseSharedAudio, input.track)) return;
+  mediaSessionArmed = true;
+  loadedTrackMetadata = input.metadata;
+  publishMediaSessionMetadata(input.metadata);
   if (input.watchUrl !== undefined || !plan.sameTrack) {
     loadedTrackUrlWatcher = input.watchUrl ?? null;
   }
+  if (!plan.sameTrack) getMediaSession()?.setPositionState();
 
   if (element.src !== input.url) {
     element.src = input.url;
@@ -144,10 +258,11 @@ export function toggleLoadedListeningTrack(): void {
     return;
   }
   const element = sharedAudio;
-  if (element === null || element.src === "") return;
+  const metadata = loadedTrackMetadata;
+  if (element === null || element.src === "" || metadata === null) return;
   const watchUrl = loadedTrackUrlWatcher;
   if (watchUrl === null) {
-    playListeningTrack({ track, url: element.src });
+    playListeningTrack({ track, metadata, url: element.src });
     return;
   }
   cancelResumeWatch?.();
@@ -158,7 +273,7 @@ export function toggleLoadedListeningTrack(): void {
     // Only resume what the user asked to resume: a track swapped or started
     // playing while the URL resolved wins over this stale intent.
     if (current === null || current.speechId !== track.speechId || current.playing) return;
-    playListeningTrack({ track: current, url, watchUrl });
+    playListeningTrack({ track: current, metadata, url, watchUrl });
   });
 }
 
@@ -174,6 +289,10 @@ export function pauseListeningForThread(environmentId: string, threadId: string)
     // resolves after the archive hid every surface with a pause control.
     cancelResumeWatch?.();
     cancelResumeWatch = null;
+    // The OS media surface goes with the archive too, but the watcher and
+    // metadata stay: unarchiving must leave the sidebar resume control
+    // functional, and only the next explicit in-app play re-arms the session.
+    clearMediaSession();
   }
   pauseThreadListening(listeningPlayback, environmentId, threadId);
 }
@@ -190,6 +309,7 @@ export function stopListeningForThread(environmentId: string, threadId: string):
   cancelResumeWatch?.();
   cancelResumeWatch = null;
   loadedTrackUrlWatcher = null;
+  loadedTrackMetadata = null;
   const element = sharedAudio;
   if (element !== null) {
     element.pause();
@@ -198,6 +318,7 @@ export function stopListeningForThread(environmentId: string, threadId: string):
   }
   listeningPlayback.release(track.speechId, pauseSharedAudio);
   listeningPlayback.setTrack(null);
+  clearMediaSession();
 }
 
 export function useListeningPlaybackSnapshot() {

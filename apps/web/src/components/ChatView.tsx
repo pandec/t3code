@@ -7795,6 +7795,7 @@ function ChatViewContent(props: ChatViewProps) {
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 steerPendingMessageIds={steerPendingMessageIds}
                 activeThreadEnvironmentId={activeThread.environmentId}
+                threadTitle={activeThread.title}
                 textToSpeechAvailable={
                   serverConfigs.get(activeThread.environmentId)?.textToSpeech.available === true
                 }

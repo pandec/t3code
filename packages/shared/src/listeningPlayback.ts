@@ -44,6 +44,11 @@ export interface ListeningTrackRef {
   readonly speechId: string;
 }
 
+/** Display metadata retained by platform playback controllers, not list snapshots. */
+export interface ListeningTrackMetadata {
+  readonly title: string;
+}
+
 export interface ListeningActiveTrack extends ListeningTrackRef {
   readonly playing: boolean;
 }
@@ -218,7 +223,16 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
     const sameSpeech = previous !== null && previous.speechId === track.speechId;
     // Re-activating the loaded recording keeps its playing flag; a new
     // recording starts paused until the platform player reports playback.
-    publish({ ...snapshot, track: { ...track, playing: sameSpeech && previous.playing } });
+    publish({
+      ...snapshot,
+      track: {
+        environmentId: track.environmentId,
+        threadId: track.threadId,
+        messageId: track.messageId,
+        speechId: track.speechId,
+        playing: sameSpeech && previous.playing,
+      },
+    });
     if (!sameSpeech) publishProgress(ZERO_PROGRESS);
   };
 

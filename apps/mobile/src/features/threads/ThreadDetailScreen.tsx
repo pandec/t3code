@@ -742,6 +742,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               props.serverConfig?.environment.capabilities.messageSummaries === true
             }
             threadId={props.selectedThread.id}
+            threadTitle={props.selectedThread.title}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
             steerPendingMessageIds={props.steerPendingMessageIds}

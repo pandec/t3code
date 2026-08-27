@@ -14,6 +14,7 @@ import {
   planListeningTrackStart,
   startListeningPlayback,
   threadListeningState,
+  type ListeningTrackMetadata,
   type ListeningTrackRef,
 } from "./listeningPlayback.js";
 
@@ -38,6 +39,8 @@ const trackB: ListeningTrackRef = {
   messageId: "message-2",
   speechId: "speech-b",
 };
+
+const trackMetadata: ListeningTrackMetadata = { title: "Thread one" };
 
 describe("listening playback speed", () => {
   it("clamps and snaps values to the 0.05 grid", () => {
@@ -119,6 +122,14 @@ describe("listening playback coordinator", () => {
 });
 
 describe("listening playback active track", () => {
+  it("keeps display metadata outside the list-facing track snapshot", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const trackWithMetadata = { ...trackA, ...trackMetadata };
+    coordinator.setTrack(trackWithMetadata);
+
+    expect(coordinator.getSnapshot().track).not.toHaveProperty("title");
+  });
+
   it("tracks the active recording through activation and playback flips", () => {
     const coordinator = createListeningPlaybackCoordinator();
     const listener = vi.fn();
