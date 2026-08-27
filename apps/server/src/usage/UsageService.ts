@@ -1,9 +1,9 @@
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files rather than T3 Code's
- * orchestration projections, so usage covers turns driven outside T3 Code too.
- * This is the approach `ccusage` takes.
+ * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
+ * Grok Build) rather than T3 Code's orchestration projections, so usage covers
+ * turns driven outside T3 Code too. This is the approach `ccusage` takes.
  *
  * Transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
@@ -23,6 +23,7 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -37,6 +38,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeConfigDirPath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
@@ -128,6 +130,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const hostEnvironment = yield* HostProcessEnvironment;
 
   const fileCache: ScanCache = new Map();
   let cacheDirty = false;
@@ -204,6 +207,8 @@ export const make = Effect.gen(function* () {
   interface TranscriptDir {
     readonly provider: UsageProviderKind;
     readonly dir: string;
+    /** Restricts the walk to one filename; Grok keeps unrelated logs alongside. */
+    readonly fileName?: string | undefined;
   }
 
   const decodeClaudeSettings = Schema.decodeUnknownEffect(ClaudeSettings);
@@ -225,10 +230,10 @@ export const make = Effect.gen(function* () {
     );
 
     const roots = new Map<string, TranscriptDir>();
-    const addRoot = (provider: UsageProviderKind, root: string) => {
+    const addRoot = (provider: UsageProviderKind, root: string, fileName?: string) => {
       const resolved = path.resolve(root);
       if (!roots.has(`${provider}\0${resolved}`)) {
-        roots.set(`${provider}\0${resolved}`, { provider, dir: resolved });
+        roots.set(`${provider}\0${resolved}`, { provider, dir: resolved, fileName });
       }
     };
 
@@ -268,6 +273,31 @@ export const make = Effect.gen(function* () {
         // Auth overlays link `sessions` into the shared home. The effective
         // home is credential-local, not an additional transcript source.
         addRoot("codex", path.join(layout.sharedHomePath, "sessions"));
+      } else if (instance.driver === "grok") {
+        // Grok Settings only expose the binary path, so the home comes from the
+        // environment: the instance's own `GROK_HOME` if it sets one, else the
+        // host's, else `~/.grok`. Resolving per instance matches how the Grok
+        // driver itself locates session files (see XAiAcpExtension).
+        // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
+        const grokEnvironment = mergeProviderInstanceEnvironment(
+          instance.environment,
+          hostEnvironment,
+        );
+        const grokHomeEnv = grokEnvironment["GROK_HOME"]?.trim() ?? "";
+        // Same precedence the Claude and Codex roots use: an explicit home
+        // wins, then the instance's own HOME, then the server's. An instance
+        // that only overrides HOME still writes under it, so scanning the
+        // server's home would report that instance as having no usage.
+        const grokEnvironmentHome = grokEnvironment["HOME"]?.trim() ?? "";
+        const grokHome =
+          grokHomeEnv.length > 0
+            ? path.resolve(expandHomePath(grokHomeEnv))
+            : grokEnvironmentHome.length > 0
+              ? path.join(path.resolve(grokEnvironmentHome), ".grok")
+              : path.join(NodeOS.homedir(), ".grok");
+        // Grok stores turn records in `updates.jsonl`; its sibling logs are
+        // large and carry no usage, so the walk is pinned to that one name.
+        addRoot("grok", path.join(grokHome, "sessions"), "updates.jsonl");
       }
     }
 
@@ -429,7 +459,7 @@ export const make = Effect.gen(function* () {
     // through symlinks. Keep only one source per provider and filesystem root.
     const seenRootIdentities = new Set<string>();
 
-    for (const { provider, dir } of dirs) {
+    for (const { provider, dir, fileName } of dirs) {
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
       const exists = yield* fileSystem
         .exists(dir)
@@ -455,7 +485,9 @@ export const make = Effect.gen(function* () {
       }
 
       walkedRoots.push(dir);
-      const files = yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs));
+      const files = yield* Effect.promise(() =>
+        listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
+      );
       let scannedFiles = 0;
       let skippedFiles = 0;
       let unreadableFiles = 0;

@@ -146,7 +146,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex") continue;
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
     if (!isRecordArray(entry.r)) continue;
     // A missing or nonsensical malformed count would understate the file's
     // damage on every warm hit, so reject the entry and re-parse it instead.
