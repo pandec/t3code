@@ -19,7 +19,10 @@ export class ClaudeSessionForkError extends Schema.TaggedErrorClass<ClaudeSessio
  * override. The fork runs in-process on the statically imported SDK: the
  * packaged desktop server is a single bundle with no resolvable
  * `@anthropic-ai/claude-agent-sdk` on disk, so spawning a subprocess that
- * imports the SDK by name cannot work there.
+ * imports the SDK by name cannot work there. Serializing every fork is a
+ * deliberate tradeoff: forks are rare, user-initiated, and finish in
+ * milliseconds even for megabyte transcripts, and the env var is
+ * process-global regardless of config dir.
  */
 let forkQueue = Promise.resolve();
 
