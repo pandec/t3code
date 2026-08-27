@@ -35,6 +35,13 @@ export interface ClaudeSessionForkInput {
  * Serializing every fork is a deliberate tradeoff: forks are rare,
  * user-initiated, and finish in milliseconds even for megabyte transcripts,
  * and the env var is process-global regardless of config dir.
+ *
+ * Two narrow windows are accepted rather than engineered away: a provider
+ * instance constructed during the swap can snapshot the override into its
+ * environment (requires a settings reload racing a custom-config-dir fork;
+ * the next reload rebinds it), and a shutdown-time interruption can leave a
+ * forked transcript on disk with no thread bound to it, where it simply
+ * becomes an importable session candidate.
  */
 const forkPermit = Semaphore.makeUnsafe(1);
 
