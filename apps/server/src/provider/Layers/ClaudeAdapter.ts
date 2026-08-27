@@ -81,7 +81,6 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -1816,7 +1815,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
-  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
   );
@@ -4993,6 +4991,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
     const sourceSessionId = resumeState.resume;
     const forkOptions = input.cwd ? { dir: input.cwd } : undefined;
+    // Same pinning as session start: a relative CLAUDE_CONFIG_DIR/HOME
+    // resolves against the cwd the transcript lives under.
+    const forkConfigDirPath = yield* resolveClaudeConfigDirPath(
+      claudeSettings,
+      claudeEnvironment,
+      input.cwd,
+    ).pipe(Effect.provideService(Path.Path, path));
     const forked = forkPersistedSession
       ? yield* Effect.tryPromise({
           try: () => forkPersistedSession(sourceSessionId, forkOptions, claudeEnvironment),
@@ -5007,8 +5012,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       : yield* forkClaudePersistedSession({
           sessionId: sourceSessionId,
           ...(forkOptions?.dir ? { dir: forkOptions.dir } : {}),
-          environment: claudeEnvironment,
-          spawner: childProcessSpawner,
+          configDirPath: forkConfigDirPath,
         }).pipe(
           Effect.mapError(
             (cause) =>
