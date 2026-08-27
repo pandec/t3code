@@ -1358,7 +1358,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;
     if (ctx.textToSpeechPersistentJobs) {
-      if (ctx.threadRef === null) return;
+      if (ctx.threadRef === null) {
+        toastManager.add({
+          type: "error",
+          title: "Listening version unavailable",
+          description: "T3 Code could not start audio preparation for this message. Try again.",
+        });
+        return;
+      }
       const result = await requestPersistentSpeech({
         environmentId: ctx.activeThreadEnvironmentId,
         input: {

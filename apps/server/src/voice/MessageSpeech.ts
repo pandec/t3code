@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   MESSAGE_SPEECH_MAX_SOURCE_CHARS,
+  MessageSpeechFailureReason,
   type MessageSpeechAttachment,
   type MessageSpeechSynthesisRequest,
 } from "@t3tools/contracts";
@@ -133,14 +134,7 @@ export function isMessageSpeechCacheReusable(input: {
 export class MessageSpeechError extends Schema.TaggedErrorClass<MessageSpeechError>()(
   "MessageSpeechError",
   {
-    reason: Schema.Literals([
-      "unavailable",
-      "message_unavailable",
-      "source_too_long",
-      "script_failed",
-      "provider_failed",
-      "storage_failed",
-    ]),
+    reason: MessageSpeechFailureReason,
   },
 ) {}
 
@@ -151,6 +145,7 @@ export class MessageSpeech extends Context.Service<
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,
     ) => Effect.Effect<MessageSpeechAttachment, MessageSpeechError>;
+    readonly deleteAttachment: (speechId: string) => Effect.Effect<void, MessageSpeechError>;
   }
 >()("t3/voice/MessageSpeech") {}
 
@@ -219,18 +214,21 @@ export const layer = Layer.effect(
         LIMIT 1
       `.pipe(Effect.mapError(storageError));
 
-    const toAttachment = (row: MessageSpeechCacheRow): MessageSpeechAttachment => ({
-      speechId: row.speechId,
-      transcript: row.transcript as MessageSpeechAttachment["transcript"],
-      mimeType: SPEECH_MIME_TYPE,
-      sizeBytes: row.sizeBytes as MessageSpeechAttachment["sizeBytes"],
-      sourceTextHash: row.sourceTextHash,
-      scriptRecipeHash: row.scriptRecipeHash,
-      voiceId: row.voiceId,
-      ttsModel: row.ttsModel,
-      origin: row.origin === "agent" ? "agent" : "user",
-      createdAt: row.createdAt as MessageSpeechAttachment["createdAt"],
-    });
+    const toAttachment = (row: MessageSpeechCacheRow): MessageSpeechAttachment => {
+      const attachment = {
+        speechId: row.speechId,
+        transcript: row.transcript as MessageSpeechAttachment["transcript"],
+        mimeType: SPEECH_MIME_TYPE,
+        sizeBytes: row.sizeBytes as MessageSpeechAttachment["sizeBytes"],
+        sourceTextHash: row.sourceTextHash,
+        voiceId: row.voiceId,
+        ttsModel: row.ttsModel,
+        createdAt: row.createdAt as MessageSpeechAttachment["createdAt"],
+      };
+      return row.origin === "agent"
+        ? { ...attachment, origin: "agent", scriptRecipeHash: row.scriptRecipeHash }
+        : { ...attachment, origin: "user", scriptRecipeHash: row.scriptRecipeHash };
+    };
 
     const synthesizeUnlocked = Effect.fn("MessageSpeech.synthesizeUnlocked")(function* (
       request: MessageSpeechSynthesisRequest,
@@ -399,6 +397,12 @@ export const layer = Layer.effect(
       available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
+      deleteAttachment: (speechId) => {
+        const speechPath = resolveSpeechPath(speechId);
+        return speechPath === null
+          ? Effect.fail(storageError())
+          : fileSystem.remove(speechPath, { force: true }).pipe(Effect.mapError(storageError));
+      },
     });
   }),
 );

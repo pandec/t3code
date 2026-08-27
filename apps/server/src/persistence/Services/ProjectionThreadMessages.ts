@@ -10,11 +10,14 @@ import {
   ChatAttachment,
   CommandId,
   MessageId,
+  MessageInputOrigin,
+  MessageSpeechOrigin,
+  NonNegativeInt,
   OrchestrationMessageRole,
   ThreadId,
+  TrimmedNonEmptyString,
   TurnId,
   IsoDateTime,
-  MessageInputOrigin,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -40,6 +43,30 @@ export const ProjectionThreadMessage = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadMessage = typeof ProjectionThreadMessage.Type;
+
+export const PendingProjectionMessageSpeechRequest = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  requestId: CommandId,
+});
+export type PendingProjectionMessageSpeechRequest =
+  typeof PendingProjectionMessageSpeechRequest.Type;
+
+export const ProjectionMessageSpeech = Schema.Struct({
+  messageId: MessageId,
+  threadId: ThreadId,
+  speechId: TrimmedNonEmptyString,
+  transcript: TrimmedNonEmptyString,
+  mimeType: Schema.Literal("audio/mpeg"),
+  sizeBytes: NonNegativeInt,
+  sourceTextHash: TrimmedNonEmptyString,
+  scriptRecipeHash: TrimmedNonEmptyString,
+  voiceId: TrimmedNonEmptyString,
+  ttsModel: TrimmedNonEmptyString,
+  origin: MessageSpeechOrigin,
+  createdAt: IsoDateTime,
+});
+export type ProjectionMessageSpeech = typeof ProjectionMessageSpeech.Type;
 
 export const ListProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
@@ -82,6 +109,21 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly getByMessageId: (
     input: GetProjectionThreadMessageInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
+
+  /**
+   * Read raw projected speech metadata by message id.
+   */
+  readonly getSpeechByMessageId: (
+    input: GetProjectionThreadMessageInput,
+  ) => Effect.Effect<Option.Option<ProjectionMessageSpeech>, ProjectionRepositoryError>;
+
+  /**
+   * List persisted message speech requests that need startup reconciliation.
+   */
+  readonly listPendingSpeechRequests: Effect.Effect<
+    ReadonlyArray<PendingProjectionMessageSpeechRequest>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * List projected thread messages for a thread.

@@ -11,9 +11,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
+import { validateMessageSpeechRequest } from "./messageSpeechRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -68,6 +70,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const turnStartBootstrap = yield* TurnStartBootstrap;
 
@@ -148,6 +151,21 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          if (normalizedCommand.type === "thread.message.speech.request") {
+            yield* validateMessageSpeechRequest(
+              projectionThreadMessageRepository,
+              normalizedCommand,
+            ).pipe(
+              Effect.catchTags({
+                OrchestrationCommandInvariantError: () =>
+                  failEnvironmentInvalidRequest("invalid_command"),
+                PersistenceSqlError: (cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                PersistenceDecodeError: (cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              }),
+            );
+          }
           // Route bootstrap turn starts through the shared bootstrap program so
           // HTTP clients (the CLI) get worktree preparation, setup script
           // launch, and thread cleanup — identical to the WebSocket path.

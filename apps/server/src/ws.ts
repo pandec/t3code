@@ -85,6 +85,7 @@ import { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 // and the threadSequence watermark SQL have to read one shared list.
 export { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 import { OrchestrationCommandInvariantError } from "./orchestration/Errors.ts";
+import { validateMessageSpeechRequest } from "./orchestration/messageSpeechRequest.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -92,6 +93,7 @@ import {
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadMessageRepository } from "./persistence/Services/ProjectionThreadMessages.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -425,6 +427,7 @@ const makeWsRpcLayer = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -935,6 +938,16 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              if (normalizedCommand.type === "thread.message.speech.request") {
+                yield* validateMessageSpeechRequest(
+                  projectionThreadMessageRepository,
+                  normalizedCommand,
+                ).pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to validate message speech request"),
+                  ),
+                );
+              }
               // Archive and settle both mean "done with this thread", so a
               // live provider session must not keep running background work
               // (PR monitors, dev servers, subagent fleets) after either

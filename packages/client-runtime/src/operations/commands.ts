@@ -60,7 +60,6 @@ export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type RequestMessageSpeechInput = CommandInput<"thread.message.speech.request">;
 export interface RequestMessageSpeechResult {
-  readonly commandId: CommandId;
   readonly receipt: EnvironmentRpcSuccess<DispatchTag>;
 }
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
@@ -319,7 +318,7 @@ export const requestMessageSpeech = Effect.fn("EnvironmentCommands.requestMessag
     }).pipe(
       Effect.tapError(() => Effect.sync(() => forgetOwnedMessageSpeechRequest(nextCommandId))),
     );
-    return { commandId: nextCommandId, receipt } satisfies RequestMessageSpeechResult;
+    return { receipt } satisfies RequestMessageSpeechResult;
   },
 );
 

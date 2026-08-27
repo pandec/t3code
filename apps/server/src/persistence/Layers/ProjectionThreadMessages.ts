@@ -15,6 +15,8 @@ import {
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
   ListProjectionThreadMessagesInput,
+  PendingProjectionMessageSpeechRequest,
+  ProjectionMessageSpeech,
   ProjectionThreadMessage,
 } from "../Services/ProjectionThreadMessages.ts";
 
@@ -187,6 +189,45 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const getProjectionMessageSpeechRow = SqlSchema.findOneOption({
+    Request: GetProjectionThreadMessageInput,
+    Result: ProjectionMessageSpeech,
+    execute: ({ messageId }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          speech_id AS "speechId",
+          transcript,
+          mime_type AS "mimeType",
+          size_bytes AS "sizeBytes",
+          source_text_hash AS "sourceTextHash",
+          script_recipe_hash AS "scriptRecipeHash",
+          voice_id AS "voiceId",
+          tts_model AS "ttsModel",
+          origin,
+          created_at AS "createdAt"
+        FROM projection_message_speech
+        WHERE message_id = ${messageId}
+        LIMIT 1
+      `,
+  });
+
+  const listPendingProjectionMessageSpeechRequestRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: PendingProjectionMessageSpeechRequest,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          speech_request_id AS "requestId"
+        FROM projection_thread_messages
+        WHERE speech_request_id IS NOT NULL
+        ORDER BY thread_id ASC, message_id ASC
+      `,
+  });
+
   const listProjectionThreadMessageRows = SqlSchema.findAll({
     Request: ListProjectionThreadMessagesInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -278,6 +319,22 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map(Option.map(toProjectionThreadMessage)),
     );
 
+  const getSpeechByMessageId: ProjectionThreadMessageRepositoryShape["getSpeechByMessageId"] = (
+    input,
+  ) =>
+    getProjectionMessageSpeechRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.getSpeechByMessageId:query"),
+      ),
+    );
+
+  const listPendingSpeechRequests: ProjectionThreadMessageRepositoryShape["listPendingSpeechRequests"] =
+    listPendingProjectionMessageSpeechRequestRows().pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.listPendingSpeechRequests:query"),
+      ),
+    );
+
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
     listProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
@@ -304,6 +361,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   return {
     upsert,
     getByMessageId,
+    getSpeechByMessageId,
+    listPendingSpeechRequests,
     listByThreadId,
     deleteByThreadId,
     copyTextMessagesForFork,

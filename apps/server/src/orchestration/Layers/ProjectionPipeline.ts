@@ -46,6 +46,7 @@ import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
+import { messageArtifactTextHash } from "../../messageArtifacts/identity.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -574,9 +575,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
      * dispatched, so event replay can rebuild the projection without running
      * synthesis again.
      * Deliberately no file deletion here: a projector apply can run inside a
-     * transaction that later rolls back, and replay revisits old events, so
-     * destroying a replaced recording's file from this path would be unsafe.
-     * A superseded MP3 is left for thread-deletion cleanup instead.
+     * transaction that later rolls back, and replay revisits old events. The
+     * live speech reactor removes a superseded user MP3 only after dispatch has
+     * committed and this projection confirms the replacement.
      */
     const upsertMessageSpeechFromEvent = Effect.fn("upsertMessageSpeechFromEvent")(
       function* (input: {
@@ -607,7 +608,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           ${speech.mimeType},
           ${speech.sizeBytes},
           ${speech.sourceTextHash},
-          ${speech.scriptRecipeHash ?? (speech.origin === "agent" ? "agent-voice-reply" : "legacy-user-listening-version")},
+          ${speech.origin === "user" ? speech.scriptRecipeHash : (speech.scriptRecipeHash ?? "agent-voice-reply")},
           ${speech.voiceId},
           ${speech.ttsModel},
           ${speech.origin},
@@ -1319,11 +1320,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             speechRequestId: null,
             speechRequestStartedAt: null,
           });
-          if (event.payload.speech !== undefined) {
+          const speech = event.payload.speech;
+          if (
+            speech !== undefined &&
+            (speech.origin === "agent" ||
+              speech.sourceTextHash === messageArtifactTextHash(existingMessage.value.text.trim()))
+          ) {
             yield* upsertMessageSpeechFromEvent({
               messageId: event.payload.messageId,
               threadId: event.payload.threadId,
-              speech: event.payload.speech,
+              speech,
             });
           }
           return;

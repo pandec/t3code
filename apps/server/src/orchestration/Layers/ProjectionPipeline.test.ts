@@ -24,6 +24,7 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
+import { messageArtifactTextHash } from "../../messageArtifacts/identity.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -101,7 +102,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           transcript: "Listening version",
           mimeType: "audio/mpeg" as const,
           sizeBytes: 123,
-          sourceTextHash: "source-hash",
+          sourceTextHash: messageArtifactTextHash("Written reply"),
           scriptRecipeHash: "recipe-hash",
           voiceId: "voice-1",
           ttsModel: "model-1",
@@ -172,6 +173,11 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           [],
         );
 
+        yield* sql`
+          UPDATE projection_thread_messages
+          SET text = 'Edited reply'
+          WHERE message_id = ${messageId}
+        `;
         yield* appendAndProject(
           event(4, {
             type: "thread.message-speech-completed",
@@ -179,6 +185,46 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
               threadId,
               messageId,
               requestId: CommandId.make("request-current"),
+              speech: userSpeech,
+            },
+          }),
+        );
+        assert.deepEqual(
+          yield* sql<{ readonly requestId: string | null }>`
+            SELECT speech_request_id AS "requestId"
+            FROM projection_thread_messages
+            WHERE message_id = ${messageId}
+          `,
+          [{ requestId: null }],
+        );
+        assert.deepEqual(
+          yield* sql`SELECT speech_id FROM projection_message_speech WHERE message_id = ${messageId}`,
+          [],
+        );
+
+        yield* sql`
+          UPDATE projection_thread_messages
+          SET text = 'Written reply'
+          WHERE message_id = ${messageId}
+        `;
+        yield* appendAndProject(
+          event(5, {
+            type: "thread.message-speech-requested",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current-2"),
+              startedAt: "2026-01-01T00:00:05.000Z",
+            },
+          }),
+        );
+        yield* appendAndProject(
+          event(6, {
+            type: "thread.message-speech-completed",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current-2"),
               speech: userSpeech,
             },
           }),
@@ -212,7 +258,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           createdAt: "2026-01-01T00:00:05.000Z",
         };
         yield* appendAndProject(
-          event(5, {
+          event(7, {
             type: "thread.message-sent",
             payload: {
               threadId,
@@ -228,7 +274,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           }),
         );
         yield* appendAndProject(
-          event(6, {
+          event(8, {
             type: "thread.message-speech-requested",
             payload: {
               threadId,
@@ -239,7 +285,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           }),
         );
         yield* appendAndProject(
-          event(7, {
+          event(9, {
             type: "thread.message-speech-completed",
             payload: {
               threadId,
@@ -364,6 +410,23 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           },
         });
         yield* eventStore.append({
+          type: "thread.message-speech-requested",
+          eventId: EventId.make("copy-speech-request-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-speech-request-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-speech-request-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            messageId: MessageId.make("source-assistant"),
+            requestId: CommandId.make("copy-speech-request-command"),
+            startedAt: now,
+          },
+        });
+        yield* eventStore.append({
           type: "thread.fork-requested",
           eventId: EventId.make("copy-fork-event"),
           aggregateKind: "thread",
@@ -386,12 +449,16 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           readonly threadId: string;
           readonly text: string;
           readonly attachmentsJson: string | null;
+          readonly speechRequestId: string | null;
+          readonly speechRequestStartedAt: string | null;
         }>`
         SELECT
           message_id AS "messageId",
           thread_id AS "threadId",
           text,
-          attachments_json AS "attachmentsJson"
+          attachments_json AS "attachmentsJson",
+          speech_request_id AS "speechRequestId",
+          speech_request_started_at AS "speechRequestStartedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${destinationThreadId}
         ORDER BY message_id
@@ -402,12 +469,16 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
             threadId: destinationThreadId,
             text: "final response",
             attachmentsJson: null,
+            speechRequestId: null,
+            speechRequestStartedAt: null,
           },
           {
             messageId: `fork:${destinationThreadId}:source-message`,
             threadId: destinationThreadId,
             text: "keep this text",
             attachmentsJson: null,
+            speechRequestId: null,
+            speechRequestStartedAt: null,
           },
         ]);
 

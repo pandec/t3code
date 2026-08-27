@@ -1,6 +1,5 @@
 import {
   EventId,
-  MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -1121,48 +1120,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.speech.request": {
-      const thread = yield* requireThread({
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const message = thread.messages.find((entry) => entry.id === command.messageId);
-      if (message === undefined) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' does not exist in thread '${command.threadId}'.`,
-        });
-      }
-      if (message.role !== "assistant") {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' is not an assistant message.`,
-        });
-      }
-      if (message.streaming) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' is still streaming.`,
-        });
-      }
-      if (message.text.trim().length === 0) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' has no text to synthesize.`,
-        });
-      }
-      if (message.text.trim().length > MESSAGE_SPEECH_MAX_SOURCE_CHARS) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' is too long to synthesize.`,
-        });
-      }
-      if (message.speechRequest !== undefined) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Message '${command.messageId}' already has a pending speech request.`,
-        });
-      }
+      // The command read model deliberately omits message arrays. Public
+      // dispatch boundaries validate message invariants against the narrow SQL
+      // projection before this command reaches the decider.
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1182,13 +1147,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.speech.complete": {
-      const thread = yield* requireThread({
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const message = thread.messages.find((entry) => entry.id === command.messageId);
-      const requestIsCurrent = message?.speechRequest?.requestId === command.requestId;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1202,7 +1165,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           requestId: command.requestId,
-          ...(requestIsCurrent && command.speech !== undefined ? { speech: command.speech } : {}),
+          ...(command.speech !== undefined ? { speech: command.speech } : {}),
+          ...(command.failureReason !== undefined ? { failureReason: command.failureReason } : {}),
         },
       };
     }

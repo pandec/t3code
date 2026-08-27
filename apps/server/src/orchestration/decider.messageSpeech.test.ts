@@ -1,6 +1,5 @@
 import {
   CommandId,
-  MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -28,10 +27,7 @@ const speech: MessageSpeechAttachment = {
   createdAt: NOW,
 };
 
-function readModel(
-  speechRequest?: { requestId: CommandId; startedAt: string },
-  text = "Assistant reply",
-): OrchestrationReadModel {
+function readModel(): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
@@ -54,18 +50,7 @@ function readModel(
         snoozedUntil: null,
         snoozedAt: null,
         deletedAt: null,
-        messages: [
-          {
-            id: MessageId.make("message-1"),
-            role: "assistant",
-            text,
-            ...(speechRequest !== undefined ? { speechRequest } : {}),
-            turnId: null,
-            streaming: false,
-            createdAt: NOW,
-            updatedAt: NOW,
-          },
-        ],
+        messages: [],
         completedTurnAssistantMessageIds: [],
         proposedPlans: [],
         activities: [],
@@ -78,7 +63,7 @@ function readModel(
 }
 
 it.layer(NodeServices.layer)("message speech decider", (it) => {
-  it.effect("persists a validated request with the command id as its correlation id", () =>
+  it.effect("emits a request when the command read model omits messages", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
         command: {
@@ -98,41 +83,7 @@ it.layer(NodeServices.layer)("message speech decider", (it) => {
     }),
   );
 
-  it.effect("rejects a duplicate pending request", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(
-        decideOrchestrationCommand({
-          command: {
-            type: "thread.message.speech.request",
-            commandId: CommandId.make("cmd-new-request"),
-            threadId: ThreadId.make("thread-1"),
-            messageId: MessageId.make("message-1"),
-          },
-          readModel: readModel({ requestId: CommandId.make("cmd-current"), startedAt: NOW }),
-        }),
-      );
-      expect(result._tag).toBe("Failure");
-    }),
-  );
-
-  it.effect("rejects source text above the synthesis limit", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(
-        decideOrchestrationCommand({
-          command: {
-            type: "thread.message.speech.request",
-            commandId: CommandId.make("cmd-long-request"),
-            threadId: ThreadId.make("thread-1"),
-            messageId: MessageId.make("message-1"),
-          },
-          readModel: readModel(undefined, "x".repeat(MESSAGE_SPEECH_MAX_SOURCE_CHARS + 1)),
-        }),
-      );
-      expect(result._tag).toBe("Failure");
-    }),
-  );
-
-  it.effect("attaches speech only to the current request", () =>
+  it.effect("carries completion speech for the projectors to guard by request id", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
         command: {
@@ -143,7 +94,7 @@ it.layer(NodeServices.layer)("message speech decider", (it) => {
           requestId: CommandId.make("cmd-current"),
           speech,
         },
-        readModel: readModel({ requestId: CommandId.make("cmd-current"), startedAt: NOW }),
+        readModel: readModel(),
       });
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("thread.message-speech-completed");
@@ -153,23 +104,23 @@ it.layer(NodeServices.layer)("message speech decider", (it) => {
     }),
   );
 
-  it.effect("strips speech from a stale completion", () =>
+  it.effect("carries typed completion failures when messages are omitted", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
         command: {
           type: "thread.message.speech.complete",
-          commandId: CommandId.make("cmd-complete"),
+          commandId: CommandId.make("cmd-complete-failed"),
           threadId: ThreadId.make("thread-1"),
           messageId: MessageId.make("message-1"),
-          requestId: CommandId.make("cmd-stale"),
-          speech,
+          requestId: CommandId.make("cmd-request"),
+          failureReason: "script_failed",
         },
-        readModel: readModel({ requestId: CommandId.make("cmd-current"), startedAt: NOW }),
+        readModel: readModel(),
       });
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("thread.message-speech-completed");
       if (event.type === "thread.message-speech-completed") {
-        expect(event.payload.speech).toBeUndefined();
+        expect(event.payload.failureReason).toBe("script_failed");
       }
     }),
   );

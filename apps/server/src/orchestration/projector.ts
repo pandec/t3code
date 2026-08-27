@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
@@ -375,12 +376,15 @@ export function projectEvent(
               (message) =>
                 (message.role === "user" || message.role === "assistant") && !message.streaming,
             )
-            .map((message) => ({
-              ...message,
-              id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
-              attachments: [],
-              streaming: false,
-            }));
+            .map((message) => {
+              const { speechRequest: _, ...forkedMessage } = message;
+              return {
+                ...forkedMessage,
+                id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
+                attachments: [],
+                streaming: false,
+              };
+            });
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, { messages }),
@@ -709,6 +713,8 @@ export function projectEvent(
                 const speech = payload.speech;
                 if (
                   speech === undefined ||
+                  (speech.origin === "user" &&
+                    speech.sourceTextHash !== messageArtifactTextHash(message.text.trim())) ||
                   (withoutRequest.speech?.origin === "agent" && speech.origin === "user")
                 ) {
                   return withoutRequest;

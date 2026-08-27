@@ -25,6 +25,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   MessageSpeechAttachment,
+  MessageSpeechFailureReason,
   MessageSpeechSynthesisResult,
   MessageSummaryResult,
 } from "./voice.ts";
@@ -1244,6 +1245,7 @@ const ThreadMessageSpeechCompleteCommand = Schema.Struct({
   messageId: MessageId,
   requestId: CommandId,
   speech: Schema.optional(MessageSpeechAttachment),
+  failureReason: Schema.optional(MessageSpeechFailureReason),
 });
 
 const InternalOrchestrationCommand = Schema.Union([
@@ -1495,6 +1497,7 @@ export const ThreadMessageSpeechCompletedPayload = Schema.Struct({
   messageId: MessageId,
   requestId: CommandId,
   speech: Schema.optional(MessageSpeechAttachment),
+  failureReason: Schema.optional(MessageSpeechFailureReason),
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
