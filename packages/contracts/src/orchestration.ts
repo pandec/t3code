@@ -25,6 +25,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   MessageSpeechAttachment,
+  MessageSpeechFailureReason,
   MessageSpeechSynthesisResult,
   MessageSummaryResult,
 } from "./voice.ts";
@@ -273,6 +274,12 @@ export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 export const MessageInputOrigin = Schema.Literal("voice-transcription");
 export type MessageInputOrigin = typeof MessageInputOrigin.Type;
 
+export const MessageSpeechRequest = Schema.Struct({
+  requestId: CommandId,
+  startedAt: IsoDateTime,
+});
+export type MessageSpeechRequest = typeof MessageSpeechRequest.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -281,6 +288,8 @@ export const OrchestrationMessage = Schema.Struct({
   inputOrigin: Schema.optional(MessageInputOrigin),
   generatedSummary: Schema.optional(MessageSummaryResult),
   speech: Schema.optional(MessageSpeechSynthesisResult),
+  speechRequest: Schema.optional(MessageSpeechRequest),
+  speechFailureReason: Schema.optional(MessageSpeechFailureReason),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -947,6 +956,13 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadMessageSpeechRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.speech.request"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1087,6 +1103,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadMessageSpeechRequestCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1117,6 +1134,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadMessageSpeechRequestCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1221,6 +1239,16 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+const ThreadMessageSpeechCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.speech.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  requestId: CommandId,
+  speech: Schema.optional(MessageSpeechAttachment),
+  failureReason: Schema.optional(MessageSpeechFailureReason),
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadImportCommand,
   ThreadSessionSetCommand,
@@ -1231,6 +1259,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadMessageSpeechCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1262,6 +1291,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
+  "thread.message-speech-requested",
+  "thread.message-speech-completed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1453,6 +1484,21 @@ export const ThreadMessageSentPayload = Schema.Struct({
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+});
+
+export const ThreadMessageSpeechRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  requestId: CommandId,
+  startedAt: IsoDateTime,
+});
+
+export const ThreadMessageSpeechCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  requestId: CommandId,
+  speech: Schema.optional(MessageSpeechAttachment),
+  failureReason: Schema.optional(MessageSpeechFailureReason),
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
@@ -1670,6 +1716,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
     payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.message-speech-requested"),
+    payload: ThreadMessageSpeechRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.message-speech-completed"),
+    payload: ThreadMessageSpeechCompletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
@@ -22,6 +23,8 @@ import {
   ThreadHistoryImportedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMessageSpeechCompletedPayload,
+  ThreadMessageSpeechRequestedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -373,12 +376,15 @@ export function projectEvent(
               (message) =>
                 (message.role === "user" || message.role === "assistant") && !message.streaming,
             )
-            .map((message) => ({
-              ...message,
-              id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
-              attachments: [],
-              streaming: false,
-            }));
+            .map((message) => {
+              const { speechRequest: _, ...forkedMessage } = message;
+              return {
+                ...forkedMessage,
+                id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
+                attachments: [],
+                streaming: false,
+              };
+            });
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, { messages }),
@@ -596,6 +602,19 @@ export function projectEvent(
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.inputOrigin !== undefined ? { inputOrigin: payload.inputOrigin } : {}),
+            ...(payload.speech !== undefined
+              ? {
+                  speech: {
+                    messageId: payload.messageId,
+                    speechId: payload.speech.speechId,
+                    transcript: payload.speech.transcript,
+                    mimeType: payload.speech.mimeType,
+                    sizeBytes: payload.speech.sizeBytes,
+                    origin: payload.speech.origin,
+                    createdAt: payload.speech.createdAt,
+                  },
+                }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             createdAt: payload.createdAt,
@@ -625,6 +644,7 @@ export function projectEvent(
                     ...(message.inputOrigin !== undefined
                       ? { inputOrigin: message.inputOrigin }
                       : {}),
+                    ...(message.speech !== undefined ? { speech: message.speech } : {}),
                   }
                 : entry,
             )
@@ -639,6 +659,96 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.message-speech-requested":
+      return decodeForEvent(
+        ThreadMessageSpeechRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: thread.messages.map((message) => {
+                if (message.id !== payload.messageId) return message;
+                const { speechFailureReason: _, ...withoutFailure } = message;
+                return {
+                  ...withoutFailure,
+                  speechRequest: {
+                    requestId: payload.requestId,
+                    startedAt: payload.startedAt,
+                  },
+                };
+              }),
+            }),
+          };
+        }),
+      );
+
+    case "thread.message-speech-completed":
+      return decodeForEvent(
+        ThreadMessageSpeechCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: thread.messages.map((message) => {
+                if (
+                  message.id !== payload.messageId ||
+                  message.speechRequest?.requestId !== payload.requestId
+                ) {
+                  return message;
+                }
+                const {
+                  speechRequest: _,
+                  speechFailureReason: __,
+                  ...withoutRequestAndFailure
+                } = message;
+                const speech = payload.speech;
+                const speechIsStale =
+                  speech?.origin === "user" &&
+                  speech.sourceTextHash !== messageArtifactTextHash(message.text.trim());
+                if (speech === undefined || speechIsStale) {
+                  return {
+                    ...withoutRequestAndFailure,
+                    speechFailureReason:
+                      payload.failureReason ??
+                      (speechIsStale ? "message_unavailable" : "provider_failed"),
+                  };
+                }
+                if (
+                  withoutRequestAndFailure.speech?.origin === "agent" &&
+                  speech.origin === "user"
+                ) {
+                  return withoutRequestAndFailure;
+                }
+                return {
+                  ...withoutRequestAndFailure,
+                  speech: {
+                    messageId: payload.messageId,
+                    speechId: speech.speechId,
+                    transcript: speech.transcript,
+                    mimeType: speech.mimeType,
+                    sizeBytes: speech.sizeBytes,
+                    origin: speech.origin,
+                    createdAt: speech.createdAt,
+                  },
+                };
+              }),
+            }),
+          };
+        }),
+      );
 
     case "thread.session-set":
       return Effect.gen(function* () {

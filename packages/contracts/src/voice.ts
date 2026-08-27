@@ -47,6 +47,16 @@ export const MESSAGE_SUMMARY_MAX_TEXT_CHARS = 12_000;
 export const MessageSpeechOrigin = Schema.Literals(["user", "agent"]);
 export type MessageSpeechOrigin = typeof MessageSpeechOrigin.Type;
 
+export const MessageSpeechFailureReason = Schema.Literals([
+  "unavailable",
+  "message_unavailable",
+  "source_too_long",
+  "script_failed",
+  "provider_failed",
+  "storage_failed",
+]);
+export type MessageSpeechFailureReason = typeof MessageSpeechFailureReason.Type;
+
 export const MessageSpeechSynthesisRequest = Schema.Struct({
   messageId: MessageId,
 });
@@ -73,7 +83,7 @@ export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
  * before the command is dispatched, mirroring how user image attachments are
  * persisted by the normalizer); the event stream only ever sees metadata.
  */
-export const MessageSpeechAttachment = Schema.Struct({
+const MessageSpeechAttachmentBase = {
   speechId: TrimmedNonEmptyString,
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
   mimeType: Schema.Literal("audio/mpeg"),
@@ -81,9 +91,23 @@ export const MessageSpeechAttachment = Schema.Struct({
   sourceTextHash: TrimmedNonEmptyString,
   voiceId: TrimmedNonEmptyString,
   ttsModel: TrimmedNonEmptyString,
-  origin: MessageSpeechOrigin,
   createdAt: IsoDateTime,
-});
+} as const;
+
+export const MessageSpeechAttachment = Schema.Union([
+  Schema.Struct({
+    ...MessageSpeechAttachmentBase,
+    origin: Schema.Literal("user"),
+    scriptRecipeHash: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    ...MessageSpeechAttachmentBase,
+    origin: Schema.Literal("agent"),
+    // Agent voice replies do not use the listening-version script recipe.
+    // Optional keeps their existing persisted events replayable.
+    scriptRecipeHash: Schema.optional(TrimmedNonEmptyString),
+  }),
+]);
 export type MessageSpeechAttachment = typeof MessageSpeechAttachment.Type;
 
 export const AgentVoiceReplyInput = Schema.Struct({

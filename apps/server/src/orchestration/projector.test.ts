@@ -12,6 +12,7 @@ import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 function makeEvent(input: {
@@ -564,6 +565,231 @@ describe("orchestration projector", () => {
     expect(message?.updatedAt).toBe(completeAt);
   });
 
+  effectIt.effect("projects correlated message speech state without replacing agent speech", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-02-23T09:00:00.000Z";
+      const messageAt = "2026-02-23T09:00:01.000Z";
+      let state = createEmptyReadModel(createdAt);
+      const events: ReadonlyArray<OrchestrationEvent> = [
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            role: "assistant",
+            text: "Written reply",
+            turnId: "turn-1",
+            streaming: false,
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-speech-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:02.000Z",
+          commandId: "cmd-request-1",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-1",
+            startedAt: "2026-02-23T09:00:02.000Z",
+          },
+        }),
+      ];
+      for (const event of events) state = yield* projectEvent(state, event);
+
+      expect(state.threads[0]?.messages[0]?.speechRequest).toEqual({
+        requestId: "cmd-request-1",
+        startedAt: "2026-02-23T09:00:02.000Z",
+      });
+      expect(state.threads[0]?.updatedAt).toBe(messageAt);
+
+      state = yield* projectEvent(
+        state,
+        makeEvent({
+          sequence: 4,
+          type: "thread.message-speech-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:03.000Z",
+          commandId: "cmd-stale-complete",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-stale",
+            speech: {
+              speechId: "speech-stale",
+              transcript: "Stale speech",
+              mimeType: "audio/mpeg",
+              sizeBytes: 10,
+              sourceTextHash: "source-hash",
+              scriptRecipeHash: "recipe-hash",
+              voiceId: "voice-1",
+              ttsModel: "model-1",
+              origin: "user",
+              createdAt: "2026-02-23T09:00:03.000Z",
+            },
+          },
+        }),
+      );
+      expect(state.threads[0]?.messages[0]?.speechRequest?.requestId).toBe("cmd-request-1");
+      expect(state.threads[0]?.messages[0]?.speech).toBeUndefined();
+
+      state = yield* projectEvent(
+        state,
+        makeEvent({
+          sequence: 5,
+          type: "thread.message-speech-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:04.000Z",
+          commandId: "cmd-failed-complete",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-1",
+          },
+        }),
+      );
+      expect(state.threads[0]?.messages[0]?.speechRequest).toBeUndefined();
+
+      const userSpeech = {
+        speechId: "speech-user",
+        transcript: "Listening version",
+        mimeType: "audio/mpeg",
+        sizeBytes: 20,
+        sourceTextHash: messageArtifactTextHash("Written reply"),
+        scriptRecipeHash: "recipe-hash",
+        voiceId: "voice-1",
+        ttsModel: "model-1",
+        origin: "user" as const,
+        createdAt: "2026-02-23T09:00:06.000Z",
+      };
+      const agentSpeech = {
+        ...userSpeech,
+        speechId: "speech-agent",
+        transcript: "Agent recording",
+        origin: "agent" as const,
+        createdAt: "2026-02-23T09:00:07.000Z",
+      };
+      const remainingEvents: ReadonlyArray<OrchestrationEvent> = [
+        makeEvent({
+          sequence: 6,
+          type: "thread.message-speech-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:05.000Z",
+          commandId: "cmd-request-2",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-2",
+            startedAt: "2026-02-23T09:00:05.000Z",
+          },
+        }),
+        makeEvent({
+          sequence: 7,
+          type: "thread.message-speech-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: userSpeech.createdAt,
+          commandId: "cmd-user-complete",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-2",
+            speech: userSpeech,
+          },
+        }),
+        makeEvent({
+          sequence: 8,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: agentSpeech.createdAt,
+          commandId: "cmd-agent-speech",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            role: "assistant",
+            text: "",
+            speech: agentSpeech,
+            turnId: "turn-1",
+            streaming: false,
+            createdAt: agentSpeech.createdAt,
+            updatedAt: agentSpeech.createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 9,
+          type: "thread.message-speech-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:08.000Z",
+          commandId: "cmd-request-3",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-3",
+            startedAt: "2026-02-23T09:00:08.000Z",
+          },
+        }),
+        makeEvent({
+          sequence: 10,
+          type: "thread.message-speech-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:00:09.000Z",
+          commandId: "cmd-user-complete-after-agent",
+          payload: {
+            threadId: "thread-1",
+            messageId: "assistant:msg-1",
+            requestId: "cmd-request-3",
+            speech: { ...userSpeech, speechId: "speech-user-new" },
+          },
+        }),
+      ];
+      for (const event of remainingEvents) state = yield* projectEvent(state, event);
+
+      expect(state.threads[0]?.messages[0]?.speechRequest).toBeUndefined();
+      expect(state.threads[0]?.messages[0]?.speech).toMatchObject({
+        speechId: "speech-agent",
+        transcript: "Agent recording",
+        origin: "agent",
+      });
+    }),
+  );
+
   it("prunes reverted turn messages from in-memory thread snapshot", async () => {
     const createdAt = "2026-02-23T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);
@@ -931,6 +1157,190 @@ describe("orchestration projector", () => {
       })),
     ).toEqual([{ id: "assistant-keep", role: "assistant", turnId: "turn-1" }]);
   });
+
+  effectIt.effect("clears a matching request without attaching stale-text speech", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-02-23T09:30:00.000Z";
+      let state = createEmptyReadModel(createdAt);
+      const events: ReadonlyArray<OrchestrationEvent> = [
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-stale-speech",
+          occurredAt: createdAt,
+          commandId: "cmd-create-stale-speech",
+          payload: {
+            threadId: "thread-stale-speech",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-stale-speech",
+          occurredAt: createdAt,
+          commandId: "cmd-message-stale-speech",
+          payload: {
+            threadId: "thread-stale-speech",
+            messageId: "assistant:stale-speech",
+            role: "assistant",
+            text: "Current text",
+            turnId: "turn-1",
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-speech-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-stale-speech",
+          occurredAt: createdAt,
+          commandId: "cmd-request-stale-speech",
+          payload: {
+            threadId: "thread-stale-speech",
+            messageId: "assistant:stale-speech",
+            requestId: "cmd-request-stale-speech",
+            startedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 4,
+          type: "thread.message-speech-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-stale-speech",
+          occurredAt: createdAt,
+          commandId: "cmd-complete-stale-speech",
+          payload: {
+            threadId: "thread-stale-speech",
+            messageId: "assistant:stale-speech",
+            requestId: "cmd-request-stale-speech",
+            speech: {
+              speechId: "speech-stale-text",
+              transcript: "Old text",
+              mimeType: "audio/mpeg",
+              sizeBytes: 10,
+              sourceTextHash: messageArtifactTextHash("Old text"),
+              scriptRecipeHash: "recipe-hash",
+              voiceId: "voice-1",
+              ttsModel: "model-1",
+              origin: "user",
+              createdAt,
+            },
+          },
+        }),
+      ];
+      for (const event of events) state = yield* projectEvent(state, event);
+
+      expect(state.threads[0]?.messages[0]?.speechRequest).toBeUndefined();
+      expect(state.threads[0]?.messages[0]?.speech).toBeUndefined();
+    }),
+  );
+
+  effectIt.effect("drops pending message speech state when forking", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-02-23T09:45:00.000Z";
+      let state = createEmptyReadModel(createdAt);
+      const threadPayload = (threadId: string) => ({
+        threadId,
+        projectId: "project-1",
+        title: threadId,
+        modelSelection: {
+          provider: ProviderDriverKind.make("codex"),
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      const events: ReadonlyArray<OrchestrationEvent> = [
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-source",
+          occurredAt: createdAt,
+          commandId: "cmd-create-source",
+          payload: threadPayload("thread-source"),
+        }),
+        makeEvent({
+          sequence: 2,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: createdAt,
+          commandId: "cmd-create-fork",
+          payload: threadPayload("thread-fork"),
+        }),
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-source",
+          occurredAt: createdAt,
+          commandId: "cmd-source-message",
+          payload: {
+            threadId: "thread-source",
+            messageId: "assistant:source",
+            role: "assistant",
+            text: "Source reply",
+            turnId: "turn-1",
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 4,
+          type: "thread.message-speech-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-source",
+          occurredAt: createdAt,
+          commandId: "cmd-source-speech",
+          payload: {
+            threadId: "thread-source",
+            messageId: "assistant:source",
+            requestId: "cmd-source-speech",
+            startedAt: createdAt,
+          },
+        }),
+        makeEvent({
+          sequence: 5,
+          type: "thread.fork-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: createdAt,
+          commandId: "cmd-fork",
+          payload: {
+            threadId: "thread-fork",
+            sourceThreadId: "thread-source",
+            createdAt,
+          },
+        }),
+      ];
+      for (const event of events) state = yield* projectEvent(state, event);
+
+      const forkedMessage = state.threads.find((thread) => thread.id === "thread-fork")
+        ?.messages[0];
+      expect(forkedMessage?.id).toBe("fork:thread-fork:assistant:source");
+      expect(forkedMessage?.speechRequest).toBeUndefined();
+    }),
+  );
 
   effectIt.effect("caps message and checkpoint retention for long-lived threads", () =>
     Effect.gen(function* () {

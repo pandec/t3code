@@ -1,4 +1,4 @@
-import { MessageId, ThreadId } from "@t3tools/contracts";
+import { CommandId, MessageId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -109,6 +109,65 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.text, "cleared");
       assert.deepEqual(rows[0]?.attachments, []);
+    }),
+  );
+
+  it.effect("sets, preserves, clears, and omits speech requests from forks", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-speech-request");
+      const destinationThreadId = ThreadId.make("thread-speech-request-fork");
+      const messageId = MessageId.make("message-speech-request");
+      const createdAt = "2026-02-28T19:20:00.000Z";
+      const requestId = CommandId.make("cmd-speech-request");
+      const startedAt = "2026-02-28T19:20:01.000Z";
+      const baseMessage = {
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant" as const,
+        text: "reply",
+        isStreaming: false,
+        createdAt,
+      };
+
+      yield* repository.upsert({
+        ...baseMessage,
+        speechRequestId: requestId,
+        speechRequestStartedAt: startedAt,
+        updatedAt: startedAt,
+      });
+      yield* repository.upsert({
+        ...baseMessage,
+        text: "updated reply",
+        updatedAt: "2026-02-28T19:20:02.000Z",
+      });
+
+      const preserved = yield* repository.getByMessageId({ messageId });
+      assert.equal(preserved._tag, "Some");
+      if (preserved._tag === "Some") {
+        assert.equal(preserved.value.speechRequestId, requestId);
+        assert.equal(preserved.value.speechRequestStartedAt, startedAt);
+      }
+
+      yield* repository.copyTextMessagesForFork({ sourceThreadId: threadId, destinationThreadId });
+      const forked = yield* repository.listByThreadId({ threadId: destinationThreadId });
+      assert.equal(forked.length, 1);
+      assert.equal(forked[0]?.speechRequestId, null);
+      assert.equal(forked[0]?.speechRequestStartedAt, null);
+
+      yield* repository.upsert({
+        ...baseMessage,
+        speechRequestId: null,
+        speechRequestStartedAt: null,
+        updatedAt: "2026-02-28T19:20:03.000Z",
+      });
+      const cleared = yield* repository.getByMessageId({ messageId });
+      assert.equal(cleared._tag, "Some");
+      if (cleared._tag === "Some") {
+        assert.equal(cleared.value.speechRequestId, null);
+        assert.equal(cleared.value.speechRequestStartedAt, null);
+      }
     }),
   );
 });

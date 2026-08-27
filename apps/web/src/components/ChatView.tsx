@@ -7798,6 +7798,10 @@ function ChatViewContent(props: ChatViewProps) {
                 textToSpeechAvailable={
                   serverConfigs.get(activeThread.environmentId)?.textToSpeech.available === true
                 }
+                textToSpeechPersistentJobs={
+                  serverConfigs.get(activeThread.environmentId)?.textToSpeech.persistentJobs ===
+                  true
+                }
                 messageSummariesAvailable={
                   serverConfigs.get(activeThread.environmentId)?.environment.capabilities
                     .messageSummaries === true

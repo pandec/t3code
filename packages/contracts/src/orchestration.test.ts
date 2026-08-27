@@ -837,6 +837,77 @@ it.effect("accepts an internal title regeneration completion", () =>
   }),
 );
 
+it.effect("accepts persistent message speech commands", () =>
+  Effect.gen(function* () {
+    const request = yield* decodeClientOrchestrationCommand({
+      type: "thread.message.speech.request",
+      commandId: "cmd-speech-request",
+      threadId: "thread-1",
+      messageId: "message-1",
+    });
+    assert.strictEqual(request.type, "thread.message.speech.request");
+
+    const completion = yield* decodeOrchestrationCommand({
+      type: "thread.message.speech.complete",
+      commandId: "cmd-speech-complete",
+      threadId: "thread-1",
+      messageId: "message-1",
+      requestId: "cmd-speech-request",
+      speech: {
+        speechId: "thread-1:speech-1",
+        transcript: "Spoken reply",
+        mimeType: "audio/mpeg",
+        sizeBytes: 123,
+        sourceTextHash: "source-hash",
+        scriptRecipeHash: "recipe-hash",
+        voiceId: "voice-1",
+        ttsModel: "model-1",
+        origin: "user",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+    });
+    assert.strictEqual(completion.type, "thread.message.speech.complete");
+  }),
+);
+
+it.effect("accepts persistent message speech events", () =>
+  Effect.gen(function* () {
+    const requested = yield* decodeOrchestrationEvent({
+      eventId: "event-speech-requested",
+      sequence: 1,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-speech-request",
+      causationEventId: null,
+      correlationId: "cmd-speech-request",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      actorKind: "client",
+      metadata: {},
+      type: "thread.message-speech-requested",
+      payload: {
+        threadId: "thread-1",
+        messageId: "message-1",
+        requestId: "cmd-speech-request",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(requested.type, "thread.message-speech-requested");
+
+    const completed = yield* decodeOrchestrationEvent({
+      ...requested,
+      eventId: "event-speech-completed",
+      sequence: 2,
+      type: "thread.message-speech-completed",
+      payload: {
+        threadId: "thread-1",
+        messageId: "message-1",
+        requestId: "cmd-speech-request",
+      },
+    });
+    assert.strictEqual(completed.type, "thread.message-speech-completed");
+  }),
+);
+
 it.effect("rejects an explicit title combined with title regeneration", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

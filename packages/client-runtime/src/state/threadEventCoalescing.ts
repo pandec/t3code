@@ -286,6 +286,8 @@ export function isStructuralThreadStreamItem(item: OrchestrationThreadStreamItem
     case "thread.runtime-mode-set":
     case "thread.interaction-mode-set":
     case "thread.proposed-plan-upserted":
+    case "thread.message-speech-requested":
+    case "thread.message-speech-completed":
       return true;
     case "thread.message-sent":
       return !item.event.payload.streaming;

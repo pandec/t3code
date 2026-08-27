@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { isThreadForkFailure } from "@t3tools/shared/conversationFork";
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
@@ -1115,6 +1116,65 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.message.speech.request": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // The command read model deliberately omits message arrays. Public
+      // dispatch boundaries validate message invariants against the narrow SQL
+      // projection before this command reaches the decider.
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-speech-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          requestId: command.commandId,
+          startedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.message.speech.complete": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((candidate) => candidate.id === command.messageId);
+      const speechIsStale =
+        command.speech?.origin === "user" &&
+        message !== undefined &&
+        command.speech.sourceTextHash !== messageArtifactTextHash(message.text.trim());
+      const speech = speechIsStale ? undefined : command.speech;
+      const failureReason = speechIsStale ? "message_unavailable" : command.failureReason;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-speech-completed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          requestId: command.requestId,
+          ...(speech !== undefined ? { speech } : {}),
+          ...(failureReason !== undefined ? { failureReason } : {}),
         },
       };
     }

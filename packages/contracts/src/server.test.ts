@@ -14,6 +14,7 @@ const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeServerProviderSkill = Schema.decodeUnknownSync(ServerProviderSkill);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+const decodeTextToSpeech = Schema.decodeUnknownSync(ServerConfig.fields.textToSpeech);
 
 const baseProviderSnapshot = {
   instanceId: "codex",
@@ -26,6 +27,19 @@ const baseProviderSnapshot = {
   checkedAt: "2026-04-10T00:00:00.000Z",
   models: [],
 };
+
+describe("ServerConfig text-to-speech capability", () => {
+  it("accepts old capability payloads without persistent jobs", () => {
+    expect(decodeTextToSpeech({ available: true })).toEqual({ available: true });
+  });
+
+  it("accepts persistent job support", () => {
+    expect(decodeTextToSpeech({ available: true, persistentJobs: true })).toEqual({
+      available: true,
+      persistentJobs: true,
+    });
+  });
+});
 
 describe("ServerProviderSkill", () => {
   it("accepts provider-native skills without filesystem metadata", () => {

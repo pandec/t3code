@@ -11,9 +11,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
+import { validateAndDispatchMessageSpeechRequest } from "./messageSpeechRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -68,6 +70,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const turnStartBootstrap = yield* TurnStartBootstrap;
 
@@ -161,12 +164,26 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               ),
             );
           }
-          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+          const dispatchEffect =
+            normalizedCommand.type === "thread.message.speech.request"
+              ? validateAndDispatchMessageSpeechRequest(
+                  projectionThreadMessageRepository,
+                  normalizedCommand,
+                  orchestrationEngine.dispatch(normalizedCommand),
+                )
+              : orchestrationEngine.dispatch(normalizedCommand);
+          return yield* dispatchEffect.pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
             ),
             Effect.catch((cause) =>
               Effect.gen(function* () {
+                if (
+                  normalizedCommand.type === "thread.message.speech.request" &&
+                  isOrchestrationCommandInvariantError(cause)
+                ) {
+                  return yield* failEnvironmentInvalidRequest("invalid_command");
+                }
                 if (
                   isOrchestrationCommandInvariantError(cause) &&
                   (cause.code === "project_actions_changed" ||

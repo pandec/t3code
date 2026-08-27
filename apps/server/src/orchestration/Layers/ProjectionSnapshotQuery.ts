@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   CheckpointRef,
+  CommandId,
   IsoDateTime,
   MessageId,
   MessageInputOrigin,
@@ -112,6 +113,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     inputOrigin: Schema.NullOr(MessageInputOrigin),
+    speechRequestId: Schema.NullOr(CommandId),
+    speechRequestStartedAt: Schema.NullOr(IsoDateTime),
   }),
 );
 const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
@@ -432,6 +435,14 @@ function mapMessageRow(
     text: row.text,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
+    ...(row.speechRequestId !== null && row.speechRequestStartedAt !== null
+      ? {
+          speechRequest: {
+            requestId: row.speechRequestId,
+            startedAt: row.speechRequestStartedAt,
+          },
+        }
+      : {}),
     ...(row.summaryText !== null &&
     row.summaryCreatedAt !== null &&
     row.generationModelSelectionJson !== null &&
@@ -1228,6 +1239,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       summary.source_text_hash AS "summarySourceTextHash",
       summary.recipe_hash AS "summaryRecipeHash",
       messages.generation_model_selection_json AS "generationModelSelectionJson",
+      messages.speech_request_id AS "speechRequestId",
+      messages.speech_request_started_at AS "speechRequestStartedAt",
       speech.speech_id AS "speechId",
       speech.transcript AS "speechTranscript",
       speech.mime_type AS "speechMimeType",

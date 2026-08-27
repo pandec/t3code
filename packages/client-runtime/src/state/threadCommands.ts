@@ -16,6 +16,7 @@ import {
   type MoveThreadToTopInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
+  type RequestMessageSpeechInput,
   type RevertThreadCheckpointInput,
   type SetThreadInteractionModeInput,
   type SetThreadRuntimeModeInput,
@@ -38,6 +39,7 @@ import {
   interruptThreadTurn,
   respondToThreadApproval,
   respondToThreadUserInput,
+  requestMessageSpeech,
   revertThreadCheckpoint,
   setThreadInteractionMode,
   setThreadRuntimeMode,
@@ -64,6 +66,7 @@ export type {
   MoveThreadToTopInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
+  RequestMessageSpeechInput,
   RevertThreadCheckpointInput,
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
@@ -93,6 +96,11 @@ export function createThreadEnvironmentAtoms<R, E>(
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: ForkThreadInput }) =>
       JSON.stringify([environmentId, input.sourceThreadId]),
+  };
+  const messageSpeechConcurrency = {
+    mode: "serial" as const,
+    key: ({ environmentId, input }: { environmentId: string; input: RequestMessageSpeechInput }) =>
+      JSON.stringify([environmentId, input.threadId, input.messageId]),
   };
   return {
     create: createEnvironmentCommand(runtime, {
@@ -190,6 +198,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       execute: (input: SetThreadInteractionModeInput) => setThreadInteractionMode(input),
       scheduler,
       concurrency,
+    }),
+    requestMessageSpeech: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:request-message-speech",
+      execute: (input: RequestMessageSpeechInput) => requestMessageSpeech(input),
+      scheduler,
+      concurrency: messageSpeechConcurrency,
     }),
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",

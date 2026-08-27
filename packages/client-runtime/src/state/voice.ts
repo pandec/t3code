@@ -1,4 +1,8 @@
-import type { MessageSpeechSynthesisRequest, VoiceTranscriptionRequest } from "@t3tools/contracts";
+import type {
+  MessageSpeechFailureReason,
+  MessageSpeechSynthesisRequest,
+  VoiceTranscriptionRequest,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -19,6 +23,19 @@ import { createEnvironmentCommand } from "./runtime.ts";
 
 const VOICE_TRANSCRIPTION_TIMEOUT_MS = 75_000;
 const MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS = 330_000;
+
+export const messageSpeechFailureDescription = (
+  reason: MessageSpeechFailureReason | undefined,
+): string => {
+  switch (reason) {
+    case "source_too_long":
+      return "This message is too long to prepare as audio.";
+    case "message_unavailable":
+      return "This message changed before audio was ready. Try again.";
+    default:
+      return "T3 Code could not prepare audio for this message. Try again in a moment.";
+  }
+};
 
 export const transcribeVoiceRecording = Effect.fn("clientRuntime.voice.transcribeVoiceRecording")(
   function* (request: VoiceTranscriptionRequest) {

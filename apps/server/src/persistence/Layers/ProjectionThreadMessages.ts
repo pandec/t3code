@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { ChatAttachment, MessageInputOrigin } from "@t3tools/contracts";
+import { ChatAttachment, CommandId, IsoDateTime, MessageInputOrigin } from "@t3tools/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -15,6 +15,8 @@ import {
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
   ListProjectionThreadMessagesInput,
+  PendingProjectionMessageSpeechRequest,
+  ProjectionMessageSpeech,
   ProjectionThreadMessage,
 } from "../Services/ProjectionThreadMessages.ts";
 
@@ -25,6 +27,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     inputOrigin: Schema.NullOr(MessageInputOrigin),
     generationModelSelectionJson: Schema.NullOr(Schema.String),
     generationCwd: Schema.NullOr(Schema.String),
+    speechRequestId: Schema.NullOr(CommandId),
+    speechRequestStartedAt: Schema.NullOr(IsoDateTime),
   }),
 );
 
@@ -46,6 +50,8 @@ function toProjectionThreadMessage(
       ? { generationModelSelectionJson: row.generationModelSelectionJson }
       : {}),
     ...(row.generationCwd !== null ? { generationCwd: row.generationCwd } : {}),
+    speechRequestId: row.speechRequestId,
+    speechRequestStartedAt: row.speechRequestStartedAt,
   };
 }
 
@@ -57,6 +63,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     execute: (row) => {
       const nextAttachmentsJson =
         row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
+      const speechRequestSpecified =
+        row.speechRequestId !== undefined || row.speechRequestStartedAt !== undefined;
       return sql`
         INSERT INTO projection_thread_messages (
           message_id,
@@ -68,6 +76,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin,
           generation_model_selection_json,
           generation_cwd,
+          speech_request_id,
+          speech_request_started_at,
           is_streaming,
           created_at,
           updated_at
@@ -110,6 +120,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          ${row.speechRequestId ?? null},
+          ${row.speechRequestStartedAt ?? null},
           ${row.isStreaming ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -136,6 +148,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             excluded.generation_cwd,
             projection_thread_messages.generation_cwd
           ),
+          speech_request_id = CASE
+            WHEN ${speechRequestSpecified ? 1 : 0} = 1 THEN excluded.speech_request_id
+            ELSE projection_thread_messages.speech_request_id
+          END,
+          speech_request_started_at = CASE
+            WHEN ${speechRequestSpecified ? 1 : 0} = 1 THEN excluded.speech_request_started_at
+            ELSE projection_thread_messages.speech_request_started_at
+          END,
           is_streaming = excluded.is_streaming,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
@@ -158,12 +178,53 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin AS "inputOrigin",
           generation_model_selection_json AS "generationModelSelectionJson",
           generation_cwd AS "generationCwd",
+          speech_request_id AS "speechRequestId",
+          speech_request_started_at AS "speechRequestStartedAt",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE message_id = ${messageId}
         LIMIT 1
+      `,
+  });
+
+  const getProjectionMessageSpeechRow = SqlSchema.findOneOption({
+    Request: GetProjectionThreadMessageInput,
+    Result: ProjectionMessageSpeech,
+    execute: ({ messageId }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          speech_id AS "speechId",
+          transcript,
+          mime_type AS "mimeType",
+          size_bytes AS "sizeBytes",
+          source_text_hash AS "sourceTextHash",
+          script_recipe_hash AS "scriptRecipeHash",
+          voice_id AS "voiceId",
+          tts_model AS "ttsModel",
+          origin,
+          created_at AS "createdAt"
+        FROM projection_message_speech
+        WHERE message_id = ${messageId}
+        LIMIT 1
+      `,
+  });
+
+  const listPendingProjectionMessageSpeechRequestRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: PendingProjectionMessageSpeechRequest,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          speech_request_id AS "requestId"
+        FROM projection_thread_messages
+        WHERE speech_request_id IS NOT NULL
+        ORDER BY thread_id ASC, message_id ASC
       `,
   });
 
@@ -182,6 +243,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin AS "inputOrigin",
           generation_model_selection_json AS "generationModelSelectionJson",
           generation_cwd AS "generationCwd",
+          speech_request_id AS "speechRequestId",
+          speech_request_started_at AS "speechRequestStartedAt",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -214,6 +277,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin,
           generation_model_selection_json,
           generation_cwd,
+          speech_request_id,
+          speech_request_started_at,
           is_streaming,
           created_at,
           updated_at
@@ -228,6 +293,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           input_origin,
           generation_model_selection_json,
           generation_cwd,
+          NULL,
+          NULL,
           0,
           created_at,
           updated_at
@@ -250,6 +317,22 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         toPersistenceSqlError("ProjectionThreadMessageRepository.getByMessageId:query"),
       ),
       Effect.map(Option.map(toProjectionThreadMessage)),
+    );
+
+  const getSpeechByMessageId: ProjectionThreadMessageRepositoryShape["getSpeechByMessageId"] = (
+    input,
+  ) =>
+    getProjectionMessageSpeechRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.getSpeechByMessageId:query"),
+      ),
+    );
+
+  const listPendingSpeechRequests: ProjectionThreadMessageRepositoryShape["listPendingSpeechRequests"] =
+    listPendingProjectionMessageSpeechRequestRows().pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.listPendingSpeechRequests:query"),
+      ),
     );
 
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
@@ -278,6 +361,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   return {
     upsert,
     getByMessageId,
+    getSpeechByMessageId,
+    listPendingSpeechRequests,
     listByThreadId,
     deleteByThreadId,
     copyTextMessagesForFork,

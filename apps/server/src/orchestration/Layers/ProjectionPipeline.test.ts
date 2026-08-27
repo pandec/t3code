@@ -24,6 +24,7 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
+import { messageArtifactTextHash } from "../../messageArtifacts/identity.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -54,6 +55,275 @@ const exists = (filePath: string) =>
   });
 
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-projection-")))(
+  "OrchestrationProjectionPipeline message speech",
+  (it) => {
+    it.effect("persists correlated requests and event-owned speech with agent precedence", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-message-speech");
+        const messageId = MessageId.make("message-speech");
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore
+            .append(event)
+            .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+        const event = (
+          sequence: number,
+          input: Omit<
+            Parameters<typeof eventStore.append>[0],
+            | "eventId"
+            | "aggregateKind"
+            | "aggregateId"
+            | "occurredAt"
+            | "commandId"
+            | "causationEventId"
+            | "correlationId"
+            | "metadata"
+          > & {
+            readonly type: Parameters<typeof eventStore.append>[0]["type"];
+            readonly payload: Parameters<typeof eventStore.append>[0]["payload"];
+          },
+        ): Parameters<typeof eventStore.append>[0] => ({
+          ...input,
+          eventId: EventId.make(`event-message-speech-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: `2026-01-01T00:00:0${sequence}.000Z`,
+          commandId: CommandId.make(`cmd-message-speech-${sequence}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-message-speech-${sequence}`),
+          metadata: {},
+        });
+        const userSpeech = {
+          speechId: "speech-user",
+          transcript: "Listening version",
+          mimeType: "audio/mpeg" as const,
+          sizeBytes: 123,
+          sourceTextHash: messageArtifactTextHash("Written reply"),
+          scriptRecipeHash: "recipe-hash",
+          voiceId: "voice-1",
+          ttsModel: "model-1",
+          origin: "user" as const,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        };
+
+        yield* appendAndProject(
+          event(1, {
+            type: "thread.message-sent",
+            payload: {
+              threadId,
+              messageId,
+              role: "assistant",
+              text: "Written reply",
+              turnId: TurnId.make("turn-1"),
+              streaming: false,
+              createdAt: "2026-01-01T00:00:01.000Z",
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+          }),
+        );
+        yield* appendAndProject(
+          event(2, {
+            type: "thread.message-speech-requested",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current"),
+              startedAt: "2026-01-01T00:00:02.000Z",
+            },
+          }),
+        );
+
+        const pending = yield* sql<{
+          readonly requestId: string | null;
+          readonly startedAt: string | null;
+        }>`
+          SELECT
+            speech_request_id AS "requestId",
+            speech_request_started_at AS "startedAt"
+          FROM projection_thread_messages
+          WHERE message_id = ${messageId}
+        `;
+        assert.deepEqual(pending, [
+          { requestId: "request-current", startedAt: "2026-01-01T00:00:02.000Z" },
+        ]);
+
+        yield* appendAndProject(
+          event(3, {
+            type: "thread.message-speech-completed",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-stale"),
+              speech: { ...userSpeech, speechId: "speech-stale" },
+            },
+          }),
+        );
+        const afterStale = yield* sql<{ readonly requestId: string | null }>`
+          SELECT speech_request_id AS "requestId"
+          FROM projection_thread_messages
+          WHERE message_id = ${messageId}
+        `;
+        assert.deepEqual(afterStale, [{ requestId: "request-current" }]);
+        assert.deepEqual(
+          yield* sql`SELECT speech_id FROM projection_message_speech WHERE message_id = ${messageId}`,
+          [],
+        );
+
+        yield* sql`
+          UPDATE projection_thread_messages
+          SET text = 'Edited reply'
+          WHERE message_id = ${messageId}
+        `;
+        yield* appendAndProject(
+          event(4, {
+            type: "thread.message-speech-completed",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current"),
+              speech: userSpeech,
+            },
+          }),
+        );
+        assert.deepEqual(
+          yield* sql<{ readonly requestId: string | null }>`
+            SELECT speech_request_id AS "requestId"
+            FROM projection_thread_messages
+            WHERE message_id = ${messageId}
+          `,
+          [{ requestId: null }],
+        );
+        assert.deepEqual(
+          yield* sql`SELECT speech_id FROM projection_message_speech WHERE message_id = ${messageId}`,
+          [],
+        );
+
+        yield* sql`
+          UPDATE projection_thread_messages
+          SET text = 'Written reply'
+          WHERE message_id = ${messageId}
+        `;
+        yield* appendAndProject(
+          event(5, {
+            type: "thread.message-speech-requested",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current-2"),
+              startedAt: "2026-01-01T00:00:05.000Z",
+            },
+          }),
+        );
+        yield* appendAndProject(
+          event(6, {
+            type: "thread.message-speech-completed",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-current-2"),
+              speech: userSpeech,
+            },
+          }),
+        );
+        const afterUser = yield* sql<{
+          readonly requestId: string | null;
+          readonly startedAt: string | null;
+        }>`
+          SELECT
+            speech_request_id AS "requestId",
+            speech_request_started_at AS "startedAt"
+          FROM projection_thread_messages
+          WHERE message_id = ${messageId}
+        `;
+        assert.deepEqual(afterUser, [{ requestId: null, startedAt: null }]);
+        assert.deepEqual(
+          yield* sql<{ readonly speechId: string; readonly origin: string }>`
+            SELECT speech_id AS "speechId", origin
+            FROM projection_message_speech
+            WHERE message_id = ${messageId}
+          `,
+          [{ speechId: "speech-user", origin: "user" }],
+        );
+
+        const agentSpeech = {
+          ...userSpeech,
+          speechId: "speech-agent",
+          transcript: "Agent recording",
+          scriptRecipeHash: undefined,
+          origin: "agent" as const,
+          createdAt: "2026-01-01T00:00:05.000Z",
+        };
+        yield* appendAndProject(
+          event(7, {
+            type: "thread.message-sent",
+            payload: {
+              threadId,
+              messageId,
+              role: "assistant",
+              text: "",
+              speech: agentSpeech,
+              turnId: TurnId.make("turn-1"),
+              streaming: false,
+              createdAt: agentSpeech.createdAt,
+              updatedAt: agentSpeech.createdAt,
+            },
+          }),
+        );
+        yield* appendAndProject(
+          event(8, {
+            type: "thread.message-speech-requested",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-after-agent"),
+              startedAt: "2026-01-01T00:00:06.000Z",
+            },
+          }),
+        );
+        yield* appendAndProject(
+          event(9, {
+            type: "thread.message-speech-completed",
+            payload: {
+              threadId,
+              messageId,
+              requestId: CommandId.make("request-after-agent"),
+              speech: { ...userSpeech, speechId: "speech-user-new" },
+            },
+          }),
+        );
+
+        assert.deepEqual(
+          yield* sql<{
+            readonly speechId: string;
+            readonly transcript: string;
+            readonly origin: string;
+            readonly recipeHash: string;
+          }>`
+            SELECT
+              speech_id AS "speechId",
+              transcript,
+              origin,
+              script_recipe_hash AS "recipeHash"
+            FROM projection_message_speech
+            WHERE message_id = ${messageId}
+          `,
+          [
+            {
+              speechId: "speech-agent",
+              transcript: "Agent recording",
+              origin: "agent",
+              recipeHash: "agent-voice-reply",
+            },
+          ],
+        );
+      }),
+    );
+  },
+);
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork-copy-")))(
   "OrchestrationProjectionPipeline fork copy",
@@ -140,6 +410,23 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           },
         });
         yield* eventStore.append({
+          type: "thread.message-speech-requested",
+          eventId: EventId.make("copy-speech-request-event"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("copy-speech-request-command"),
+          causationEventId: null,
+          correlationId: CommandId.make("copy-speech-request-command"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            messageId: MessageId.make("source-assistant"),
+            requestId: CommandId.make("copy-speech-request-command"),
+            startedAt: now,
+          },
+        });
+        yield* eventStore.append({
           type: "thread.fork-requested",
           eventId: EventId.make("copy-fork-event"),
           aggregateKind: "thread",
@@ -162,12 +449,16 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
           readonly threadId: string;
           readonly text: string;
           readonly attachmentsJson: string | null;
+          readonly speechRequestId: string | null;
+          readonly speechRequestStartedAt: string | null;
         }>`
         SELECT
           message_id AS "messageId",
           thread_id AS "threadId",
           text,
-          attachments_json AS "attachmentsJson"
+          attachments_json AS "attachmentsJson",
+          speech_request_id AS "speechRequestId",
+          speech_request_started_at AS "speechRequestStartedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${destinationThreadId}
         ORDER BY message_id
@@ -178,12 +469,16 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork
             threadId: destinationThreadId,
             text: "final response",
             attachmentsJson: null,
+            speechRequestId: null,
+            speechRequestStartedAt: null,
           },
           {
             messageId: `fork:${destinationThreadId}:source-message`,
             threadId: destinationThreadId,
             text: "keep this text",
             attachmentsJson: null,
+            speechRequestId: null,
+            speechRequestStartedAt: null,
           },
         ]);
 

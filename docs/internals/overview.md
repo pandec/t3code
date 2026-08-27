@@ -90,15 +90,17 @@ does not define turn end.
 
 ## Drainable workers
 
-Follow-up work runs asynchronously in queue-backed workers built on [`DrainableWorker`][worker]:
-[`ProviderRuntimeIngestion`][ingest] normalizes provider runtime streams into orchestration commands,
-[`ProviderCommandReactor`][cmd] dispatches provider calls in response to intent events, and
-[`CheckpointReactor`][checkpoint] captures and reverts workspace checkpoints.
+Follow-up work runs asynchronously in four drainable services. Three use queue-backed workers built
+on [`DrainableWorker`][worker]: [`ProviderRuntimeIngestion`][ingest] normalizes provider runtime
+streams into orchestration commands, [`ProviderCommandReactor`][cmd] dispatches provider calls in
+response to intent events, and [`CheckpointReactor`][checkpoint] captures and reverts workspace
+checkpoints. [`MessageSpeechReactor`][speech-reactor] runs listening-version synthesis concurrently
+across messages while serializing work for each message.
 
 `DrainableWorker` pairs a transactional queue with a transactional count of outstanding items.
-`enqueue` atomically offers and increments; processing always decrements. `drain` retries until the
-count reaches zero, so a test can await "queue empty and current item finished" instead of sleeping.
-Each of the three services exposes `drain` for exactly this.
+`enqueue` atomically offers and increments; processing always decrements. The speech reactor tracks
+its scoped jobs with the same transactional-count pattern. All four services expose `drain`, which
+retries until no queued or active work remains, so tests wait on completion instead of sleeping.
 
 Runtime receipts are a test-only mechanism. `RuntimeReceiptBusLive` in
 [`RuntimeReceiptBus.ts`][receipts] publishes nothing; only the test layer is PubSub-backed. Do not
@@ -148,5 +150,6 @@ already dispatch.
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
 [cmd]: ../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
 [checkpoint]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts
+[speech-reactor]: ../../apps/server/src/orchestration/Layers/MessageSpeechReactor.ts
 [receipts]: ../../apps/server/src/orchestration/Layers/RuntimeReceiptBus.ts
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts

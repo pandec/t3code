@@ -3,8 +3,9 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   MESSAGE_SPEECH_MAX_SOURCE_CHARS,
+  MessageSpeechFailureReason,
+  type MessageSpeechAttachment,
   type MessageSpeechSynthesisRequest,
-  type MessageSpeechSynthesisResult,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -24,6 +25,7 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
 import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
 
@@ -56,19 +58,33 @@ interface AssistantMessageRow {
   readonly isStreaming: number;
 }
 
+export type MessageSpeechSourceFailureReason = Extract<
+  MessageSpeechFailureReason,
+  "message_unavailable" | "source_too_long"
+>;
+
+export function getMessageSpeechSourceFailureReason(input: {
+  readonly role: string;
+  readonly isStreaming: boolean;
+  readonly text: string;
+  readonly maxSourceChars?: number;
+}): MessageSpeechSourceFailureReason | null {
+  const text = input.text.trim();
+  if (input.role !== "assistant" || input.isStreaming || text.length === 0) {
+    return "message_unavailable";
+  }
+  return text.length > (input.maxSourceChars ?? MESSAGE_SPEECH_MAX_SOURCE_CHARS)
+    ? "source_too_long"
+    : null;
+}
+
 export function isMessageSpeechSourceEligible(input: {
   readonly role: string;
   readonly isStreaming: boolean;
   readonly text: string;
   readonly maxSourceChars?: number;
 }): boolean {
-  const text = input.text.trim();
-  return (
-    input.role === "assistant" &&
-    !input.isStreaming &&
-    text.length > 0 &&
-    text.length <= (input.maxSourceChars ?? MESSAGE_SPEECH_MAX_SOURCE_CHARS)
-  );
+  return getMessageSpeechSourceFailureReason(input) === null;
 }
 
 export function getElevenLabsTtsCharacterLimit(model: string): number {
@@ -133,14 +149,7 @@ export function isMessageSpeechCacheReusable(input: {
 export class MessageSpeechError extends Schema.TaggedErrorClass<MessageSpeechError>()(
   "MessageSpeechError",
   {
-    reason: Schema.Literals([
-      "unavailable",
-      "message_unavailable",
-      "source_too_long",
-      "script_failed",
-      "provider_failed",
-      "storage_failed",
-    ]),
+    reason: MessageSpeechFailureReason,
   },
 ) {}
 
@@ -150,7 +159,8 @@ export class MessageSpeech extends Context.Service<
     readonly available: boolean;
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,
-    ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
+    ) => Effect.Effect<MessageSpeechAttachment, MessageSpeechError>;
+    readonly deleteAttachment: (speechId: string) => Effect.Effect<void, MessageSpeechError>;
   }
 >()("t3/voice/MessageSpeech") {}
 
@@ -183,6 +193,22 @@ export const layer = Layer.effect(
         relativePath: `${speechId}.mp3`,
       });
 
+    const findMessage = (messageId: string) =>
+      sql<AssistantMessageRow>`
+        SELECT
+          messages.message_id AS "messageId",
+          messages.thread_id AS "threadId",
+          messages.role,
+          messages.text,
+          messages.is_streaming AS "isStreaming"
+        FROM projection_thread_messages AS messages
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = messages.thread_id
+          AND threads.deleted_at IS NULL
+        WHERE messages.message_id = ${messageId}
+        LIMIT 1
+      `.pipe(Effect.mapError(storageError));
+
     const findCachedSpeech = (messageId: string) =>
       sql<MessageSpeechCacheRow>`
         SELECT
@@ -203,15 +229,21 @@ export const layer = Layer.effect(
         LIMIT 1
       `.pipe(Effect.mapError(storageError));
 
-    const toResult = (row: MessageSpeechCacheRow): MessageSpeechSynthesisResult => ({
-      messageId: row.messageId as MessageSpeechSynthesisResult["messageId"],
-      speechId: row.speechId,
-      transcript: row.transcript as MessageSpeechSynthesisResult["transcript"],
-      mimeType: SPEECH_MIME_TYPE,
-      sizeBytes: row.sizeBytes as MessageSpeechSynthesisResult["sizeBytes"],
-      origin: row.origin === "agent" ? "agent" : "user",
-      createdAt: row.createdAt as MessageSpeechSynthesisResult["createdAt"],
-    });
+    const toAttachment = (row: MessageSpeechCacheRow): MessageSpeechAttachment => {
+      const attachment = {
+        speechId: row.speechId,
+        transcript: row.transcript as MessageSpeechAttachment["transcript"],
+        mimeType: SPEECH_MIME_TYPE,
+        sizeBytes: row.sizeBytes as MessageSpeechAttachment["sizeBytes"],
+        sourceTextHash: row.sourceTextHash,
+        voiceId: row.voiceId,
+        ttsModel: row.ttsModel,
+        createdAt: row.createdAt as MessageSpeechAttachment["createdAt"],
+      };
+      return row.origin === "agent"
+        ? { ...attachment, origin: "agent", scriptRecipeHash: row.scriptRecipeHash }
+        : { ...attachment, origin: "user", scriptRecipeHash: row.scriptRecipeHash };
+    };
 
     const synthesizeUnlocked = Effect.fn("MessageSpeech.synthesizeUnlocked")(function* (
       request: MessageSpeechSynthesisRequest,
@@ -220,20 +252,7 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "unavailable" });
       }
 
-      const messageRows = yield* sql<AssistantMessageRow>`
-        SELECT
-          messages.message_id AS "messageId",
-          messages.thread_id AS "threadId",
-          messages.role,
-          messages.text,
-          messages.is_streaming AS "isStreaming"
-        FROM projection_thread_messages AS messages
-        INNER JOIN projection_threads AS threads
-          ON threads.thread_id = messages.thread_id
-          AND threads.deleted_at IS NULL
-        WHERE messages.message_id = ${request.messageId}
-        LIMIT 1
-      `.pipe(Effect.mapError(storageError));
+      const messageRows = yield* findMessage(request.messageId);
       const message = messageRows[0];
       if (!message) {
         return yield* new MessageSpeechError({ reason: "message_unavailable" });
@@ -257,23 +276,17 @@ export const layer = Layer.effect(
 
       const sourceText = message.text.trim();
       const ttsCharacterLimit = getElevenLabsTtsCharacterLimit(ttsModel);
-      if (
-        !isMessageSpeechSourceEligible({
-          role: message.role,
-          isStreaming: message.isStreaming !== 0,
-          text: sourceText,
-          maxSourceChars: ttsCharacterLimit,
-        })
-      ) {
-        if (sourceText.length > ttsCharacterLimit) {
-          return yield* new MessageSpeechError({ reason: "source_too_long" });
-        }
-        return yield* new MessageSpeechError({ reason: "message_unavailable" });
+      const sourceFailureReason = getMessageSpeechSourceFailureReason({
+        role: message.role,
+        isStreaming: message.isStreaming !== 0,
+        text: sourceText,
+        maxSourceChars: ttsCharacterLimit,
+      });
+      if (sourceFailureReason !== null) {
+        return yield* new MessageSpeechError({ reason: sourceFailureReason });
       }
 
-      const sourceTextHash = NodeCrypto.createHash("sha256")
-        .update(sourceText, "utf8")
-        .digest("hex");
+      const sourceTextHash = messageArtifactTextHash(sourceText);
       const scriptRecipeHash = NodeCrypto.createHash("sha256")
         .update(
           // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -291,7 +304,7 @@ export const layer = Layer.effect(
       // path must never overwrite it (or delete its file). Serve it as-is —
       // it already is the spoken form of this message.
       if (cached && cached.origin === "agent") {
-        return toResult(cached);
+        return toAttachment(cached);
       }
       if (
         cached &&
@@ -308,7 +321,7 @@ export const layer = Layer.effect(
           cachedPath &&
           (yield* fileSystem.exists(cachedPath).pipe(Effect.orElseSucceed(() => false)))
         ) {
-          return toResult(cached);
+          return toAttachment(cached);
         }
       }
 
@@ -338,6 +351,26 @@ export const layer = Layer.effect(
         text: transcript,
       }).pipe(Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })));
 
+      // Synthesis can be slow. Revalidate the exact source before committing an
+      // attachment so a message edit, deletion, or agent recording that landed
+      // while the provider ran wins deterministically.
+      const currentMessageRows = yield* findMessage(request.messageId);
+      const currentMessage = currentMessageRows[0];
+      if (
+        currentMessage === undefined ||
+        currentMessage.threadId !== message.threadId ||
+        currentMessage.role !== "assistant" ||
+        currentMessage.isStreaming !== 0 ||
+        currentMessage.text !== message.text
+      ) {
+        return yield* new MessageSpeechError({ reason: "message_unavailable" });
+      }
+      const currentSpeechRows = yield* findCachedSpeech(request.messageId);
+      const currentSpeech = currentSpeechRows[0];
+      if (currentSpeech?.origin === "agent") {
+        return toAttachment(currentSpeech);
+      }
+
       const speechId = createAttachmentId(message.threadId);
       const speechPath = speechId ? resolveSpeechPath(speechId) : null;
       if (!speechId || !speechPath) {
@@ -345,97 +378,9 @@ export const layer = Layer.effect(
       }
       const createdAt = DateTime.formatIso(yield* DateTime.now);
 
-      const upserted = yield* Effect.gen(function* () {
-        yield* fileSystem
-          .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
-          .pipe(
-            Effect.andThen(fileSystem.writeFile(speechPath, audioBytes)),
-            Effect.mapError(storageError),
-          );
-
-        const rows = yield* sql<MessageSpeechCacheRow>`
-        INSERT INTO projection_message_speech (
-          message_id,
-          thread_id,
-          speech_id,
-          transcript,
-          mime_type,
-          size_bytes,
-          source_text_hash,
-          script_recipe_hash,
-          voice_id,
-          tts_model,
-          origin,
-          created_at
-        )
-        SELECT
-          ${message.messageId},
-          ${message.threadId},
-          ${speechId},
-          ${transcript},
-          ${SPEECH_MIME_TYPE},
-          ${audioBytes.byteLength},
-          ${sourceTextHash},
-          ${scriptRecipeHash},
-          ${voiceId},
-          ${ttsModel},
-          ${"user"},
-          ${createdAt}
-        WHERE EXISTS (
-          SELECT 1
-          FROM projection_thread_messages AS messages
-          INNER JOIN projection_threads AS threads
-            ON threads.thread_id = messages.thread_id
-            AND threads.deleted_at IS NULL
-          WHERE messages.message_id = ${message.messageId}
-            AND messages.thread_id = ${message.threadId}
-            AND messages.role = 'assistant'
-            AND messages.is_streaming = 0
-            AND messages.text = ${message.text}
-        )
-        ON CONFLICT(message_id) DO UPDATE SET
-          thread_id = excluded.thread_id,
-          speech_id = excluded.speech_id,
-          transcript = excluded.transcript,
-          mime_type = excluded.mime_type,
-          size_bytes = excluded.size_bytes,
-          source_text_hash = excluded.source_text_hash,
-          script_recipe_hash = excluded.script_recipe_hash,
-          voice_id = excluded.voice_id,
-          tts_model = excluded.tts_model,
-          origin = excluded.origin,
-          created_at = excluded.created_at
-        WHERE projection_message_speech.origin <> 'agent'
-        RETURNING
-          message_id AS "messageId",
-          thread_id AS "threadId",
-          speech_id AS "speechId",
-          transcript,
-          mime_type AS "mimeType",
-          size_bytes AS "sizeBytes",
-          source_text_hash AS "sourceTextHash",
-          script_recipe_hash AS "scriptRecipeHash",
-          voice_id AS "voiceId",
-          tts_model AS "ttsModel",
-          origin,
-          created_at AS "createdAt"
-        `.pipe(Effect.mapError(storageError));
-
-        if (rows.length === 0) {
-          // Either the message vanished (the WHERE EXISTS guard failed) or an
-          // agent recording claimed this message while we were synthesizing
-          // and the conflict guard above refused to overwrite it. In the
-          // second case ours loses: serve the agent recording instead.
-          const currentRows = yield* findCachedSpeech(request.messageId);
-          const current = currentRows[0];
-          if (current && current.origin === "agent") {
-            yield* fileSystem.remove(speechPath, { force: true }).pipe(Effect.ignore);
-            return [current];
-          }
-          return yield* new MessageSpeechError({ reason: "message_unavailable" });
-        }
-        return rows;
-      }).pipe(
+      yield* fileSystem.makeDirectory(serverConfig.attachmentsDir, { recursive: true }).pipe(
+        Effect.andThen(fileSystem.writeFile(speechPath, audioBytes)),
+        Effect.mapError(storageError),
         Effect.onExit((exit) =>
           Exit.isSuccess(exit)
             ? Effect.void
@@ -443,33 +388,30 @@ export const layer = Layer.effect(
         ),
       );
 
-      const upsertedRow = upserted[0];
-      if (upsertedRow && upsertedRow.origin === "agent") {
-        return toResult(upsertedRow);
-      }
-
-      if (cached && cached.speechId !== speechId) {
-        const previousPath = resolveSpeechPath(cached.speechId);
-        if (previousPath) {
-          yield* fileSystem.remove(previousPath, { force: true }).pipe(Effect.ignore);
-        }
-      }
-
       return {
-        messageId: request.messageId,
         speechId,
         transcript,
         mimeType: SPEECH_MIME_TYPE,
         sizeBytes: audioBytes.byteLength,
+        sourceTextHash,
+        scriptRecipeHash,
+        voiceId,
+        ttsModel,
         origin: "user",
         createdAt,
-      } satisfies MessageSpeechSynthesisResult;
+      } satisfies MessageSpeechAttachment;
     });
 
     return MessageSpeech.of({
       available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
+      deleteAttachment: (speechId) => {
+        const speechPath = resolveSpeechPath(speechId);
+        return speechPath === null
+          ? Effect.fail(storageError())
+          : fileSystem.remove(speechPath, { force: true }).pipe(Effect.mapError(storageError));
+      },
     });
   }),
 );

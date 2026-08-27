@@ -7,6 +7,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { consumeOwnedMessageSpeechRequest } from "@t3tools/client-runtime/operations";
 import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   emptyAgentPanelModel,
@@ -135,8 +136,9 @@ import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { useAssetUrlState } from "../../assets/assetUrls";
-import { synthesizeMessageSpeech } from "../../state/voice";
+import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
+import { threadEnvironment } from "../../state/threads";
 import {
   beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
@@ -180,6 +182,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable: boolean;
+  textToSpeechPersistentJobs: boolean;
   messageSummariesAvailable: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -273,6 +276,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
   textToSpeechAvailable?: boolean;
+  textToSpeechPersistentJobs?: boolean;
   messageSummariesAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -322,6 +326,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   activeThreadEnvironmentId,
   textToSpeechAvailable = false,
+  textToSpeechPersistentJobs = false,
   messageSummariesAvailable = false,
   markdownCwd,
   resolvedTheme,
@@ -602,6 +607,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      textToSpeechPersistentJobs,
       messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
@@ -620,6 +626,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       textToSpeechAvailable,
+      textToSpeechPersistentJobs,
       messageSummariesAvailable,
       onRevertUserMessage,
       onImageExpand,
@@ -1262,8 +1269,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const requestPersistentSpeech = useAtomCommand(threadEnvironment.requestMessageSpeech, {
+    reportFailure: false,
+  });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [speechPhase, setSpeechPhase] = useState<"idle" | "preparing">("idle");
+  const [legacySpeechPhase, setLegacySpeechPhase] = useState<"idle" | "preparing">("idle");
   // null = untouched: agent voice replies start expanded, listening versions
   // start collapsed.
   const [speechExpandedState, setSpeechExpandedState] = useState<boolean | null>(null);
@@ -1288,10 +1298,39 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     readSessionArtifacts,
     readSessionArtifacts,
   );
-  const speech = sessionArtifacts.speech ?? row.message.speech ?? null;
+  const speech = ctx.textToSpeechPersistentJobs
+    ? (row.message.speech ?? null)
+    : (sessionArtifacts.speech ?? row.message.speech ?? null);
+  const speechPhase =
+    ctx.textToSpeechPersistentJobs && row.message.speechRequest !== undefined
+      ? "preparing"
+      : legacySpeechPhase;
   const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
   const isAgentVoiceReply = speech !== null && speech.origin === "agent";
   const speechExpanded = speechExpandedState ?? isAgentVoiceReply;
+  const previousSpeechRequestId = useRef(row.message.speechRequest?.requestId);
+  useEffect(() => {
+    if (!ctx.textToSpeechPersistentJobs) return;
+    const previousRequestId = previousSpeechRequestId.current;
+    const currentRequestId = row.message.speechRequest?.requestId;
+    previousSpeechRequestId.current = currentRequestId;
+    if (previousRequestId === undefined || currentRequestId !== undefined) return;
+    if (!consumeOwnedMessageSpeechRequest(previousRequestId)) return;
+    if (speech !== null) {
+      setSpeechExpandedState(true);
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Listening version unavailable",
+      description: messageSpeechFailureDescription(row.message.speechFailureReason),
+    });
+  }, [
+    ctx.textToSpeechPersistentJobs,
+    row.message.speechFailureReason,
+    row.message.speechRequest?.requestId,
+    speech,
+  ]);
   const [voiceReplyAudioUnavailable, setVoiceReplyAudioUnavailable] = useState(false);
   const onVoiceReplyAudioUnavailable = useCallback(() => setVoiceReplyAudioUnavailable(true), []);
   // A voice-only turn publishes its transcript as the message text; a
@@ -1323,14 +1362,38 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
   const prepareSpeech = useCallback(async () => {
     if (speechPhase === "preparing") return;
-    setSpeechPhase("preparing");
+    if (ctx.textToSpeechPersistentJobs) {
+      if (ctx.threadRef === null) {
+        toastManager.add({
+          type: "error",
+          title: "Listening version unavailable",
+          description: "T3 Code could not start audio preparation for this message. Try again.",
+        });
+        return;
+      }
+      const result = await requestPersistentSpeech({
+        environmentId: ctx.activeThreadEnvironmentId,
+        input: {
+          threadId: ctx.threadRef.threadId,
+          messageId: row.message.id,
+        },
+      });
+      if (result._tag === "Success") return;
+      toastManager.add({
+        type: "error",
+        title: "Listening version unavailable",
+        description: "T3 Code could not start audio preparation for this message. Try again.",
+      });
+      return;
+    }
+
+    setLegacySpeechPhase("preparing");
     const endRequest = beginMessageArtifactRequest(ctx.activeThreadEnvironmentId, row.message.id);
     try {
       const result = await synthesize({
         environmentId: ctx.activeThreadEnvironmentId,
         input: { messageId: row.message.id },
       });
-      setSpeechPhase("idle");
       if (result._tag === "Success") {
         rememberMessageSpeech(ctx.activeThreadEnvironmentId, row.message.text, result.value);
         setSpeechExpandedState(true);
@@ -1342,9 +1405,19 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         description: "T3 Code could not prepare audio for this message. Try again in a moment.",
       });
     } finally {
+      setLegacySpeechPhase("idle");
       endRequest();
     }
-  }, [ctx.activeThreadEnvironmentId, row.message.id, row.message.text, speechPhase, synthesize]);
+  }, [
+    ctx.activeThreadEnvironmentId,
+    ctx.textToSpeechPersistentJobs,
+    ctx.threadRef,
+    requestPersistentSpeech,
+    row.message.id,
+    row.message.text,
+    speechPhase,
+    synthesize,
+  ]);
 
   const onToggleSpeech = useCallback(async () => {
     if (speech !== null) {

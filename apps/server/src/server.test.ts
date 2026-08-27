@@ -119,6 +119,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadMessageRepository } from "./persistence/Services/ProjectionThreadMessages.ts";
 import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
@@ -424,6 +425,7 @@ const buildAppUnderTest = (options?: {
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     analyticsService?: Partial<AnalyticsService.AnalyticsService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
+    projectionThreadMessageRepository?: Partial<ProjectionThreadMessageRepository["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
@@ -898,6 +900,18 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(resourceTelemetryLayer),
+      Layer.provide(
+        Layer.mock(ProjectionThreadMessageRepository)({
+          upsert: () => Effect.void,
+          getByMessageId: () => Effect.succeed(Option.none()),
+          getSpeechByMessageId: () => Effect.succeed(Option.none()),
+          listPendingSpeechRequests: Effect.succeed([]),
+          listByThreadId: () => Effect.succeed([]),
+          deleteByThreadId: () => Effect.void,
+          copyTextMessagesForFork: () => Effect.void,
+          ...options?.layers?.projectionThreadMessageRepository,
+        }),
+      ),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
