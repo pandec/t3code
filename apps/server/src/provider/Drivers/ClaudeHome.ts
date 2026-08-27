@@ -79,7 +79,11 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     };
   }
   const homePath = config.homePath.trim();
-  if (homePath.length === 0) return resolvedBaseEnv;
+  // Copy instead of returning the base env by reference: when the base is
+  // `process.env`, a by-reference environment would observe the fork driver's
+  // temporary CLAUDE_CONFIG_DIR override (see ClaudeSessionFork.ts) at
+  // whatever moment a session start happens to snapshot it.
+  if (homePath.length === 0) return { ...resolvedBaseEnv };
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
   return {
     ...resolvedBaseEnv,

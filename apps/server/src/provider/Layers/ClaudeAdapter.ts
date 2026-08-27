@@ -91,7 +91,10 @@ import {
   listClaudeSessionTranscripts,
   readClaudeSessionTranscript,
 } from "../Drivers/ClaudeSessionImport.ts";
-import { forkClaudePersistedSession } from "../Drivers/ClaudeSessionFork.ts";
+import {
+  ClaudeSessionForkError,
+  forkClaudePersistedSession,
+} from "../Drivers/ClaudeSessionFork.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import {
@@ -390,11 +393,11 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime;
-  readonly forkSession?: (
-    sessionId: string,
-    options?: { readonly dir?: string },
-    environment?: NodeJS.ProcessEnv,
-  ) => Promise<{ readonly sessionId: string }>;
+  readonly forkSession?: (input: {
+    readonly sessionId: string;
+    readonly dir?: string;
+    readonly configDirPath: string;
+  }) => Promise<{ readonly sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -4990,7 +4993,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
     const sourceSessionId = resumeState.resume;
-    const forkOptions = input.cwd ? { dir: input.cwd } : undefined;
     // Same pinning as session start: a relative CLAUDE_CONFIG_DIR/HOME
     // resolves against the cwd the transcript lives under.
     const forkConfigDirPath = yield* resolveClaudeConfigDirPath(
@@ -4998,32 +5000,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       claudeEnvironment,
       input.cwd,
     ).pipe(Effect.provideService(Path.Path, path));
-    const forked = forkPersistedSession
-      ? yield* Effect.tryPromise({
-          try: () => forkPersistedSession(sourceSessionId, forkOptions, claudeEnvironment),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/fork",
-              detail: `Failed to fork Claude session '${sourceSessionId}'.`,
-              cause,
-            }),
-        })
-      : yield* forkClaudePersistedSession({
-          sessionId: sourceSessionId,
-          ...(forkOptions?.dir ? { dir: forkOptions.dir } : {}),
-          configDirPath: forkConfigDirPath,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/fork",
-                detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+    const forkInput = {
+      sessionId: sourceSessionId,
+      ...(input.cwd ? { dir: input.cwd } : {}),
+      configDirPath: forkConfigDirPath,
+    };
+    const forked = yield* (
+      forkPersistedSession
+        ? Effect.tryPromise({
+            try: () => forkPersistedSession(forkInput),
+            catch: (cause) =>
+              new ClaudeSessionForkError({
+                sessionId: sourceSessionId,
+                detail: "The injected fork dependency failed.",
                 cause,
               }),
-          ),
-        );
+          })
+        : forkClaudePersistedSession(forkInput)
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/fork",
+            detail: `Failed to fork Claude session '${sourceSessionId}'.`,
+            cause,
+          }),
+      ),
+    );
     return {
       resumeCursor: {
         threadId: input.destinationThreadId,
