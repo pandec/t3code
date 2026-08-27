@@ -1313,15 +1313,13 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect("forks a persisted Claude session without starting a live query", () => {
-    const forkCalls: Array<
-      readonly [string, { readonly dir?: string } | undefined, NodeJS.ProcessEnv | undefined]
-    > = [];
-    const forkSession: NonNullable<ClaudeAdapterLiveOptions["forkSession"]> = async (
-      sessionId,
-      options,
-      environment,
-    ) => {
-      forkCalls.push([sessionId, options, environment]);
+    const forkCalls: Array<{
+      readonly sessionId: string;
+      readonly dir?: string;
+      readonly configDirPath: string;
+    }> = [];
+    const forkSession: NonNullable<ClaudeAdapterLiveOptions["forkSession"]> = async (input) => {
+      forkCalls.push(input);
       return { sessionId: "22222222-2222-4222-8222-222222222222" };
     };
     const harness = makeHarness({
@@ -1342,12 +1340,11 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      assert.equal(forkCalls[0]?.[0], "11111111-1111-4111-8111-111111111111");
-      assert.deepEqual(forkCalls[0]?.[1], { dir: "/tmp/project" });
-      assert.equal(
-        forkCalls[0]?.[2]?.CLAUDE_CONFIG_DIR,
-        NodePath.join(NodeOS.homedir(), ".claude-fork-work"),
-      );
+      assert.deepEqual(forkCalls[0], {
+        sessionId: "11111111-1111-4111-8111-111111111111",
+        dir: "/tmp/project",
+        configDirPath: NodePath.join(NodeOS.homedir(), ".claude-fork-work"),
+      });
       assert.deepEqual(result.resumeCursor, {
         threadId: "destination-thread",
         resume: "22222222-2222-4222-8222-222222222222",
