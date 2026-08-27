@@ -46,25 +46,49 @@ export interface PendingListeningStartGate {
 }
 
 /**
+ * A pending intent that outlives its usefulness must expire rather than fire
+ * surprise audio much later: one minute comfortably covers a slow asset RPC,
+ * and anything slower (an environment mid-disconnect, hours offline) should
+ * require a fresh tap. The cap also covers the disconnect case, so no
+ * separate cancel-on-disconnect wiring exists.
+ */
+export const PENDING_LISTENING_START_TTL_MS = 60_000;
+
+/**
  * The play-before-URL intent, owned by the controller instead of a message
  * row: tapping play on a slow link and navigating away must still start the
- * audio once the signed URL lands. A newer play supersedes it, and thread
- * deletion cancels it.
+ * audio once the signed URL lands. A newer play supersedes it, thread
+ * deletion or archival cancels it, becoming blocked (recording) cancels it,
+ * and it expires after the TTL.
  */
-export function createPendingListeningStart(): PendingListeningStartGate {
+export function createPendingListeningStart(options?: {
+  /** Refuses to arm while blocked and cancels when blocking starts. */
+  readonly coordinator?: ListeningPlaybackCoordinator;
+  readonly ttlMs?: number;
+}): PendingListeningStartGate {
+  const coordinator = options?.coordinator ?? null;
+  const ttlMs = options?.ttlMs ?? PENDING_LISTENING_START_TTL_MS;
   let generation = 0;
   let pending: {
     readonly generation: number;
     readonly track: ListeningTrackRef;
     readonly cancelWatch: (() => void) | null;
   } | null = null;
+  let expiryTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<() => void>();
 
   const notify = () => {
     for (const listener of listeners) listener();
   };
 
+  const clearExpiryTimer = () => {
+    if (expiryTimer === null) return;
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+  };
+
   const clear = () => {
+    clearExpiryTimer();
     if (pending === null) return;
     const cancelWatch = pending.cancelWatch;
     pending = null;
@@ -72,17 +96,26 @@ export function createPendingListeningStart(): PendingListeningStartGate {
     notify();
   };
 
+  // Recording blocks playback without auto-resume; a pending start firing
+  // mid-recording (or after it) would be exactly that auto-resume.
+  coordinator?.subscribe(() => {
+    if (coordinator.getSnapshot().blocked) clear();
+  });
+
   return {
     begin: (input) => {
       clear();
+      if (coordinator !== null && coordinator.getSnapshot().blocked) return;
       generation += 1;
       const startedGeneration = generation;
       // Armed before the watch starts: a synchronously-cached URL resolves
       // inside the watch() call and must find the pending entry in place.
       pending = { generation: startedGeneration, track: input.track, cancelWatch: null };
+      expiryTimer = setTimeout(clear, ttlMs);
       notify();
       const cancelWatch = input.watch((url) => {
         if (pending === null || pending.generation !== startedGeneration) return;
+        clearExpiryTimer();
         pending = null;
         notify();
         if (url !== null) input.play(url);

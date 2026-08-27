@@ -1,6 +1,7 @@
 import {
   createListeningPlaybackCoordinator,
   isThreadListeningLoaded,
+  pauseThreadListening,
   planListeningTrackStart,
   threadListeningState,
   type ListeningTrackRef,
@@ -25,8 +26,15 @@ export function setListeningRecordingActive(owner: symbol, active: boolean): voi
  */
 let sharedAudio: HTMLAudioElement | null = null;
 // Progress publishes are throttled: timeupdate can fire faster than the
-// 4Hz the transport needs, and every publish wakes the subscribed view.
+// transport needs (one publish per 200ms), and every publish wakes the
+// subscribed view.
 let lastProgressPublishMs = 0;
+// Re-resolves a current signed URL for the loaded track, registry-based and
+// component-independent: the row hands it over on play so the sidebar can
+// resume long after the row unmounted and the old URL expired.
+type ListeningUrlWatcher = (onResolved: (url: string | null) => void) => () => void;
+let loadedTrackUrlWatcher: ListeningUrlWatcher | null = null;
+let cancelResumeWatch: (() => void) | null = null;
 
 const pauseSharedAudio = () => {
   sharedAudio?.pause();
@@ -79,7 +87,11 @@ function ensureSharedAudio(): HTMLAudioElement {
 export function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
   readonly url: string;
+  /** Re-resolves a fresh signed URL for this track; kept for sidebar resume. */
+  readonly watchUrl?: ListeningUrlWatcher;
 }): void {
+  cancelResumeWatch?.();
+  cancelResumeWatch = null;
   const element = ensureSharedAudio();
   const plan = planListeningTrackStart({
     loadedTrack: listeningPlayback.getSnapshot().track,
@@ -88,6 +100,9 @@ export function playListeningTrack(input: {
     durationSeconds: element.duration,
   });
   if (!listeningPlayback.activate(input.track.speechId, pauseSharedAudio, input.track)) return;
+  if (input.watchUrl !== undefined || !plan.sameTrack) {
+    loadedTrackUrlWatcher = input.watchUrl ?? null;
+  }
 
   if (element.src !== input.url) {
     element.src = input.url;
@@ -114,7 +129,13 @@ export function seekListeningTrack(seconds: number): void {
   element.currentTime = Math.max(0, seconds);
 }
 
-/** Play/pause toggle for the loaded track, usable from any sidebar row. */
+/**
+ * Play/pause toggle for the loaded track, usable from any sidebar row.
+ * Resume re-resolves a current signed URL through the watcher the row handed
+ * over on play: after a long pause the loaded URL may have expired, and the
+ * plan-based play path swap-restores the position on a fresh one. Without a
+ * watcher it falls back to replaying the loaded source.
+ */
 export function toggleLoadedListeningTrack(): void {
   const track = listeningPlayback.getSnapshot().track;
   if (track === null) return;
@@ -124,7 +145,31 @@ export function toggleLoadedListeningTrack(): void {
   }
   const element = sharedAudio;
   if (element === null || element.src === "") return;
-  playListeningTrack({ track, url: element.src });
+  const watchUrl = loadedTrackUrlWatcher;
+  if (watchUrl === null) {
+    playListeningTrack({ track, url: element.src });
+    return;
+  }
+  cancelResumeWatch?.();
+  cancelResumeWatch = watchUrl((url) => {
+    cancelResumeWatch = null;
+    if (url === null) return;
+    const current = listeningPlayback.getSnapshot().track;
+    // Only resume what the user asked to resume: a track swapped or started
+    // playing while the URL resolved wins over this stale intent.
+    if (current === null || current.speechId !== track.speechId || current.playing) return;
+    playListeningTrack({ track: current, url, watchUrl });
+  });
+}
+
+/**
+ * Pauses playback owned by the thread without clearing it (used when it is
+ * archived): archived rows leave every list surface that carries the pause
+ * control, so the audio must not keep playing — but the recording stays
+ * loaded and resumable.
+ */
+export function pauseListeningForThread(environmentId: string, threadId: string): void {
+  pauseThreadListening(listeningPlayback, environmentId, threadId);
 }
 
 /**
@@ -136,6 +181,9 @@ export function stopListeningForThread(environmentId: string, threadId: string):
   if (!isThreadListeningLoaded(snapshot, environmentId, threadId)) return;
   const track = snapshot.track;
   if (track === null) return;
+  cancelResumeWatch?.();
+  cancelResumeWatch = null;
+  loadedTrackUrlWatcher = null;
   const element = sharedAudio;
   if (element !== null) {
     element.pause();

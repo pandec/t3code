@@ -140,7 +140,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
-import { useAssetUrlState } from "../../assets/assetUrls";
+import { useAssetUrlState, watchAssetUrl } from "../../assets/assetUrls";
 import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { threadEnvironment } from "../../state/threads";
@@ -1685,14 +1685,22 @@ function AssistantSpeechPlayer({
     [environmentId, threadId, messageId, speech.speechId],
   );
 
+  const speechId = speech.speechId;
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
       listeningPlayback.pauseActive();
       return;
     }
     if (audioUrl === null || playbackUnavailable) return;
-    playListeningTrack({ track: trackRef, url: audioUrl });
-  }, [audioUrl, isPlaying, playbackUnavailable, trackRef]);
+    playListeningTrack({
+      track: trackRef,
+      url: audioUrl,
+      // Kept by the controller so sidebar resume can re-resolve a fresh
+      // signed URL long after this row unmounted.
+      watchUrl: (onResolved) =>
+        watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
+    });
+  }, [audioUrl, environmentId, isPlaying, playbackUnavailable, speechId, trackRef]);
 
   const playerLabel = primary ? "voice reply" : "listening version";
 
@@ -1757,6 +1765,7 @@ function AssistantSpeechPlayer({
               <div className="min-w-0 flex-1">
                 <input
                   aria-label="Playback position"
+                  aria-valuetext="Not started"
                   className="settings-slider block w-full"
                   disabled
                   max={1}
@@ -1765,12 +1774,20 @@ function AssistantSpeechPlayer({
                   type="range"
                   value={0}
                 />
-                <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">0:00 / 0:00</p>
+                {/* Duration is unknown until the recording loads; a fake
+                    0:00 total would be a lie. Same width under tabular-nums. */}
+                <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                  --:-- / --:--
+                </p>
               </div>
             )}
           </div>
           {blocked ? (
             <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
+          ) : playbackUnavailable ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Playback is unavailable in this view.
+            </p>
           ) : null}
           <ListeningSpeedControl speed={speed} />
         </>
@@ -1796,6 +1813,7 @@ function listeningSliderFillStyle(ratio: number): CSSProperties {
 }
 
 const LISTENING_SEEK_JUMP_S = 5;
+const LISTENING_SEEK_PAGE_JUMP_S = 15;
 
 /**
  * Live position for the loaded recording. Mounted only in the active row so
@@ -1806,29 +1824,38 @@ function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
   const { currentTime, duration } = useListeningPlaybackProgress();
   // While dragging, the local scrub value owns the thumb: seeking commits on
   // release, so store publishes (delayed over relay/tunnel) cannot snap the
-  // thumb back mid-drag.
-  const [scrubTime, setScrubTime] = useState<number | null>(null);
+  // thumb back mid-drag. The ref mirrors the state so commit reads the
+  // pending value without side effects inside a state updater.
+  const [scrubTime, setScrubTimeState] = useState<number | null>(null);
+  const scrubTimeRef = useRef<number | null>(null);
+  const setScrubTime = useCallback((value: number | null) => {
+    scrubTimeRef.current = value;
+    setScrubTimeState(value);
+  }, []);
   const playedTime = Math.min(currentTime, duration > 0 ? duration : currentTime);
   const shownTime = scrubTime ?? playedTime;
   const ratio = duration > 0 ? Math.min(1, shownTime / duration) : 0;
 
   const commitScrub = useCallback(() => {
-    setScrubTime((pending) => {
-      if (pending !== null) seekListeningTrack(pending);
-      return null;
-    });
-  }, []);
+    const pending = scrubTimeRef.current;
+    setScrubTime(null);
+    if (pending !== null) seekListeningTrack(pending);
+  }, [setScrubTime]);
   const handleSeekKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       // Native range steps are useless for audio (1s per press); arrows jump
-      // 5s instead, applied immediately so keyboard seeking never waits on a
-      // pointer-style commit.
+      // 5s and PageUp/PageDown 15s instead, applied immediately so keyboard
+      // seeking never waits on a pointer-style commit.
       const jump =
         event.key === "ArrowRight" || event.key === "ArrowUp"
           ? LISTENING_SEEK_JUMP_S
           : event.key === "ArrowLeft" || event.key === "ArrowDown"
             ? -LISTENING_SEEK_JUMP_S
-            : null;
+            : event.key === "PageUp"
+              ? LISTENING_SEEK_PAGE_JUMP_S
+              : event.key === "PageDown"
+                ? -LISTENING_SEEK_PAGE_JUMP_S
+                : null;
       if (jump !== null) {
         event.preventDefault();
         const upperBound = duration > 0 ? duration : playedTime;
@@ -1848,7 +1875,7 @@ function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
         setScrubTime(null);
       }
     },
-    [duration, playedTime],
+    [duration, playedTime, setScrubTime],
   );
 
   return (

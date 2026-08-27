@@ -1,5 +1,6 @@
 import {
   isThreadListeningLoaded,
+  pauseThreadListening,
   planListeningTrackStart,
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
@@ -23,7 +24,7 @@ let sharedPlayer: AudioPlayer | null = null;
 let loadedUrl: string | null = null;
 let appliedSpeed: number | null = null;
 
-const pendingStart = createPendingListeningStart();
+const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
 
 const pauseSharedPlayer = () => {
   try {
@@ -139,6 +140,17 @@ export function toggleLoadedListeningTrack(): void {
   }
   if (loadedUrl === null) return;
   void playListeningTrack({ track, url: loadedUrl });
+}
+
+/**
+ * Pauses playback owned by the thread without clearing it (used when it is
+ * archived): archived rows leave every list surface that carries the pause
+ * control, so the audio must not keep playing — but the recording stays
+ * loaded and resumable. A pending start for the thread is dropped too.
+ */
+export function pauseListeningForThread(environmentId: string, threadId: string): void {
+  pendingStart.cancelForThread(environmentId, threadId);
+  pauseThreadListening(listeningPlayback, environmentId, threadId);
 }
 
 /**

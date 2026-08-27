@@ -10,6 +10,7 @@ import {
   LISTENING_SPEED_PRESETS,
   listeningSpeedSpokenLabel,
   nudgeListeningSpeed,
+  pauseThreadListening,
   planListeningTrackStart,
   startListeningPlayback,
   threadListeningState,
@@ -173,6 +174,21 @@ describe("listening playback active track", () => {
     expect(snapshotListener).not.toHaveBeenCalled();
   });
 
+  it("pauses on archive only when the thread owns the loaded track", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const pause = vi.fn();
+    coordinator.activate(trackA.speechId, pause, trackA);
+    coordinator.setTrackPlaying(true);
+
+    pauseThreadListening(coordinator, "env-1", "thread-other");
+    expect(pause).not.toHaveBeenCalled();
+
+    pauseThreadListening(coordinator, trackA.environmentId, trackA.threadId);
+    expect(pause).toHaveBeenCalledOnce();
+    // Paused, not cleared: the recording stays loaded and resumable.
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+  });
+
   it("resolves the now-playing indicator only for the playing thread", () => {
     const coordinator = createListeningPlaybackCoordinator();
     expect(isThreadListeningPlaying(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(false);
@@ -315,6 +331,76 @@ describe("listening playback startup generations", () => {
     finishFirstAudioMode.resolve();
     await first;
     expect(playFirst).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale rejecting attempt release the newer attempt's ownership", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const pause = vi.fn();
+    const firstAudioModeStarted = deferred();
+    const failFirstAudioMode = deferred();
+
+    const first = startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: async () => {
+        firstAudioModeStarted.resolve();
+        await failFirstAudioMode.promise;
+        throw new Error("stale attempt failed");
+      },
+      applyPlaybackRate: vi.fn(),
+      play: vi.fn(),
+    });
+    await firstAudioModeStarted.promise;
+
+    // A newer attempt for the same recording completes and plays.
+    await startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: vi.fn(async () => undefined),
+      applyPlaybackRate: vi.fn(),
+      play: vi.fn(),
+    });
+    coordinator.setTrackPlaying(true);
+
+    failFirstAudioMode.resolve();
+    await first;
+    // Ownership and track survive: recording-block pauses must still reach
+    // the player, and the lists must still show the playing indicator.
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+    coordinator.pauseActive();
+    expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it("releases ownership and clears the track when the current attempt fails", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const pause = vi.fn();
+
+    await startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: vi.fn(async () => {
+        throw new Error("audio mode failed");
+      }),
+      applyPlaybackRate: vi.fn(),
+      play: vi.fn(),
+    });
+
+    // No dead paused indicator: the failed start unregistered its track.
+    expect(coordinator.getSnapshot().track).toBeNull();
+    coordinator.pauseActive();
+    expect(pause).not.toHaveBeenCalled();
   });
 
   it("aborts a startup attempt when ownership was released mid-flight", async () => {

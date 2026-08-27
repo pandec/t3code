@@ -282,6 +282,70 @@ describe("pending listening start", () => {
     expect(play).not.toHaveBeenCalled();
   });
 
+  it("refuses to arm while playback is blocked", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const gate = createPendingListeningStart({ coordinator });
+    const watch = vi.fn(() => vi.fn());
+    coordinator.setBlocked(true);
+
+    gate.begin({ track: pendingTrack, watch, play: vi.fn() });
+    expect(watch).not.toHaveBeenCalled();
+    expect(gate.getPendingSpeechId()).toBeNull();
+  });
+
+  it("cancels an armed start when recording blocks playback", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const gate = createPendingListeningStart({ coordinator });
+    const cancelWatch = vi.fn();
+    const play = vi.fn();
+    let deliver: (url: string | null) => void = () => undefined;
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliver = onResolved;
+        return cancelWatch;
+      },
+      play,
+    });
+    coordinator.setBlocked(true);
+    expect(cancelWatch).toHaveBeenCalledOnce();
+    expect(gate.getPendingSpeechId()).toBeNull();
+
+    // A late resolution must not fire surprise audio mid-recording.
+    deliver("https://example.test/a.mp3");
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("expires after its lifetime instead of firing surprise audio later", () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createPendingListeningStart({ ttlMs: 1_000 });
+      const cancelWatch = vi.fn();
+      const play = vi.fn();
+      let deliver: (url: string | null) => void = () => undefined;
+
+      gate.begin({
+        track: pendingTrack,
+        watch: (onResolved) => {
+          deliver = onResolved;
+          return cancelWatch;
+        },
+        play,
+      });
+      vi.advanceTimersByTime(999);
+      expect(gate.getPendingSpeechId()).toBe("speech-a");
+      vi.advanceTimersByTime(1);
+      expect(cancelWatch).toHaveBeenCalledOnce();
+      expect(gate.getPendingSpeechId()).toBeNull();
+
+      deliver("https://example.test/a.mp3");
+      expect(play).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not play when resolution fails, and notifies subscribers", () => {
     const gate = createPendingListeningStart();
     const listener = vi.fn();

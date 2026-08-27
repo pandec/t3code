@@ -24,7 +24,7 @@ import {
   pinOrderKeyBetween,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { stopListeningForThread } from "../state/listeningPlayback";
+import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -294,6 +294,9 @@ export function useThreadActions() {
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
+      // Archived rows leave every list surface carrying the pause control,
+      // so the thread's audio pauses (but stays loaded and resumable).
+      pauseListeningForThread(threadRef.environmentId, threadRef.threadId);
       threadActionUndoHistory.arm({
         action: "archive",
         threadRef,

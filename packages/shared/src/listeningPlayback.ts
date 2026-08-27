@@ -311,6 +311,27 @@ export async function startListeningPlayback(input: {
     input.applyPlaybackRate(coordinator.getSnapshot().speed);
     input.play();
   } catch {
+    // Only the current attempt may unwind: a stale rejection must not
+    // release ownership (or clear the track) now held by a newer attempt.
+    if (startupGenerations.get(coordinator) !== generation) return;
     coordinator.release(input.id, input.pause);
+    // A failed start must not leave a dead paused indicator in the lists:
+    // the registered track has no working audio behind it.
+    if (input.track !== undefined) coordinator.setTrack(null);
   }
+}
+
+/**
+ * Pauses playback when the thread owns the loaded track, leaving it loaded
+ * and resumable. Used when the thread is archived: its rows leave every list
+ * surface that carries the pause control, so the audio must not keep playing
+ * with no in-app affordance.
+ */
+export function pauseThreadListening(
+  coordinator: ListeningPlaybackCoordinator,
+  environmentId: string,
+  threadId: string,
+): void {
+  if (!isThreadListeningLoaded(coordinator.getSnapshot(), environmentId, threadId)) return;
+  coordinator.pauseActive();
 }
