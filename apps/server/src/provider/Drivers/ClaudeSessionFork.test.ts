@@ -22,8 +22,8 @@ const withTempConfigDir = <A, E>(
       }),
   );
 
-const writeSourceTranscript = (configDirPath: string) => {
-  const projectDirectory = NodePath.join(configDirPath, "projects", "fixture-project");
+const writeSourceTranscript = (configDirPath: string, projectKey = "fixture-project") => {
+  const projectDirectory = NodePath.join(configDirPath, "projects", projectKey);
   NodeFS.mkdirSync(projectDirectory, { recursive: true });
   NodeFS.writeFileSync(
     NodePath.join(projectDirectory, `${SOURCE_SESSION_ID}.jsonl`),
@@ -77,29 +77,45 @@ it.effect("serializes concurrent forks so each targets its own config dir", () =
   withTempConfigDir((firstConfigDir) =>
     withTempConfigDir((secondConfigDir) =>
       Effect.gen(function* () {
-        const firstProject = writeSourceTranscript(firstConfigDir);
-        const secondProject = writeSourceTranscript(secondConfigDir);
+        const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+        // Passing `dir` makes the SDK resolve it (awaited realpath) before it
+        // reads CLAUDE_CONFIG_DIR, so an unserialized implementation would
+        // read the other fork's override and fail to find its transcript.
+        const makeWorkspace = (configDirPath: string) => {
+          const workspace = NodeFS.realpathSync(
+            NodeFS.mkdtempSync(NodePath.join(configDirPath, "ws-")),
+          );
+          const projectKey = workspace.replace(/[^a-zA-Z0-9]/g, "-");
+          return { workspace, projectDirectory: writeSourceTranscript(configDirPath, projectKey) };
+        };
+        const first = makeWorkspace(firstConfigDir);
+        const second = makeWorkspace(secondConfigDir);
 
-        const [first, second] = yield* Effect.all(
+        const [firstFork, secondFork] = yield* Effect.all(
           [
             forkClaudePersistedSession({
               sessionId: SOURCE_SESSION_ID,
+              dir: first.workspace,
               configDirPath: firstConfigDir,
             }),
             forkClaudePersistedSession({
               sessionId: SOURCE_SESSION_ID,
+              dir: second.workspace,
               configDirPath: secondConfigDir,
             }),
           ],
           { concurrency: "unbounded" },
         );
 
-        expect(NodeFS.existsSync(NodePath.join(firstProject, `${first.sessionId}.jsonl`))).toBe(
-          true,
-        );
-        expect(NodeFS.existsSync(NodePath.join(secondProject, `${second.sessionId}.jsonl`))).toBe(
-          true,
-        );
+        expect(
+          NodeFS.existsSync(NodePath.join(first.projectDirectory, `${firstFork.sessionId}.jsonl`)),
+        ).toBe(true);
+        expect(
+          NodeFS.existsSync(
+            NodePath.join(second.projectDirectory, `${secondFork.sessionId}.jsonl`),
+          ),
+        ).toBe(true);
+        expect(process.env.CLAUDE_CONFIG_DIR).toBe(originalConfigDir);
       }),
     ),
   ),

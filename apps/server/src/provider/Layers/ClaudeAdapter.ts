@@ -4990,13 +4990,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
     const sourceSessionId = resumeState.resume;
-    // Same pinning as session start: a relative CLAUDE_CONFIG_DIR/HOME
-    // resolves against the cwd the transcript lives under.
-    const forkConfigDirPath = yield* resolveClaudeConfigDirPath(
-      claudeSettings,
-      claudeEnvironment,
-      input.cwd,
-    ).pipe(Effect.provideService(Path.Path, path));
+    // Prefer the config dir the live source session pinned at start: a
+    // relative CLAUDE_CONFIG_DIR/HOME resolves against the cwd, and the
+    // session's cwd may have moved (worktrees) since the transcript was
+    // rooted. Stopped sessions re-resolve against the thread's cwd, the same
+    // resolution a restart of that session would perform.
+    const forkConfigDirPath =
+      sessions.get(input.sourceThreadId)?.configDirPath ??
+      (yield* resolveClaudeConfigDirPath(claudeSettings, claudeEnvironment, input.cwd).pipe(
+        Effect.provideService(Path.Path, path),
+      ));
     const forkInput = {
       sessionId: sourceSessionId,
       ...(input.cwd ? { dir: input.cwd } : {}),
