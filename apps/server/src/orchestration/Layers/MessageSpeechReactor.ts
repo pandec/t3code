@@ -132,14 +132,16 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
       ),
     );
 
-  const readProjection = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  const retryProjectionRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.retry({
         times: MESSAGE_SPEECH_PROJECTION_READ_RETRIES,
         schedule: MESSAGE_SPEECH_PROJECTION_READ_RETRY_SCHEDULE,
       }),
-      Effect.result,
     );
+
+  const readProjection = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    retryProjectionRead(effect).pipe(Effect.result);
 
   const completeAfterProjectionFailure = Effect.fn("completeMessageSpeechAfterProjectionFailure")(
     function* (input: {
@@ -358,7 +360,7 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
     }).pipe(Effect.uninterruptible);
 
   const findInterruptedRequests = Effect.fn("findInterruptedMessageSpeechRequests")(function* () {
-    return yield* projectionThreadMessages.listPendingSpeechRequests;
+    return yield* retryProjectionRead(projectionThreadMessages.listPendingSpeechRequests);
   });
 
   const clearInterruptedRequests = Effect.fn("clearInterruptedMessageSpeechRequests")(function* (
@@ -381,14 +383,7 @@ export const makeMessageSpeechReactor = Effect.gen(function* () {
   });
 
   const start: MessageSpeechReactorShape["start"] = Effect.fn("start")(function* () {
-    const interruptedRequests = yield* findInterruptedRequests().pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
-        return Effect.logWarning("message speech reactor failed to find interrupted requests", {
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.as([] as ReadonlyArray<PendingMessageSpeech>));
-      }),
-    );
+    const interruptedRequests = yield* findInterruptedRequests();
 
     yield* forkParked(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {

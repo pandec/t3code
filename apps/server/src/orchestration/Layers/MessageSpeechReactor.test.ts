@@ -9,8 +9,11 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -561,6 +564,60 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         assert.equal(completion.failureReason, "storage_failed");
       }
       assert.deepEqual(yield* Ref.get(deletedSpeechIds), [generated.speechId]);
+    }),
+  );
+
+  it.effect("fails startup when pending-request reconciliation reads keep failing", () =>
+    Effect.gen(function* () {
+      const messages = yield* Ref.make<ReadonlyMap<MessageId, ProjectionThreadMessage>>(new Map());
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const events = yield* Queue.unbounded<OrchestrationEvent>();
+      const attempts = yield* Ref.make(0);
+      const attemptedReads = yield* Queue.unbounded<number>();
+      const baseRepository = repositoryService(messages);
+      const listPendingSpeechRequests: ProjectionThreadMessageRepositoryShape["listPendingSpeechRequests"] =
+        Effect.gen(function* () {
+          const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
+          yield* Queue.offer(attemptedReads, attempt);
+          return yield* new PersistenceSqlError({
+            operation: "list pending speech requests",
+          });
+        });
+      const repository: ProjectionThreadMessageRepositoryShape = {
+        ...baseRepository,
+        listPendingSpeechRequests,
+      };
+      const layer = Layer.mergeAll(
+        Layer.succeed(OrchestrationEngineService, engineService(events, commands)),
+        Layer.succeed(ProjectionThreadMessageRepository, repository),
+        Layer.succeed(MessageSpeech, {
+          available: true,
+          synthesize: () => Effect.die("startup must fail before synthesis"),
+          deleteAttachment: () => Effect.void,
+        }),
+        Layer.succeed(RuntimeReceiptBus, {
+          publish: () => Effect.void,
+          streamEventsForTest: Stream.empty,
+        }),
+      );
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* MessageSpeechReactor;
+        const startFiber = yield* reactor.start().pipe(Effect.exit, Effect.forkChild);
+        assert.equal(yield* Queue.take(attemptedReads), 1);
+        yield* TestClock.adjust("50 millis");
+        assert.equal(yield* Queue.take(attemptedReads), 2);
+        yield* TestClock.adjust("100 millis");
+        assert.equal(yield* Queue.take(attemptedReads), 3);
+        const startExit = yield* Fiber.join(startFiber);
+        assert.isTrue(Exit.isFailure(startExit));
+        if (Exit.isFailure(startExit)) {
+          assert.instanceOf(Cause.squash(startExit.cause), PersistenceSqlError);
+        }
+      }).pipe(
+        Effect.provide(MessageSpeechReactorLive.pipe(Layer.provideMerge(layer))),
+        Effect.scoped,
+      );
     }),
   );
 

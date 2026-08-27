@@ -5,6 +5,7 @@ import {
   type MessageSpeechAttachment,
   type MessageSpeechFailureReason,
   type MessageSpeechSynthesisResult,
+  type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -24,12 +25,15 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
-import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
+import { validateAndDispatchMessageSpeechRequest } from "../orchestration/messageSpeechRequest.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
+import {
+  ProjectionThreadMessageRepository,
+  type ProjectionThreadMessageRepositoryShape,
+} from "../persistence/Services/ProjectionThreadMessages.ts";
 import { getMessageSpeechSourceFailureReason, MessageSpeech } from "./MessageSpeech.ts";
 import { VoiceTranscription } from "./VoiceTranscription.ts";
 
@@ -37,6 +41,22 @@ type MessageSpeechCompletedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.message-speech-completed" }
 >;
+
+type MessageSpeechRequestCommand = Extract<
+  OrchestrationCommand,
+  { type: "thread.message.speech.request" }
+>;
+
+export const dispatchLegacyMessageSpeechRequest = (
+  repository: ProjectionThreadMessageRepositoryShape,
+  orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">,
+  command: MessageSpeechRequestCommand,
+) =>
+  validateAndDispatchMessageSpeechRequest(
+    repository,
+    command,
+    orchestrationEngine.dispatch(command),
+  );
 
 export const subscribeToMessageSpeechCompletion = Effect.fn("subscribeToMessageSpeechCompletion")(
   function* (
@@ -85,7 +105,6 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
     const crypto = yield* Crypto.Crypto;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionThreadMessages = yield* ProjectionThreadMessageRepository;
-    const requestLocks = yield* makeMessageArtifactLockCoordinator();
 
     const failForSpeechReason = (reason: MessageSpeechFailureReason, cause: unknown) => {
       switch (reason) {
@@ -232,96 +251,90 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
             );
           }
 
-          return yield* requestLocks.withMessageLock(
-            args.payload.messageId,
-            Effect.gen(function* () {
-              const initial = yield* readSpeechState(args.payload.messageId);
-              if (initial.speech !== undefined) {
-                return toSynthesisResult(args.payload.messageId, initial.speech);
-              }
-              if (
-                initial.message.speechRequestId !== null &&
-                initial.message.speechRequestId !== undefined
-              ) {
-                return yield* joinPendingSpeech(initial.message.threadId, args.payload.messageId);
-              }
+          return yield* Effect.gen(function* () {
+            const initial = yield* readSpeechState(args.payload.messageId);
+            if (initial.speech !== undefined) {
+              return toSynthesisResult(args.payload.messageId, initial.speech);
+            }
+            if (
+              initial.message.speechRequestId !== null &&
+              initial.message.speechRequestId !== undefined
+            ) {
+              return yield* joinPendingSpeech(initial.message.threadId, args.payload.messageId);
+            }
 
-              const completionFiber = yield* subscribeToCompletion(
-                initial.message.threadId,
+            const completionFiber = yield* subscribeToCompletion(
+              initial.message.threadId,
+              args.payload.messageId,
+            );
+            const beforeDispatch = yield* readSpeechState(args.payload.messageId);
+            if (beforeDispatch.speech !== undefined) {
+              yield* Fiber.interrupt(completionFiber);
+              return toSynthesisResult(args.payload.messageId, beforeDispatch.speech);
+            }
+            if (
+              beforeDispatch.message.speechRequestId !== null &&
+              beforeDispatch.message.speechRequestId !== undefined
+            ) {
+              yield* Fiber.interrupt(completionFiber);
+              return yield* joinPendingSpeech(
+                beforeDispatch.message.threadId,
                 args.payload.messageId,
               );
-              const beforeDispatch = yield* readSpeechState(args.payload.messageId);
-              if (beforeDispatch.speech !== undefined) {
-                yield* Fiber.interrupt(completionFiber);
-                return toSynthesisResult(args.payload.messageId, beforeDispatch.speech);
+            }
+
+            const requestId = CommandId.make(
+              `server:message-speech-request:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+            );
+            const dispatchExit = yield* Effect.exit(
+              dispatchLegacyMessageSpeechRequest(projectionThreadMessages, orchestrationEngine, {
+                type: "thread.message.speech.request",
+                commandId: requestId,
+                threadId: beforeDispatch.message.threadId,
+                messageId: args.payload.messageId,
+              }),
+            );
+            if (Exit.isFailure(dispatchExit)) {
+              yield* Fiber.interrupt(completionFiber);
+              const recovered = yield* readSpeechState(args.payload.messageId);
+              if (recovered.speech !== undefined) {
+                return toSynthesisResult(args.payload.messageId, recovered.speech);
               }
               if (
-                beforeDispatch.message.speechRequestId !== null &&
-                beforeDispatch.message.speechRequestId !== undefined
+                recovered.message.speechRequestId !== null &&
+                recovered.message.speechRequestId !== undefined
               ) {
-                yield* Fiber.interrupt(completionFiber);
-                return yield* joinPendingSpeech(
-                  beforeDispatch.message.threadId,
-                  args.payload.messageId,
-                );
+                return yield* joinPendingSpeech(recovered.message.threadId, args.payload.messageId);
               }
+              return yield* failEnvironmentInternal("speech_provider_failed", dispatchExit.cause);
+            }
 
-              const requestId = CommandId.make(
-                `server:message-speech-request:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+            const completion = yield* Fiber.join(completionFiber).pipe(
+              Effect.timeout(Duration.minutes(4)),
+              Effect.catchCause((cause) =>
+                failEnvironmentInternal("speech_provider_failed", cause),
+              ),
+            );
+            const event = Option.getOrUndefined(completion);
+            const afterDispatch = yield* readSpeechState(args.payload.messageId);
+            if (afterDispatch.speech !== undefined) {
+              return toSynthesisResult(args.payload.messageId, afterDispatch.speech);
+            }
+            if (
+              afterDispatch.message.speechRequestId !== null &&
+              afterDispatch.message.speechRequestId !== undefined
+            ) {
+              return yield* joinPendingSpeech(
+                afterDispatch.message.threadId,
+                args.payload.messageId,
               );
-              const dispatchExit = yield* Effect.exit(
-                orchestrationEngine.dispatch({
-                  type: "thread.message.speech.request",
-                  commandId: requestId,
-                  threadId: beforeDispatch.message.threadId,
-                  messageId: args.payload.messageId,
-                }),
-              );
-              if (Exit.isFailure(dispatchExit)) {
-                yield* Fiber.interrupt(completionFiber);
-                const recovered = yield* readSpeechState(args.payload.messageId);
-                if (recovered.speech !== undefined) {
-                  return toSynthesisResult(args.payload.messageId, recovered.speech);
-                }
-                if (
-                  recovered.message.speechRequestId !== null &&
-                  recovered.message.speechRequestId !== undefined
-                ) {
-                  return yield* joinPendingSpeech(
-                    recovered.message.threadId,
-                    args.payload.messageId,
-                  );
-                }
-                return yield* failEnvironmentInternal("speech_provider_failed", dispatchExit.cause);
-              }
-
-              const completion = yield* Fiber.join(completionFiber).pipe(
-                Effect.timeout(Duration.minutes(4)),
-                Effect.catchCause((cause) =>
-                  failEnvironmentInternal("speech_provider_failed", cause),
-                ),
-              );
-              const event = Option.getOrUndefined(completion);
-              const afterDispatch = yield* readSpeechState(args.payload.messageId);
-              if (afterDispatch.speech !== undefined) {
-                return toSynthesisResult(args.payload.messageId, afterDispatch.speech);
-              }
-              if (
-                afterDispatch.message.speechRequestId !== null &&
-                afterDispatch.message.speechRequestId !== undefined
-              ) {
-                return yield* joinPendingSpeech(
-                  afterDispatch.message.threadId,
-                  args.payload.messageId,
-                );
-              }
-              const failureReason = event?.payload.failureReason ?? "provider_failed";
-              return yield* failForSpeechReason(
-                failureReason,
-                new Error(`Persistent speech synthesis failed: ${failureReason}`),
-              );
-            }),
-          );
+            }
+            const failureReason = event?.payload.failureReason ?? "provider_failed";
+            return yield* failForSpeechReason(
+              failureReason,
+              new Error(`Persistent speech synthesis failed: ${failureReason}`),
+            );
+          });
         }),
       );
   }),

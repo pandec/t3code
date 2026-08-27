@@ -10,6 +10,8 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
+
 /**
  * OrchestrationReactorShape - Service API for orchestration reactor lifecycle.
  */
@@ -20,7 +22,7 @@ export interface OrchestrationReactorShape {
    * The returned effect must be run in a scope so all worker fibers can be
    * finalized on shutdown.
    */
-  readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  readonly start: () => Effect.Effect<void, ProjectionRepositoryError, Scope.Scope>;
 }
 
 /**
