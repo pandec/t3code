@@ -116,6 +116,8 @@ const STRUCTURAL_EVENT_TYPES = {
   "thread.runtime-mode-set": true,
   "thread.interaction-mode-set": true,
   "thread.message-sent": true,
+  "thread.message-speech-requested": true,
+  "thread.message-speech-completed": true,
   "thread.turn-start-requested": true,
   "thread.turn-interrupt-requested": true,
   "thread.approval-response-requested": false,

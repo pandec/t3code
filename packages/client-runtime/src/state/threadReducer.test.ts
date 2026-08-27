@@ -720,6 +720,99 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("applies only correlated persistent speech completions", () => {
+      const threadWithMessage: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("msg-speech"),
+            role: "assistant",
+            text: "Written reply",
+            speech: {
+              messageId: MessageId.make("msg-speech"),
+              speechId: "speech-agent",
+              transcript: "Agent recording",
+              mimeType: "audio/mpeg",
+              sizeBytes: 123,
+              origin: "agent",
+              createdAt: "2026-04-01T06:00:00.000Z",
+            },
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:00:00.000Z",
+          },
+        ],
+      };
+      const requested = applyThreadDetailEvent(threadWithMessage, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-01T06:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-speech-requested",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-speech"),
+          requestId: CommandId.make("cmd-speech-request"),
+          startedAt: "2026-04-01T06:01:00.000Z",
+        },
+      });
+      expect(requested.kind).toBe("updated");
+      if (requested.kind !== "updated") return;
+      expect(requested.thread.messages[0]?.speechRequest?.requestId).toBe("cmd-speech-request");
+      expect(requested.thread.updatedAt).toBe(baseThread.updatedAt);
+
+      const stale = applyThreadDetailEvent(requested.thread, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T06:02:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-speech-completed",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-speech"),
+          requestId: CommandId.make("cmd-stale"),
+        },
+      });
+      expect(stale.kind).toBe("unchanged");
+
+      const completed = applyThreadDetailEvent(requested.thread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:03:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-speech-completed",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-speech"),
+          requestId: CommandId.make("cmd-speech-request"),
+          speech: {
+            speechId: "speech-user",
+            transcript: "Listening version",
+            mimeType: "audio/mpeg",
+            sizeBytes: 456,
+            sourceTextHash: "source-hash",
+            scriptRecipeHash: "recipe-hash",
+            voiceId: "voice-1",
+            ttsModel: "model-1",
+            origin: "user",
+            createdAt: "2026-04-01T06:03:00.000Z",
+          },
+        },
+      });
+      expect(completed.kind).toBe("updated");
+      if (completed.kind === "updated") {
+        expect(completed.thread.messages[0]?.speechRequest).toBeUndefined();
+        expect(completed.thread.messages[0]?.speech).toMatchObject({
+          speechId: "speech-agent",
+          origin: "agent",
+        });
+      }
+    });
+
     it("updates latestTurn for assistant messages with a turn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,

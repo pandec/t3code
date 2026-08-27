@@ -5,12 +5,14 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
   EnvironmentId,
   MessageId,
+  MessageSpeechRequest,
   MessageSpeechSynthesisResult,
   MessageSummaryResult,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
+import { consumeOwnedMessageSpeechRequest } from "@t3tools/client-runtime/operations";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   formatListeningSpeed,
@@ -144,6 +146,7 @@ import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
+import { threadEnvironment } from "../../state/threads";
 import {
   beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
@@ -239,6 +242,7 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textToSpeechAvailable?: boolean;
+  readonly textToSpeechPersistentJobs?: boolean;
   readonly messageSummariesAvailable?: boolean;
 }
 
@@ -1070,8 +1074,10 @@ function renderFeedEntry(
   props: Pick<
     ThreadFeedProps,
     | "environmentId"
+    | "threadId"
     | "skills"
     | "textToSpeechAvailable"
+    | "textToSpeechPersistentJobs"
     | "messageSummariesAvailable"
     | "steerPendingMessageIds"
   > & {
@@ -1298,13 +1304,16 @@ function renderFeedEntry(
         {showAssistantMeta ? (
           <AssistantMessageMetaAndArtifacts
             environmentId={props.environmentId}
+            threadId={props.threadId}
             messageId={message.id}
             messageText={message.text}
+            speechRequest={message.speechRequest ?? null}
             persistedSummary={message.generatedSummary ?? null}
             persistedSpeech={message.speech ?? null}
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             textToSpeechAvailable={props.textToSpeechAvailable === true}
+            textToSpeechPersistentJobs={props.textToSpeechPersistentJobs === true}
             messageSummariesAvailable={props.messageSummariesAvailable === true}
             markdownStyles={styles}
             skills={props.skills}
@@ -1397,13 +1406,16 @@ function AssistantAgentVoiceReply(props: {
 
 function AssistantMessageMetaAndArtifacts(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
   readonly messageId: MessageId;
   readonly messageText: string;
+  readonly speechRequest: MessageSpeechRequest | null;
   readonly persistedSummary: MessageSummaryResult | null;
   readonly persistedSpeech: MessageSpeechSynthesisResult | null;
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly textToSpeechAvailable: boolean;
+  readonly textToSpeechPersistentJobs: boolean;
   readonly messageSummariesAvailable: boolean;
   readonly markdownStyles: MarkdownStyleSet;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
@@ -1411,8 +1423,11 @@ function AssistantMessageMetaAndArtifacts(props: {
   readonly renderImage: MarkdownImageRenderer;
 }) {
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  const requestPersistentSpeech = useAtomCommand(threadEnvironment.requestMessageSpeech, {
+    reportFailure: false,
+  });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [preparing, setPreparing] = useState(false);
+  const [legacyPreparing, setLegacyPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [summaryPreparing, setSummaryPreparing] = useState(false);
@@ -1430,23 +1445,60 @@ function AssistantMessageMetaAndArtifacts(props: {
     readSessionArtifacts,
     readSessionArtifacts,
   );
-  const speech = sessionArtifacts.speech ?? props.persistedSpeech;
+  const speech = props.textToSpeechPersistentJobs
+    ? props.persistedSpeech
+    : (sessionArtifacts.speech ?? props.persistedSpeech);
+  const preparing = props.textToSpeechPersistentJobs
+    ? props.speechRequest !== null
+    : legacyPreparing;
   const summary = sessionArtifacts.summary ?? props.persistedSummary;
   // Agent voice replies render their own player above the message; the meta
   // row must not offer a second one (or a regeneration that would replace the
   // agent's recording with a synthesized listening version).
   const isAgentVoiceReply = speech !== null && speech.origin === "agent";
+  const previousSpeechRequestId = useRef(props.speechRequest?.requestId);
+  useEffect(() => {
+    if (!props.textToSpeechPersistentJobs) return;
+    const previousRequestId = previousSpeechRequestId.current;
+    const currentRequestId = props.speechRequest?.requestId;
+    previousSpeechRequestId.current = currentRequestId;
+    if (previousRequestId === undefined || currentRequestId !== undefined) return;
+    if (!consumeOwnedMessageSpeechRequest(previousRequestId)) return;
+    if (speech !== null) {
+      setExpanded(true);
+      return;
+    }
+    Alert.alert(
+      "Listening version unavailable",
+      "T3 Code could not prepare audio for this message. Try again in a moment.",
+    );
+  }, [props.speechRequest?.requestId, props.textToSpeechPersistentJobs, speech]);
 
   const prepareSpeech = useCallback(async () => {
     if (preparing) return;
-    setPreparing(true);
+    if (props.textToSpeechPersistentJobs) {
+      const result = await requestPersistentSpeech({
+        environmentId: props.environmentId,
+        input: {
+          threadId: props.threadId,
+          messageId: props.messageId,
+        },
+      });
+      if (result._tag === "Success") return;
+      Alert.alert(
+        "Listening version unavailable",
+        "T3 Code could not start audio preparation for this message. Try again.",
+      );
+      return;
+    }
+
+    setLegacyPreparing(true);
     const endRequest = beginMessageArtifactRequest(props.environmentId, props.messageId);
     try {
       const result = await synthesize({
         environmentId: props.environmentId,
         input: { messageId: props.messageId },
       });
-      setPreparing(false);
       if (result._tag === "Success") {
         rememberMessageSpeech(props.environmentId, props.messageText, result.value);
         setExpanded(true);
@@ -1457,9 +1509,19 @@ function AssistantMessageMetaAndArtifacts(props: {
         "T3 Code could not prepare audio for this message. Try again in a moment.",
       );
     } finally {
+      setLegacyPreparing(false);
       endRequest();
     }
-  }, [preparing, props.environmentId, props.messageId, props.messageText, synthesize]);
+  }, [
+    preparing,
+    props.environmentId,
+    props.messageId,
+    props.messageText,
+    props.textToSpeechPersistentJobs,
+    props.threadId,
+    requestPersistentSpeech,
+    synthesize,
+  ]);
 
   const onPressSpeech = useCallback(async () => {
     if (speech !== null) {
@@ -2356,6 +2418,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentColors,
       messageSummariesAvailable: props.messageSummariesAvailable,
       textToSpeechAvailable: props.textToSpeechAvailable,
+      textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
       userBubbleColor,
       viewportWidth,
     }),
@@ -2367,6 +2430,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentColors,
       props.messageSummariesAvailable,
       props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
       userBubbleColor,
       viewportWidth,
     ],
@@ -2916,8 +2980,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        threadId: props.threadId,
         messageSummariesAvailable: props.messageSummariesAvailable,
         textToSpeechAvailable: props.textToSpeechAvailable,
+        textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
         steerPendingMessageIds: props.steerPendingMessageIds,
         copiedRowId,
         expandedWorkRows,
@@ -2960,6 +3026,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.environmentId,
       props.messageSummariesAvailable,
       props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
+      props.threadId,
       props.steerPendingMessageIds,
       props.skills,
       renderMarkdownImage,

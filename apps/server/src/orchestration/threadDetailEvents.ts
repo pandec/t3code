@@ -21,6 +21,8 @@ import type { OrchestrationEvent } from "@t3tools/contracts";
  */
 export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",
+  "thread.message-speech-requested",
+  "thread.message-speech-completed",
   "thread.history-imported",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",

@@ -900,6 +900,7 @@ const makeWsRpcLayer = (
           },
           textToSpeech: {
             available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
+            persistentJobs: true,
           },
           shellResumeCompletionMarker: true,
           ...(fileManagerRevealKind === undefined

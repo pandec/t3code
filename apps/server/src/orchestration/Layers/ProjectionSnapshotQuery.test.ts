@@ -1,5 +1,6 @@
 import {
   CheckpointRef,
+  CommandId,
   EventId,
   MessageId,
   ProjectId,
@@ -264,6 +265,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           input_origin,
           generation_model_selection_json,
           generation_cwd,
+          speech_request_id,
+          speech_request_started_at,
           is_streaming,
           created_at,
           updated_at
@@ -277,6 +280,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'voice-transcription',
           '{"instanceId":"codex","model":"gpt-5.6-sol"}',
           '/workspace/project',
+          'cmd-speech-request',
+          '2026-02-24T00:00:04.500Z',
           0,
           '2026-02-24T00:00:04.000Z',
           '2026-02-24T00:00:05.000Z'
@@ -544,6 +549,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",
               updatedAt: "2026-02-24T00:00:05.000Z",
+              speechRequest: {
+                requestId: CommandId.make("cmd-speech-request"),
+                startedAt: "2026-02-24T00:00:04.500Z",
+              },
               generatedSummary: {
                 messageId: asMessageId("message-1"),
                 summary: "A persisted summary.",

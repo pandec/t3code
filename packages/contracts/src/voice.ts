@@ -79,6 +79,10 @@ export const MessageSpeechAttachment = Schema.Struct({
   mimeType: Schema.Literal("audio/mpeg"),
   sizeBytes: NonNegativeInt,
   sourceTextHash: TrimmedNonEmptyString,
+  // Optional so agent voice-reply events persisted before listening-version
+  // jobs still decode. User-origin jobs persist their actual script recipe so
+  // replayed projections retain cache identity.
+  scriptRecipeHash: Schema.optional(TrimmedNonEmptyString),
   voiceId: TrimmedNonEmptyString,
   ttsModel: TrimmedNonEmptyString,
   origin: MessageSpeechOrigin,

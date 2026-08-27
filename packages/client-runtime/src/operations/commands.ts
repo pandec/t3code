@@ -10,6 +10,10 @@ import * as Effect from "effect/Effect";
 
 import type { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import {
+  forgetOwnedMessageSpeechRequest,
+  markOwnedMessageSpeechRequest,
+} from "./messageSpeechRequests.ts";
+import {
   type EnvironmentRpcFailure,
   type EnvironmentRpcSuccess,
   type EnvironmentRpcUnavailableError,
@@ -54,6 +58,11 @@ export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
+export type RequestMessageSpeechInput = CommandInput<"thread.message.speech.request">;
+export interface RequestMessageSpeechResult {
+  readonly commandId: CommandId;
+  readonly receipt: EnvironmentRpcSuccess<DispatchTag>;
+}
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
@@ -298,6 +307,21 @@ export const setThreadInteractionMode: (input: SetThreadInteractionModeInput) =>
       createdAt: metadata.createdAt,
     });
   });
+
+export const requestMessageSpeech = Effect.fn("EnvironmentCommands.requestMessageSpeech")(
+  function* (input: RequestMessageSpeechInput) {
+    const nextCommandId = yield* commandId(input);
+    markOwnedMessageSpeechRequest(nextCommandId);
+    const receipt = yield* dispatch({
+      ...input,
+      type: "thread.message.speech.request",
+      commandId: nextCommandId,
+    }).pipe(
+      Effect.tapError(() => Effect.sync(() => forgetOwnedMessageSpeechRequest(nextCommandId))),
+    );
+    return { commandId: nextCommandId, receipt } satisfies RequestMessageSpeechResult;
+  },
+);
 
 export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.startThreadTurn",

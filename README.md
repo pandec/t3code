@@ -44,7 +44,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### Voice
 
 - **Voice dictation** — ElevenLabs-powered voice transcription in the composer, including mobile.
-- **Message listening** — optional spoken versions of assistant messages with playback controls; per-message summaries and speech artifacts are persisted, with mobile playback support and server-side ElevenLabs model and voice overrides.
+- **Message listening.** Optional spoken versions of assistant messages with playback controls on web, desktop, and mobile. Listening requests run as server-owned jobs, so pending state survives navigation, reconnects, and server restarts and appears on every connected client. Finished recordings are event-sourced and rebuild with the thread projection. Per-message summaries keep their existing local behavior, and the server still supports ElevenLabs model and voice overrides.
 - **Agent voice replies** — agents get a `voice_reply` tool that turns a script they write for the ear into an ElevenLabs recording, attached to their final message when the turn completes; calling the tool again in the same turn appends another segment, and they play in order as one recording. Web and mobile then lead with the player and fold the written reply behind a "Show written reply" toggle; a turn that ends with no written message publishes the transcript as the message text. Needs `ELEVENLABS_API_KEY` on the server; the switch in Settings → Extras (on by default) withholds the tool from newly started agent sessions.
 
 ### Agents & skills

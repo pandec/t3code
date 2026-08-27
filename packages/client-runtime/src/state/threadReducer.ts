@@ -624,6 +624,63 @@ function applyThreadDetailEventUnretained(
       };
     }
 
+    case "thread.message-speech-requested": {
+      if (!thread.messages.some((message) => message.id === event.payload.messageId)) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === event.payload.messageId
+              ? {
+                  ...message,
+                  speechRequest: {
+                    requestId: event.payload.requestId,
+                    startedAt: event.payload.startedAt,
+                  },
+                }
+              : message,
+          ),
+        },
+      };
+    }
+
+    case "thread.message-speech-completed": {
+      let changed = false;
+      const messages = thread.messages.map((message) => {
+        if (
+          message.id !== event.payload.messageId ||
+          message.speechRequest?.requestId !== event.payload.requestId
+        ) {
+          return message;
+        }
+        changed = true;
+        const { speechRequest: _, ...withoutRequest } = message;
+        const speech = event.payload.speech;
+        if (
+          speech === undefined ||
+          (withoutRequest.speech?.origin === "agent" && speech.origin === "user")
+        ) {
+          return withoutRequest;
+        }
+        return {
+          ...withoutRequest,
+          speech: {
+            messageId: event.payload.messageId,
+            speechId: speech.speechId,
+            transcript: speech.transcript,
+            mimeType: speech.mimeType,
+            sizeBytes: speech.sizeBytes,
+            origin: speech.origin,
+            createdAt: speech.createdAt,
+          },
+        };
+      });
+      return changed ? { kind: "updated", thread: { ...thread, messages } } : { kind: "unchanged" };
+    }
+
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
       // Leaving the "running" session status is the turn-end signal: settle a

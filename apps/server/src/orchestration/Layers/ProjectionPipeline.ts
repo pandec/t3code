@@ -569,10 +569,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const serverConfig = yield* ServerConfig;
 
     /**
-     * Materializes an agent-staged voice recording carried on a
-     * `thread.message-sent` event. The MP3 was written to the attachments
-     * directory before the command was dispatched, so this only records
-     * metadata — which also makes event replay rebuild the row correctly.
+     * Materializes speech metadata carried by an orchestration event. The MP3
+     * was written to the attachments directory before the command was
+     * dispatched, so event replay can rebuild the projection without running
+     * synthesis again.
      * Deliberately no file deletion here: a projector apply can run inside a
      * transaction that later rolls back, and replay revisits old events, so
      * destroying a replaced recording's file from this path would be unsafe.
@@ -607,7 +607,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           ${speech.mimeType},
           ${speech.sizeBytes},
           ${speech.sourceTextHash},
-          ${"agent-voice-reply"},
+          ${speech.scriptRecipeHash ?? (speech.origin === "agent" ? "agent-voice-reply" : "legacy-user-listening-version")},
           ${speech.voiceId},
           ${speech.ttsModel},
           ${speech.origin},
@@ -625,6 +625,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           tts_model = excluded.tts_model,
           origin = excluded.origin,
           created_at = excluded.created_at
+        WHERE excluded.origin = 'agent'
+          OR projection_message_speech.origin <> 'agent'
       `.pipe(
           Effect.catchTag("SqlError", (sqlError) =>
             Effect.fail(
@@ -1280,6 +1282,44 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
           }
           if (event.payload.speech !== undefined && event.payload.role === "assistant") {
+            yield* upsertMessageSpeechFromEvent({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              speech: event.payload.speech,
+            });
+          }
+          return;
+        }
+
+        case "thread.message-speech-requested": {
+          const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(existingMessage)) return;
+          yield* projectionThreadMessageRepository.upsert({
+            ...existingMessage.value,
+            speechRequestId: event.payload.requestId,
+            speechRequestStartedAt: event.payload.startedAt,
+          });
+          return;
+        }
+
+        case "thread.message-speech-completed": {
+          const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (
+            Option.isNone(existingMessage) ||
+            existingMessage.value.speechRequestId !== event.payload.requestId
+          ) {
+            return;
+          }
+          yield* projectionThreadMessageRepository.upsert({
+            ...existingMessage.value,
+            speechRequestId: null,
+            speechRequestStartedAt: null,
+          });
+          if (event.payload.speech !== undefined) {
             yield* upsertMessageSpeechFromEvent({
               messageId: event.payload.messageId,
               threadId: event.payload.threadId,
