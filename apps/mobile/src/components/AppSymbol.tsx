@@ -79,6 +79,8 @@ import {
   IconTrash,
   IconTypography,
   IconUserCircle,
+  IconVolume,
+  IconVolume2,
   IconWifiOff,
   IconWorld,
   IconX,
@@ -180,6 +182,10 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "sidebar.left": IconLayoutSidebar,
   "sidebar.right": IconLayoutSidebarRight,
   "slider.horizontal.3": IconAdjustmentsHorizontal,
+  // IconVolume2 (cone + small arc), not IconVolume3: 3 is Tabler's MUTE
+  // glyph and would read as "muted" for a merely paused recording.
+  "speaker.fill": IconVolume2,
+  "speaker.wave.2.fill": IconVolume,
   "square.and.pencil": IconEdit,
   "square.grid.2x2": IconApps,
   "square.split.2x1": IconLayoutColumns,

@@ -18,11 +18,13 @@ const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
+  formatListeningClock,
   formatListeningSpeed,
   LISTENING_SPEED_MAX,
   LISTENING_SPEED_MIN,
   LISTENING_SPEED_PRESETS,
   listeningSpeedSpokenLabel,
+  type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
 import {
   createContext,
@@ -36,6 +38,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -72,6 +75,8 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  PauseIcon,
+  PlayIcon,
   PlusIcon,
   SearchIcon,
   SquarePenIcon,
@@ -135,7 +140,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
-import { useAssetUrlState } from "../../assets/assetUrls";
+import { useAssetUrlState, watchAssetUrl } from "../../assets/assetUrls";
 import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { threadEnvironment } from "../../state/threads";
@@ -149,7 +154,13 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
-import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
+import {
+  listeningPlayback,
+  playListeningTrack,
+  seekListeningTrack,
+  useListeningPlaybackProgress,
+  useListeningPlaybackSnapshot,
+} from "../../state/listeningPlayback";
 
 import {
   buildInlineTerminalContextText,
@@ -1469,6 +1480,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {isAgentVoiceReply && speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
+            threadId={ctx.threadRef?.threadId ?? null}
+            messageId={row.message.id}
             speech={speech}
             onRetry={null}
             onAudioUnavailable={onVoiceReplyAudioUnavailable}
@@ -1613,6 +1626,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {speech !== null && speechExpanded && !isAgentVoiceReply ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
+            threadId={ctx.threadRef?.threadId ?? null}
+            messageId={row.message.id}
             speech={speech}
             onRetry={() => void prepareSpeech()}
           />
@@ -1624,12 +1639,19 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
 function AssistantSpeechPlayer({
   environmentId,
+  threadId,
+  messageId,
   speech,
   onRetry,
   onAudioUnavailable,
   primary = false,
 }: {
   environmentId: EnvironmentId;
+  /** Null when the route key failed to parse. Playback is disabled then:
+      app-scoped audio without a thread identity would play with no
+      indicator (and no control) anywhere in the thread lists. */
+  threadId: string | null;
+  messageId: string;
   speech: MessageSpeechSynthesisResult;
   /**
    * null hides the regenerate action. Agent recordings must not offer it:
@@ -1642,8 +1664,7 @@ function AssistantSpeechPlayer({
   /** Agent voice replies render the player as the message's main content. */
   primary?: boolean;
 }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const { blocked, speed } = useListeningPlaybackSnapshot();
+  const { blocked, speed, track } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(environmentId, {
     _tag: "attachment",
     attachmentId: speech.speechId,
@@ -1653,21 +1674,35 @@ function AssistantSpeechPlayer({
     if (audioUnavailable) onAudioUnavailable?.();
   }, [audioUnavailable, onAudioUnavailable]);
 
-  const pauseAudio = useCallback(() => {
-    audioRef.current?.pause();
-  }, []);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (audio === null) return;
-    audio.preservesPitch = true;
-    audio.playbackRate = speed;
-  }, [audioUrlState, speed]);
-
-  useEffect(
-    () => () => listeningPlayback.release(speech.speechId, pauseAudio),
-    [pauseAudio, speech.speechId],
+  // This row is a view over the app-scoped player: the recording keeps
+  // playing when the row unmounts, and remounting binds back to it.
+  const isActiveTrack = track !== null && track.speechId === speech.speechId;
+  const isPlaying = isActiveTrack && track.playing;
+  const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
+  const playbackUnavailable = threadId === null;
+  const trackRef = useMemo<ListeningTrackRef>(
+    () => ({ environmentId, threadId: threadId ?? "", messageId, speechId: speech.speechId }),
+    [environmentId, threadId, messageId, speech.speechId],
   );
+
+  const speechId = speech.speechId;
+  const handleTogglePlayback = useCallback(() => {
+    if (isPlaying) {
+      listeningPlayback.pauseActive();
+      return;
+    }
+    if (audioUrl === null || playbackUnavailable) return;
+    playListeningTrack({
+      track: trackRef,
+      url: audioUrl,
+      // Kept by the controller so sidebar resume can re-resolve a fresh
+      // signed URL long after this row unmounted.
+      watchUrl: (onResolved) =>
+        watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
+    });
+  }, [audioUrl, environmentId, isPlaying, playbackUnavailable, speechId, trackRef]);
+
+  const playerLabel = primary ? "voice reply" : "listening version";
 
   return (
     <div
@@ -1700,26 +1735,59 @@ function AssistantSpeechPlayer({
         </div>
       ) : (
         <>
-          <audio
-            ref={audioRef}
-            aria-disabled={blocked}
-            className={cn("h-9 w-full", blocked && "pointer-events-none opacity-60")}
-            controls
-            onLoadedMetadata={(event) => {
-              event.currentTarget.preservesPitch = true;
-              event.currentTarget.playbackRate = speed;
-            }}
-            onPlay={(event) => {
-              if (!listeningPlayback.activate(speech.speechId, pauseAudio)) {
-                event.currentTarget.pause();
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label={
+                playbackUnavailable
+                  ? "Playback unavailable"
+                  : blocked
+                    ? `Play ${playerLabel} unavailable while recording`
+                    : isPlaying
+                      ? `Pause ${playerLabel}`
+                      : `Play ${playerLabel}`
               }
-            }}
-            preload="metadata"
-            src={audioUrlState.url}
-            tabIndex={blocked ? -1 : undefined}
-          />
+              disabled={blocked || playbackUnavailable}
+              onClick={handleTogglePlayback}
+              className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+            >
+              {isPlaying ? (
+                <PauseIcon aria-hidden className="size-4 fill-current" />
+              ) : (
+                <PlayIcon aria-hidden className="size-4 translate-x-px fill-current" />
+              )}
+            </button>
+            {isActiveTrack ? (
+              <ListeningTransportProgress blocked={blocked} />
+            ) : (
+              // Same footprint as the live transport so first play causes no
+              // layout shift; disabled communicates not-yet-seekable.
+              <div className="min-w-0 flex-1">
+                <input
+                  aria-label="Playback position"
+                  aria-valuetext="Not started"
+                  className="settings-slider block w-full"
+                  disabled
+                  max={1}
+                  min={0}
+                  style={listeningSliderFillStyle(0)}
+                  type="range"
+                  value={0}
+                />
+                {/* Duration is unknown until the recording loads; a fake
+                    0:00 total would be a lie. Same width under tabular-nums. */}
+                <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                  --:-- / --:--
+                </p>
+              </div>
+            )}
+          </div>
           {blocked ? (
             <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
+          ) : playbackUnavailable ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Playback is unavailable in this view.
+            </p>
           ) : null}
           <ListeningSpeedControl speed={speed} />
         </>
@@ -1732,6 +1800,106 @@ function AssistantSpeechPlayer({
           {speech.transcript}
         </p>
       </details>
+    </div>
+  );
+}
+
+/** Progress + fill offset for the settings-slider chrome, like sliderFillStyle. */
+function listeningSliderFillStyle(ratio: number): CSSProperties {
+  return {
+    "--settings-slider-progress": `${ratio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
+  } as CSSProperties;
+}
+
+const LISTENING_SEEK_JUMP_S = 5;
+const LISTENING_SEEK_PAGE_JUMP_S = 15;
+
+/**
+ * Live position for the loaded recording. Mounted only in the active row so
+ * the throttled progress publishes (at most one per 200ms) never re-render
+ * inactive players or the timeline.
+ */
+function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
+  const { currentTime, duration } = useListeningPlaybackProgress();
+  // While dragging, the local scrub value owns the thumb: seeking commits on
+  // release, so store publishes (delayed over relay/tunnel) cannot snap the
+  // thumb back mid-drag. The ref mirrors the state so commit reads the
+  // pending value without side effects inside a state updater.
+  const [scrubTime, setScrubTimeState] = useState<number | null>(null);
+  const scrubTimeRef = useRef<number | null>(null);
+  const setScrubTime = useCallback((value: number | null) => {
+    scrubTimeRef.current = value;
+    setScrubTimeState(value);
+  }, []);
+  const playedTime = Math.min(currentTime, duration > 0 ? duration : currentTime);
+  const shownTime = scrubTime ?? playedTime;
+  const ratio = duration > 0 ? Math.min(1, shownTime / duration) : 0;
+
+  const commitScrub = useCallback(() => {
+    const pending = scrubTimeRef.current;
+    setScrubTime(null);
+    if (pending !== null) seekListeningTrack(pending);
+  }, [setScrubTime]);
+  const handleSeekKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      // Native range steps are useless for audio (1s per press); arrows jump
+      // 5s and PageUp/PageDown 15s instead, applied immediately so keyboard
+      // seeking never waits on a pointer-style commit.
+      const jump =
+        event.key === "ArrowRight" || event.key === "ArrowUp"
+          ? LISTENING_SEEK_JUMP_S
+          : event.key === "ArrowLeft" || event.key === "ArrowDown"
+            ? -LISTENING_SEEK_JUMP_S
+            : event.key === "PageUp"
+              ? LISTENING_SEEK_PAGE_JUMP_S
+              : event.key === "PageDown"
+                ? -LISTENING_SEEK_PAGE_JUMP_S
+                : null;
+      if (jump !== null) {
+        event.preventDefault();
+        const upperBound = duration > 0 ? duration : playedTime;
+        seekListeningTrack(Math.min(Math.max(0, playedTime + jump), upperBound));
+        setScrubTime(null);
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        seekListeningTrack(0);
+        setScrubTime(null);
+        return;
+      }
+      if (event.key === "End" && duration > 0) {
+        event.preventDefault();
+        seekListeningTrack(duration);
+        setScrubTime(null);
+      }
+    },
+    [duration, playedTime, setScrubTime],
+  );
+
+  return (
+    <div className="min-w-0 flex-1">
+      <input
+        aria-label="Playback position"
+        aria-valuetext={`${formatListeningClock(shownTime)} of ${formatListeningClock(duration)}`}
+        className="settings-slider block w-full"
+        disabled={blocked}
+        max={duration > 0 ? duration : 0}
+        min={0}
+        onBlur={commitScrub}
+        onChange={(event) => setScrubTime(event.currentTarget.valueAsNumber)}
+        onKeyDown={handleSeekKeyDown}
+        onPointerCancel={() => setScrubTime(null)}
+        onPointerUp={commitScrub}
+        step={1}
+        style={listeningSliderFillStyle(ratio)}
+        type="range"
+        value={shownTime}
+      />
+      <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+        {formatListeningClock(shownTime)} / {formatListeningClock(duration)}
+      </p>
     </div>
   );
 }

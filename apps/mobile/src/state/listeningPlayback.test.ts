@@ -1,7 +1,17 @@
-import { createListeningPlaybackCoordinator } from "@t3tools/shared/listeningPlayback";
+import {
+  createListeningPlaybackCoordinator,
+  type ListeningTrackRef,
+} from "@t3tools/shared/listeningPlayback";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { startListeningPlayback } from "./listeningPlayback";
+import { createPendingListeningStart, startListeningPlayback } from "./listeningPlayback";
+
+const pendingTrack: ListeningTrackRef = {
+  environmentId: "env-1",
+  threadId: "thread-1",
+  messageId: "message-1",
+  speechId: "speech-a",
+};
 
 function deferred() {
   let resolve!: () => void;
@@ -111,5 +121,251 @@ describe("mobile listening playback startup", () => {
     await startup;
 
     expect(applyPlaybackRate).toHaveBeenCalledWith(1.75);
+  });
+
+  it("registers the track and attaches the source before playing", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const order: string[] = [];
+    const track = {
+      environmentId: "env-1",
+      threadId: "thread-1",
+      messageId: "message-1",
+      speechId: "speech-a",
+    };
+
+    await startListeningPlayback({
+      coordinator,
+      id: track.speechId,
+      pause: vi.fn(),
+      track,
+      prepareSource: async () => {
+        order.push("prepareSource");
+      },
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: async () => {
+        order.push("prepareAudioMode");
+      },
+      applyPlaybackRate: vi.fn(),
+      play: () => {
+        order.push("play");
+      },
+    });
+
+    expect(order).toEqual(["prepareSource", "prepareAudioMode", "play"]);
+    expect(coordinator.getSnapshot().track).toEqual({ ...track, playing: false });
+  });
+
+  it("stops after source attach when recording starts mid-load", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const loadStarted = deferred();
+    const finishLoad = deferred();
+    const prepareAudioMode = vi.fn(async () => undefined);
+    const play = vi.fn();
+
+    const startup = startListeningPlayback({
+      coordinator,
+      id: "speech-a",
+      pause: vi.fn(),
+      prepareSource: async () => {
+        loadStarted.resolve();
+        await finishLoad.promise;
+      },
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode,
+      applyPlaybackRate: vi.fn(),
+      play,
+    });
+
+    await loadStarted.promise;
+    coordinator.setBlocked(true);
+    finishLoad.resolve();
+    await startup;
+
+    expect(prepareAudioMode).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+  });
+});
+
+describe("pending listening start", () => {
+  it("plays once the URL lands, even without the row that armed it", () => {
+    const gate = createPendingListeningStart();
+    const play = vi.fn();
+    let deliver: (url: string | null) => void = () => undefined;
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliver = onResolved;
+        return vi.fn();
+      },
+      play,
+    });
+    expect(gate.getPendingSpeechId()).toBe("speech-a");
+
+    deliver("https://example.test/a.mp3");
+    expect(play).toHaveBeenCalledWith("https://example.test/a.mp3");
+    expect(gate.getPendingSpeechId()).toBeNull();
+  });
+
+  it("plays a URL that resolves synchronously inside the watch", () => {
+    const gate = createPendingListeningStart();
+    const play = vi.fn();
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        onResolved("https://example.test/a.mp3");
+        return vi.fn();
+      },
+      play,
+    });
+
+    expect(play).toHaveBeenCalledOnce();
+    expect(gate.getPendingSpeechId()).toBeNull();
+  });
+
+  it("supersedes an armed start with a newer one and cancels its watch", () => {
+    const gate = createPendingListeningStart();
+    const cancelFirstWatch = vi.fn();
+    const playFirst = vi.fn();
+    const playSecond = vi.fn();
+    let deliverFirst: (url: string | null) => void = () => undefined;
+    let deliverSecond: (url: string | null) => void = () => undefined;
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliverFirst = onResolved;
+        return cancelFirstWatch;
+      },
+      play: playFirst,
+    });
+    gate.begin({
+      track: { ...pendingTrack, threadId: "thread-2", speechId: "speech-b" },
+      watch: (onResolved) => {
+        deliverSecond = onResolved;
+        return vi.fn();
+      },
+      play: playSecond,
+    });
+
+    expect(cancelFirstWatch).toHaveBeenCalledOnce();
+    deliverFirst("https://example.test/a.mp3");
+    expect(playFirst).not.toHaveBeenCalled();
+    deliverSecond("https://example.test/b.mp3");
+    expect(playSecond).toHaveBeenCalledOnce();
+  });
+
+  it("cancels for the deleted thread and only for it", () => {
+    const gate = createPendingListeningStart();
+    const cancelWatch = vi.fn();
+    const play = vi.fn();
+    let deliver: (url: string | null) => void = () => undefined;
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliver = onResolved;
+        return cancelWatch;
+      },
+      play,
+    });
+    gate.cancelForThread("env-1", "thread-other");
+    expect(gate.getPendingSpeechId()).toBe("speech-a");
+
+    gate.cancelForThread("env-1", "thread-1");
+    expect(cancelWatch).toHaveBeenCalledOnce();
+    expect(gate.getPendingSpeechId()).toBeNull();
+    deliver("https://example.test/a.mp3");
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("refuses to arm while playback is blocked", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const gate = createPendingListeningStart({ coordinator });
+    const watch = vi.fn(() => vi.fn());
+    coordinator.setBlocked(true);
+
+    gate.begin({ track: pendingTrack, watch, play: vi.fn() });
+    expect(watch).not.toHaveBeenCalled();
+    expect(gate.getPendingSpeechId()).toBeNull();
+  });
+
+  it("cancels an armed start when recording blocks playback", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const gate = createPendingListeningStart({ coordinator });
+    const cancelWatch = vi.fn();
+    const play = vi.fn();
+    let deliver: (url: string | null) => void = () => undefined;
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliver = onResolved;
+        return cancelWatch;
+      },
+      play,
+    });
+    coordinator.setBlocked(true);
+    expect(cancelWatch).toHaveBeenCalledOnce();
+    expect(gate.getPendingSpeechId()).toBeNull();
+
+    // A late resolution must not fire surprise audio mid-recording.
+    deliver("https://example.test/a.mp3");
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("expires after its lifetime instead of firing surprise audio later", () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createPendingListeningStart({ ttlMs: 1_000 });
+      const cancelWatch = vi.fn();
+      const play = vi.fn();
+      let deliver: (url: string | null) => void = () => undefined;
+
+      gate.begin({
+        track: pendingTrack,
+        watch: (onResolved) => {
+          deliver = onResolved;
+          return cancelWatch;
+        },
+        play,
+      });
+      vi.advanceTimersByTime(999);
+      expect(gate.getPendingSpeechId()).toBe("speech-a");
+      vi.advanceTimersByTime(1);
+      expect(cancelWatch).toHaveBeenCalledOnce();
+      expect(gate.getPendingSpeechId()).toBeNull();
+
+      deliver("https://example.test/a.mp3");
+      expect(play).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not play when resolution fails, and notifies subscribers", () => {
+    const gate = createPendingListeningStart();
+    const listener = vi.fn();
+    const play = vi.fn();
+    let deliver: (url: string | null) => void = () => undefined;
+    gate.subscribe(listener);
+
+    gate.begin({
+      track: pendingTrack,
+      watch: (onResolved) => {
+        deliver = onResolved;
+        return vi.fn();
+      },
+      play,
+    });
+    expect(listener).toHaveBeenCalledOnce();
+
+    deliver(null);
+    expect(play).not.toHaveBeenCalled();
+    expect(gate.getPendingSpeechId()).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

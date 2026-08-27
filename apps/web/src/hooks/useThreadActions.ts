@@ -24,6 +24,7 @@ import {
   pinOrderKeyBetween,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -293,6 +294,9 @@ export function useThreadActions() {
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
+      // Archived rows leave every list surface carrying the pause control,
+      // so the thread's audio pauses (but stays loaded and resumable).
+      pauseListeningForThread(threadRef.environmentId, threadRef.threadId);
       threadActionUndoHistory.arm({
         action: "archive",
         threadRef,
@@ -404,6 +408,9 @@ export function useThreadActions() {
         if (result._tag === "Success") {
           threadActionUndoHistory.discard(target);
           refreshArchivedThreadsForEnvironment(target.environmentId);
+          // Audio owned by a deleted thread must not keep playing with no
+          // control anywhere.
+          stopListeningForThread(target.environmentId, target.threadId);
         }
         return result;
       }
@@ -489,6 +496,9 @@ export function useThreadActions() {
       }
       threadActionUndoHistory.discard(threadRef);
       refreshArchivedThreadsForEnvironment(threadRef.environmentId);
+      // Audio owned by a deleted thread must not keep playing with no
+      // control anywhere.
+      stopListeningForThread(threadRef.environmentId, threadRef.threadId);
       releaseComposerDraftUploads(threadRef);
       clearComposerDraftForThread(threadRef);
       clearProjectDraftThreadById(

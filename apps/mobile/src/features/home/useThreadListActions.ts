@@ -22,6 +22,7 @@ import {
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { pauseListeningForThread, stopListeningForThread } from "../../state/listeningPlayer";
 import { environmentServerConfigsAtom } from "../../state/server";
 import {
   enqueueThreadLifecycleIntent,
@@ -193,6 +194,10 @@ function useThreadActionExecutor(
             );
             return false;
           }
+          // The queued-offline archive hides the row just like a direct one.
+          if (action === "archive") {
+            pauseListeningForThread(thread.environmentId, thread.id);
+          }
           onCompleted?.(action, thread);
           return true;
         }
@@ -225,6 +230,15 @@ function useThreadActionExecutor(
         // lifecycle still feeds the archived-snapshot surface.
         if (action === "archive" || action === "unarchive" || action === "delete") {
           refreshArchivedThreadsForEnvironment(thread.environmentId);
+        }
+        // Audio owned by a deleted thread must not keep playing with no
+        // control anywhere; deletion clears the player outright. Archive
+        // pauses instead — archived rows also leave every surface carrying
+        // the pause control, but the recording stays loaded and resumable.
+        if (action === "delete") {
+          stopListeningForThread(thread.environmentId, thread.id);
+        } else if (action === "archive") {
+          pauseListeningForThread(thread.environmentId, thread.id);
         }
         onCompleted?.(action, thread);
         return true;

@@ -4,8 +4,9 @@ import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { assetEnvironment } from "~/state/assets";
-import { usePreparedConnection } from "~/state/session";
+import { environmentSession, usePreparedConnection } from "~/state/session";
 
 export { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 
@@ -47,6 +48,54 @@ export function useAssetUrl(environmentId: EnvironmentId, resource: AssetResourc
     return null;
   }
   return result.url;
+}
+
+/**
+ * Imperative one-shot asset URL resolution, independent of any component
+ * lifetime: subscribing through the app registry keeps the query mounted
+ * until it settles, so a caller can outlive the row that started it. Calls
+ * onResolved exactly once with the absolute URL, or null on failure; the
+ * returned function cancels the watch.
+ */
+export function watchAssetUrl(
+  environmentId: EnvironmentId,
+  resource: AssetResource,
+  onResolved: (url: string | null) => void,
+): () => void {
+  const urlAtom = assetEnvironment.createUrl({ environmentId, input: { resource } });
+  const connectionAtom = environmentSession.preparedConnectionValueAtom(environmentId);
+  let done = false;
+  let unsubscribeUrl: (() => void) | null = null;
+  let unsubscribeConnection: (() => void) | null = null;
+
+  const finish = (url: string | null) => {
+    if (done) return;
+    done = true;
+    unsubscribeUrl?.();
+    unsubscribeConnection?.();
+    onResolved(url);
+  };
+  const evaluate = () => {
+    const result = appAtomRegistry.get(urlAtom);
+    if (result._tag === "Failure") {
+      finish(null);
+      return;
+    }
+    if (result._tag !== "Success") return;
+    const connection = appAtomRegistry.get(connectionAtom);
+    if (connection._tag === "None") return;
+    finish(resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl));
+  };
+
+  unsubscribeUrl = appAtomRegistry.subscribe(urlAtom, evaluate);
+  unsubscribeConnection = appAtomRegistry.subscribe(connectionAtom, evaluate);
+  evaluate();
+  return () => {
+    if (done) return;
+    done = true;
+    unsubscribeUrl?.();
+    unsubscribeConnection?.();
+  };
 }
 
 export function useAssetUrls(

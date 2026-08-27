@@ -21,6 +21,8 @@ import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useThreadListeningState } from "../../state/listeningPlayback";
+import { toggleLoadedListeningTrack } from "../../state/listeningPlayer";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
@@ -476,6 +478,28 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
     props;
   const status = resolveThreadStatus(thread);
+  // Set while this thread owns the loaded track (playing or paused), so
+  // pausing from the list keeps a way back in. Re-renders only when the
+  // state flips — never on the player's progress tick.
+  const listeningState = useThreadListeningState(thread.environmentId, thread.id);
+  const toggleListeningAudio = useCallback(() => toggleLoadedListeningTrack(), []);
+  const listeningActionLabel = listeningState === "playing" ? "Pause audio" : "Play audio";
+  // The row Pressable's accessibilityLabel collapses its subtree, so the
+  // nested speaker Pressable is invisible to VoiceOver/TalkBack; a custom
+  // accessibility action on the row exposes the same toggle.
+  const listeningAccessibilityActions = useMemo(
+    () =>
+      listeningState === null
+        ? undefined
+        : [{ name: "toggleListening", label: listeningActionLabel }],
+    [listeningActionLabel, listeningState],
+  );
+  const onListeningAccessibilityAction = useCallback(
+    (event: { readonly nativeEvent: { readonly actionName: string } }) => {
+      if (event.nativeEvent.actionName === "toggleListening") toggleLoadedListeningTrack();
+    },
+    [],
+  );
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
@@ -548,6 +572,27 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     </View>
   ) : null;
 
+  // The speaker doubles as the transport control: with the loaded track's
+  // message row off screen, tapping here pauses — and resumes, so pausing
+  // from the list is never a one-way door.
+  const listeningIndicator =
+    listeningState !== null ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={listeningActionLabel}
+        hitSlop={16}
+        onPress={toggleListeningAudio}
+      >
+        <SymbolView
+          name={listeningState === "playing" ? "speaker.wave.2.fill" : "speaker.fill"}
+          size={13}
+          style={listeningState === "paused" ? { opacity: 0.55 } : undefined}
+          tintColor={selected ? selectedForegroundColor : iconSubtleColor}
+          type="monochrome"
+        />
+      </Pressable>
+    ) : null;
+
   const subtitleRow =
     subtitleParts.length > 0 || pr !== null ? (
       <View className="mt-px flex-row items-center gap-1.5">
@@ -598,10 +643,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const rowContent = (close: () => void) =>
     compact ? (
       <Pressable
+        accessibilityActions={listeningAccessibilityActions}
         accessibilityHint="Swipe left for archive and delete actions"
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
+        onAccessibilityAction={onListeningAccessibilityAction}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -628,6 +675,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 {thread.title}
               </Text>
               <View className="flex-row items-center gap-2">
+                {listeningIndicator}
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
                 <SymbolView
@@ -651,10 +699,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       </Pressable>
     ) : (
       <Pressable
+        accessibilityActions={listeningAccessibilityActions}
         accessibilityHint="Opens the thread"
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
+        onAccessibilityAction={onListeningAccessibilityAction}
         onHoverIn={() => setHovered(true)}
         onHoverOut={() => setHovered(false)}
         onPress={() => {
@@ -687,6 +737,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               {thread.title}
             </Text>
             <View className="flex-row items-center gap-2">
+              {listeningIndicator}
               {statusPill}
               <Text
                 className={cn(
