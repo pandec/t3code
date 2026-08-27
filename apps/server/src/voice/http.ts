@@ -8,6 +8,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -15,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
@@ -25,6 +27,7 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
+import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import { validateAndDispatchMessageSpeechRequest } from "../orchestration/messageSpeechRequest.ts";
 import {
   OrchestrationEngineService,
@@ -47,6 +50,8 @@ type MessageSpeechRequestCommand = Extract<
   { type: "thread.message.speech.request" }
 >;
 
+const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
+
 export const dispatchLegacyMessageSpeechRequest = (
   repository: ProjectionThreadMessageRepositoryShape,
   orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">,
@@ -57,6 +62,34 @@ export const dispatchLegacyMessageSpeechRequest = (
     command,
     orchestrationEngine.dispatch(command),
   );
+
+type LegacyMessageSpeechState = {
+  readonly message: { readonly speechRequestId?: CommandId | null | undefined };
+  readonly speech: MessageSpeechAttachment | undefined;
+};
+
+export const recoverLegacyMessageSpeechDispatch = <E, R>(input: {
+  readonly dispatchCause: Cause.Cause<unknown>;
+  readonly readState: Effect.Effect<LegacyMessageSpeechState, E, R>;
+  readonly interruptCompletion: Effect.Effect<void>;
+}) =>
+  Effect.gen(function* () {
+    const recovered = yield* input.readState;
+    if (recovered.speech !== undefined) {
+      yield* input.interruptCompletion;
+      return { _tag: "speech" as const, speech: recovered.speech };
+    }
+    const requestIsPending =
+      recovered.message.speechRequestId !== null && recovered.message.speechRequestId !== undefined;
+    if (
+      requestIsPending ||
+      isOrchestrationCommandInvariantError(Cause.squash(input.dispatchCause))
+    ) {
+      return { _tag: "await_completion" as const };
+    }
+    yield* input.interruptCompletion;
+    return { _tag: "failed" as const };
+  });
 
 export const subscribeToMessageSpeechCompletion = Effect.fn("subscribeToMessageSpeechCompletion")(
   function* (
@@ -295,18 +328,17 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
               }),
             );
             if (Exit.isFailure(dispatchExit)) {
-              yield* Fiber.interrupt(completionFiber);
-              const recovered = yield* readSpeechState(args.payload.messageId);
-              if (recovered.speech !== undefined) {
-                return toSynthesisResult(args.payload.messageId, recovered.speech);
+              const recovery = yield* recoverLegacyMessageSpeechDispatch({
+                dispatchCause: dispatchExit.cause,
+                readState: readSpeechState(args.payload.messageId),
+                interruptCompletion: Fiber.interrupt(completionFiber).pipe(Effect.asVoid),
+              });
+              if (recovery._tag === "speech") {
+                return toSynthesisResult(args.payload.messageId, recovery.speech);
               }
-              if (
-                recovered.message.speechRequestId !== null &&
-                recovered.message.speechRequestId !== undefined
-              ) {
-                return yield* joinPendingSpeech(recovered.message.threadId, args.payload.messageId);
+              if (recovery._tag === "failed") {
+                return yield* failEnvironmentInternal("speech_provider_failed", dispatchExit.cause);
               }
-              return yield* failEnvironmentInternal("speech_provider_failed", dispatchExit.cause);
             }
 
             const completion = yield* Fiber.join(completionFiber).pipe(

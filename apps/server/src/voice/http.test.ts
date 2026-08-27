@@ -6,6 +6,7 @@ import {
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -15,13 +16,18 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 
+import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import { validateAndDispatchMessageSpeechRequest } from "../orchestration/messageSpeechRequest.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type {
   ProjectionThreadMessage,
   ProjectionThreadMessageRepositoryShape,
 } from "../persistence/Services/ProjectionThreadMessages.ts";
-import { dispatchLegacyMessageSpeechRequest, subscribeToMessageSpeechCompletion } from "./http.ts";
+import {
+  dispatchLegacyMessageSpeechRequest,
+  recoverLegacyMessageSpeechDispatch,
+  subscribeToMessageSpeechCompletion,
+} from "./http.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -60,6 +66,64 @@ it.effect("subscribes before returning to the projection reread", () =>
 
       const received = Option.getOrUndefined(yield* Fiber.join(completionFiber));
       assert.equal(received?.eventId, completion.eventId);
+    }),
+  ),
+);
+
+it.effect("keeps the completion subscription when a competing request already finished", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-recovery");
+      const messageId = MessageId.make("message-recovery");
+      const requestId = CommandId.make("request-recovery");
+      const events = yield* PubSub.unbounded<OrchestrationEvent>();
+      const interrupted = yield* Ref.make(false);
+      const completion: OrchestrationEvent = {
+        sequence: 1,
+        eventId: EventId.make("event-recovery"),
+        type: "thread.message-speech-completed",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: NOW,
+        commandId: CommandId.make("completion-recovery"),
+        causationEventId: null,
+        correlationId: requestId,
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          requestId,
+          failureReason: "source_too_long",
+        },
+      };
+      const completionFiber = yield* subscribeToMessageSpeechCompletion(
+        PubSub.subscribe(events).pipe(Effect.map(Stream.fromSubscription)),
+        threadId,
+        messageId,
+      );
+      yield* PubSub.publish(events, completion);
+
+      const recovery = yield* recoverLegacyMessageSpeechDispatch({
+        dispatchCause: Cause.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: "thread.message.speech.request",
+            detail: "A competing request owns this message.",
+          }),
+        ),
+        readState: Effect.succeed({
+          message: { speechRequestId: null },
+          speech: undefined,
+        }),
+        interruptCompletion: Ref.set(interrupted, true).pipe(
+          Effect.andThen(Fiber.interrupt(completionFiber)),
+          Effect.asVoid,
+        ),
+      });
+
+      assert.equal(recovery._tag, "await_completion");
+      assert.isFalse(yield* Ref.get(interrupted));
+      const received = Option.getOrUndefined(yield* Fiber.join(completionFiber));
+      assert.equal(received?.payload.failureReason, "source_too_long");
     }),
   ),
 );
