@@ -22,6 +22,7 @@ import {
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { stopListeningForThread } from "../../state/listeningPlayer";
 import { environmentServerConfigsAtom } from "../../state/server";
 import {
   enqueueThreadLifecycleIntent,
@@ -225,6 +226,12 @@ function useThreadActionExecutor(
         // lifecycle still feeds the archived-snapshot surface.
         if (action === "archive" || action === "unarchive" || action === "delete") {
           refreshArchivedThreadsForEnvironment(thread.environmentId);
+        }
+        // Audio owned by a deleted thread must not keep playing with no
+        // control anywhere. Archive deliberately keeps playing: the recording
+        // and its thread remain recoverable.
+        if (action === "delete") {
+          stopListeningForThread(thread.environmentId, thread.id);
         }
         onCompleted?.(action, thread);
         return true;

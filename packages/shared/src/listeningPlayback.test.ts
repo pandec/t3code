@@ -5,12 +5,24 @@ import {
   createListeningPlaybackCoordinator,
   formatListeningClock,
   formatListeningSpeed,
+  isThreadListeningLoaded,
   isThreadListeningPlaying,
   LISTENING_SPEED_PRESETS,
   listeningSpeedSpokenLabel,
   nudgeListeningSpeed,
+  planListeningTrackStart,
+  startListeningPlayback,
+  threadListeningState,
   type ListeningTrackRef,
 } from "./listeningPlayback.js";
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 const trackA: ListeningTrackRef = {
   environmentId: "env-1",
@@ -181,5 +193,158 @@ describe("listening playback active track", () => {
     expect(formatListeningClock(0)).toBe("0:00");
     expect(formatListeningClock(65.9)).toBe("1:05");
     expect(formatListeningClock(Number.NaN)).toBe("0:00");
+  });
+
+  it("reports loaded and paused states for the indicator toggle", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
+    expect(isThreadListeningLoaded(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(false);
+
+    coordinator.activate(trackA.speechId, vi.fn(), trackA);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
+    expect(isThreadListeningLoaded(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(true);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-2")).toBeNull();
+
+    coordinator.setTrackPlaying(true);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("playing");
+
+    coordinator.setTrackPlaying(false);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
+
+    coordinator.setTrack(null);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
+  });
+});
+
+describe("listening track start plan", () => {
+  it("resumes the loaded recording in place regardless of source URL", () => {
+    expect(
+      planListeningTrackStart({
+        loadedTrack: trackA,
+        nextTrack: trackA,
+        positionSeconds: 12.5,
+        durationSeconds: 60,
+      }),
+    ).toEqual({ sameTrack: true, finished: false, resumeAt: 12.5 });
+  });
+
+  it("classifies end-of-track by identity so a re-signed URL replays from zero", () => {
+    expect(
+      planListeningTrackStart({
+        loadedTrack: trackA,
+        nextTrack: trackA,
+        positionSeconds: 59.95,
+        durationSeconds: 60,
+      }),
+    ).toEqual({ sameTrack: true, finished: true, resumeAt: 0 });
+  });
+
+  it("starts a different recording from the beginning", () => {
+    expect(
+      planListeningTrackStart({
+        loadedTrack: trackA,
+        nextTrack: trackB,
+        positionSeconds: 30,
+        durationSeconds: 60,
+      }),
+    ).toEqual({ sameTrack: false, finished: false, resumeAt: 0 });
+    expect(
+      planListeningTrackStart({
+        loadedTrack: null,
+        nextTrack: trackA,
+        positionSeconds: 30,
+        durationSeconds: 60,
+      }),
+    ).toEqual({ sameTrack: false, finished: false, resumeAt: 0 });
+  });
+
+  it("treats an unknown duration as not finished", () => {
+    expect(
+      planListeningTrackStart({
+        loadedTrack: trackA,
+        nextTrack: trackA,
+        positionSeconds: 4,
+        durationSeconds: Number.NaN,
+      }),
+    ).toEqual({ sameTrack: true, finished: false, resumeAt: 4 });
+  });
+});
+
+describe("listening playback startup generations", () => {
+  it("aborts a stale startup attempt for the same recording", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const pause = vi.fn();
+    const firstAudioModeStarted = deferred();
+    const finishFirstAudioMode = deferred();
+    const playFirst = vi.fn();
+    const playSecond = vi.fn();
+
+    // First attempt stalls in audio-mode preparation.
+    const first = startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: async () => {
+        firstAudioModeStarted.resolve();
+        await finishFirstAudioMode.promise;
+      },
+      applyPlaybackRate: vi.fn(),
+      play: playFirst,
+    });
+    await firstAudioModeStarted.promise;
+
+    // Second attempt for the SAME recording (same owner id and pause) completes.
+    await startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: vi.fn(async () => undefined),
+      applyPlaybackRate: vi.fn(),
+      play: playSecond,
+    });
+    expect(playSecond).toHaveBeenCalledOnce();
+
+    // The user pauses; the stale first attempt must not resume playback.
+    coordinator.pauseActive();
+    finishFirstAudioMode.resolve();
+    await first;
+    expect(playFirst).not.toHaveBeenCalled();
+  });
+
+  it("aborts a startup attempt when ownership was released mid-flight", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const pause = vi.fn();
+    const sourceStarted = deferred();
+    const finishSource = deferred();
+    const play = vi.fn();
+
+    const startup = startListeningPlayback({
+      coordinator,
+      id: trackA.speechId,
+      pause,
+      track: trackA,
+      prepareSource: async () => {
+        sourceStarted.resolve();
+        await finishSource.promise;
+      },
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: vi.fn(async () => undefined),
+      applyPlaybackRate: vi.fn(),
+      play,
+    });
+    await sourceStarted.promise;
+    // Thread deletion releases ownership and clears the track.
+    coordinator.release(trackA.speechId, pause);
+    coordinator.setTrack(null);
+    finishSource.resolve();
+    await startup;
+    expect(play).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,10 @@
 import {
   createListeningPlaybackCoordinator,
-  isThreadListeningPlaying,
+  startListeningPlayback as startListeningPlaybackShared,
+  threadListeningState,
   type ListeningPlaybackCoordinator,
   type ListeningTrackRef,
+  type ThreadListeningState,
 } from "@t3tools/shared/listeningPlayback";
 import { useCallback, useSyncExternalStore } from "react";
 
@@ -15,40 +17,98 @@ export function setListeningRecordingActive(owner: symbol, active: boolean): voi
   listeningPlayback.setBlocked(recordingOwners.size > 0);
 }
 
-export async function startListeningPlayback(input: {
-  readonly coordinator?: ListeningPlaybackCoordinator;
-  readonly id: string;
-  readonly pause: () => void;
-  /** Registers the recording with the coordinator so thread lists can point at it. */
-  readonly track?: ListeningTrackRef;
-  /** Attaches or swaps the player's source before playback starts. */
-  readonly prepareSource?: () => Promise<void>;
-  readonly restartFromBeginning: boolean;
-  readonly seekToBeginning: () => Promise<void>;
-  readonly prepareAudioMode: () => Promise<void>;
-  readonly applyPlaybackRate: (speed: number) => void;
-  readonly play: () => void;
-}): Promise<void> {
-  const coordinator = input.coordinator ?? listeningPlayback;
-  if (!coordinator.activate(input.id, input.pause, input.track)) return;
+type SharedStartupInput = Parameters<typeof startListeningPlaybackShared>[0];
 
-  try {
-    if (input.prepareSource !== undefined) {
-      await input.prepareSource();
-      if (coordinator.getSnapshot().blocked || !coordinator.isActive(input.id, input.pause)) return;
-    }
-    if (input.restartFromBeginning) await input.seekToBeginning();
-    if (coordinator.getSnapshot().blocked || !coordinator.isActive(input.id, input.pause)) return;
+export function startListeningPlayback(
+  input: Omit<SharedStartupInput, "coordinator"> & {
+    readonly coordinator?: ListeningPlaybackCoordinator;
+  },
+): Promise<void> {
+  return startListeningPlaybackShared({
+    ...input,
+    coordinator: input.coordinator ?? listeningPlayback,
+  });
+}
 
-    await input.prepareAudioMode();
-    const snapshot = coordinator.getSnapshot();
-    if (snapshot.blocked || !coordinator.isActive(input.id, input.pause)) return;
+export interface PendingListeningStartGate {
+  /** Arms a pending start; supersedes any previous one. */
+  readonly begin: (input: {
+    readonly track: ListeningTrackRef;
+    /** Resolves the recording's URL once; the returned function cancels the watch. */
+    readonly watch: (onResolved: (url: string | null) => void) => () => void;
+    readonly play: (url: string) => void;
+  }) => void;
+  readonly cancel: () => void;
+  /** Drops the pending start when its thread was deleted. */
+  readonly cancelForThread: (environmentId: string, threadId: string) => void;
+  readonly getPendingSpeechId: () => string | null;
+  readonly subscribe: (listener: () => void) => () => void;
+}
 
-    input.applyPlaybackRate(snapshot.speed);
-    input.play();
-  } catch {
-    coordinator.release(input.id, input.pause);
-  }
+/**
+ * The play-before-URL intent, owned by the controller instead of a message
+ * row: tapping play on a slow link and navigating away must still start the
+ * audio once the signed URL lands. A newer play supersedes it, and thread
+ * deletion cancels it.
+ */
+export function createPendingListeningStart(): PendingListeningStartGate {
+  let generation = 0;
+  let pending: {
+    readonly generation: number;
+    readonly track: ListeningTrackRef;
+    readonly cancelWatch: (() => void) | null;
+  } | null = null;
+  const listeners = new Set<() => void>();
+
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+
+  const clear = () => {
+    if (pending === null) return;
+    const cancelWatch = pending.cancelWatch;
+    pending = null;
+    cancelWatch?.();
+    notify();
+  };
+
+  return {
+    begin: (input) => {
+      clear();
+      generation += 1;
+      const startedGeneration = generation;
+      // Armed before the watch starts: a synchronously-cached URL resolves
+      // inside the watch() call and must find the pending entry in place.
+      pending = { generation: startedGeneration, track: input.track, cancelWatch: null };
+      notify();
+      const cancelWatch = input.watch((url) => {
+        if (pending === null || pending.generation !== startedGeneration) return;
+        pending = null;
+        notify();
+        if (url !== null) input.play(url);
+      });
+      if (pending !== null && pending.generation === startedGeneration) {
+        pending = { ...pending, cancelWatch };
+      } else {
+        cancelWatch();
+      }
+    },
+    cancel: clear,
+    cancelForThread: (environmentId, threadId) => {
+      if (
+        pending !== null &&
+        pending.track.environmentId === environmentId &&
+        pending.track.threadId === threadId
+      ) {
+        clear();
+      }
+    },
+    getPendingSpeechId: () => pending?.track.speechId ?? null,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 }
 
 export function useListeningPlaybackSnapshot() {
@@ -68,10 +128,17 @@ export function useListeningPlaybackProgress() {
   );
 }
 
-/** Whether the thread owns the actively playing audio; drives list indicators. */
-export function useThreadListeningPlaying(environmentId: string, threadId: string): boolean {
+/**
+ * Indicator state for a thread-list row: "playing", "paused" while the
+ * thread still owns the loaded track, or null. String snapshots bail out of
+ * re-renders exactly like the previous boolean selector did.
+ */
+export function useThreadListeningState(
+  environmentId: string,
+  threadId: string,
+): ThreadListeningState {
   const read = useCallback(
-    () => isThreadListeningPlaying(listeningPlayback.getSnapshot(), environmentId, threadId),
+    () => threadListeningState(listeningPlayback.getSnapshot(), environmentId, threadId),
     [environmentId, threadId],
   );
   return useSyncExternalStore(listeningPlayback.subscribe, read, read);

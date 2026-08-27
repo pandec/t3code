@@ -144,7 +144,7 @@ import {
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
-import { useAssetUrl, useAssetUrlState } from "../../state/assets";
+import { useAssetUrl, useAssetUrlState, watchAssetUrl } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
 import { summarizeMessage } from "../../state/messageArtifacts";
@@ -162,7 +162,7 @@ import {
   useListeningPlaybackProgress,
   useListeningPlaybackSnapshot,
 } from "../../state/listeningPlayback";
-import { playListeningTrack } from "../../state/listeningPlayer";
+import { requestListeningTrack, usePendingListeningSpeechId } from "../../state/listeningPlayer";
 import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
@@ -1725,7 +1725,10 @@ function AssistantSpeechPlayer(props: {
   // a remote or cellular link.
   const isActiveTrack = track !== null && track.speechId === props.speech.speechId;
   const isPlaying = isActiveTrack && track.playing;
-  const [pendingPlay, setPendingPlay] = useState(false);
+  // The play-before-URL intent lives in the controller, not this row: it
+  // survives the row unmounting and starts once the signed URL lands. The
+  // row only mirrors it for the loading spinner.
+  const pendingSpeechId = usePendingListeningSpeechId();
   const audioUnavailable = audioUrlState._tag === "Failure";
   const onAudioUnavailableProp = props.onAudioUnavailable;
   useEffect(() => {
@@ -1742,25 +1745,21 @@ function AssistantSpeechPlayer(props: {
     [props.environmentId, props.threadId, props.messageId, props.speech.speechId],
   );
 
+  const speechId = props.speech.speechId;
+  const environmentId = props.environmentId;
   const onTogglePlayback = useCallback(() => {
     if (isPlaying) {
       listeningPlayback.pauseActive();
       return;
     }
     if (blocked) return;
-    if (audioUrl === null) {
-      setPendingPlay(true);
-      return;
-    }
-    void playListeningTrack({ track: trackRef, url: audioUrl });
-  }, [audioUrl, blocked, isPlaying, trackRef]);
-
-  // First tap before the signed URL resolves: play as soon as it lands.
-  useEffect(() => {
-    if (!pendingPlay || audioUrl === null) return;
-    setPendingPlay(false);
-    void playListeningTrack({ track: trackRef, url: audioUrl });
-  }, [audioUrl, pendingPlay, trackRef]);
+    requestListeningTrack({
+      track: trackRef,
+      url: audioUrl,
+      watchUrl: (onResolved) =>
+        watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
+    });
+  }, [audioUrl, blocked, environmentId, isPlaying, speechId, trackRef]);
 
   return (
     <View
@@ -1793,7 +1792,7 @@ function AssistantSpeechPlayer(props: {
             </Pressable>
           ) : null}
         </View>
-      ) : audioUrl === null && pendingPlay ? (
+      ) : audioUrl === null && pendingSpeechId === props.speech.speechId ? (
         <View className="flex-row items-center gap-2 py-1">
           <ActivityIndicator size="small" color={props.iconSubtleColor} />
           <Text className="text-xs text-foreground-muted">Loading audio…</Text>

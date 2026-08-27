@@ -76,6 +76,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   Volume2Icon,
+  VolumeIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -226,7 +227,7 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
-import { listeningPlayback, useThreadListeningPlaying } from "../state/listeningPlayback";
+import { toggleLoadedListeningTrack, useThreadListeningState } from "../state/listeningPlayback";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -927,10 +928,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
-  // True only while this thread's audio is actually playing, so the icon
-  // never lingers on paused rows and the subscription re-renders the row
-  // only when the boolean flips — never on the player's progress tick.
-  const isListeningPlaying = useThreadListeningPlaying(thread.environmentId, thread.id);
+  // Set while this thread owns the loaded track (playing or paused), so
+  // pausing from the list keeps a way back in. The subscription re-renders
+  // the row only when the state flips — never on the player's progress tick.
+  const listeningState = useThreadListeningState(thread.environmentId, thread.id);
 
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
@@ -1243,10 +1244,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onPin, onUnpin, props.isPinned, threadRef],
   );
-  const handlePauseListeningClick = useCallback((event: ReactMouseEvent) => {
+  const handleToggleListeningClick = useCallback((event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    listeningPlayback.pauseActive();
+    toggleLoadedListeningTrack();
   }, []);
   const handleSnoozePreset = useCallback(
     (preset: SnoozePreset) => {
@@ -1438,26 +1439,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </span>
     </>
   ) : null;
-  // The speaker doubles as the stop affordance: when the playing thread's
-  // message row is not on screen, this is how the audio gets paused. It
-  // stays visible under row hover for exactly that reason.
-  const listeningIndicator = isListeningPlaying ? (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Pause listening audio"
-            onClick={handlePauseListeningClick}
-            className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        }
-      >
-        <Volume2Icon aria-hidden className="size-3.5 shrink-0" />
-      </TooltipTrigger>
-      <TooltipPopup>Playing audio — click to pause</TooltipPopup>
-    </Tooltip>
-  ) : null;
+  // The speaker doubles as the transport control: when the loaded track's
+  // message row is not on screen, this is how the audio gets paused — and
+  // resumed, so pausing from the list is never a one-way door. It stays
+  // visible under row hover for exactly that reason.
+  const listeningIndicator =
+    listeningState !== null ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={listeningState === "playing" ? "Pause audio" : "Play audio"}
+              onClick={handleToggleListeningClick}
+              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
+          {listeningState === "playing" ? (
+            <Volume2Icon aria-hidden className="size-3.5 shrink-0" />
+          ) : (
+            <VolumeIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup>{listeningState === "playing" ? "Pause audio" : "Play audio"}</TooltipPopup>
+      </Tooltip>
+    ) : null;
   const pinIndicator = props.isPinned ? (
     props.pinningSupported ? (
       <Tooltip>

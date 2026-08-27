@@ -1,7 +1,16 @@
-import type { ListeningTrackRef } from "@t3tools/shared/listeningPlayback";
+import {
+  isThreadListeningLoaded,
+  planListeningTrackStart,
+  type ListeningTrackRef,
+} from "@t3tools/shared/listeningPlayback";
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
+import { useSyncExternalStore } from "react";
 
-import { listeningPlayback, startListeningPlayback } from "./listeningPlayback";
+import {
+  createPendingListeningStart,
+  listeningPlayback,
+  startListeningPlayback,
+} from "./listeningPlayback";
 
 /**
  * The app-scoped player behind every listening version and voice reply.
@@ -13,6 +22,8 @@ import { listeningPlayback, startListeningPlayback } from "./listeningPlayback";
 let sharedPlayer: AudioPlayer | null = null;
 let loadedUrl: string | null = null;
 let appliedSpeed: number | null = null;
+
+const pendingStart = createPendingListeningStart();
 
 const pauseSharedPlayer = () => {
   try {
@@ -55,18 +66,24 @@ function ensureSharedPlayer(): AudioPlayer {
 /**
  * Loads (or resumes) a recording on the shared player and starts playback.
  * Rows always pass their freshest signed URL: a re-signed URL for the loaded
- * recording is swapped in with the position restored, which covers token
- * expiry across long pauses without a dedicated refresh path.
+ * recording is swapped in with the position restored (or replayed from the
+ * start when the old one had finished), which covers token expiry across
+ * long pauses without a dedicated refresh path.
  */
 export async function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
   readonly url: string;
 }): Promise<void> {
+  // Any direct play supersedes a still-pending play-before-URL intent.
+  pendingStart.cancel();
   const player = ensureSharedPlayer();
-  const previous = listeningPlayback.getSnapshot().track;
-  const sameTrack = previous !== null && previous.speechId === input.track.speechId;
-  const sameSource = sameTrack && loadedUrl === input.url;
-  const atEnd = sameSource && player.duration > 0 && player.currentTime >= player.duration - 0.1;
+  const plan = planListeningTrackStart({
+    loadedTrack: listeningPlayback.getSnapshot().track,
+    nextTrack: input.track,
+    positionSeconds: player.currentTime,
+    durationSeconds: player.duration,
+  });
+  const sameSource = plan.sameTrack && loadedUrl === input.url;
 
   await startListeningPlayback({
     id: input.track.speechId,
@@ -75,13 +92,12 @@ export async function playListeningTrack(input: {
     prepareSource: sameSource
       ? undefined
       : async () => {
-          const resumeAt = sameTrack ? player.currentTime : 0;
           appliedSpeed = null;
           player.replace(input.url);
           loadedUrl = input.url;
-          if (resumeAt > 0) await player.seekTo(resumeAt);
+          if (plan.resumeAt > 0) await player.seekTo(plan.resumeAt);
         },
-    restartFromBeginning: atEnd,
+    restartFromBeginning: sameSource && plan.finished,
     seekToBeginning: () => player.seekTo(0),
     prepareAudioMode: () => setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
     applyPlaybackRate: (speed) => {
@@ -90,4 +106,63 @@ export async function playListeningTrack(input: {
     },
     play: () => player.play(),
   });
+}
+
+/**
+ * Row entry point. With a resolved URL it plays immediately; without one it
+ * arms the controller-owned pending start, which survives the row unmounting
+ * and plays once the watch resolves the URL.
+ */
+export function requestListeningTrack(input: {
+  readonly track: ListeningTrackRef;
+  readonly url: string | null;
+  readonly watchUrl: (onResolved: (url: string | null) => void) => () => void;
+}): void {
+  if (input.url !== null) {
+    void playListeningTrack({ track: input.track, url: input.url });
+    return;
+  }
+  pendingStart.begin({
+    track: input.track,
+    watch: input.watchUrl,
+    play: (url) => void playListeningTrack({ track: input.track, url }),
+  });
+}
+
+/** Play/pause toggle for the loaded track, usable from any thread-list row. */
+export function toggleLoadedListeningTrack(): void {
+  const track = listeningPlayback.getSnapshot().track;
+  if (track === null) return;
+  if (track.playing) {
+    listeningPlayback.pauseActive();
+    return;
+  }
+  if (loadedUrl === null) return;
+  void playListeningTrack({ track, url: loadedUrl });
+}
+
+/**
+ * Stops and clears playback owned by the thread (used when it is deleted):
+ * the loaded track, and any pending play-before-URL intent, must not outlive
+ * the thread that owns them.
+ */
+export function stopListeningForThread(environmentId: string, threadId: string): void {
+  pendingStart.cancelForThread(environmentId, threadId);
+  const snapshot = listeningPlayback.getSnapshot();
+  if (!isThreadListeningLoaded(snapshot, environmentId, threadId)) return;
+  const track = snapshot.track;
+  if (track === null) return;
+  pauseSharedPlayer();
+  loadedUrl = null;
+  listeningPlayback.release(track.speechId, pauseSharedPlayer);
+  listeningPlayback.setTrack(null);
+}
+
+/** Speech id of the armed play-before-URL intent; drives the row spinner. */
+export function usePendingListeningSpeechId(): string | null {
+  return useSyncExternalStore(
+    pendingStart.subscribe,
+    pendingStart.getPendingSpeechId,
+    pendingStart.getPendingSpeechId,
+  );
 }

@@ -1480,7 +1480,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {isAgentVoiceReply && speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
-            threadId={ctx.threadRef?.threadId ?? ""}
+            threadId={ctx.threadRef?.threadId ?? null}
             messageId={row.message.id}
             speech={speech}
             onRetry={null}
@@ -1626,7 +1626,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {speech !== null && speechExpanded && !isAgentVoiceReply ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
-            threadId={ctx.threadRef?.threadId ?? ""}
+            threadId={ctx.threadRef?.threadId ?? null}
             messageId={row.message.id}
             speech={speech}
             onRetry={() => void prepareSpeech()}
@@ -1647,9 +1647,10 @@ function AssistantSpeechPlayer({
   primary = false,
 }: {
   environmentId: EnvironmentId;
-  /** Empty when the route key failed to parse; playback still lifts, the
-      thread-list indicator just cannot point back at the thread. */
-  threadId: string;
+  /** Null when the route key failed to parse. Playback is disabled then:
+      app-scoped audio without a thread identity would play with no
+      indicator (and no control) anywhere in the thread lists. */
+  threadId: string | null;
   messageId: string;
   speech: MessageSpeechSynthesisResult;
   /**
@@ -1678,8 +1679,9 @@ function AssistantSpeechPlayer({
   const isActiveTrack = track !== null && track.speechId === speech.speechId;
   const isPlaying = isActiveTrack && track.playing;
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
+  const playbackUnavailable = threadId === null;
   const trackRef = useMemo<ListeningTrackRef>(
-    () => ({ environmentId, threadId, messageId, speechId: speech.speechId }),
+    () => ({ environmentId, threadId: threadId ?? "", messageId, speechId: speech.speechId }),
     [environmentId, threadId, messageId, speech.speechId],
   );
 
@@ -1688,9 +1690,9 @@ function AssistantSpeechPlayer({
       listeningPlayback.pauseActive();
       return;
     }
-    if (audioUrl === null) return;
+    if (audioUrl === null || playbackUnavailable) return;
     playListeningTrack({ track: trackRef, url: audioUrl });
-  }, [audioUrl, isPlaying, trackRef]);
+  }, [audioUrl, isPlaying, playbackUnavailable, trackRef]);
 
   const playerLabel = primary ? "voice reply" : "listening version";
 
@@ -1729,13 +1731,15 @@ function AssistantSpeechPlayer({
             <button
               type="button"
               aria-label={
-                blocked
-                  ? `Play ${playerLabel} unavailable while recording`
-                  : isPlaying
-                    ? `Pause ${playerLabel}`
-                    : `Play ${playerLabel}`
+                playbackUnavailable
+                  ? "Playback unavailable"
+                  : blocked
+                    ? `Play ${playerLabel} unavailable while recording`
+                    : isPlaying
+                      ? `Pause ${playerLabel}`
+                      : `Play ${playerLabel}`
               }
-              disabled={blocked}
+              disabled={blocked || playbackUnavailable}
               onClick={handleTogglePlayback}
               className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
             >
@@ -1748,8 +1752,20 @@ function AssistantSpeechPlayer({
             {isActiveTrack ? (
               <ListeningTransportProgress blocked={blocked} />
             ) : (
+              // Same footprint as the live transport so first play causes no
+              // layout shift; disabled communicates not-yet-seekable.
               <div className="min-w-0 flex-1">
-                <div className="h-1.5 rounded-full bg-muted-foreground/20" />
+                <input
+                  aria-label="Playback position"
+                  className="settings-slider block w-full"
+                  disabled
+                  max={1}
+                  min={0}
+                  style={listeningSliderFillStyle(0)}
+                  type="range"
+                  value={0}
+                />
+                <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">0:00 / 0:00</p>
               </div>
             )}
           </div>
@@ -1771,30 +1787,91 @@ function AssistantSpeechPlayer({
   );
 }
 
+/** Progress + fill offset for the settings-slider chrome, like sliderFillStyle. */
+function listeningSliderFillStyle(ratio: number): CSSProperties {
+  return {
+    "--settings-slider-progress": `${ratio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
+  } as CSSProperties;
+}
+
+const LISTENING_SEEK_JUMP_S = 5;
+
 /**
  * Live position for the loaded recording. Mounted only in the active row so
- * the 4Hz progress tick never re-renders inactive players or the timeline.
+ * the throttled progress publishes (at most one per 200ms) never re-render
+ * inactive players or the timeline.
  */
 function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
   const { currentTime, duration } = useListeningPlaybackProgress();
-  const ratio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  // While dragging, the local scrub value owns the thumb: seeking commits on
+  // release, so store publishes (delayed over relay/tunnel) cannot snap the
+  // thumb back mid-drag.
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
+  const playedTime = Math.min(currentTime, duration > 0 ? duration : currentTime);
+  const shownTime = scrubTime ?? playedTime;
+  const ratio = duration > 0 ? Math.min(1, shownTime / duration) : 0;
+
+  const commitScrub = useCallback(() => {
+    setScrubTime((pending) => {
+      if (pending !== null) seekListeningTrack(pending);
+      return null;
+    });
+  }, []);
+  const handleSeekKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      // Native range steps are useless for audio (1s per press); arrows jump
+      // 5s instead, applied immediately so keyboard seeking never waits on a
+      // pointer-style commit.
+      const jump =
+        event.key === "ArrowRight" || event.key === "ArrowUp"
+          ? LISTENING_SEEK_JUMP_S
+          : event.key === "ArrowLeft" || event.key === "ArrowDown"
+            ? -LISTENING_SEEK_JUMP_S
+            : null;
+      if (jump !== null) {
+        event.preventDefault();
+        const upperBound = duration > 0 ? duration : playedTime;
+        seekListeningTrack(Math.min(Math.max(0, playedTime + jump), upperBound));
+        setScrubTime(null);
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        seekListeningTrack(0);
+        setScrubTime(null);
+        return;
+      }
+      if (event.key === "End" && duration > 0) {
+        event.preventDefault();
+        seekListeningTrack(duration);
+        setScrubTime(null);
+      }
+    },
+    [duration, playedTime],
+  );
 
   return (
     <div className="min-w-0 flex-1">
       <input
         aria-label="Playback position"
+        aria-valuetext={`${formatListeningClock(shownTime)} of ${formatListeningClock(duration)}`}
         className="settings-slider block w-full"
         disabled={blocked}
         max={duration > 0 ? duration : 0}
         min={0}
-        onChange={(event) => seekListeningTrack(event.currentTarget.valueAsNumber)}
-        step={0.1}
-        style={{ "--settings-slider-progress": `${ratio * 100}%` } as CSSProperties}
+        onBlur={commitScrub}
+        onChange={(event) => setScrubTime(event.currentTarget.valueAsNumber)}
+        onKeyDown={handleSeekKeyDown}
+        onPointerCancel={() => setScrubTime(null)}
+        onPointerUp={commitScrub}
+        step={1}
+        style={listeningSliderFillStyle(ratio)}
         type="range"
-        value={Math.min(currentTime, duration > 0 ? duration : currentTime)}
+        value={shownTime}
       />
       <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
-        {formatListeningClock(currentTime)} / {formatListeningClock(duration)}
+        {formatListeningClock(shownTime)} / {formatListeningClock(duration)}
       </p>
     </div>
   );

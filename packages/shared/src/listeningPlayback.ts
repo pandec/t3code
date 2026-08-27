@@ -57,7 +57,8 @@ export interface ListeningPlaybackSnapshot {
 
 /**
  * Position updates live outside the main snapshot so list rows subscribing to
- * track identity never re-render on the player's 250ms progress tick.
+ * track identity never re-render on the player's progress ticks (each
+ * platform controller picks its own cadence).
  */
 export interface ListeningPlaybackProgress {
   readonly currentTime: number;
@@ -70,13 +71,71 @@ export function isThreadListeningPlaying(
   environmentId: string,
   threadId: string,
 ): boolean {
+  return threadListeningState(snapshot, environmentId, threadId) === "playing";
+}
+
+/** True when the loaded track (playing or paused) belongs to the thread. */
+export function isThreadListeningLoaded(
+  snapshot: ListeningPlaybackSnapshot,
+  environmentId: string,
+  threadId: string,
+): boolean {
+  return threadListeningState(snapshot, environmentId, threadId) !== null;
+}
+
+export type ThreadListeningState = "playing" | "paused" | null;
+
+/**
+ * What the thread-list indicator should show for a thread: "playing" while
+ * its audio runs, "paused" while it still owns the loaded track (the
+ * indicator is a toggle, so pausing from the list must leave a way back in),
+ * null otherwise.
+ */
+export function threadListeningState(
+  snapshot: ListeningPlaybackSnapshot,
+  environmentId: string,
+  threadId: string,
+): ThreadListeningState {
   const track = snapshot.track;
-  return (
-    track !== null &&
-    track.playing &&
-    track.environmentId === environmentId &&
-    track.threadId === threadId
-  );
+  if (track === null || track.environmentId !== environmentId || track.threadId !== threadId) {
+    return null;
+  }
+  return track.playing ? "playing" : "paused";
+}
+
+/** How close to the end still counts as "finished" for replay purposes. */
+export const LISTENING_TRACK_END_EPSILON_S = 0.1;
+
+export interface ListeningTrackStartPlan {
+  /** The request targets the recording already loaded in the player. */
+  readonly sameTrack: boolean;
+  /** The loaded recording had played to its end; playback restarts at 0. */
+  readonly finished: boolean;
+  /** Position the player should start from, in seconds. */
+  readonly resumeAt: number;
+}
+
+/**
+ * Decides how a play request relates to the loaded recording. End-of-track
+ * detection keys on track identity, never on the source URL: a re-signed URL
+ * for the same recording must replay from 0 when the old one had finished,
+ * and resume in place when it had not.
+ */
+export function planListeningTrackStart(input: {
+  readonly loadedTrack: ListeningTrackRef | null;
+  readonly nextTrack: ListeningTrackRef;
+  /** Player position of the currently loaded source, in seconds. */
+  readonly positionSeconds: number;
+  /** Duration of the currently loaded source; 0 or NaN when unknown. */
+  readonly durationSeconds: number;
+}): ListeningTrackStartPlan {
+  const sameTrack =
+    input.loadedTrack !== null && input.loadedTrack.speechId === input.nextTrack.speechId;
+  const duration = Number.isFinite(input.durationSeconds) ? input.durationSeconds : 0;
+  const finished =
+    sameTrack && duration > 0 && input.positionSeconds >= duration - LISTENING_TRACK_END_EPSILON_S;
+  const resumeAt = sameTrack && !finished ? Math.max(0, input.positionSeconds) : 0;
+  return { sameTrack, finished, resumeAt };
 }
 
 type PausePlayback = () => void;
@@ -201,4 +260,57 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
     },
     setProgress: publishProgress,
   };
+}
+
+// Two startup attempts for the SAME recording share an owner id and pause
+// callback, so ownership alone cannot tell them apart. Each attempt takes a
+// generation token; a stale attempt aborts instead of calling play() after
+// the user paused or superseded it.
+const startupGenerations = new WeakMap<ListeningPlaybackCoordinator, number>();
+
+/**
+ * The async playback startup flow shared by the platform controllers:
+ * ownership activation, optional source attach, end-of-track restart, audio
+ * mode preparation, speed application, then play — re-checking after every
+ * await that the attempt is still current, unblocked, and owning.
+ */
+export async function startListeningPlayback(input: {
+  readonly coordinator: ListeningPlaybackCoordinator;
+  readonly id: string;
+  readonly pause: () => void;
+  /** Registers the recording with the coordinator so thread lists can point at it. */
+  readonly track?: ListeningTrackRef;
+  /** Attaches or swaps the player's source before playback starts. */
+  readonly prepareSource?: () => Promise<void>;
+  readonly restartFromBeginning: boolean;
+  readonly seekToBeginning: () => Promise<void>;
+  readonly prepareAudioMode: () => Promise<void>;
+  readonly applyPlaybackRate: (speed: number) => void;
+  readonly play: () => void;
+}): Promise<void> {
+  const coordinator = input.coordinator;
+  const generation = (startupGenerations.get(coordinator) ?? 0) + 1;
+  startupGenerations.set(coordinator, generation);
+  if (!coordinator.activate(input.id, input.pause, input.track)) return;
+  const isCurrent = () =>
+    startupGenerations.get(coordinator) === generation &&
+    !coordinator.getSnapshot().blocked &&
+    coordinator.isActive(input.id, input.pause);
+
+  try {
+    if (input.prepareSource !== undefined) {
+      await input.prepareSource();
+      if (!isCurrent()) return;
+    }
+    if (input.restartFromBeginning) await input.seekToBeginning();
+    if (!isCurrent()) return;
+
+    await input.prepareAudioMode();
+    if (!isCurrent()) return;
+
+    input.applyPlaybackRate(coordinator.getSnapshot().speed);
+    input.play();
+  } catch {
+    coordinator.release(input.id, input.pause);
+  }
 }

@@ -1,7 +1,10 @@
 import {
   createListeningPlaybackCoordinator,
-  isThreadListeningPlaying,
+  isThreadListeningLoaded,
+  planListeningTrackStart,
+  threadListeningState,
   type ListeningTrackRef,
+  type ThreadListeningState,
 } from "@t3tools/shared/listeningPlayback";
 import { useCallback, useSyncExternalStore } from "react";
 
@@ -69,25 +72,29 @@ function ensureSharedAudio(): HTMLAudioElement {
 /**
  * Loads (or resumes) a recording on the shared element and starts playback.
  * Rows always pass their freshest signed URL: a re-signed URL for the loaded
- * recording is swapped in with the position restored, which covers token
- * expiry across long pauses without a dedicated refresh path.
+ * recording is swapped in with the position restored (or replayed from the
+ * start when the old one had finished), which covers token expiry across
+ * long pauses without a dedicated refresh path.
  */
 export function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
   readonly url: string;
 }): void {
   const element = ensureSharedAudio();
-  const previous = listeningPlayback.getSnapshot().track;
-  const sameTrack = previous !== null && previous.speechId === input.track.speechId;
+  const plan = planListeningTrackStart({
+    loadedTrack: listeningPlayback.getSnapshot().track,
+    nextTrack: input.track,
+    positionSeconds: element.currentTime,
+    durationSeconds: element.duration,
+  });
   if (!listeningPlayback.activate(input.track.speechId, pauseSharedAudio, input.track)) return;
 
   if (element.src !== input.url) {
-    const resumeAt = sameTrack ? element.currentTime : 0;
     element.src = input.url;
     // Assigning currentTime before metadata arrives sets the default start
     // position, so the resume survives the source swap.
-    if (resumeAt > 0) element.currentTime = resumeAt;
-  } else if (element.duration > 0 && element.currentTime >= element.duration - 0.1) {
+    if (plan.resumeAt > 0) element.currentTime = plan.resumeAt;
+  } else if (plan.finished) {
     element.currentTime = 0;
   }
   element.preservesPitch = true;
@@ -107,6 +114,38 @@ export function seekListeningTrack(seconds: number): void {
   element.currentTime = Math.max(0, seconds);
 }
 
+/** Play/pause toggle for the loaded track, usable from any sidebar row. */
+export function toggleLoadedListeningTrack(): void {
+  const track = listeningPlayback.getSnapshot().track;
+  if (track === null) return;
+  if (track.playing) {
+    listeningPlayback.pauseActive();
+    return;
+  }
+  const element = sharedAudio;
+  if (element === null || element.src === "") return;
+  playListeningTrack({ track, url: element.src });
+}
+
+/**
+ * Stops and clears playback owned by the thread (used when it is deleted):
+ * the loaded track must not outlive the thread that owns it.
+ */
+export function stopListeningForThread(environmentId: string, threadId: string): void {
+  const snapshot = listeningPlayback.getSnapshot();
+  if (!isThreadListeningLoaded(snapshot, environmentId, threadId)) return;
+  const track = snapshot.track;
+  if (track === null) return;
+  const element = sharedAudio;
+  if (element !== null) {
+    element.pause();
+    element.removeAttribute("src");
+    element.load();
+  }
+  listeningPlayback.release(track.speechId, pauseSharedAudio);
+  listeningPlayback.setTrack(null);
+}
+
 export function useListeningPlaybackSnapshot() {
   return useSyncExternalStore(
     listeningPlayback.subscribe,
@@ -124,10 +163,17 @@ export function useListeningPlaybackProgress() {
   );
 }
 
-/** Whether the thread owns the actively playing audio; drives list indicators. */
-export function useThreadListeningPlaying(environmentId: string, threadId: string): boolean {
+/**
+ * Indicator state for a sidebar row: "playing", "paused" while the thread
+ * still owns the loaded track, or null. String snapshots bail out of
+ * re-renders exactly like a boolean selector would.
+ */
+export function useThreadListeningState(
+  environmentId: string,
+  threadId: string,
+): ThreadListeningState {
   const read = useCallback(
-    () => isThreadListeningPlaying(listeningPlayback.getSnapshot(), environmentId, threadId),
+    () => threadListeningState(listeningPlayback.getSnapshot(), environmentId, threadId),
     [environmentId, threadId],
   );
   return useSyncExternalStore(listeningPlayback.subscribe, read, read);
