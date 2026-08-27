@@ -1,5 +1,4 @@
 import * as Haptics from "expo-haptics";
-import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
@@ -16,11 +15,13 @@ import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-im
 import { consumeOwnedMessageSpeechRequest } from "@t3tools/client-runtime/operations";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
+  formatListeningClock,
   formatListeningSpeed,
   LISTENING_SPEED_MAX,
   LISTENING_SPEED_MIN,
   LISTENING_SPEED_PRESETS,
   listeningSpeedSpokenLabel,
+  type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -158,9 +159,10 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   listeningPlayback,
-  startListeningPlayback,
+  useListeningPlaybackProgress,
   useListeningPlaybackSnapshot,
 } from "../../state/listeningPlayback";
+import { playListeningTrack } from "../../state/listeningPlayer";
 import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
@@ -1280,6 +1282,8 @@ function renderFeedEntry(
         {agentVoiceReply !== null ? (
           <AssistantAgentVoiceReply
             environmentId={props.environmentId}
+            threadId={props.threadId}
+            messageId={message.id}
             speech={agentVoiceReply}
             iconSubtleColor={iconSubtleColor}
             writtenReplyDuplicatesTranscript={
@@ -1339,17 +1343,14 @@ function renderFeedEntry(
   );
 }
 
-function formatPlaybackTime(seconds: number): string {
-  const wholeSeconds = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
-}
-
 /**
  * An agent-staged voice recording rendered as the message's main content:
  * player first, the written reply collapsed behind a toggle.
  */
 function AssistantAgentVoiceReply(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
   /**
@@ -1372,6 +1373,8 @@ function AssistantAgentVoiceReply(props: {
     <View>
       <AssistantSpeechPlayer
         environmentId={props.environmentId}
+        threadId={props.threadId}
+        messageId={props.messageId}
         speech={props.speech}
         iconSubtleColor={props.iconSubtleColor}
         transcriptExpanded={transcriptExpanded}
@@ -1675,6 +1678,8 @@ function AssistantMessageMetaAndArtifacts(props: {
       {speech !== null && expanded && !isAgentVoiceReply ? (
         <AssistantSpeechPlayer
           environmentId={props.environmentId}
+          threadId={props.threadId}
+          messageId={props.messageId}
           speech={speech}
           iconSubtleColor={props.iconSubtleColor}
           transcriptExpanded={transcriptExpanded}
@@ -1688,6 +1693,8 @@ function AssistantMessageMetaAndArtifacts(props: {
 
 function AssistantSpeechPlayer(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
   readonly transcriptExpanded: boolean;
@@ -1699,7 +1706,7 @@ function AssistantSpeechPlayer(props: {
   /** Agent voice replies render the player as the message's main content. */
   readonly primary?: boolean;
 }) {
-  const { blocked, speed } = useListeningPlaybackSnapshot();
+  const { blocked, speed, track } = useListeningPlaybackSnapshot();
   // The transport sits on `bg-foreground`, so its glyph has to come from the
   // background family to stay legible. A literal white disappears on the light
   // `--color-foreground` that dark appearances and several built-in themes use.
@@ -1711,92 +1718,49 @@ function AssistantSpeechPlayer(props: {
     attachmentId: props.speech.speechId,
   });
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
-  // Primary players mount for every voice-reply row in the feed, so they must
-  // not fetch their MP3 until the user asks to play — a thread can hold many
-  // recordings and the app may be on a remote or cellular link. Secondary
-  // players only mount after an explicit expand, which is consent enough.
-  const [activated, setActivated] = useState(props.primary !== true);
+  // This row is a view over the app-scoped player: the recording keeps
+  // playing when the row unmounts (thread switches, virtualization), and
+  // remounting binds back to it. The MP3 is only fetched when the user
+  // presses play — a thread can hold many recordings and the app may be on
+  // a remote or cellular link.
+  const isActiveTrack = track !== null && track.speechId === props.speech.speechId;
+  const isPlaying = isActiveTrack && track.playing;
   const [pendingPlay, setPendingPlay] = useState(false);
-  const player = useAudioPlayer(activated ? audioUrl : null, { updateInterval: 250 });
-  const status = useAudioPlayerStatus(player);
   const audioUnavailable = audioUrlState._tag === "Failure";
   const onAudioUnavailableProp = props.onAudioUnavailable;
   useEffect(() => {
     if (audioUnavailable) onAudioUnavailableProp?.();
   }, [audioUnavailable, onAudioUnavailableProp]);
-  const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
 
-  const pausePlayer = useCallback(() => {
-    try {
-      player.pause();
-    } catch {
-      // LegendList may release the row-owned native player during virtualization.
-    }
-  }, [player]);
-
-  const applyPlaybackRate = useCallback(
-    (nextSpeed: number) => {
-      try {
-        player.shouldCorrectPitch = true;
-        player.setPlaybackRate(nextSpeed, "high");
-      } catch {
-        // The native player may not be loaded yet; the play path applies it again.
-      }
-    },
-    [player],
+  const trackRef = useMemo<ListeningTrackRef>(
+    () => ({
+      environmentId: props.environmentId,
+      threadId: props.threadId,
+      messageId: props.messageId,
+      speechId: props.speech.speechId,
+    }),
+    [props.environmentId, props.threadId, props.messageId, props.speech.speechId],
   );
 
-  useEffect(() => {
-    if (audioUrl !== null) applyPlaybackRate(speed);
-  }, [applyPlaybackRate, audioUrl, speed, status.duration]);
-
-  useEffect(
-    () => () => listeningPlayback.release(props.speech.speechId, pausePlayer),
-    [pausePlayer, props.speech.speechId],
-  );
-
-  const startPlayback = useCallback(
-    () =>
-      startListeningPlayback({
-        id: props.speech.speechId,
-        pause: pausePlayer,
-        restartFromBeginning: status.duration > 0 && status.currentTime >= status.duration - 0.1,
-        seekToBeginning: () => player.seekTo(0),
-        prepareAudioMode: () =>
-          setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }),
-        applyPlaybackRate,
-        play: () => player.play(),
-      }),
-    [
-      applyPlaybackRate,
-      pausePlayer,
-      player,
-      props.speech.speechId,
-      status.currentTime,
-      status.duration,
-    ],
-  );
-
-  const onTogglePlayback = useCallback(async () => {
-    if (status.playing) {
-      pausePlayer();
+  const onTogglePlayback = useCallback(() => {
+    if (isPlaying) {
+      listeningPlayback.pauseActive();
       return;
     }
     if (blocked) return;
-    if (!activated) {
-      setActivated(true);
+    if (audioUrl === null) {
       setPendingPlay(true);
       return;
     }
-    await startPlayback();
-  }, [activated, blocked, pausePlayer, startPlayback, status.playing]);
+    void playListeningTrack({ track: trackRef, url: audioUrl });
+  }, [audioUrl, blocked, isPlaying, trackRef]);
 
-  // First tap on a deferred player: wait for the source to attach, then play.
+  // First tap before the signed URL resolves: play as soon as it lands.
   useEffect(() => {
-    if (!pendingPlay || !activated || audioUrl === null) return;
+    if (!pendingPlay || audioUrl === null) return;
     setPendingPlay(false);
-    void startPlayback();
-  }, [activated, audioUrl, pendingPlay, startPlayback]);
+    void playListeningTrack({ track: trackRef, url: audioUrl });
+  }, [audioUrl, pendingPlay, trackRef]);
 
   return (
     <View
@@ -1829,7 +1793,7 @@ function AssistantSpeechPlayer(props: {
             </Pressable>
           ) : null}
         </View>
-      ) : audioUrl === null && activated ? (
+      ) : audioUrl === null && pendingPlay ? (
         <View className="flex-row items-center gap-2 py-1">
           <ActivityIndicator size="small" color={props.iconSubtleColor} />
           <Text className="text-xs text-foreground-muted">Loading audio…</Text>
@@ -1842,7 +1806,7 @@ function AssistantSpeechPlayer(props: {
               accessibilityLabel={
                 blocked
                   ? `Play ${props.primary ? "voice reply" : "listening version"} unavailable while recording`
-                  : status.playing
+                  : isPlaying
                     ? `Pause ${props.primary ? "voice reply" : "listening version"}`
                     : `Play ${props.primary ? "voice reply" : "listening version"}`
               }
@@ -1852,29 +1816,25 @@ function AssistantSpeechPlayer(props: {
                 blocked && "opacity-50",
               )}
               disabled={blocked}
-              onPress={() => void onTogglePlayback()}
+              onPress={onTogglePlayback}
             >
               <SymbolView
-                name={status.playing ? "pause.fill" : "play"}
+                name={isPlaying ? "pause.fill" : "play"}
                 size={15}
                 tintColor={onForegroundColor}
                 type="monochrome"
               />
             </Pressable>
-            <View className="flex-1 gap-1.5">
-              <View
-                className="h-1.5 overflow-hidden rounded-full"
-                style={{ backgroundColor: trackColor }}
-              >
+            {isActiveTrack ? (
+              <ListeningTransportProgress trackColor={trackColor} />
+            ) : (
+              <View className="flex-1">
                 <View
-                  className="h-full rounded-full bg-foreground"
-                  style={{ width: `${progress * 100}%` }}
+                  className="h-1.5 overflow-hidden rounded-full"
+                  style={{ backgroundColor: trackColor }}
                 />
               </View>
-              <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
-                {formatPlaybackTime(status.currentTime)} / {formatPlaybackTime(status.duration)}
-              </Text>
-            </View>
+            )}
           </View>
           {blocked ? (
             <Text className="text-xs text-foreground-muted">Finish recording to listen.</Text>
@@ -1901,6 +1861,33 @@ function AssistantSpeechPlayer(props: {
       {props.transcriptExpanded ? (
         <Text className="text-sm leading-5 text-foreground-muted">{props.speech.transcript}</Text>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Live position for the loaded recording. Mounted only in the active row so
+ * the player's 250ms progress tick never re-renders inactive players or the
+ * feed around them.
+ */
+function ListeningTransportProgress(props: { readonly trackColor: string }) {
+  const { currentTime, duration } = useListeningPlaybackProgress();
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  return (
+    <View className="flex-1 gap-1.5">
+      <View
+        className="h-1.5 overflow-hidden rounded-full"
+        style={{ backgroundColor: props.trackColor }}
+      >
+        <View
+          className="h-full rounded-full bg-foreground"
+          style={{ width: `${progress * 100}%` }}
+        />
+      </View>
+      <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
+        {formatListeningClock(currentTime)} / {formatListeningClock(duration)}
+      </Text>
     </View>
   );
 }

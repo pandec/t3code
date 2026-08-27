@@ -21,6 +21,7 @@ import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { listeningPlayback, useThreadListeningPlaying } from "../../state/listeningPlayback";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
@@ -476,6 +477,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
     props;
   const status = resolveThreadStatus(thread);
+  // Re-renders only when the boolean flips — never on the player's progress tick.
+  const isListeningPlaying = useThreadListeningPlaying(thread.environmentId, thread.id);
+  const pauseListeningAudio = useCallback(() => listeningPlayback.pauseActive(), []);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
@@ -546,6 +550,24 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         {effectiveStatus.label}
       </Text>
     </View>
+  ) : null;
+
+  // The speaker doubles as the stop affordance: with the playing thread's
+  // message row off screen, tapping here is how the audio gets paused.
+  const listeningIndicator = isListeningPlaying ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Pause listening audio"
+      hitSlop={8}
+      onPress={pauseListeningAudio}
+    >
+      <SymbolView
+        name="speaker.wave.2.fill"
+        size={13}
+        tintColor={selected ? selectedForegroundColor : iconSubtleColor}
+        type="monochrome"
+      />
+    </Pressable>
   ) : null;
 
   const subtitleRow =
@@ -628,6 +650,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 {thread.title}
               </Text>
               <View className="flex-row items-center gap-2">
+                {listeningIndicator}
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
                 <SymbolView
@@ -687,6 +710,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               {thread.title}
             </Text>
             <View className="flex-row items-center gap-2">
+              {listeningIndicator}
               {statusPill}
               <Text
                 className={cn(

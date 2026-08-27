@@ -18,11 +18,13 @@ const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
+  formatListeningClock,
   formatListeningSpeed,
   LISTENING_SPEED_MAX,
   LISTENING_SPEED_MIN,
   LISTENING_SPEED_PRESETS,
   listeningSpeedSpokenLabel,
+  type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
 import {
   createContext,
@@ -36,6 +38,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -72,6 +75,8 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  PauseIcon,
+  PlayIcon,
   PlusIcon,
   SearchIcon,
   SquarePenIcon,
@@ -149,7 +154,13 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
-import { listeningPlayback, useListeningPlaybackSnapshot } from "../../state/listeningPlayback";
+import {
+  listeningPlayback,
+  playListeningTrack,
+  seekListeningTrack,
+  useListeningPlaybackProgress,
+  useListeningPlaybackSnapshot,
+} from "../../state/listeningPlayback";
 
 import {
   buildInlineTerminalContextText,
@@ -1469,6 +1480,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {isAgentVoiceReply && speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
+            threadId={ctx.threadRef?.threadId ?? ""}
+            messageId={row.message.id}
             speech={speech}
             onRetry={null}
             onAudioUnavailable={onVoiceReplyAudioUnavailable}
@@ -1613,6 +1626,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {speech !== null && speechExpanded && !isAgentVoiceReply ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
+            threadId={ctx.threadRef?.threadId ?? ""}
+            messageId={row.message.id}
             speech={speech}
             onRetry={() => void prepareSpeech()}
           />
@@ -1624,12 +1639,18 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
 function AssistantSpeechPlayer({
   environmentId,
+  threadId,
+  messageId,
   speech,
   onRetry,
   onAudioUnavailable,
   primary = false,
 }: {
   environmentId: EnvironmentId;
+  /** Empty when the route key failed to parse; playback still lifts, the
+      thread-list indicator just cannot point back at the thread. */
+  threadId: string;
+  messageId: string;
   speech: MessageSpeechSynthesisResult;
   /**
    * null hides the regenerate action. Agent recordings must not offer it:
@@ -1642,8 +1663,7 @@ function AssistantSpeechPlayer({
   /** Agent voice replies render the player as the message's main content. */
   primary?: boolean;
 }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const { blocked, speed } = useListeningPlaybackSnapshot();
+  const { blocked, speed, track } = useListeningPlaybackSnapshot();
   const audioUrlState = useAssetUrlState(environmentId, {
     _tag: "attachment",
     attachmentId: speech.speechId,
@@ -1653,21 +1673,26 @@ function AssistantSpeechPlayer({
     if (audioUnavailable) onAudioUnavailable?.();
   }, [audioUnavailable, onAudioUnavailable]);
 
-  const pauseAudio = useCallback(() => {
-    audioRef.current?.pause();
-  }, []);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (audio === null) return;
-    audio.preservesPitch = true;
-    audio.playbackRate = speed;
-  }, [audioUrlState, speed]);
-
-  useEffect(
-    () => () => listeningPlayback.release(speech.speechId, pauseAudio),
-    [pauseAudio, speech.speechId],
+  // This row is a view over the app-scoped player: the recording keeps
+  // playing when the row unmounts, and remounting binds back to it.
+  const isActiveTrack = track !== null && track.speechId === speech.speechId;
+  const isPlaying = isActiveTrack && track.playing;
+  const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
+  const trackRef = useMemo<ListeningTrackRef>(
+    () => ({ environmentId, threadId, messageId, speechId: speech.speechId }),
+    [environmentId, threadId, messageId, speech.speechId],
   );
+
+  const handleTogglePlayback = useCallback(() => {
+    if (isPlaying) {
+      listeningPlayback.pauseActive();
+      return;
+    }
+    if (audioUrl === null) return;
+    playListeningTrack({ track: trackRef, url: audioUrl });
+  }, [audioUrl, isPlaying, trackRef]);
+
+  const playerLabel = primary ? "voice reply" : "listening version";
 
   return (
     <div
@@ -1700,24 +1725,34 @@ function AssistantSpeechPlayer({
         </div>
       ) : (
         <>
-          <audio
-            ref={audioRef}
-            aria-disabled={blocked}
-            className={cn("h-9 w-full", blocked && "pointer-events-none opacity-60")}
-            controls
-            onLoadedMetadata={(event) => {
-              event.currentTarget.preservesPitch = true;
-              event.currentTarget.playbackRate = speed;
-            }}
-            onPlay={(event) => {
-              if (!listeningPlayback.activate(speech.speechId, pauseAudio)) {
-                event.currentTarget.pause();
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label={
+                blocked
+                  ? `Play ${playerLabel} unavailable while recording`
+                  : isPlaying
+                    ? `Pause ${playerLabel}`
+                    : `Play ${playerLabel}`
               }
-            }}
-            preload="metadata"
-            src={audioUrlState.url}
-            tabIndex={blocked ? -1 : undefined}
-          />
+              disabled={blocked}
+              onClick={handleTogglePlayback}
+              className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+            >
+              {isPlaying ? (
+                <PauseIcon aria-hidden className="size-4 fill-current" />
+              ) : (
+                <PlayIcon aria-hidden className="size-4 translate-x-px fill-current" />
+              )}
+            </button>
+            {isActiveTrack ? (
+              <ListeningTransportProgress blocked={blocked} />
+            ) : (
+              <div className="min-w-0 flex-1">
+                <div className="h-1.5 rounded-full bg-muted-foreground/20" />
+              </div>
+            )}
+          </div>
           {blocked ? (
             <p className="mt-1 text-xs text-muted-foreground">Finish recording to listen.</p>
           ) : null}
@@ -1732,6 +1767,35 @@ function AssistantSpeechPlayer({
           {speech.transcript}
         </p>
       </details>
+    </div>
+  );
+}
+
+/**
+ * Live position for the loaded recording. Mounted only in the active row so
+ * the 4Hz progress tick never re-renders inactive players or the timeline.
+ */
+function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
+  const { currentTime, duration } = useListeningPlaybackProgress();
+  const ratio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  return (
+    <div className="min-w-0 flex-1">
+      <input
+        aria-label="Playback position"
+        className="settings-slider block w-full"
+        disabled={blocked}
+        max={duration > 0 ? duration : 0}
+        min={0}
+        onChange={(event) => seekListeningTrack(event.currentTarget.valueAsNumber)}
+        step={0.1}
+        style={{ "--settings-slider-progress": `${ratio * 100}%` } as CSSProperties}
+        type="range"
+        value={Math.min(currentTime, duration > 0 ? duration : currentTime)}
+      />
+      <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+        {formatListeningClock(currentTime)} / {formatListeningClock(duration)}
+      </p>
     </div>
   );
 }

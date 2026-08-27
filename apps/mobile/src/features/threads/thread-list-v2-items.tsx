@@ -23,6 +23,7 @@ import { resolveRowAccentTintAlpha, withAccentAlpha } from "../../lib/accentTint
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { listeningPlayback, useThreadListeningPlaying } from "../../state/listeningPlayback";
 import { useAccentTintSettings } from "../../state/use-mobile-preferences";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
@@ -580,6 +581,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
   const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
+  // Re-renders only when the boolean flips — never on the player's progress tick.
+  const isListeningPlaying = useThreadListeningPlaying(thread.environmentId, thread.id);
+  const pauseListeningAudio = useCallback(() => listeningPlayback.pauseActive(), []);
+  // The speaker doubles as the stop affordance: with the playing thread's
+  // message row off screen, tapping here is how the audio gets paused.
+  const listeningIndicator = isListeningPlaying ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Pause listening audio"
+      hitSlop={8}
+      onPress={pauseListeningAudio}
+    >
+      <SymbolView name="speaker.wave.2.fill" size={12} tintColor={pinTintColor} type="monochrome" />
+    </Pressable>
+  ) : null;
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRegenerateTitle = useCallback(
@@ -920,6 +936,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         >
           {props.projectTitle ?? props.project?.title ?? ""}
         </Text>
+        {listeningIndicator}
         {pinnedRow ? (
           <SymbolView name="pin" size={11} tintColor={pinTintColor} type="monochrome" />
         ) : null}
@@ -1138,6 +1155,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               />
             ) : null}
           </View>
+          {listeningIndicator}
           <Text
             className={cn(
               "text-sm tabular-nums",

@@ -112,4 +112,68 @@ describe("mobile listening playback startup", () => {
 
     expect(applyPlaybackRate).toHaveBeenCalledWith(1.75);
   });
+
+  it("registers the track and attaches the source before playing", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const order: string[] = [];
+    const track = {
+      environmentId: "env-1",
+      threadId: "thread-1",
+      messageId: "message-1",
+      speechId: "speech-a",
+    };
+
+    await startListeningPlayback({
+      coordinator,
+      id: track.speechId,
+      pause: vi.fn(),
+      track,
+      prepareSource: async () => {
+        order.push("prepareSource");
+      },
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode: async () => {
+        order.push("prepareAudioMode");
+      },
+      applyPlaybackRate: vi.fn(),
+      play: () => {
+        order.push("play");
+      },
+    });
+
+    expect(order).toEqual(["prepareSource", "prepareAudioMode", "play"]);
+    expect(coordinator.getSnapshot().track).toEqual({ ...track, playing: false });
+  });
+
+  it("stops after source attach when recording starts mid-load", async () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const loadStarted = deferred();
+    const finishLoad = deferred();
+    const prepareAudioMode = vi.fn(async () => undefined);
+    const play = vi.fn();
+
+    const startup = startListeningPlayback({
+      coordinator,
+      id: "speech-a",
+      pause: vi.fn(),
+      prepareSource: async () => {
+        loadStarted.resolve();
+        await finishLoad.promise;
+      },
+      restartFromBeginning: false,
+      seekToBeginning: vi.fn(async () => undefined),
+      prepareAudioMode,
+      applyPlaybackRate: vi.fn(),
+      play,
+    });
+
+    await loadStarted.promise;
+    coordinator.setBlocked(true);
+    finishLoad.resolve();
+    await startup;
+
+    expect(prepareAudioMode).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+  });
 });
