@@ -61,7 +61,11 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   config: Pick<ClaudeSettings, "homePath" | "shadowHomePath">,
   baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
-  const resolvedBaseEnv = baseEnv ?? process.env;
+  // Always a copy, never the base env by reference: when the base is
+  // `process.env`, a by-reference environment would observe the fork driver's
+  // temporary CLAUDE_CONFIG_DIR override (see ClaudeSessionFork.ts) at
+  // whatever moment a session start happens to snapshot it.
+  const environment = { ...(baseEnv ?? process.env) };
   // Isolate this instance's config via CLAUDE_CONFIG_DIR rather than HOME.
   // Overriding HOME also relocates the macOS login keychain lookup
   // ($HOME/Library/Keychains), so the spawned CLI can't find its stored
@@ -73,22 +77,14 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     // The shadow dir wins over homePath: the CLI must read this account's
     // credentials, while shared state reaches the homePath dir through the
     // materialized symlinks.
-    return {
-      ...resolvedBaseEnv,
-      CLAUDE_CONFIG_DIR: shadowConfigDirPath,
-    };
+    environment.CLAUDE_CONFIG_DIR = shadowConfigDirPath;
+    return environment;
   }
   const homePath = config.homePath.trim();
-  // Copy instead of returning the base env by reference: when the base is
-  // `process.env`, a by-reference environment would observe the fork driver's
-  // temporary CLAUDE_CONFIG_DIR override (see ClaudeSessionFork.ts) at
-  // whatever moment a session start happens to snapshot it.
-  if (homePath.length === 0) return { ...resolvedBaseEnv };
-  const resolvedHomePath = yield* resolveClaudeHomePath(config);
-  return {
-    ...resolvedBaseEnv,
-    CLAUDE_CONFIG_DIR: resolvedHomePath,
-  };
+  if (homePath.length > 0) {
+    environment.CLAUDE_CONFIG_DIR = yield* resolveClaudeHomePath(config);
+  }
+  return environment;
 });
 
 // The continuation key deliberately ignores `shadowHomePath`: a shadow

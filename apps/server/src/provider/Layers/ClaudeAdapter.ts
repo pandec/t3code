@@ -93,6 +93,7 @@ import {
 } from "../Drivers/ClaudeSessionImport.ts";
 import {
   ClaudeSessionForkError,
+  type ClaudeSessionForkInput,
   forkClaudePersistedSession,
 } from "../Drivers/ClaudeSessionFork.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
@@ -393,11 +394,7 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime;
-  readonly forkSession?: (input: {
-    readonly sessionId: string;
-    readonly dir?: string;
-    readonly configDirPath: string;
-  }) => Promise<{ readonly sessionId: string }>;
+  readonly forkSession?: (input: ClaudeSessionForkInput) => Promise<{ readonly sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }

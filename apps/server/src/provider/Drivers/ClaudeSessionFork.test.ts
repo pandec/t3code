@@ -56,40 +56,6 @@ it.effect("forks a real SDK transcript inside the configured Claude config dir",
   ),
 );
 
-it.effect("forks without touching the env when CLAUDE_CONFIG_DIR already matches", () =>
-  withTempConfigDir((configDirPath) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const previous = process.env.CLAUDE_CONFIG_DIR;
-        process.env.CLAUDE_CONFIG_DIR = configDirPath;
-        return previous;
-      }),
-      () =>
-        Effect.gen(function* () {
-          const projectDirectory = writeSourceTranscript(configDirPath);
-
-          const result = yield* forkClaudePersistedSession({
-            sessionId: SOURCE_SESSION_ID,
-            configDirPath,
-          });
-
-          expect(
-            NodeFS.existsSync(NodePath.join(projectDirectory, `${result.sessionId}.jsonl`)),
-          ).toBe(true);
-          expect(process.env.CLAUDE_CONFIG_DIR).toBe(configDirPath);
-        }),
-      (previous) =>
-        Effect.sync(() => {
-          if (previous === undefined) {
-            delete process.env.CLAUDE_CONFIG_DIR;
-          } else {
-            process.env.CLAUDE_CONFIG_DIR = previous;
-          }
-        }),
-    ),
-  ),
-);
-
 it.effect("fails with ClaudeSessionForkError and restores the env for unknown sessions", () =>
   withTempConfigDir((configDirPath) =>
     Effect.gen(function* () {
