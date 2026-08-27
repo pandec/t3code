@@ -42,7 +42,6 @@ import { useEnvironmentQuery } from "../../state/query";
 import {
   appendComposerDraftAttachments,
   clearComposerDraft,
-  copyComposerDraftContentIfEmpty,
   getComposerDraftSnapshot,
   isComposerDraftEmpty,
   removeComposerDraftAttachment,
@@ -606,21 +605,13 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     );
   }, [availableBranches, branchQuery]);
 
-  const setProject = useCallback(
-    (project: EnvironmentProject) => {
-      const nextProjectKey = scopedProjectKey(project.environmentId, project.id);
-      const nextDraftKey = `new-task:${nextProjectKey}`;
-      if (
-        selectedProjectDraftKey?.startsWith("new-task:") &&
-        selectedProjectDraftKey !== nextDraftKey
-      ) {
-        void copyComposerDraftContentIfEmpty(selectedProjectDraftKey, nextDraftKey);
-      }
-      setSelectedEnvironmentId(project.environmentId);
-      setSelectedProjectKey(nextProjectKey);
-    },
-    [selectedProjectDraftKey],
-  );
+  // Drafts stay scoped to their project on purpose: copying the current draft
+  // into the next project's empty draft made one sticky draft spread to every
+  // project and resurrect after the user cleared it.
+  const setProject = useCallback((project: EnvironmentProject) => {
+    setSelectedEnvironmentId(project.environmentId);
+    setSelectedProjectKey(scopedProjectKey(project.environmentId, project.id));
+  }, []);
 
   const selectEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
