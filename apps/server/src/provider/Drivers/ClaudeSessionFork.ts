@@ -21,9 +21,9 @@ export class ClaudeSessionForkError extends Schema.TaggedErrorClass<ClaudeSessio
  * `@anthropic-ai/claude-agent-sdk` on disk, so spawning a subprocess that
  * imports the SDK by name cannot work there.
  */
-let forkQueue: Promise<unknown> = Promise.resolve();
+let forkQueue = Promise.resolve();
 
-const runWithClaudeConfigDir = <A>(configDirPath: string, run: () => Promise<A>): Promise<A> => {
+const runWithClaudeConfigDir = <A>(configDirPath: string, run: () => Promise<A>) => {
   const task = forkQueue.then(async () => {
     const previous = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = configDirPath;
