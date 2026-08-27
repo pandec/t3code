@@ -215,6 +215,7 @@ function haveSameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>
 export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   /**
@@ -1084,6 +1085,7 @@ function renderFeedEntry(
     | "messageSummariesAvailable"
     | "steerPendingMessageIds"
   > & {
+    readonly getThreadTitle: () => string;
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
@@ -1283,6 +1285,7 @@ function renderFeedEntry(
           <AssistantAgentVoiceReply
             environmentId={props.environmentId}
             threadId={props.threadId}
+            getThreadTitle={props.getThreadTitle}
             messageId={message.id}
             speech={agentVoiceReply}
             iconSubtleColor={iconSubtleColor}
@@ -1310,6 +1313,7 @@ function renderFeedEntry(
           <AssistantMessageMetaAndArtifacts
             environmentId={props.environmentId}
             threadId={props.threadId}
+            getThreadTitle={props.getThreadTitle}
             messageId={message.id}
             messageText={message.text}
             speechRequest={message.speechRequest ?? null}
@@ -1350,6 +1354,7 @@ function renderFeedEntry(
 function AssistantAgentVoiceReply(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly getThreadTitle: () => string;
   readonly messageId: MessageId;
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
@@ -1374,6 +1379,7 @@ function AssistantAgentVoiceReply(props: {
       <AssistantSpeechPlayer
         environmentId={props.environmentId}
         threadId={props.threadId}
+        getThreadTitle={props.getThreadTitle}
         messageId={props.messageId}
         speech={props.speech}
         iconSubtleColor={props.iconSubtleColor}
@@ -1412,6 +1418,7 @@ function AssistantAgentVoiceReply(props: {
 function AssistantMessageMetaAndArtifacts(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly getThreadTitle: () => string;
   readonly messageId: MessageId;
   readonly messageText: string;
   readonly speechRequest: MessageSpeechRequest | null;
@@ -1679,6 +1686,7 @@ function AssistantMessageMetaAndArtifacts(props: {
         <AssistantSpeechPlayer
           environmentId={props.environmentId}
           threadId={props.threadId}
+          getThreadTitle={props.getThreadTitle}
           messageId={props.messageId}
           speech={speech}
           iconSubtleColor={props.iconSubtleColor}
@@ -1694,6 +1702,7 @@ function AssistantMessageMetaAndArtifacts(props: {
 function AssistantSpeechPlayer(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly getThreadTitle: () => string;
   readonly messageId: MessageId;
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
@@ -1755,11 +1764,12 @@ function AssistantSpeechPlayer(props: {
     if (blocked) return;
     requestListeningTrack({
       track: trackRef,
+      metadata: { title: props.getThreadTitle() },
       url: audioUrl,
       watchUrl: (onResolved) =>
         watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
     });
-  }, [audioUrl, blocked, environmentId, isPlaying, speechId, trackRef]);
+  }, [audioUrl, blocked, environmentId, isPlaying, props.getThreadTitle, speechId, trackRef]);
 
   return (
     <View
@@ -2260,6 +2270,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const previousLatestTurnRef = useRef(props.latestTurn);
   const settledTurnOpeningAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const threadTitleRef = useRef(props.threadTitle);
+  useEffect(() => {
+    threadTitleRef.current = props.threadTitle;
+  }, [props.threadTitle]);
+  const getThreadTitle = useCallback(() => threadTitleRef.current, []);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -2975,6 +2990,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       renderFeedEntry(info, {
         environmentId: props.environmentId,
         threadId: props.threadId,
+        getThreadTitle,
         messageSummariesAvailable: props.messageSummariesAvailable,
         textToSpeechAvailable: props.textToSpeechAvailable,
         textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
@@ -3011,6 +3027,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentColors,
       reviewCommentBubbleWidth,
       userBubbleMaxWidth,
+      getThreadTitle,
       onCopyWorkRow,
       onMarkdownLinkPress,
       onPressImage,
