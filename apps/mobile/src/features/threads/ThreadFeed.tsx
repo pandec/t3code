@@ -1441,7 +1441,9 @@ function AssistantMessageMetaAndArtifacts(props: {
   });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
   const [legacyPreparing, setLegacyPreparing] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // null = untouched: a row that already owns a recording starts expanded,
+  // so returning to a thread still shows which messages have one.
+  const [expandedState, setExpandedState] = useState<boolean | null>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [summaryPreparing, setSummaryPreparing] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -1469,6 +1471,7 @@ function AssistantMessageMetaAndArtifacts(props: {
   // row must not offer a second one (or a regeneration that would replace the
   // agent's recording with a synthesized listening version).
   const isAgentVoiceReply = speech !== null && speech.origin === "agent";
+  const expanded = expandedState ?? speech !== null;
   const previousSpeechRequestId = useRef(props.speechRequest?.requestId);
   useEffect(() => {
     if (!props.textToSpeechPersistentJobs) return;
@@ -1478,7 +1481,7 @@ function AssistantMessageMetaAndArtifacts(props: {
     if (previousRequestId === undefined || currentRequestId !== undefined) return;
     if (!consumeOwnedMessageSpeechRequest(previousRequestId)) return;
     if (speech !== null) {
-      setExpanded(true);
+      setExpandedState(true);
       return;
     }
     Alert.alert(
@@ -1519,7 +1522,7 @@ function AssistantMessageMetaAndArtifacts(props: {
       });
       if (result._tag === "Success") {
         rememberMessageSpeech(props.environmentId, props.messageText, result.value);
-        setExpanded(true);
+        setExpandedState(true);
         return;
       }
       Alert.alert(
@@ -1543,11 +1546,11 @@ function AssistantMessageMetaAndArtifacts(props: {
 
   const onPressSpeech = useCallback(async () => {
     if (speech !== null) {
-      setExpanded((current) => !current);
+      setExpandedState(!expanded);
       return;
     }
     await prepareSpeech();
-  }, [prepareSpeech, speech]);
+  }, [expanded, prepareSpeech, speech]);
 
   const onPressSummary = useCallback(async () => {
     if (summary !== null) {
