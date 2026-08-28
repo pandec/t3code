@@ -1348,8 +1348,7 @@ function renderFeedEntry(
 }
 
 /**
- * An agent-staged voice recording rendered as the message's main content:
- * player first, the written reply collapsed behind a toggle.
+ * An agent-staged voice recording rendered below the written reply.
  */
 function AssistantAgentVoiceReply(props: {
   readonly environmentId: EnvironmentId;
@@ -1359,23 +1358,23 @@ function AssistantAgentVoiceReply(props: {
   readonly speech: MessageSpeechSynthesisResult;
   readonly iconSubtleColor: ColorValue;
   /**
-   * A voice-only turn's text is the transcript itself; the toggle is skipped
-   * for it (the player's "View transcript" already covers it), but a dead
-   * recording still forces the text visible — it is the message then.
+   * A voice-only turn's text is the transcript itself and stays hidden (the
+   * player's "View transcript" already covers it), but a dead recording still
+   * forces the text visible — it is the message then.
    */
   readonly writtenReplyDuplicatesTranscript: boolean;
   readonly children: ReactNode;
 }) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
-  // When the recording's file is gone, the written reply becomes the message
-  // content and is forced visible instead of hiding behind the toggle.
   const [audioUnavailable, setAudioUnavailable] = useState(false);
   const onAudioUnavailable = useCallback(() => setAudioUnavailable(true), []);
-  const hasWrittenReply = props.children !== null;
+  const showWrittenReply =
+    props.children !== null && (!props.writtenReplyDuplicatesTranscript || audioUnavailable);
 
   return (
-    <View>
+    // gap, not player margin, so a voice-only turn's player sits flush.
+    <View className="gap-1.5">
+      {showWrittenReply ? props.children : null}
       <AssistantSpeechPlayer
         environmentId={props.environmentId}
         threadId={props.threadId}
@@ -1389,28 +1388,6 @@ function AssistantAgentVoiceReply(props: {
         onAudioUnavailable={onAudioUnavailable}
         primary
       />
-      {hasWrittenReply && !props.writtenReplyDuplicatesTranscript && !audioUnavailable ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: writtenReplyExpanded }}
-          className="min-h-8 flex-row items-center gap-1 px-0.5"
-          onPress={() => setWrittenReplyExpanded((current) => !current)}
-        >
-          <Text className="font-t3-medium text-xs text-foreground-muted">
-            {writtenReplyExpanded ? "Hide written reply" : "Show written reply"}
-          </Text>
-          <SymbolView
-            name={writtenReplyExpanded ? "chevron.up" : "chevron.down"}
-            size={13}
-            tintColor={props.iconSubtleColor}
-            type="monochrome"
-          />
-        </Pressable>
-      ) : null}
-      {hasWrittenReply &&
-      (audioUnavailable || (writtenReplyExpanded && !props.writtenReplyDuplicatesTranscript))
-        ? props.children
-        : null}
     </View>
   );
 }
@@ -1723,6 +1700,7 @@ function AssistantSpeechPlayer(props: {
   // background family to stay legible. A literal white disappears on the light
   // `--color-foreground` that dark appearances and several built-in themes use.
   const onForegroundColor = useThemeColor("--color-sheet");
+  const accentColor = useThemeColor("--color-accent");
   const foregroundColor = String(useThemeColor("--color-foreground"));
   const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
   const audioUrlState = useAssetUrlState(props.environmentId, {
@@ -1777,15 +1755,17 @@ function AssistantSpeechPlayer(props: {
   return (
     <View
       className={cn(
-        "gap-2 rounded-2xl border border-border bg-subtle p-3",
-        props.primary ? "mb-1" : "mt-2",
+        "gap-2 rounded-2xl border p-3",
+        // The accent marks the agent's own recording apart from the neutral
+        // listening-version card.
+        props.primary ? "border-accent/30 bg-accent/10" : "mt-2 border-border bg-subtle",
       )}
     >
       <View className="flex-row items-center gap-2">
         <SymbolView
-          name="headphones"
+          name={props.primary ? "waveform" : "headphones"}
           size={14}
-          tintColor={props.iconSubtleColor}
+          tintColor={props.primary ? accentColor : props.iconSubtleColor}
           type="monochrome"
         />
         <Text className="font-t3-bold text-xs text-foreground">

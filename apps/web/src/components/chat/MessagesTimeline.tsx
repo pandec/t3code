@@ -58,6 +58,7 @@ import {
 } from "../../lib/diffRendering";
 import ChatMarkdown from "../ChatMarkdown";
 import {
+  AudioLinesIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -1299,7 +1300,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   // so returning to a thread still shows which messages have one. Rows with
   // no recording stay collapsed.
   const [speechExpandedState, setSpeechExpandedState] = useState<boolean | null>(null);
-  const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
   const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const readSessionArtifacts = useCallback(
@@ -1355,20 +1355,17 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   ]);
   const [voiceReplyAudioUnavailable, setVoiceReplyAudioUnavailable] = useState(false);
   const onVoiceReplyAudioUnavailable = useCallback(() => setVoiceReplyAudioUnavailable(true), []);
-  // A voice-only turn publishes its transcript as the message text; a
-  // "written reply" that merely duplicates the transcript is not offered.
+  // A voice-only turn publishes its transcript as the message text; showing
+  // it would duplicate what the player's "View transcript" already offers.
   const hasDistinctWrittenReply =
     isAgentVoiceReply &&
     speech !== null &&
     row.message.text.trim().length > 0 &&
     row.message.text.trim() !== speech.transcript.trim();
   // Never leave the row content-less: when the player is hidden or its audio
-  // cannot load, the written reply always shows.
+  // cannot load, the transcript-as-text always shows.
   const showMessageText =
-    !isAgentVoiceReply ||
-    !speechExpanded ||
-    voiceReplyAudioUnavailable ||
-    (writtenReplyExpanded && hasDistinctWrittenReply);
+    !isAgentVoiceReply || !speechExpanded || voiceReplyAudioUnavailable || hasDistinctWrittenReply;
 
   const canShowSpeech =
     speech !== null ||
@@ -1488,6 +1485,16 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        {showMessageText ? (
+          <ChatMarkdown
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        ) : null}
         {isAgentVoiceReply && speech !== null && speechExpanded ? (
           <AssistantSpeechPlayer
             environmentId={ctx.activeThreadEnvironmentId}
@@ -1498,30 +1505,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onRetry={null}
             onAudioUnavailable={onVoiceReplyAudioUnavailable}
             primary
-          />
-        ) : null}
-        {isAgentVoiceReply &&
-        speechExpanded &&
-        hasDistinctWrittenReply &&
-        !voiceReplyAudioUnavailable ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="mb-1 text-xs text-muted-foreground"
-            aria-expanded={writtenReplyExpanded}
-            onClick={() => setWrittenReplyExpanded((expanded) => !expanded)}
-          >
-            {writtenReplyExpanded ? "Hide written reply" : "Show written reply"}
-          </Button>
-        ) : null}
-        {showMessageText ? (
-          <ChatMarkdown
-            text={messageText}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-            skills={ctx.skills}
           />
         ) : null}
         <AssistantChangedFilesSection
@@ -1723,12 +1706,19 @@ function AssistantSpeechPlayer({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/70 bg-secondary/35 p-3",
-        primary ? "mb-1.5" : "mt-2",
+        "mt-2 rounded-xl border p-3",
+        // The accent marks the agent's own recording apart from the neutral
+        // listening-version card; first:mt-0 covers voice-only turns where
+        // the player is the message.
+        primary ? "border-primary/30 bg-primary/5 first:mt-0" : "border-border/70 bg-secondary/35",
       )}
     >
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-        <HeadphonesIcon className="size-3.5 text-muted-foreground" />
+        {primary ? (
+          <AudioLinesIcon className="size-3.5 text-primary" />
+        ) : (
+          <HeadphonesIcon className="size-3.5 text-muted-foreground" />
+        )}
         <span>{primary ? "Voice reply" : "Listening version"}</span>
       </div>
       {audioUrlState._tag === "Failure" ? (

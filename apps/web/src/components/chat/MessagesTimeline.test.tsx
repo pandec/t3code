@@ -256,7 +256,64 @@ function buildAssistantMessageEntry(text: string) {
   };
 }
 
+function buildAgentVoiceReplyEntry(text: string, transcript: string) {
+  const messageId = MessageId.make("message-assistant-voice");
+  return {
+    id: "entry-assistant-voice",
+    kind: "message" as const,
+    createdAt: MESSAGE_CREATED_AT,
+    message: {
+      id: messageId,
+      role: "assistant" as const,
+      text,
+      turnId: TurnId.make("turn-voice"),
+      createdAt: MESSAGE_CREATED_AT,
+      updatedAt: MESSAGE_CREATED_AT,
+      streaming: false,
+      speech: {
+        messageId,
+        speechId: "speech-voice-1",
+        transcript,
+        mimeType: "audio/mpeg" as const,
+        sizeBytes: 1024,
+        origin: "agent" as const,
+        createdAt: MESSAGE_CREATED_AT,
+      },
+    },
+  };
+}
+
 describe("MessagesTimeline", () => {
+  it("renders an agent voice reply below the written text with no toggle", () => {
+    const text = "Full written answer with all the details.";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildAgentVoiceReplyEntry(text, "Short spoken recap.")]}
+      />,
+    );
+
+    expect(markup).toContain("Voice reply");
+    expect(markup).not.toContain("written reply");
+    const textIndex = markup.indexOf(text);
+    expect(textIndex).toBeGreaterThan(-1);
+    expect(textIndex).toBeLessThan(markup.indexOf("Voice reply"));
+  });
+
+  it("keeps a voice-only turn's transcript out of the message body", () => {
+    const transcript = "Spoken-only recap of the change.";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildAgentVoiceReplyEntry(transcript, transcript)]}
+      />,
+    );
+
+    // Once inside the player's collapsed transcript, not again as body text.
+    expect(markup).toContain("Voice reply");
+    expect(markup.split(transcript).length - 1).toBe(1);
+  });
+
   it("shows the listening action only when text-to-speech is available", () => {
     const timelineEntries = [
       {
