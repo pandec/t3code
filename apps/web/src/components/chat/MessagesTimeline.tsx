@@ -1295,8 +1295,9 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   });
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
   const [legacySpeechPhase, setLegacySpeechPhase] = useState<"idle" | "preparing">("idle");
-  // null = untouched: agent voice replies start expanded, listening versions
-  // start collapsed.
+  // null = untouched: any row that already owns a recording starts expanded,
+  // so returning to a thread still shows which messages have one. Rows with
+  // no recording stay collapsed.
   const [speechExpandedState, setSpeechExpandedState] = useState<boolean | null>(null);
   const [writtenReplyExpanded, setWrittenReplyExpanded] = useState(false);
   const [summaryPhase, setSummaryPhase] = useState<"idle" | "preparing">("idle");
@@ -1328,7 +1329,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       : legacySpeechPhase;
   const summary = sessionArtifacts.summary ?? row.message.generatedSummary ?? null;
   const isAgentVoiceReply = speech !== null && speech.origin === "agent";
-  const speechExpanded = speechExpandedState ?? isAgentVoiceReply;
+  const speechExpanded = speechExpandedState ?? speech !== null;
   const previousSpeechRequestId = useRef(row.message.speechRequest?.requestId);
   useEffect(() => {
     if (!ctx.textToSpeechPersistentJobs) return;

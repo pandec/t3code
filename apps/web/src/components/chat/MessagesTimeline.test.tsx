@@ -290,6 +290,58 @@ describe("MessagesTimeline", () => {
     expect(availableMarkup).toContain("Create listening version");
   });
 
+  it("expands a stored listening version on mount so revisiting a thread still shows it", () => {
+    const timelineEntries = [
+      {
+        id: "entry-assistant-stored-speech",
+        kind: "message" as const,
+        createdAt: MESSAGE_CREATED_AT,
+        message: {
+          id: MessageId.make("message-assistant-stored-speech"),
+          role: "assistant" as const,
+          text: "A response with a saved recording.",
+          turnId: TurnId.make("turn-stored-speech"),
+          createdAt: MESSAGE_CREATED_AT,
+          updatedAt: MESSAGE_CREATED_AT,
+          streaming: false,
+          speech: {
+            messageId: MessageId.make("message-assistant-stored-speech"),
+            speechId: "speech-1",
+            transcript: "A response with a saved recording.",
+            mimeType: "audio/mpeg" as const,
+            sizeBytes: 1024,
+            origin: "user" as const,
+            createdAt: MESSAGE_CREATED_AT,
+          },
+        },
+      },
+    ];
+
+    const withSpeech = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={timelineEntries}
+        textToSpeechAvailable
+      />,
+    );
+    const withoutSpeech = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            ...timelineEntries[0]!,
+            message: { ...timelineEntries[0]!.message, speech: undefined },
+          },
+        ]}
+        textToSpeechAvailable
+      />,
+    );
+
+    expect(withSpeech).toContain('aria-label="Toggle listening version" aria-expanded="true"');
+    expect(withSpeech).toContain("<span>Listening version</span>");
+    expect(withoutSpeech).not.toContain("<span>Listening version</span>");
+  });
+
   it("shows the summarize action only when the remote environment supports it", () => {
     const timelineEntries = [
       {
