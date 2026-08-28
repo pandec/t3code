@@ -1354,7 +1354,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     speech,
   ]);
   const [voiceReplyAudioUnavailable, setVoiceReplyAudioUnavailable] = useState(false);
-  const onVoiceReplyAudioUnavailable = useCallback(() => setVoiceReplyAudioUnavailable(true), []);
   // A voice-only turn publishes its transcript as the message text; showing
   // it would duplicate what the player's "View transcript" already offers.
   const hasDistinctWrittenReply =
@@ -1503,7 +1502,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             messageId={row.message.id}
             speech={speech}
             onRetry={null}
-            onAudioUnavailable={onVoiceReplyAudioUnavailable}
+            onAudioUnavailable={setVoiceReplyAudioUnavailable}
             primary
           />
         ) : null}
@@ -1657,8 +1656,9 @@ function AssistantSpeechPlayer({
    * version and destroy the agent's recording.
    */
   onRetry: (() => void) | null;
-  /** Lets the row fall back to the written reply when the audio is gone. */
-  onAudioUnavailable?: () => void;
+  /** Mirrors availability so the row can fall back to the written reply
+      while the audio is gone — and stop once it resolves again. */
+  onAudioUnavailable?: (unavailable: boolean) => void;
   /** Agent voice replies render the player as the message's main content. */
   primary?: boolean;
 }) {
@@ -1669,7 +1669,7 @@ function AssistantSpeechPlayer({
   });
   const audioUnavailable = audioUrlState._tag === "Failure";
   useEffect(() => {
-    if (audioUnavailable) onAudioUnavailable?.();
+    onAudioUnavailable?.(audioUnavailable);
   }, [audioUnavailable, onAudioUnavailable]);
 
   // This row is a view over the app-scoped player: the recording keeps

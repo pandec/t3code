@@ -1367,7 +1367,6 @@ function AssistantAgentVoiceReply(props: {
 }) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [audioUnavailable, setAudioUnavailable] = useState(false);
-  const onAudioUnavailable = useCallback(() => setAudioUnavailable(true), []);
   const showWrittenReply =
     props.children !== null && (!props.writtenReplyDuplicatesTranscript || audioUnavailable);
 
@@ -1385,7 +1384,7 @@ function AssistantAgentVoiceReply(props: {
         transcriptExpanded={transcriptExpanded}
         onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
         onRetry={null}
-        onAudioUnavailable={onAudioUnavailable}
+        onAudioUnavailable={setAudioUnavailable}
         primary
       />
     </View>
@@ -1690,8 +1689,9 @@ function AssistantSpeechPlayer(props: {
   readonly onToggleTranscript: () => void;
   /** null hides the regenerate action (agent recordings cannot be re-made client-side). */
   readonly onRetry: (() => void) | null;
-  /** Lets the row fall back to the written reply when the audio is gone. */
-  readonly onAudioUnavailable?: () => void;
+  /** Mirrors availability so the row can fall back to the written reply
+      while the audio is gone — and stop once it resolves again. */
+  readonly onAudioUnavailable?: (unavailable: boolean) => void;
   /** Agent voice replies render the player as the message's main content. */
   readonly primary?: boolean;
 }) {
@@ -1722,7 +1722,7 @@ function AssistantSpeechPlayer(props: {
   const audioUnavailable = audioUrlState._tag === "Failure";
   const onAudioUnavailableProp = props.onAudioUnavailable;
   useEffect(() => {
-    if (audioUnavailable) onAudioUnavailableProp?.();
+    onAudioUnavailableProp?.(audioUnavailable);
   }, [audioUnavailable, onAudioUnavailableProp]);
 
   const trackRef = useMemo<ListeningTrackRef>(

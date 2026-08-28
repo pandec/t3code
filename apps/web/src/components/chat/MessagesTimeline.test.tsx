@@ -294,7 +294,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Voice reply");
-    expect(markup).not.toContain("written reply");
+    expect(markup).not.toContain("Show written reply");
     const textIndex = markup.indexOf(text);
     expect(textIndex).toBeGreaterThan(-1);
     expect(textIndex).toBeLessThan(markup.indexOf("Voice reply"));
@@ -312,6 +312,7 @@ describe("MessagesTimeline", () => {
     // Once inside the player's collapsed transcript, not again as body text.
     expect(markup).toContain("Voice reply");
     expect(markup.split(transcript).length - 1).toBe(1);
+    expect(markup.indexOf(transcript)).toBeGreaterThan(markup.indexOf("View transcript"));
   });
 
   it("shows the listening action only when text-to-speech is available", () => {
