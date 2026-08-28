@@ -114,6 +114,29 @@ const IconListFilter = forwardRef<Svg, IconProps>(function IconListFilter(
   );
 });
 
+// Lucide's audio-lines glyph; Tabler has no vertical-bars waveform.
+const IconAudioLines = forwardRef<Svg, IconProps>(function IconAudioLines(
+  { color = "currentColor", size = 24, strokeWidth = 2, ...props },
+  ref,
+) {
+  return (
+    <Svg
+      ref={ref}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <Path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3" />
+    </Svg>
+  );
+});
+
 const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.branch": IconGitBranch,
   "arrow.clockwise": IconRefresh,
@@ -198,6 +221,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
   trash: IconTrash,
+  waveform: IconAudioLines,
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
