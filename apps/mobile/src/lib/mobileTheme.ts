@@ -274,6 +274,8 @@ export function createMobileThemeVariables(
       c.messageSurface,
     ),
     "--color-backdrop": withAlpha("#000000", appearance === "dark" ? 0.48 : 0.22),
+    // Voice reply accent: fixed per appearance across themes, matching global.css.
+    "--color-accent": appearance === "dark" ? "#0a84ff" : "#007aff",
     "--color-drawer": withAlpha(c.sidebar, 0.99),
     "--color-drawer-shadow": withAlpha("#000000", appearance === "dark" ? 0.32 : 0.12),
     "--color-dot-separator": withAlpha(c.textMuted, 0.35),

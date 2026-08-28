@@ -25,6 +25,9 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 vi.mock("../../state/use-mobile-preferences", () => ({
   useAccentTintSettings: () => ({ enabled: false, alphas: {} }),
 }));
+// The listening modules reach expo-audio, which this environment cannot load.
+vi.mock("../../state/listeningPlayback", () => ({ useThreadListeningState: () => null }));
+vi.mock("../../state/listeningPlayer", () => ({ toggleLoadedListeningTrack: () => {} }));
 vi.mock("../../state/use-thread-pr", () => ({ useThreadPr: () => null }));
 vi.mock("../home/thread-swipe-actions", () => ({ ThreadSwipeable: "ThreadSwipeable" }));
 vi.mock("./thread-search-match", () => ({ ThreadSearchMatchExcerpt: "ThreadSearchMatchExcerpt" }));

@@ -1,7 +1,8 @@
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
+  PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -37,6 +38,9 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
+    useEffect: (effect: () => void | (() => void)) => {
+      effect();
+    },
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
@@ -85,6 +89,7 @@ vi.mock("../../state/session", () => ({
   useEnvironmentSessionState: () => ({ data: null, hasError: false, isPending: true }),
 }));
 
+import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
@@ -125,6 +130,15 @@ function renderPanel(options?: {
     environmentLabel: "Remote device",
     ...(options?.readOnly === undefined ? {} : { readOnly: options.readOnly }),
   }) as ReactElement<Record<string, unknown>>;
+}
+
+function renderProviderCard(
+  element: ReactElement<Record<string, unknown>>,
+): ReactElement<Record<string, unknown>> {
+  hooks.reset();
+  return ProviderInstanceCard(
+    element.props as unknown as ComponentProps<typeof ProviderInstanceCard>,
+  ) as ReactElement<Record<string, unknown>>;
 }
 
 async function flushPromises(): Promise<void> {
@@ -178,21 +192,45 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
-  it("renders the provider layout inert with a limited-permissions notice when read only", () => {
+  it("keeps provider selection available while write controls are read only", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      },
+    };
     atoms.providers = [provider()];
-    const panel = renderPanel({ readOnly: true });
+    let panel = renderPanel({ readOnly: true });
 
     const inertWrapper = visitElements(panel, (element) => element.props.inert === true);
     expect(inertWrapper).not.toBeNull();
-    const providerCard = visitElements(panel, (element) => element.props.instanceId === codexId);
-    expect(providerCard).not.toBeNull();
+
+    const customRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "list",
+    );
+    expect(customRow?.props.readOnly).toBe(true);
+    expect(customRow?.props.onSelect).toBeTypeOf("function");
+    (customRow?.props.onSelect as (() => void) | undefined)?.();
+
+    panel = renderPanel({ readOnly: true });
+    const customEditor = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "editor",
+    );
+    expect(customEditor).not.toBeNull();
 
     const notice = visitElements(panel, (element) => element.props.title === "Limited permissions");
     expect(notice).not.toBeNull();
 
-    expect(
-      visitElements(panel, (element) => element.props["aria-label"] === "Add provider instance"),
-    ).toBeNull();
+    const providersSection = visitElements(
+      panel,
+      (element) => element.props.title === "Providers" && "headerAction" in element.props,
+    );
+    expect(providersSection?.props.headerAction).toBeNull();
     expect(
       visitElements(panel, (element) => element.props["aria-label"] === "Refresh provider status"),
     ).toBeNull();
@@ -205,6 +243,143 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(
       visitElements(panel, (element) => element.props.title === "Limited permissions"),
     ).toBeNull();
+    const providersSection = visitElements(
+      panel,
+      (element) => element.props.title === "Providers" && "headerAction" in element.props,
+    );
+    expect(providersSection?.props.headerAction).not.toBeNull();
+  });
+
+  it("shares pending envelopes between editor and list writes", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          config: { approvalPolicy: "on-request" },
+        },
+      },
+    };
+    atoms.providers = [provider()];
+    const panel = renderPanel();
+    const listCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+    );
+    const editorCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+    );
+    expect(listCard).not.toBeNull();
+    expect(editorCard).not.toBeNull();
+    expect(listCard?.props.pendingInstancesRef).toBe(editorCard?.props.pendingInstancesRef);
+
+    const editor = renderProviderCard(editorCard!);
+    const displayNameInput = visitElements(
+      editor,
+      (element) => element.props.id === `provider-instance-${codexId}-display-name`,
+    );
+    (displayNameInput?.props.onCommit as ((value: string) => void) | undefined)?.("Work");
+
+    const list = renderProviderCard(listCard!);
+    const enabledSwitch = visitElements(
+      list,
+      (element) => element.props["aria-label"] === "Enable Codex",
+    );
+    (enabledSwitch?.props.onCheckedChange as ((checked: boolean) => void) | undefined)?.(false);
+
+    const patch = settingsState.updateSettings.mock.lastCall?.[0] as
+      | { providerInstances?: Record<string, unknown> }
+      | undefined;
+    expect(patch?.providerInstances?.[codexId]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: false,
+      displayName: "Work",
+      config: { approvalPolicy: "on-request" },
+    });
+  });
+
+  it("keeps model and usage-source editors inside the read-only inert boundary", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          config: {
+            customModels: ["gpt-custom=Custom label"],
+            customModelIcons: { "gpt-custom": "claudeAgent" },
+          },
+          usageSource: {
+            kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
+            managementKey: "",
+            managementKeyRedacted: true,
+          },
+        },
+      },
+    };
+    atoms.providers = [provider()];
+    const panel = renderPanel({ readOnly: true });
+    const editorCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+    );
+    const listCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+    );
+    expect(editorCard).not.toBeNull();
+    expect(listCard).not.toBeNull();
+
+    const editor = renderProviderCard(editorCard!);
+    const modelsSection = visitElements(
+      editor,
+      (element) =>
+        Array.isArray(element.props.customModels) &&
+        typeof element.props.onAddCustomModel === "function",
+    );
+    expect(modelsSection?.props.models).toEqual([
+      {
+        slug: "gpt-custom",
+        name: "Custom label",
+        isCustom: true,
+        capabilities: null,
+      },
+    ]);
+    expect(modelsSection?.props.customModelIcons).toMatchObject({
+      "gpt-custom": "claudeAgent",
+    });
+    expect(modelsSection?.props.onAddCustomModel).toBeTypeOf("function");
+    expect(modelsSection?.props.onRemoveCustomModel).toBeTypeOf("function");
+    expect(modelsSection?.props.onCustomModelIconChange).toBeTypeOf("function");
+    const usageSection = visitElements(
+      editor,
+      (element) =>
+        (element.props.usageSource as { kind?: unknown } | undefined)?.kind ===
+          PROVIDER_USAGE_SOURCE_CLIPROXYAPI && typeof element.props.onChange === "function",
+    );
+    expect(usageSection).not.toBeNull();
+    const inertEditor = visitElements(
+      editor,
+      (element) =>
+        element.props.inert === true &&
+        visitElements(
+          element,
+          (child) =>
+            Array.isArray(child.props.customModels) || child.props.usageSource !== undefined,
+        ) !== null,
+    );
+    expect(inertEditor).not.toBeNull();
+
+    const list = renderProviderCard(listCard!);
+    expect(
+      visitElements(
+        list,
+        (element) =>
+          Array.isArray(element.props.customModels) || element.props.usageSource !== undefined,
+      ),
+    ).toBeNull();
   });
 
   it("deletes and resets provider configuration without erasing shared preferences", () => {
@@ -214,9 +389,11 @@ describe("EnvironmentProviderSettings routing", () => {
         [codexId]: {
           driver: ProviderDriverKind.make("codex"),
           enabled: false,
+          failoverInstanceId: customId,
         },
         [customId]: {
           driver: ProviderDriverKind.make("codex"),
+          displayName: "Work",
           enabled: true,
         },
       },
@@ -225,19 +402,47 @@ describe("EnvironmentProviderSettings routing", () => {
       },
       favorites: [{ provider: customId, model: "favorite" }],
     };
-    const panel = renderPanel();
-    const customCard = visitElements(panel, (element) => element.props.instanceId === customId);
+    let panel = renderPanel();
+    const customRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "list",
+    );
+    (customRow?.props.onSelect as (() => void) | undefined)?.();
+    panel = renderPanel();
+    const customCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "editor",
+    );
     expect(customCard).not.toBeNull();
+    expect(customCard?.props.failoverOptions).toEqual([
+      {
+        id: codexId,
+        label: "Codex (codex)",
+        compatible: false,
+      },
+    ]);
     (customCard?.props.onDelete as (() => void) | undefined)?.();
 
     expect(settingsState.updateSettings).toHaveBeenLastCalledWith({
       providerInstances: {
-        [codexId]: settingsState.value.providerInstances?.[codexId],
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: false,
+        },
       },
     });
 
     settingsState.updateSettings.mockClear();
-    const defaultCard = visitElements(panel, (element) => element.props.instanceId === codexId);
+    const defaultRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+    );
+    (defaultRow?.props.onSelect as (() => void) | undefined)?.();
+    panel = renderPanel();
+    const defaultCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+    );
     const resetAction = defaultCard?.props.headerAction;
     const resetButton = visitElements(
       resetAction,
