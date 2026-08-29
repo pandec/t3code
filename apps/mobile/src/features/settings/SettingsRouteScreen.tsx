@@ -47,7 +47,6 @@ import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/pu
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
   didEnvironmentPrewarmRunsAdvance,
@@ -728,7 +727,6 @@ function useMinuteClockMs(): number {
 const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
 
 function ThreadSyncRow() {
-  const icon = useThemeColor("--color-icon");
   const summary = useThreadPrewarmSummary();
   const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
   const nowMs = useMinuteClockMs();
@@ -785,14 +783,14 @@ function ThreadSyncRow() {
         <SymbolView
           name="arrow.triangle.2.circlepath"
           size={22}
-          tintColor={icon}
+          tintColorClassName={"accent-icon"}
           type="monochrome"
           weight="regular"
         />
         <Text className="flex-1 text-lg text-foreground">Sync Threads</Text>
         <Text className="text-base text-foreground-muted">{statusLabel}</Text>
         <View className="w-[22px] items-center">
-          {syncing ? <ActivityIndicator color={icon} size="small" /> : null}
+          {syncing ? <ActivityIndicator colorClassName={"accent-icon"} size="small" /> : null}
         </View>
       </View>
     </Pressable>
@@ -836,7 +834,6 @@ function LegacySettingsSection() {
 }
 
 function AppSettingsSection() {
-  const icon = useThemeColor("--color-icon");
   const [updateState, setUpdateState] = useState<AppUpdateCheckState>("idle");
   const updateInFlight = useRef(false);
   const hiddenUpdateTapCount = useRef(0);
@@ -906,7 +903,7 @@ function AppSettingsSection() {
       <SymbolView
         name="info.circle"
         size={22}
-        tintColor={icon}
+        tintColorClassName={"accent-icon"}
         type="monochrome"
         weight="regular"
       />

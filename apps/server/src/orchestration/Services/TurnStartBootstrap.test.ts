@@ -16,6 +16,7 @@ import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunne
 import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./TurnStartBootstrap.ts";
+import { ThreadDeletionReactor } from "./ThreadDeletionReactor.ts";
 
 type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 type DispatchOptions = Parameters<OrchestrationEngine.OrchestrationEngineShape["dispatch"]>[1];
@@ -120,6 +121,13 @@ const makeLayer = (input: {
     Layer.provide(
       Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
         refreshStatus: () => Effect.die("refreshStatus is forked and ignored in these tests"),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(ThreadDeletionReactor)({
+        // The create fence is exercised by server.test.ts against the real
+        // reactor; here it only needs to be a no-op pass-through.
+        drainThrough: () => Effect.void,
       }),
     ),
     Layer.provide(testCryptoLayer),

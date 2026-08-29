@@ -64,6 +64,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { SessionImportServiceLive } from "./sessionImport/SessionImportService.ts";
@@ -296,7 +297,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(MessageSpeechReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
-  Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
   Layer.provideMerge(ProviderUsageRefreshLive),
@@ -447,13 +447,21 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
   // the WebSocket dispatch path and the HTTP dispatch route. Its git, setup
   // script, and orchestration engine dependencies are provided below.
   Layer.provideMerge(Layer.mergeAll(TurnStartBootstrap.layer, ServerSettingsLayerLive)),
-  Layer.provideMerge(SourceControlProviderRegistryLayerLive),
+  // The deletion reactor sits below the bootstrap service so its
+  // thread.create fence and the reactor pipeline share one cleanup worker.
+  Layer.provideMerge(
+    Layer.mergeAll(ThreadDeletionReactorLive, SourceControlProviderRegistryLayerLive),
+  ),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, TextGeneration.layer)),
+  // Both read a user-owned file out of the state directory and stream changes
+  // to clients; neither depends on the other.
+  Layer.provideMerge(
+    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, TextGeneration.layer),
+  ),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`

@@ -5,7 +5,7 @@ import {
   useNavigation,
   usePreventRemove,
 } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import {
   KeyboardController,
@@ -13,21 +13,15 @@ import {
   useKeyboardState,
 } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useThemeColor } from "../../lib/useThemeColor";
-import { themeColorWithAlpha } from "../../lib/mobileTheme";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { detectComposerTrigger, replaceTextRange } from "@t3tools/shared/composerTrigger";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
-import {
-  ComposerEditor,
-  type ComposerEditorHandle,
-  type ComposerEditorSelection,
-} from "../../components/ComposerEditor";
+import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
   ComposerInlineControl,
   ComposerToolbarButton,
@@ -40,7 +34,8 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ComposerSurface } from "./ThreadComposer";
-import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
@@ -49,7 +44,6 @@ import {
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   clearComposerDraftContent,
   flushComposerDrafts,
@@ -79,17 +73,32 @@ function NewTaskWorkspaceIcon(props: {
   readonly workspaceMode: "local" | "worktree";
   readonly worktreePath: string | null;
 }) {
-  const iconColor = useThemeColor("--color-icon-muted");
-
   if (props.workspaceMode === "local" && props.worktreePath === null) {
-    return <SymbolView name="folder" size={16} tintColor={iconColor} type="monochrome" />;
+    return (
+      <SymbolView
+        name="folder"
+        size={16}
+        tintColorClassName={"accent-icon-muted"}
+        type="monochrome"
+      />
+    );
   }
 
   return (
     <View className="size-4">
-      <SymbolView name="folder" size={16} tintColor={iconColor} type="monochrome" />
+      <SymbolView
+        name="folder"
+        size={16}
+        tintColorClassName={"accent-icon-muted"}
+        type="monochrome"
+      />
       <View className="absolute -right-1 -bottom-1">
-        <SymbolView name="arrow.triangle.branch" size={9} tintColor={iconColor} type="monochrome" />
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={9}
+          tintColorClassName={"accent-icon-muted"}
+          type="monochrome"
+        />
       </View>
     </View>
   );
@@ -118,7 +127,6 @@ export function NewTaskDraftScreen(props: {
     reserveShare,
   } = useIncomingShare();
   const insets = useSafeAreaInsets();
-  const { themeAppearance: colorScheme } = useAppearancePreferences();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const controlsBottomPadding = Math.max(insets.bottom, 10);
   const keyboardOpenedOffset = Math.max(0, controlsBottomPadding - 8);
@@ -133,10 +141,6 @@ export function NewTaskDraftScreen(props: {
       (environment) => environment.environmentId === selectedProject.environmentId,
     )?.connectionState === "connected";
   const promptInputRef = useRef<ComposerEditorHandle>(null);
-  const [promptSelection, setPromptSelection] = useState<ComposerEditorSelection>(() => ({
-    start: flow.prompt.length,
-    end: flow.prompt.length,
-  }));
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const settingsSheetPresentation = useThreadSettingsSheetPresentation({
@@ -212,67 +216,25 @@ export function NewTaskDraftScreen(props: {
         project.id === props.initialProjectRef?.projectId,
     ),
   );
-  useEffect(() => {
-    const end = flow.prompt.length;
-    setPromptSelection((selection) => ({
-      start: Math.min(selection.start, end),
-      end: Math.min(selection.end, end),
-    }));
-  }, [flow.prompt.length]);
-
-  const skillTrigger = useMemo(() => {
-    if (promptSelection.start !== promptSelection.end) {
-      return null;
-    }
-    const trigger = detectComposerTrigger(flow.prompt, promptSelection.end);
-    return trigger?.kind === "skill" ? trigger : null;
-  }, [flow.prompt, promptSelection]);
-  const skillMenuItems = useMemo<ReadonlyArray<ComposerCommandItem>>(() => {
-    if (!skillTrigger) {
-      return [];
-    }
-    // Match ThreadComposer: `$$foo` should still search for `foo`.
-    const query = skillTrigger.query.replace(/^\$+/, "").toLowerCase();
-    return flow.selectedProviderSkills
-      .filter(
-        (skill) =>
-          skill.enabled &&
-          (query.length === 0 ||
-            skill.name.toLowerCase().includes(query) ||
-            skill.displayName?.toLowerCase().includes(query) === true ||
-            skill.shortDescription?.toLowerCase().includes(query) === true),
-      )
-      .slice(0, 20)
-      .map((skill) => ({
-        id: `skill:${skill.name}`,
-        type: "skill" as const,
-        skill,
-        label: skill.displayName ?? skill.name,
-        description: skill.shortDescription ?? skill.description ?? "",
-      }));
-  }, [flow.selectedProviderSkills, skillTrigger]);
-  const handleSkillSelect = useCallback(
-    (item: ComposerCommandItem) => {
-      if (!skillTrigger || item.type !== "skill") {
-        return;
-      }
-      const result = replaceTextRange(
-        flow.prompt,
-        skillTrigger.rangeStart,
-        skillTrigger.rangeEnd,
-        `$${item.skill.name} `,
-      );
-      setPromptSelection({ start: result.cursor, end: result.cursor });
-      flow.setPrompt(result.text);
-      promptInputRef.current?.focus();
-    },
-    [flow, skillTrigger],
-  );
   const isProjectPickerReturnActive =
     isReturningToProjectPicker && !requestedInitialProjectAvailable;
   const isIncomingShareTransferPending = Boolean(
     incomingShare && cancelledIncomingShareId !== props.incomingShareId,
   );
+  const composerMenu = useComposerCommandMenu({
+    draftMessage: flow.prompt,
+    environmentId: selectedProject?.environmentId ?? null,
+    projectCwd:
+      (flow.workspaceMode === "worktree"
+        ? selectedProject?.workspaceRoot
+        : (flow.selectedWorktreePath ?? selectedProject?.workspaceRoot)) || null,
+    selectedProviderStatus: flow.selectedProviderStatus,
+    providerSkills: flow.selectedProviderSkills,
+    hasThread: false,
+    enabled: isComposerFocused && !isIncomingShareTransferPending,
+    onChangeDraftMessage: flow.setPrompt,
+    onUpdateInteractionMode: flow.planModeEnabled ? flow.setInteractionMode : undefined,
+  });
   usePreventRemove(
     (isIncomingShareTransferPending && !isProjectPickerReturnActive) || isCancellingShareImport,
     () => undefined,
@@ -360,13 +322,9 @@ export function NewTaskDraftScreen(props: {
     };
   }, [props.pendingTaskId, cancelEditingPendingTask]);
 
-  const foregroundColor = useThemeColor("--color-foreground");
-  const sheetColor = String(useThemeColor("--color-sheet"));
-  const projectUnderlineColor = useThemeColor("--color-foreground-muted");
+  const foregroundColor = useUniwindTheme()["--color-foreground"];
   const regularFontFamily = useFontFamily("regular");
   const bodyText = useScaledTextRole("body");
-  const sheetFadeOpaque = sheetColor;
-  const sheetFadeTransparent = themeColorWithAlpha(sheetColor, 0);
 
   // A new navigation to this mounted screen delivers a fresh initialProjectRef
   // reference — treat it as a new request and let it apply again.
@@ -776,10 +734,12 @@ export function NewTaskDraftScreen(props: {
       if (editingPendingTask) {
         flow.finishEditingPendingTask();
       } else {
-        // Drop the workspace selection with the content: the next task should
-        // re-resolve mode/branch/origin from the server's configured defaults
-        // instead of resurrecting this task's picks.
-        clearComposerDraftContent(draftKey, { clearWorkspaceSelection: true });
+        // Drop draft-local model/workspace selections with the content. The
+        // next task re-resolves project defaults before sticky app defaults.
+        clearComposerDraftContent(draftKey, {
+          clearModelSelection: true,
+          clearWorkspaceSelection: true,
+        });
       }
       navigation.getParent()?.goBack();
       return;
@@ -854,7 +814,10 @@ export function NewTaskDraftScreen(props: {
       }
       flow.finishEditingPendingTask();
     } else {
-      clearComposerDraftContent(draftKey, { clearWorkspaceSelection: true });
+      clearComposerDraftContent(draftKey, {
+        clearModelSelection: true,
+        clearWorkspaceSelection: true,
+      });
     }
     navigation.dispatch(
       StackActions.replace("Thread", {
@@ -880,7 +843,6 @@ export function NewTaskDraftScreen(props: {
   }
 
   const isAndroid = Platform.OS === "android";
-  const isDarkMode = colorScheme === "dark";
   const canStart =
     Boolean(flow.selectedProject) &&
     Boolean(flow.selectedModel) &&
@@ -900,9 +862,9 @@ export function NewTaskDraftScreen(props: {
       scrollEnabled
       value={flow.prompt}
       skills={flow.selectedProviderSkills}
+      selection={composerMenu.selection}
       onChangeText={flow.setPrompt}
-      selection={promptSelection}
-      onSelectionChange={setPromptSelection}
+      onSelectionChange={composerMenu.onSelectionChange}
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => {
         setIsComposerFocused(false);
@@ -921,16 +883,6 @@ export function NewTaskDraftScreen(props: {
       textStyle={{ ...bodyText, color: foregroundColor, fontFamily: regularFontFamily }}
     />
   );
-  const skillPopover =
-    skillTrigger && skillMenuItems.length > 0 ? (
-      <ComposerCommandPopover
-        items={skillMenuItems}
-        triggerKind="skill"
-        isLoading={false}
-        onSelect={handleSkillSelect}
-      />
-    ) : null;
-
   const closeNewTask = () => {
     void KeyboardController.dismiss({ animated: true });
     const parentNavigation = navigation.getParent();
@@ -971,11 +923,7 @@ export function NewTaskDraftScreen(props: {
             accessibilityRole="button"
             disabled={isIncomingShareTransferPending}
             onPress={chooseProject}
-            className="min-w-0 max-w-[250px] active:opacity-65"
-            style={{
-              borderBottomColor: projectUnderlineColor,
-              borderBottomWidth: 1,
-            }}
+            className="min-w-0 max-w-[250px] border-b border-foreground-muted active:opacity-65"
           >
             <Text
               className="text-2xl font-t3-medium tracking-tight text-foreground"
@@ -1052,15 +1000,21 @@ export function NewTaskDraftScreen(props: {
   );
 
   const composerDock = (
-    <View className="relative bg-sheet px-4 pt-1" style={{ paddingBottom: controlsBottomPadding }}>
-      {skillPopover ? (
-        <View className="absolute inset-x-4 bottom-full z-10 mb-2">{skillPopover}</View>
+    <View className="bg-sheet px-4 pt-1" style={{ paddingBottom: controlsBottomPadding }}>
+      {composerMenu.trigger && composerMenu.items.length > 0 ? (
+        <View className="mb-2">
+          <ComposerCommandPopover
+            items={composerMenu.items}
+            triggerKind={composerMenu.trigger.kind}
+            isLoading={composerMenu.isLoading}
+            onSelect={composerMenu.onSelect}
+          />
+        </View>
       ) : null}
       <View className="pb-1">{workspaceControls}</View>
 
       <ComposerSurface
         animateLayout={false}
-        isDarkMode={isDarkMode}
         style={{
           borderRadius: 26,
           minHeight: 140,
@@ -1084,11 +1038,7 @@ export function NewTaskDraftScreen(props: {
         {promptEditor}
 
         <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={4}>
-          <ComposerToolbarScroller
-            fadeOpaque={sheetFadeOpaque}
-            fadeTransparent={sheetFadeTransparent}
-            contentPaddingRight={8}
-          >
+          <ComposerToolbarScroller contentPaddingRight={8} fadeSurface="sheet">
             <ComposerToolbarButton
               accessibilityLabel="Add attachment"
               disabled={isIncomingShareTransferPending}
@@ -1106,7 +1056,7 @@ export function NewTaskDraftScreen(props: {
                   const next =
                     flow.prompt.trim().length > 0 ? `${flow.prompt.trimEnd()}\n\n${text}` : text;
                   flow.setPrompt(next, "voice-transcription");
-                  setPromptSelection({ start: next.length, end: next.length });
+                  composerMenu.onSelectionChange({ start: next.length, end: next.length });
                 }}
               />
             ) : null}

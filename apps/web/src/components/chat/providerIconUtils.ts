@@ -61,6 +61,7 @@ export type ModelEsque = {
   isLegacy?: boolean | undefined;
   /** Per-model icon override (a driver-kind id); see {@link getModelIconComponent}. */
   icon?: string | undefined;
+  isUnavailable?: boolean | undefined;
 };
 
 function escapeRegExp(value: string): string {

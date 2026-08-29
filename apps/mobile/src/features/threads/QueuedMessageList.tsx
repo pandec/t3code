@@ -8,7 +8,6 @@ import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { useThemeColor } from "../../lib/useThemeColor";
 import {
   queuedThreadMessageIntent,
   queuedThreadMessagePreview,
@@ -28,9 +27,6 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly isDispatching: boolean;
   readonly isFirst: boolean;
 }) {
-  const iconColor = useThemeColor("--color-icon");
-  const iconSubtle = useThemeColor("--color-icon-subtle");
-  const dangerFg = useThemeColor("--color-danger-foreground");
   const message = props.message;
   // A steer still inside its window can be sent now — the window is a chance
   // to change your mind, not a delay to sit through.
@@ -60,7 +56,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         <SymbolView
           name="clock"
           size={15}
-          tintColor={canQueueForLater ? iconColor : iconSubtle}
+          tintColorClassName={canQueueForLater ? "accent-icon" : "accent-icon-subtle"}
           type="monochrome"
         />
       </Pressable>
@@ -72,12 +68,12 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         onPress={() => void steerQueuedMessageNow(message)}
       >
         {props.isDispatching ? (
-          <ActivityIndicator size="small" color={iconSubtle} />
+          <ActivityIndicator size="small" colorClassName={"accent-icon-subtle"} />
         ) : (
           <SymbolView
             name="arrow.up"
             size={15}
-            tintColor={canSteer ? iconColor : iconSubtle}
+            tintColorClassName={canSteer ? "accent-icon" : "accent-icon-subtle"}
             type="monochrome"
           />
         )}
@@ -92,7 +88,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         <SymbolView
           name="pencil"
           size={15}
-          tintColor={props.isDispatching ? iconSubtle : iconColor}
+          tintColorClassName={props.isDispatching ? "accent-icon-subtle" : "accent-icon"}
           type="monochrome"
         />
       </Pressable>
@@ -106,7 +102,9 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         <SymbolView
           name="trash"
           size={15}
-          tintColor={props.isDispatching ? iconSubtle : dangerFg}
+          tintColorClassName={
+            props.isDispatching ? "accent-icon-subtle" : "accent-danger-foreground"
+          }
           type="monochrome"
         />
       </Pressable>

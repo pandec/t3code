@@ -120,6 +120,7 @@ const ISOLATED_TEST_FILES = [
   "src/components/Sidebar.logic.test.ts",
   "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
+  "src/hooks/useEnvironmentThemeSync.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/attachmentUploadQueue.test.ts",
   "src/lib/imageCompression.test.ts",

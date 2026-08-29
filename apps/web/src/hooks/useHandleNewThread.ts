@@ -37,6 +37,7 @@ import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
+import { toastManager } from "../components/ui/toast";
 
 /**
  * Seeds a freshly created draft's composer model state.
@@ -176,7 +177,7 @@ export function useNewThreadHandler() {
         startFromOrigin?: boolean;
         replace?: boolean;
         /**
-         * Move the viewed draft's typed content (prompt + images) into the
+         * Move the viewed draft's typed content and transferable attachments into the
          * draft this request lands on. Set by the draft repo picker: the
          * user started writing in the wrong project and the text should
          * follow them. Explicit new-thread surfaces leave this unset and
@@ -198,11 +199,10 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
-      // A new thread carries the user's *working mode* from the thread being
-      // viewed: model (including options like reasoning effort and context
-      // window), permission mode, and interaction mode. Branch, worktree, and
-      // env mode never carry implicitly — those come from the configured
-      // defaults unless the caller passes them explicitly.
+      // A new thread carries the user's working mode from the thread being
+      // viewed. The target project's configured model still wins; runtime and
+      // interaction modes carry independently. Branch, worktree, and env mode
+      // come from configured defaults unless the caller passes them explicitly.
       const carrySourceShell =
         currentRouteTarget?.kind === "server"
           ? readThreadShell(currentRouteTarget.threadRef)
@@ -253,6 +253,18 @@ export function useNewThreadHandler() {
           composerDraftHasUserContent(getComposerDraft(carryContentSourceDraftId))
         ) {
           moveComposerPromptAndImages(carryContentSourceDraftId, destinationDraftId);
+          // The move caps at the destination's free slots and skips
+          // duplicates, so images and files can both stay behind.
+          const remainingDraft = getComposerDraft(carryContentSourceDraftId);
+          const remainingCount =
+            (remainingDraft?.files.length ?? 0) + (remainingDraft?.images.length ?? 0);
+          if (remainingCount > 0) {
+            toastManager.add({
+              type: "warning",
+              title: `${remainingCount} attachment${remainingCount === 1 ? " stayed" : "s stayed"} in the original draft`,
+              description: "Return to the original draft or attach the files again.",
+            });
+          }
         }
       };
       const project = projects.find(
@@ -336,8 +348,10 @@ export function useNewThreadHandler() {
           // env context resets to the configured defaults so drafts seeded
           // before a defaults change (or by the old carry-over behavior) stop
           // landing on "current checkout" branches forever. When the draft is
-          // already open and no options were passed, leave it alone entirely —
-          // the user may have just picked a branch in the composer.
+          // already open and no options were passed, leave its workspace
+          // context alone entirely — the user may have just picked a branch
+          // in the composer. Model selection has its own explicit-pick rule
+          // below and does not follow this guard.
           let workspaceContext: NewThreadWorkspaceOptions | null = null;
           if (hasExplicitWorkspaceOption) {
             workspaceContext = pickExplicitWorkspaceOptions(options);
@@ -383,9 +397,25 @@ export function useNewThreadHandler() {
               ...(carryRuntimeMode ? { runtimeMode: carryRuntimeMode } : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             });
-            applyCarryModelSelectionToReusedDraft({
+          }
+          // Model intent: an explicit human pick always stands. Seeds and
+          // legacy entries alike re-resolve here — sticky first, mirroring
+          // the mint-fresh path, then the project default, then the carried
+          // selection when it comes from the same logical project. This runs
+          // even when the draft is already open: without it, a changed pin
+          // could never reach the draft the user is looking at, because
+          // explicit picks are the only thing the flag protects.
+          const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
+          const storedActiveSelection = storedDraft?.activeProvider
+            ? storedDraft.modelSelectionByProvider[storedDraft.activeProvider]
+            : undefined;
+          const storedDraftHasExplicitModelPick =
+            Boolean(storedActiveSelection) && storedDraft?.modelSelectionExplicit === true;
+          if (!storedDraftHasExplicitModelPick) {
+            seedNewDraftModelState({
               draftId: emptyStoredDraftThread.draftId,
               logicalProjectKey,
+              projectDefaultModelSelection: project?.defaultModelSelection ?? null,
               carryModelSelection,
               carrySourceLogicalProjectKey,
             });

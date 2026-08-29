@@ -25,6 +25,7 @@ const clientSettings: ClientSettings = {
   confirmTerminalClose: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  confirmThreadUnpin: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   enableTurnCompletionToasts: true,

@@ -591,6 +591,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   // that only the persisted list is populated, hence max not sum.
   const attachmentCount =
     Math.max(composer.images.length, composer.persistedAttachments.length) +
+    composer.files.length +
     composer.terminalContexts.length +
     composer.elementContexts.length +
     composer.previewAnnotations.length +
@@ -2176,7 +2177,7 @@ export default function Sidebar() {
     snoozeThread,
     unsnoozeThread,
     pinThread,
-    unpinThread,
+    confirmAndUnpinThread,
     reorderPinnedThread,
     deleteThread,
     confirmAndDeleteThread,
@@ -3603,7 +3604,7 @@ export default function Sidebar() {
   const attemptUnpin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
-        const result = await unpinThread(threadRef);
+        const result = await confirmAndUnpinThread(threadRef);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           toastManager.add(
@@ -3616,7 +3617,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [unpinThread],
+    [confirmAndUnpinThread],
   );
 
   const handlePinnedDragEnd = useCallback(

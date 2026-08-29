@@ -12,7 +12,7 @@ import Animated, {
 import type { ComponentProps } from "react";
 
 import { AppText as Text } from "../../../components/AppText";
-import { useThemeColor } from "../../../lib/useThemeColor";
+import { useUniwindTheme } from "../../../lib/useUniwindTheme";
 
 type SymbolName = ComponentProps<typeof SymbolView>["name"];
 
@@ -46,10 +46,9 @@ export function SettingsSliderRow(props: {
   readonly value: number;
   readonly onChange: (value: number) => void;
 }) {
-  const icon = useThemeColor("--color-icon");
-  const iconMuted = String(useThemeColor("--color-icon-muted"));
-  const trackColor = String(useThemeColor("--color-secondary-border"));
-  const fillColor = String(useThemeColor("--color-primary"));
+  const theme = useUniwindTheme();
+  const trackColor = theme["--color-secondary-border"];
+  const fillColor = theme["--color-primary"];
 
   const latest = useRef(props);
   latest.current = props;
@@ -157,7 +156,7 @@ export function SettingsSliderRow(props: {
         <SymbolView
           name={props.icon}
           size={22}
-          tintColor={icon}
+          tintColorClassName={"accent-icon"}
           type="monochrome"
           weight="regular"
         />
@@ -169,7 +168,7 @@ export function SettingsSliderRow(props: {
           <SymbolView
             name={minIcon}
             size={15}
-            tintColor={iconMuted}
+            tintColorClassName={"accent-icon-muted"}
             type="monochrome"
             weight="regular"
           />
@@ -228,7 +227,7 @@ export function SettingsSliderRow(props: {
           <SymbolView
             name={maxIcon}
             size={22}
-            tintColor={iconMuted}
+            tintColorClassName={"accent-icon-muted"}
             type="monochrome"
             weight="regular"
           />

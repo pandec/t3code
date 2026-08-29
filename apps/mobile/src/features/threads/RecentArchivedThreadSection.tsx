@@ -12,7 +12,6 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { relativeTime } from "../../lib/time";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 const ARCHIVED_MENU_ACTIONS: MenuAction[] = [
   { id: "unarchive", title: "Unarchive", image: "arrow.uturn.backward" },
@@ -38,7 +37,6 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
   readonly onUnarchive: (thread: EnvironmentThreadShell) => void;
   readonly pane?: "screen" | "sidebar";
 }) {
-  const iconColor = useThemeColor("--color-icon-subtle");
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "unarchive") props.onUnarchive(props.thread);
@@ -87,7 +85,12 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
               workspaceRoot={props.project.workspaceRoot}
             />
           ) : (
-            <SymbolView name="archivebox" size={15} tintColor={iconColor} type="monochrome" />
+            <SymbolView
+              name="archivebox"
+              size={15}
+              tintColorClassName={"accent-icon-subtle"}
+              type="monochrome"
+            />
           )}
           <View className="min-w-0 flex-1">
             <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
@@ -123,7 +126,7 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
             <SymbolView
               name="arrow.uturn.backward"
               size={15}
-              tintColor={iconColor}
+              tintColorClassName={"accent-icon-subtle"}
               type="monochrome"
             />
           </Pressable>
@@ -145,7 +148,6 @@ const ArchivedShelfHeader = memo(function ArchivedShelfHeader(props: {
   readonly onToggle: () => void;
   readonly pane?: "screen" | "sidebar";
 }) {
-  const mutedColor = useThemeColor("--color-foreground-muted");
   return (
     <Pressable
       accessibilityHint={
@@ -167,7 +169,7 @@ const ArchivedShelfHeader = memo(function ArchivedShelfHeader(props: {
       <SymbolView
         name="chevron.down"
         size={10}
-        tintColor={mutedColor}
+        tintColorClassName={"accent-foreground-muted"}
         type="monochrome"
         style={{ transform: [{ rotate: props.expanded ? "180deg" : "0deg" }] }}
       />

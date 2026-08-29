@@ -10,6 +10,8 @@ import type { Directory as ExpoDirectory } from "expo-file-system";
 import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
+import type { ModelSelection } from "@t3tools/contracts";
+
 import type { ComposerDraft } from "./use-composer-drafts";
 
 const LEGACY_SCHEMA_VERSION = 1;
@@ -129,6 +131,14 @@ export interface SplitComposerDraftRecord {
   readonly attachmentContents: ReadonlyMap<string, string>;
 }
 
+/**
+ * importedShareIds are share-import receipts: a contentless draft carrying one
+ * is not discardable, or the same native share would re-import after restart.
+ */
+function isDiscardableDraft(draft: ComposerDraft): boolean {
+  return isEmptyDraft(draft) && (draft.importedShareIds?.length ?? 0) === 0;
+}
+
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
     draft.text.length === 0 &&
@@ -157,7 +167,7 @@ function composerDraftForPersistence(draftKey: string, draft: ComposerDraft): Co
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodeLegacyComposerDraftsDocument(value);
   return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isEmptyDraft(draft)),
+    Object.entries(parsed.drafts).filter(([, draft]) => !isDiscardableDraft(draft)),
   );
 }
 
@@ -727,7 +737,7 @@ export async function persistComposerDraftKeys(
   for (const draftKey of draftKeys) {
     try {
       const draft = drafts[draftKey];
-      if (!draft || isEmptyDraft(draft)) {
+      if (!draft || isDiscardableDraft(draft)) {
         await removeDraftRecord(draftKey);
         continue;
       }
@@ -772,6 +782,9 @@ function isEmptyPersistedDraft(draft: PersistedComposerDraftRecord["draft"]): bo
     draft.text.length === 0 &&
     draft.inputOrigin === undefined &&
     draft.attachments.length === 0 &&
+    // Share-import receipts must survive persistence, or an interrupted
+    // handoff re-imports the same native share after restart.
+    (draft.importedShareIds?.length ?? 0) === 0 &&
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
@@ -835,7 +848,7 @@ export async function loadPersistedComposerDraftState(): Promise<LoadedComposerD
   }));
   const recordDrafts: Record<string, HydratedComposerDraftRecord> = {};
   for (const { draftKey, hydrated } of hydratedRecords) {
-    if (!isEmptyDraft(hydrated.draft) || hydrated.state !== "ok") {
+    if (!isDiscardableDraft(hydrated.draft) || hydrated.state !== "ok") {
       recordDrafts[draftKey] = hydrated;
     }
   }
@@ -844,7 +857,7 @@ export async function loadPersistedComposerDraftState(): Promise<LoadedComposerD
   const drafts: Record<string, ComposerDraft> = { ...legacy.drafts };
   for (const [draftKey, hydrated] of Object.entries(recordDrafts)) {
     if (
-      !isEmptyDraft(hydrated.draft) &&
+      !isDiscardableDraft(hydrated.draft) &&
       (hydrated.state === "ok" || drafts[draftKey] === undefined)
     ) {
       drafts[draftKey] = hydrated.draft;
@@ -912,4 +925,65 @@ export async function loadPersistedComposerDraftState(): Promise<LoadedComposerD
 
 export async function loadPersistedComposerDrafts(): Promise<Record<string, ComposerDraft>> {
   return (await loadPersistedComposerDraftState()).drafts;
+}
+
+const STICKY_MODEL_SELECTION_FILE = "sticky-model-selection.json";
+
+const StickyModelSelectionDocumentSchema = Schema.Struct({
+  stickyModelSelection: ModelSelectionSchema,
+});
+
+const decodeStickyModelSelectionDocument = Schema.decodeUnknownSync(
+  StickyModelSelectionDocumentSchema,
+);
+
+/**
+ * The device-level "last used model", persisted beside the draft records. It is
+ * a single value with no per-draft identity, so it gets its own small document
+ * rather than a slot in the record store.
+ */
+export async function loadStickyComposerModelSelection(): Promise<ModelSelection | null> {
+  try {
+    const { File } = await loadExpoFileSystem();
+    const { root } = await getStorageDirectories();
+    const file = new File(root, STICKY_MODEL_SELECTION_FILE);
+    if (!file.exists) {
+      return null;
+    }
+    const raw = await file.text();
+    return decodeStickyModelSelectionDocument(JSON.parse(raw) as unknown).stickyModelSelection;
+  } catch (cause) {
+    console.warn(
+      "[composer-drafts] ignored persisted sticky model selection failure",
+      new ComposerDraftPersistenceError({
+        operation: "read",
+        directory: COMPOSER_DRAFTS_DIRECTORY,
+        fileName: STICKY_MODEL_SELECTION_FILE,
+        cause,
+      }),
+    );
+    return null;
+  }
+}
+
+export async function saveStickyComposerModelSelection(
+  modelSelection: ModelSelection,
+): Promise<void> {
+  try {
+    const { root } = await getStorageDirectories();
+    await writeFileAtomically(
+      root,
+      STICKY_MODEL_SELECTION_FILE,
+      JSON.stringify({
+        stickyModelSelection: modelSelection,
+      }),
+    );
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "write",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: STICKY_MODEL_SELECTION_FILE,
+      cause,
+    });
+  }
 }

@@ -1,8 +1,6 @@
 import { SymbolView } from "../../components/AppSymbol";
 import { Pressable } from "react-native";
 
-import { useThemeColor } from "../../lib/useThemeColor";
-
 export type SidebarFilterButtonIcon =
   | "line.3.horizontal.decrease"
   | "line.3.horizontal.decrease.circle"
@@ -17,9 +15,6 @@ export function SidebarFilterButton(props: {
   readonly icon: SidebarFilterButtonIcon;
   readonly onPress?: () => void;
 }) {
-  const iconColor = useThemeColor("--color-foreground");
-  const primaryColor = useThemeColor("--color-primary");
-
   return (
     <Pressable
       className="size-11 cursor-pointer items-center justify-center rounded-full bg-subtle active:opacity-70"
@@ -36,7 +31,7 @@ export function SidebarFilterButton(props: {
       <SymbolView
         name={props.icon}
         size={16}
-        tintColor={props.active ? primaryColor : iconColor}
+        tintColorClassName={props.active ? "accent-primary" : "accent-foreground"}
         type="monochrome"
       />
     </Pressable>

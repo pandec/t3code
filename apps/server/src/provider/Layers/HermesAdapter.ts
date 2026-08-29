@@ -1137,36 +1137,43 @@ export function makeHermesAdapter(
                     ? rewriteHermesPrompt(input.input, knownSkillNames)
                     : undefined;
                   const imagePromptParts = yield* restore(
-                    Effect.forEach(input.attachments ?? [], (attachment) =>
-                      Effect.gen(function* () {
-                        const attachmentPath = resolveAttachmentPath({
-                          attachmentsDir: serverConfig.attachmentsDir,
-                          attachment,
-                        });
-                        if (!attachmentPath) {
-                          return yield* new ProviderAdapterRequestError({
-                            provider: PROVIDER,
-                            method: "session/prompt",
-                            detail: `Invalid attachment id '${attachment.id}'.`,
+                    // Only images inline as ACP image blocks; a generic file
+                    // would be sent as a mislabeled image and rejected or
+                    // misread. Files reach the agent through the path line
+                    // ProviderService puts in the prompt.
+                    Effect.forEach(
+                      (input.attachments ?? []).filter((attachment) => attachment.type === "image"),
+                      (attachment) =>
+                        Effect.gen(function* () {
+                          const attachmentPath = resolveAttachmentPath({
+                            attachmentsDir: serverConfig.attachmentsDir,
+                            attachment,
                           });
-                        }
-                        const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                          Effect.mapError(
-                            (cause) =>
-                              new ProviderAdapterRequestError({
-                                provider: PROVIDER,
-                                method: "session/prompt",
-                                detail: cause.message,
-                                cause,
-                              }),
-                          ),
-                        );
-                        return {
-                          type: "image",
-                          data: Buffer.from(bytes).toString("base64"),
-                          mimeType: attachment.mimeType,
-                        } satisfies EffectAcpSchema.ContentBlock;
-                      }),
+                          if (!attachmentPath) {
+                            return yield* new ProviderAdapterRequestError({
+                              provider: PROVIDER,
+                              method: "session/prompt",
+                              detail: `Invalid attachment id '${attachment.id}'.`,
+                            });
+                          }
+                          const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new ProviderAdapterRequestError({
+                                  provider: PROVIDER,
+                                  method: "session/prompt",
+                                  detail: cause.message,
+                                  cause,
+                                }),
+                            ),
+                          );
+                          return {
+                            type: "image",
+                            data: Buffer.from(bytes).toString("base64"),
+                            mimeType: attachment.mimeType,
+                          } satisfies EffectAcpSchema.ContentBlock;
+                        }),
+                      { concurrency: 1 },
                     ),
                   );
                   const promptParts: Array<EffectAcpSchema.ContentBlock> = [

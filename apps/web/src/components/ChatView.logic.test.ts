@@ -40,6 +40,7 @@ import {
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
   shouldShowBranchMismatchBanner,
+  shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -453,6 +454,7 @@ describe("hasStandaloneComposerCommandContext", () => {
     expect(
       hasStandaloneComposerCommandContext({
         imageCount: 0,
+        fileCount: 0,
         terminalContextCount: 0,
         elementContextCount: 0,
         previewAnnotationCount: 0,
@@ -465,7 +467,21 @@ describe("hasStandaloneComposerCommandContext", () => {
     expect(
       hasStandaloneComposerCommandContext({
         imageCount: 0,
+        fileCount: 0,
         terminalContextCount: 1,
+        elementContextCount: 0,
+        previewAnnotationCount: 0,
+        reviewCommentCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a file attachment so /t3-name never consumes it", () => {
+    expect(
+      hasStandaloneComposerCommandContext({
+        imageCount: 0,
+        fileCount: 1,
+        terminalContextCount: 0,
         elementContextCount: 0,
         previewAnnotationCount: 0,
         reviewCommentCount: 0,
@@ -620,6 +636,31 @@ describe("shouldShowBranchMismatchBanner", () => {
     expect(
       shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
     ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanFollowUpPrompt", () => {
+  const base = {
+    pendingUserInputCount: 0,
+    interactionMode: "plan" as const,
+    latestTurnSettled: true,
+    hasActionableProposedPlan: true,
+    hasComposerAttachments: false,
+  };
+
+  it("shows plan actions for a settled actionable plan without attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
+  });
+
+  it("hides plan actions while the composer has staged attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
+  });
+
+  it("preserves the existing plan follow-up gates", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
   });
 });
 

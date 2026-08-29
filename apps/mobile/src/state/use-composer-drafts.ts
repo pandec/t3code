@@ -20,7 +20,9 @@ import {
   decodePersistedComposerDrafts,
   hydratePersistedComposerDraftKey,
   loadPersistedComposerDraftState,
+  loadStickyComposerModelSelection,
   persistComposerDraftKeys,
+  saveStickyComposerModelSelection,
 } from "./composer-draft-persistence";
 import { removeStagedThreadSettingsForEnvironment } from "./use-thread-staged-settings";
 
@@ -76,6 +78,11 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.withLabel("mobile:composer-drafts"),
 );
 
+export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:sticky-composer-model-selection"),
+);
+
 let loadPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistMaxDelayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -85,6 +92,11 @@ const draftKeysMutatedBeforeHydration = new Set<string>();
 const partialDraftKeys = new Set<string>();
 const partialVisibleAttachmentIds = new Map<string, ReadonlySet<string>>();
 const persistenceQueue = new SerializedAsyncQueue();
+
+/** Resets module-level state between test runs. */
+export function resetComposerDraftsLoadState(): void {
+  loadPromise = null;
+}
 
 function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
   if (!draft) {
@@ -131,8 +143,30 @@ function sanitizeHydratedComposerDraft(
   draftKey: string,
   draft: ComposerDraft,
 ): ComposerDraft | null {
-  const sanitized = isServerThreadDraftKey(draftKey) ? stripThreadDraftSettings(draft) : draft;
-  return isEmptyDraft(sanitized) ? null : sanitized;
+  let sanitized = isServerThreadDraftKey(draftKey) ? stripThreadDraftSettings(draft) : draft;
+  // Stale new-task drafts left on disk by builds before the model-precedence
+  // fix carry a bare modelSelection with no other selector settings. Strip it
+  // so the next compose pass re-resolves project -> sticky -> provider
+  // defaults. Drafts with runtime/interaction/workspace settings or actual
+  // text / attachments were deliberately configured and are left alone.
+  if (
+    draftKey.startsWith("new-task:") &&
+    sanitized.modelSelection &&
+    sanitized.text.length === 0 &&
+    sanitized.attachments.length === 0 &&
+    sanitized.runtimeMode === undefined &&
+    sanitized.interactionMode === undefined &&
+    sanitized.workspaceSelection === undefined
+  ) {
+    const { modelSelection: _staleModelSelection, ...rest } = sanitized;
+    sanitized = rest;
+  }
+  // importedShareIds are share-import receipts: a contentless draft carrying
+  // one is not empty, or the same native share would re-import after restart.
+  if (isEmptyDraft(sanitized) && (sanitized.importedShareIds?.length ?? 0) === 0) {
+    return null;
+  }
+  return sanitized;
 }
 
 const pendingDraftKeys = new Set<string>();
@@ -475,8 +509,11 @@ export function ensureComposerDraftsLoaded(): void {
     return;
   }
   loadPromise = persistenceQueue
-    .run(() => loadPersistedComposerDraftState())
-    .then((persisted) => {
+    .run(async () => ({
+      draftState: await loadPersistedComposerDraftState(),
+      stickyModelSelection: await loadStickyComposerModelSelection(),
+    }))
+    .then(({ draftState: persisted, stickyModelSelection }) => {
       partialDraftKeys.clear();
       partialVisibleAttachmentIds.clear();
       for (const draftKey of persisted.unavailableDraftKeys) {
@@ -491,6 +528,12 @@ export function ensureComposerDraftsLoaded(): void {
         composerDraftsAtom,
         mergeHydratedComposerDrafts(persisted.drafts, current, draftKeysMutatedBeforeHydration),
       );
+      if (
+        stickyModelSelection !== null &&
+        appAtomRegistry.get(stickyComposerModelSelectionAtom) === null
+      ) {
+        appAtomRegistry.set(stickyComposerModelSelectionAtom, stickyModelSelection);
+      }
     })
     .catch((cause) => {
       console.warn(
@@ -537,6 +580,17 @@ function updateComposerDrafts(
     draftKeysMutatedBeforeHydration.add(draftKey);
   }
   schedulePersistComposerDraft(draftKey, options);
+}
+
+export function setStickyComposerModelSelection(modelSelection: ModelSelection): void {
+  appAtomRegistry.set(stickyComposerModelSelectionAtom, modelSelection);
+  // Sticky selection lives in its own small file: best-effort, serialized
+  // behind the draft queue so it cannot interleave with record writes.
+  void persistenceQueue
+    .run(() => saveStickyComposerModelSelection(modelSelection))
+    .catch((error) => {
+      console.warn("[composer-drafts] failed to persist sticky model selection", error);
+    });
 }
 
 export function setComposerDraftText(
@@ -826,7 +880,10 @@ export function updateComposerDraftSettings(
 export function clearComposerDraftContentState(
   current: Record<string, ComposerDraft>,
   draftKey: string,
-  options?: { readonly clearWorkspaceSelection?: boolean },
+  options?: {
+    readonly clearModelSelection?: boolean;
+    readonly clearWorkspaceSelection?: boolean;
+  },
 ): Record<string, ComposerDraft> {
   const existing = current[draftKey];
   if (!existing) {
@@ -835,6 +892,7 @@ export function clearComposerDraftContentState(
   const {
     importedShareIds: _importedShareIds,
     inputOrigin: _inputOrigin,
+    modelSelection,
     workspaceSelection,
     ...retained
   } = existing;
@@ -843,6 +901,14 @@ export function clearComposerDraftContentState(
     : retained;
   const draft = {
     ...retainedSettings,
+    // Server-thread drafts never retain a model selection across a clear
+    // (stripThreadDraftSettings semantics); new-task drafts keep it unless
+    // the caller asks for a full reset.
+    ...(options?.clearModelSelection ||
+    modelSelection === undefined ||
+    isServerThreadDraftKey(draftKey)
+      ? {}
+      : { modelSelection }),
     ...(options?.clearWorkspaceSelection || workspaceSelection === undefined
       ? {}
       : { workspaceSelection }),
@@ -1062,7 +1128,10 @@ export async function restoreComposerDraftSnapshot(
 
 export function clearComposerDraftContent(
   draftKey: string,
-  options?: { readonly clearWorkspaceSelection?: boolean },
+  options?: {
+    readonly clearModelSelection?: boolean;
+    readonly clearWorkspaceSelection?: boolean;
+  },
 ): void {
   updateComposerDrafts(
     draftKey,
@@ -1149,4 +1218,12 @@ export function useComposerDraft(draftKey: string | null): ComposerDraft {
     ensureComposerDraftsLoaded();
   }, []);
   return draftKey ? normalizeDraft(drafts[draftKey]) : EMPTY_DRAFT;
+}
+
+export function useStickyComposerModelSelection(): ModelSelection | null {
+  const selection = useAtomValue(stickyComposerModelSelectionAtom);
+  useEffect(() => {
+    ensureComposerDraftsLoaded();
+  }, []);
+  return selection;
 }

@@ -108,8 +108,8 @@ describe("resolveThreadStatus", () => {
     expect(resolveThreadStatus(makeThread({ backgroundLiveness: "working" }))).toMatchObject({
       kind: "working",
       label: "Working",
-      pillClassName: "bg-sky-500/12 dark:bg-sky-500/16",
-      textClassName: "text-sky-700 dark:text-sky-300",
+      pillClassName: "bg-adaptive-sky-500-a12-a16",
+      textClassName: "text-adaptive-sky-700-300",
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
       pulse: true,
@@ -117,8 +117,8 @@ describe("resolveThreadStatus", () => {
     expect(resolveThreadStatus(makeThread({ backgroundLiveness: "monitoring" }))).toMatchObject({
       kind: "monitoring",
       label: "Monitoring",
-      pillClassName: "bg-sky-500/12 dark:bg-sky-500/16",
-      textClassName: "text-sky-700 dark:text-sky-300",
+      pillClassName: "bg-adaptive-sky-500-a12-a16",
+      textClassName: "text-adaptive-sky-700-300",
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
       pulse: false,

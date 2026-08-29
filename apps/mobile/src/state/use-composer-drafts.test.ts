@@ -147,10 +147,13 @@ import {
   removeComposerDraftsForEnvironment,
   replaceComposerDraftAttachments,
   resetComposerDraftPersistenceForTests,
+  resetComposerDraftsLoadState,
   revertComposerDraftAppend,
   restoreComposerDraftSnapshot,
   restoreComposerDraftSnapshotState,
   setComposerDraftText,
+  setStickyComposerModelSelection,
+  stickyComposerModelSelectionAtom,
 } from "./use-composer-drafts";
 
 const DRAFT: ComposerDraft = {
@@ -244,7 +247,9 @@ function persistedAttachmentIds(recordPath: string): ReadonlyArray<string> {
 
 afterEach(() => {
   resetComposerDraftPersistenceForTests();
+  resetComposerDraftsLoadState();
   appAtomRegistry.set(composerDraftsAtom, {});
+  appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
   persistedFiles.clear();
   corruptNextWrite.value = false;
   failNextMove.value = false;
@@ -325,10 +330,14 @@ describe("mobile composer drafts", () => {
             runtimeMode: "approval-required",
             interactionMode: "plan",
           },
+          // A model beside another selector setting is a deliberate
+          // configuration; only a BARE model is the stale seed the
+          // hydration strip removes (covered by its own test above).
           "new-task:environment-1:project-1": {
             text: "",
             attachments: [],
             modelSelection,
+            runtimeMode: "approval-required",
           },
         },
         {},
@@ -343,6 +352,7 @@ describe("mobile composer drafts", () => {
         text: "",
         attachments: [],
         modelSelection,
+        runtimeMode: "approval-required",
       },
     });
   });
@@ -370,6 +380,64 @@ describe("mobile composer drafts", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("keeps share-import receipts on otherwise contentless drafts at hydration", () => {
+    const receiptDraft: ComposerDraft = {
+      text: "",
+      attachments: [],
+      importedShareIds: ["share-1"],
+    };
+    // The empty-draft filter must keep receipt-bearing drafts — or the same
+    // native share would re-import after restart.
+    expect(
+      mergeHydratedComposerDrafts(
+        { "new-task:environment-1:project-1": receiptDraft },
+        {},
+        new Set(),
+      ),
+    ).toEqual({ "new-task:environment-1:project-1": receiptDraft });
+  });
+
+  it("strips a stale bare model selection from hydrated new-task drafts", () => {
+    // Builds before the model-precedence fix left contentless new-task drafts
+    // carrying only a modelSelection; hydration re-resolves defaults instead.
+    const bare: ComposerDraft = {
+      text: "",
+      attachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    };
+    expect(
+      mergeHydratedComposerDrafts({ "new-task:environment-1:project-1": bare }, {}, new Set()),
+    ).toEqual({});
+
+    const configured: ComposerDraft = { ...bare, runtimeMode: "approval-required" };
+    expect(
+      mergeHydratedComposerDrafts(
+        { "new-task:environment-1:project-1": configured },
+        {},
+        new Set(),
+      ),
+    ).toEqual({ "new-task:environment-1:project-1": configured });
+  });
+
+  it("persists and hydrates the sticky model selection", async () => {
+    setStickyComposerModelSelection({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    });
+    await flushComposerDrafts();
+
+    appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
+    resetComposerDraftPersistenceForTests();
+    resetComposerDraftsLoadState();
+    ensureComposerDraftsLoaded();
+    await flushComposerDrafts();
+
+    expect(appAtomRegistry.get(stickyComposerModelSelectionAtom)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
   });
 
   it("clears sent content and staged setting fields for an existing thread", () => {
@@ -454,7 +522,7 @@ describe("mobile composer drafts", () => {
     ).toEqual({ [draftKey]: attachmentsChanged });
   });
 
-  it("drops the workspace selection when clearing a sent new-task draft", () => {
+  it("drops draft-local model and workspace selections after sending a new task", () => {
     const draftKey = "new-task:environment-1:project-1";
     const draft: ComposerDraft = {
       text: "send this",
@@ -473,15 +541,10 @@ describe("mobile composer drafts", () => {
 
     expect(
       clearComposerDraftContentState({ [draftKey]: draft }, draftKey, {
+        clearModelSelection: true,
         clearWorkspaceSelection: true,
       }),
-    ).toEqual({
-      [draftKey]: {
-        modelSelection: draft.modelSelection,
-        text: "",
-        attachments: [],
-      },
-    });
+    ).toEqual({});
   });
 
   it("reads the latest selector state synchronously for send", () => {

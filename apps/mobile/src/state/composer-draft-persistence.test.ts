@@ -343,6 +343,25 @@ describe("composer draft record split", () => {
     await expect(persistComposerDraftKeys(drafts, new Set([draftKey]))).resolves.toBeUndefined();
   });
 
+  it("round-trips a contentless draft that carries a share-import receipt", async () => {
+    const draftKey = "new-task:environment-1:project-1";
+    const receiptDraft: ComposerDraft = {
+      text: "",
+      attachments: [],
+      importedShareIds: ["share-1"],
+    };
+
+    await persistComposerDraftKeys({ [draftKey]: receiptDraft }, new Set([draftKey]), {
+      verify: true,
+    });
+    const recordPath = `file:///document/composer-drafts/drafts/${encodeURIComponent(draftKey)}.json`;
+    expect(persistedFiles.has(recordPath)).toBe(true);
+
+    // The receipt must survive hydration too, or the same native share would
+    // re-import after restart.
+    expect(await loadPersistedComposerDrafts()).toEqual({ [draftKey]: receiptDraft });
+  });
+
   it("attempts every draft in a batch before rejecting the first failure", async () => {
     const failedKey = "environment-1:thread-failed";
     const persistedKey = "environment-1:thread-persisted";

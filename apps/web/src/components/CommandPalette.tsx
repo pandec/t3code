@@ -696,7 +696,7 @@ function OpenCommandPaletteDialog(props: {
     forkThread,
     pinThread,
     settleThread,
-    unpinThread,
+    confirmAndUnpinThread,
     unsettleThread,
   } = useThreadActions();
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
@@ -1916,7 +1916,9 @@ function OpenCommandPaletteDialog(props: {
             await reportThreadActionFailure("Failed to pin thread", () => pinThread(threadRef));
             return;
           case "unpin":
-            await reportThreadActionFailure("Failed to unpin thread", () => unpinThread(threadRef));
+            await reportThreadActionFailure("Failed to unpin thread", () =>
+              confirmAndUnpinThread(threadRef),
+            );
             return;
           case "fork":
             await reportThreadActionFailure("Failed to fork conversation", () =>

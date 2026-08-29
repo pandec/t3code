@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { MOBILE_THEME_IDS, getMobileThemeVariables } from "../../lib/mobileTheme";
+import { MOBILE_THEME_IDS } from "../../lib/mobileTheme";
+import { getMobileThemeRuntimeVariables } from "../../lib/mobileThemeVariables";
 import { listeningPlayerChrome } from "./listeningPlayerChrome";
 
 /**
@@ -81,7 +82,10 @@ describe("listening player chrome contrast", () => {
     it(`keeps the ${label} visible on its card in every theme`, () => {
       for (const themeId of MOBILE_THEME_IDS) {
         for (const appearance of APPEARANCES) {
-          const variables = getMobileThemeVariables(themeId, appearance) as Record<string, string>;
+          const variables = getMobileThemeRuntimeVariables(themeId, appearance) as Record<
+            string,
+            string
+          >;
           const card = cardColor(variables);
           const chrome = listeningPlayerChrome(variables["--color-foreground"]!)[part];
           expect(
@@ -96,7 +100,10 @@ describe("listening player chrome contrast", () => {
   it("beats the surface-ramp tier it replaced on every theme", () => {
     for (const themeId of MOBILE_THEME_IDS) {
       for (const appearance of APPEARANCES) {
-        const variables = getMobileThemeVariables(themeId, appearance) as Record<string, string>;
+        const variables = getMobileThemeRuntimeVariables(themeId, appearance) as Record<
+          string,
+          string
+        >;
         const card = cardColor(variables);
         const ramp = contrastRatio(compositeOver(variables["--color-subtle-strong"]!, card), card);
         const derived = contrastRatio(

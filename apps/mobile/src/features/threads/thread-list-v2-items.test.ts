@@ -16,7 +16,9 @@ vi.mock("../../components/AppText", () => ({ AppText: "Text" }));
 vi.mock("../../components/ControlPill", () => ({ ControlPillMenu: "ControlPillMenu" }));
 vi.mock("../../components/ProjectFavicon", () => ({ ProjectFavicon: "ProjectFavicon" }));
 vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: "ProviderIcon" }));
-vi.mock("../../lib/useThemeColor", () => ({ useThemeColor: () => "#000" }));
+vi.mock("../../lib/useUniwindTheme", () => ({
+  useUniwindTheme: () => new Proxy({}, { get: () => "#000" }),
+}));
 // The rows read the selected built-in theme rather than the system color scheme. The real
 // provider pulls in uniwind, which this environment cannot transform.
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({

@@ -24,7 +24,6 @@ import { useThreadPrewarm } from "./state/prewarm";
 import { ensureComposerDraftsLoaded, flushComposerDrafts } from "./state/use-composer-drafts";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { appBlurTargetRef } from "./lib/appBlurTarget";
-import { useThemeColor } from "./lib/useThemeColor";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { MobileDiagnosticsCoordinator } from "./diagnostics/MobileDiagnosticsCoordinator";
 
@@ -94,8 +93,7 @@ export default function App() {
 
 function AppContent() {
   const { themeAppearance } = useAppearancePreferences();
-  const statusBarBg = useThemeColor("--color-status-bar");
-  const navigationTheme = useMobileNavigationTheme(themeAppearance);
+  const navigationTheme = useMobileNavigationTheme();
 
   return (
     <>
@@ -109,7 +107,6 @@ function AppContent() {
           <SafeAreaProvider>
             <StatusBar
               barStyle={themeAppearance === "dark" ? "light-content" : "dark-content"}
-              backgroundColor={statusBarBg}
               translucent
             />
             {/* The navigation theme drives the NATIVE header appearance: native-stack

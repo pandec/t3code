@@ -28,7 +28,6 @@ import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import type { ProviderUsageSheetAccount } from "../../lib/providerUsagePill";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 /**
  * Full provider quota for every configured account, as a native form sheet.
@@ -48,8 +47,8 @@ const STATUS_BAR_CLASS: Record<ProviderUsageStatus, string> = {
 
 const STATUS_TEXT_CLASS: Record<ProviderUsageStatus, string> = {
   ok: "text-foreground-muted",
-  warning: "text-amber-600 dark:text-amber-400",
-  critical: "text-rose-600 dark:text-rose-400",
+  warning: "text-adaptive-amber-700-400",
+  critical: "text-adaptive-rose-600-400",
 };
 
 function UsageWindowRow(props: { readonly window: ProviderUsageWindow; readonly nowMs: number }) {
@@ -138,7 +137,7 @@ function AccountCard(props: {
           ) : null}
         </View>
         {account.error ? (
-          <Text className="text-2xs text-rose-600 dark:text-rose-400">{account.error}</Text>
+          <Text className="text-2xs text-adaptive-rose-600-400">{account.error}</Text>
         ) : null}
         {/* A lagging account states its own age; the header covers the rest. */}
         {stale ? (
@@ -245,7 +244,6 @@ export function ProviderUsageSheet(
   props: ProviderUsageSheetProps & { readonly onClose: () => void },
 ) {
   const insets = useSafeAreaInsets();
-  const iconMuted = useThemeColor("--color-icon-muted");
 
   const title = `${props.providerLabel} usage`;
   const showCurrentBadge = props.accounts.length > 1;
@@ -279,7 +277,7 @@ export function ProviderUsageSheet(
             <SymbolView
               name={Platform.OS === "android" ? "chevron.left" : "xmark"}
               size={16}
-              tintColor={iconMuted}
+              tintColorClassName={"accent-icon-muted"}
               type="monochrome"
             />
           </Pressable>
@@ -314,7 +312,7 @@ export function ProviderUsageSheet(
               <SymbolView
                 name="arrow.clockwise"
                 size={15}
-                tintColor={iconMuted}
+                tintColorClassName={"accent-icon-muted"}
                 type="monochrome"
               />
             </Pressable>

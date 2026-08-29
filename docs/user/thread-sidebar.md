@@ -2,8 +2,12 @@
 
 Pin a thread from its context menu, or from the pin button that appears when you hover its card on
 web and desktop, to keep it in the pinned section above your active work. The same button, filled
-while the thread is pinned, unpins it again. Pinned threads are shown independently of their
-project, including when you connect to more than one environment.
+while the thread is pinned, unpins it again. `mod+shift+p` pins or unpins the thread you have
+open. Pinned threads are shown independently of their project, including when you connect to more
+than one environment.
+
+To require confirmation before unpinning, enable **Settings → General → Unpin confirmation**. The
+confirmation applies to the sidebar controls, thread menus, and the `mod+shift+p` shortcut.
 
 The pinned section folds behind its **Pinned** header like the other sections, with a count while
 it is folded. It starts unfolded, and folding it is remembered per device. The thread you have

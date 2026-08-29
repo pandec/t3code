@@ -4,7 +4,6 @@ import { Pressable, View } from "react-native";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 /**
  * Header for the fork's Older shelf. Deliberately the quietest of the three
@@ -18,7 +17,6 @@ export const ThreadListV2OlderShelfHeader = memo(function ThreadListV2OlderShelf
   readonly onToggle: () => void;
   readonly pane?: "screen" | "sidebar";
 }) {
-  const mutedColor = useThemeColor("--color-foreground-muted");
   return (
     <Pressable
       accessibilityHint={
@@ -41,7 +39,7 @@ export const ThreadListV2OlderShelfHeader = memo(function ThreadListV2OlderShelf
       <SymbolView
         name="chevron.down"
         size={10}
-        tintColor={mutedColor}
+        tintColorClassName={"accent-foreground-muted"}
         type="monochrome"
         style={{ transform: [{ rotate: props.expanded ? "180deg" : "0deg" }] }}
       />
