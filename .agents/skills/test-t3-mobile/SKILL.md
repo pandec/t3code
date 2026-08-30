@@ -168,7 +168,7 @@ Run Metro from `apps/mobile`. `vp exec` resolves binaries from the current packa
 
 1. Inspect any process on the intended Metro port and its `/status` response. Reuse it only when it is healthy, belongs to this worktree, and matches `APP_VARIANT=development`, `--dev-client`, and scheme `t3code-dev`.
 2. Never kill another worktree's Metro. Use a free explicit port when necessary.
-3. `vp run dev:client` bakes in `--clear`, which discards the bundler cache and adds minutes of cold bundling. Use `--clear` only when you suspect a stale bundle; otherwise retain the complete development identity without it:
+3. Run `vp run dev:client` on the standard port. For another port, retain the complete development identity:
 
    ```bash
    APP_VARIANT=development vp exec expo start \
@@ -327,6 +327,7 @@ Keep local verification focused. Do not turn this workflow into a full repositor
 - **`no such module 'GhosttyKit'` on a simulator build:** the vendored `GhosttyKit.xcframework` ships arm64 slices only, and a `Release` simulator build requests `arm64 x86_64`. Build the simulator with `Debug` (the documented default) or pin `ARCHS=arm64`; do not switch to a scheme that excludes the terminal module — that stops verifying the app.
 - **`Cannot find module 'xcode'` or `'expo/config-plugins'` from an inspection script:** pnpm does not hoist these; bare `require` fails from the repo root _and_ from `apps/mobile`. Resolve through a consumer — `require.resolve('expo/config-plugins', { paths: [path.resolve('apps/mobile')] })` or `createRequire` on a file in `apps/mobile/plugins/`. Never hardcode a `node_modules/.pnpm/<pkg>@<version>/` path.
 - **`vp run lint:mobile` fails with `'swiftlint' exited with code 2`:** real `--strict` violations. If the offending file is under generated `apps/mobile/ios/`, fix the config plugin that emits it, not the file. Note a green `lint:mobile` is not proof the native linters ran — SwiftLint/ktlint/detekt are skipped silently when not installed.
+- **Metro serves stale or invalid transforms after those checks:** stop the owned Metro process and run `vp run dev:client:reset` once on the standard port. For a custom port, add `--clear` to the complete explicit `expo start` command above.
 - **The environment remains empty:** verify the platform-specific HTTP origin (including the `http://` prefix — see Pairing), use a fresh token, and confirm project seeding used the identical base directory.
 - **A second client cannot pair:** pairing tokens are single-use; issue another token.
 - **The pairing form opens but does not connect:** confirm the deep link uses the existing `connections/new` route, includes `autoConnect=1`, and carries a freshly minted encoded `pairingUrl`.

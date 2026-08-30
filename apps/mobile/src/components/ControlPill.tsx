@@ -179,6 +179,14 @@ export function ControlPillMenu(
   // onLongPress makes Pressability swallow the release, so holds past 350ms
   // (below the ~500ms context-menu threshold) can only open the menu, never
   // tap through.
+  //
+  // Upstream replaced this with a deferred-press state machine driven by
+  // onMenuInteractionStart (configuration time) vs onOpenMenu (display time).
+  // The fork's native patch keeps both events at configuration time — its
+  // willDisplayMenuFor override degrades button-anchored menus into generic
+  // context-menu chrome — which collapses that machine's isPreparing window
+  // and lets an aborted menu leave presses suppressed. Rejected until both
+  // halves can be verified together on a device.
   if (props.shouldOpenOnLongPress && isValidElement(children)) {
     const child = children as ReactElement<{ onLongPress?: () => void; delayLongPress?: number }>;
     children = cloneElement(child, {

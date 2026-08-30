@@ -467,29 +467,41 @@ function SwipeActionButton(props: {
   readonly stretchesOnFullSwipe: boolean;
   readonly translation: SharedValue<number>;
 }) {
+  const {
+    actionsWidth,
+    entryRange: [entryRangeStart, entryRangeEnd],
+    fullSwipeThreshold,
+    stretchesOnFullSwipe,
+    translation,
+  } = props;
   const circleSize = props.compact ? COMPACT_ACTION_CIRCLE_SIZE : ACTION_CIRCLE_SIZE;
   const iconSize = props.compact ? COMPACT_ACTION_ICON_SIZE : ACTION_ICON_SIZE;
   // Left-panel reveal grows with positive translation, right-panel with
   // negative; the stretch offset flips sign with it.
   const revealSign = props.side === "left" ? 1 : -1;
   const actionStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(revealSign * props.translation.value, 0);
-    const entryProgress = interpolate(reveal, props.entryRange, [0, 1], Extrapolation.CLAMP);
-    const stretch = Math.max(reveal - props.actionsWidth, 0);
+    const reveal = Math.max(revealSign * translation.value, 0);
+    const entryProgress = interpolate(
+      reveal,
+      [entryRangeStart, entryRangeEnd],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
+    const stretch = Math.max(reveal - actionsWidth, 0);
     const fullSwipeProgress = interpolate(
       reveal,
-      [props.actionsWidth, props.fullSwipeThreshold + 20],
+      [actionsWidth, fullSwipeThreshold + 20],
       [0, 1],
       Extrapolation.CLAMP,
     );
 
     return {
-      opacity: props.stretchesOnFullSwipe ? entryProgress : entryProgress * (1 - fullSwipeProgress),
+      opacity: stretchesOnFullSwipe ? entryProgress : entryProgress * (1 - fullSwipeProgress),
       transform: [
         {
           translateX:
             interpolate(entryProgress, [0, 1], [-revealSign * 22, 0]) +
-            revealSign * (props.stretchesOnFullSwipe ? 0 : stretch),
+            revealSign * (stretchesOnFullSwipe ? 0 : stretch),
         },
         { scale: interpolate(entryProgress, [0, 1], [0.78, 1]) },
       ],
@@ -497,8 +509,8 @@ function SwipeActionButton(props: {
   });
   const anchorOffset = props.side === "left" ? (props.stretchAnchorOffset ?? 0) : 0;
   const circleStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(revealSign * props.translation.value, 0);
-    const stretch = props.stretchesOnFullSwipe ? Math.max(reveal - props.actionsWidth, 0) : 0;
+    const reveal = Math.max(revealSign * translation.value, 0);
+    const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
     // Reaches back to the panel's leading edge, then stops — the pill never
     // slides past the screen edge it is filling toward.
     const anchorPull = Math.min(stretch, anchorOffset);
@@ -507,16 +519,16 @@ function SwipeActionButton(props: {
       // The circle widens toward the row: leftward on the right panel, and on
       // the left panel it grows rightward from its anchored left edge while
       // that edge settles onto the panel's start.
-      transform: [{ translateX: props.side === "left" ? -anchorPull : -stretch }],
+      transform: [{ translateX: revealSign === 1 ? -anchorPull : -stretch }],
       width: circleSize + stretch + anchorPull,
     };
   });
   const iconStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(revealSign * props.translation.value, 0);
-    const stretch = props.stretchesOnFullSwipe ? Math.max(reveal - props.actionsWidth, 0) : 0;
+    const reveal = Math.max(revealSign * translation.value, 0);
+    const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
     const armedProgress = interpolate(
       reveal,
-      [props.fullSwipeThreshold, props.fullSwipeThreshold + 20],
+      [fullSwipeThreshold, fullSwipeThreshold + 20],
       [0, 1],
       Extrapolation.CLAMP,
     );
@@ -526,16 +538,16 @@ function SwipeActionButton(props: {
     };
   });
   const labelStyle = useAnimatedStyle(() => {
-    if (!props.stretchesOnFullSwipe) {
+    if (!stretchesOnFullSwipe) {
       return { opacity: 1 };
     }
 
-    const reveal = Math.max(revealSign * props.translation.value, 0);
-    const stretch = Math.max(reveal - props.actionsWidth, 0);
+    const reveal = Math.max(revealSign * translation.value, 0);
+    const stretch = Math.max(reveal - actionsWidth, 0);
     return {
       opacity: interpolate(
         reveal,
-        [props.fullSwipeThreshold - 24, props.fullSwipeThreshold],
+        [fullSwipeThreshold - 24, fullSwipeThreshold],
         [1, 0],
         Extrapolation.CLAMP,
       ),
@@ -698,17 +710,17 @@ export function ThreadSwipeActions(props: {
   readonly secondaryAction: ThreadSwipeSecondaryAction | null;
   readonly translation: SharedValue<number>;
 }) {
-  const secondaryAction = props.secondaryAction;
+  const { fullSwipeThreshold, onFullSwipeArmedChange, secondaryAction, translation } = props;
   const fullSwipeIsPrimary = props.fullSwipeAction === "primary" || secondaryAction === null;
   const actionsWidth = swipeActionsWidth(secondaryAction !== null);
   useAnimatedReaction(
-    () => -props.translation.value >= props.fullSwipeThreshold,
+    () => -translation.value >= fullSwipeThreshold,
     (armed, previous) => {
       if (armed !== previous) {
-        runOnJS(props.onFullSwipeArmedChange)(armed);
+        runOnJS(onFullSwipeArmedChange)(armed);
       }
     },
-    [props.fullSwipeThreshold, props.onFullSwipeArmedChange],
+    [fullSwipeThreshold, onFullSwipeArmedChange, translation],
   );
 
   return (

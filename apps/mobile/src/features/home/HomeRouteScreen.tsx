@@ -19,6 +19,7 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
+import { useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
@@ -57,6 +58,7 @@ export function HomeRouteScreen() {
     [pendingTasks],
   );
   const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
+  const handleSelectThread = useHomeThreadSelection();
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -267,10 +269,7 @@ export function HomeRouteScreen() {
             setSearchQuery("");
             // Settled threads are live shells: opening one is plain
             // navigation, and sending a message un-settles server-side.
-            navigation.navigate("Thread", {
-              environmentId: thread.environmentId,
-              threadId: thread.id,
-            });
+            handleSelectThread(thread);
           }}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}

@@ -35,6 +35,9 @@ const customIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 // does not tell the EAS CLI which account to authenticate against.
 const forkEasProjectId = repoEnv.T3CODE_EAS_PROJECT_ID?.trim();
 const forkEasOwner = repoEnv.T3CODE_EAS_OWNER?.trim();
+const runtimeVersionPolicy =
+  process.env.MOBILE_VERSION_POLICY ??
+  (APP_VARIANT === "development" ? "appVersion" : "fingerprint");
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 // Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
@@ -272,11 +275,15 @@ const config: ExpoConfig = {
   scheme: variant.scheme,
   version: appVersion,
   runtimeVersion: {
-    // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
-    // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every build of one version shares a runtime version, so a JS
-    // update could land on a binary missing the native changes it needs and crash.
-    policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
+    // Preview and production fingerprint (not appVersion) so an OTA only reaches
+    // binaries whose native project — native deps, config plugins, AND patches/ —
+    // matches the update. With appVersion, every build of one version shares a
+    // runtime version, so a JS update could land on a binary missing the native
+    // changes it needs and crash. Development opts out because its manifest
+    // resolves on every launch and fingerprinting the native project is expensive;
+    // a dev client distributed as a Release build that receives OTAs needs
+    // MOBILE_VERSION_POLICY=fingerprint for both its build and its updates.
+    policy: runtimeVersionPolicy,
   },
   orientation: "portrait",
   icon: variant.assets.appIcon,
