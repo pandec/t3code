@@ -30,7 +30,7 @@ import * as Runtime from "../lib/runtime";
 import * as MobileStorage from "../persistence/mobile-storage";
 import { appAtomRegistry } from "../state/atom-registry";
 import { clearThreadLifecycleOutboxEnvironment } from "../state/thread-lifecycle-outbox";
-import { clearThreadOutboxEnvironment } from "../state/thread-outbox";
+import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
 import { connectionStorageLayer } from "./storage";

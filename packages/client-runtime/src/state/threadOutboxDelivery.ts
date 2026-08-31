@@ -1,13 +1,18 @@
 import {
   CommandId,
+  type ChatFileAttachment,
   type EnvironmentId,
   type OrchestrationSessionStatus,
   type TurnId,
+  type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
-import { toUploadChatImageAttachments } from "./composerAttachment.ts";
+import {
+  toUploadChatImageAttachments,
+  type DraftComposerAttachment,
+} from "./composerAttachment.ts";
 import type {
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
@@ -82,6 +87,29 @@ export interface ThreadOutboxDeliveryOptions {
 
 function settingsCommandId(message: QueuedThreadMessage, setting: string): CommandId {
   return CommandId.make(`${message.commandId}:${setting}`);
+}
+
+function toStartTurnAttachments(
+  attachments: ReadonlyArray<DraftComposerAttachment>,
+): ReadonlyArray<UploadChatImageAttachment | ChatFileAttachment> | null {
+  const prepared: Array<UploadChatImageAttachment | ChatFileAttachment> = [];
+  for (const attachment of attachments) {
+    if (attachment.type === "image") {
+      prepared.push(...toUploadChatImageAttachments([attachment]));
+      continue;
+    }
+    if (attachment.uploadedAttachmentId === undefined) {
+      return null;
+    }
+    prepared.push({
+      type: "file",
+      id: attachment.uploadedAttachmentId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    });
+  }
+  return prepared;
 }
 
 /**
@@ -215,6 +243,16 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       }
     }
 
+    const attachments = toStartTurnAttachments(queuedMessage.attachments);
+    if (attachments === null) {
+      warn("[thread-outbox] queued file attachment is not uploaded", {
+        environmentId: queuedMessage.environmentId,
+        threadId: queuedMessage.threadId,
+        messageId: queuedMessage.messageId,
+      });
+      return false;
+    }
+
     const deliveryResult = await options.commands.startTurn({
       environmentId: queuedMessage.environmentId,
       input: {
@@ -224,7 +262,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
           messageId: queuedMessage.messageId,
           role: "user",
           text: queuedMessage.text,
-          attachments: toUploadChatImageAttachments(queuedMessage.attachments),
+          attachments,
           ...(queuedMessage.inputOrigin !== undefined
             ? { inputOrigin: queuedMessage.inputOrigin }
             : {}),

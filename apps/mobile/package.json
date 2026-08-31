@@ -59,6 +59,7 @@
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
     "@pierre/diffs": "catalog:",
+    "@react-native-ai/apple": "0.12.0",
     "@react-native-menu/menu": "^2.0.0",
     "@react-navigation/elements": "2.9.26",
     "@react-navigation/native": "7.3.4",
@@ -149,7 +150,8 @@
     "autolinking": {
       "buildFromSource": [
         "react-native-screens",
-        "@react-native-menu/menu"
+        "@react-native-menu/menu",
+        "expo-audio"
       ]
     }
   },

@@ -88,8 +88,8 @@ export function updateThreadOutboxMessage(message: QueuedThreadMessage): Promise
 }
 
 /** Removes an extant message and reports whether this caller owned the removal. */
-export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
-  return threadOutboxManager.remove(message);
+export async function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
+  return (await threadOutboxManager.remove(message)) !== null;
 }
 
 /** The queued message the drain is currently delivering, if any. */

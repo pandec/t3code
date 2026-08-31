@@ -63,6 +63,9 @@ import IconMoon from "@tabler/icons-react-native/IconMoon";
 import IconNetwork from "@tabler/icons-react-native/IconNetwork";
 import IconPalette from "@tabler/icons-react-native/IconPalette";
 import IconPencil from "@tabler/icons-react-native/IconPencil";
+import IconPhoto from "@tabler/icons-react-native/IconPhoto";
+import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
+import IconMicrophoneFilled from "@tabler/icons-react-native/IconMicrophoneFilled";
 import IconPin from "@tabler/icons-react-native/IconPin";
 import IconPinnedOff from "@tabler/icons-react-native/IconPinnedOff";
 import IconPlayerPause from "@tabler/icons-react-native/IconPlayerPause";
@@ -190,9 +193,12 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "line.3.horizontal.decrease.circle": IconFilter,
   "line.3.horizontal.decrease.circle.fill": IconFilter,
   magnifyingglass: IconSearch,
+  mic: IconMicrophone,
+  "mic.fill": IconMicrophoneFilled,
   paintbrush: IconPalette,
   pencil: IconPencil,
   "person.crop.circle": IconUserCircle,
+  photo: IconPhoto,
   pin: IconPin,
   "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,

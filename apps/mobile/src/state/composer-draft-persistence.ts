@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   ModelSelection as ModelSelectionSchema,
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
@@ -7,8 +8,8 @@ import {
 import * as Schema from "effect/Schema";
 import type { Directory as ExpoDirectory } from "expo-file-system";
 
-import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import type { DraftComposerAttachment, DraftComposerImageAttachment } from "../lib/composerImages";
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import type { ModelSelection } from "@t3tools/contracts";
 
@@ -79,7 +80,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
 const LegacyComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
@@ -92,7 +93,7 @@ const LegacyComposerDraftsSchema = Schema.Struct({
   drafts: Schema.Record(Schema.String, LegacyComposerDraftSchema),
 });
 
-const PersistedAttachmentReferenceSchema = Schema.Struct({
+const PersistedImageAttachmentReferenceSchema = Schema.Struct({
   id: Schema.String,
   type: Schema.Literal("image"),
   name: Schema.String,
@@ -100,6 +101,22 @@ const PersistedAttachmentReferenceSchema = Schema.Struct({
   sizeBytes: Schema.Number,
   contentHash: Schema.String,
 });
+
+const PersistedFileAttachmentReferenceSchema = Schema.Struct({
+  id: Schema.String,
+  type: Schema.Literal("file"),
+  name: Schema.String,
+  mimeType: Schema.String,
+  sizeBytes: Schema.Number,
+  fileUri: Schema.String,
+  uploadedAttachmentId: Schema.optional(Schema.String),
+  uploadEnvironmentId: Schema.optional(EnvironmentId),
+});
+
+const PersistedAttachmentReferenceSchema = Schema.Union([
+  PersistedImageAttachmentReferenceSchema,
+  PersistedFileAttachmentReferenceSchema,
+]);
 
 const PersistedComposerDraftSchema = Schema.Struct({
   text: Schema.String,
@@ -171,7 +188,7 @@ export function decodePersistedComposerDrafts(value: unknown): Record<string, Co
   );
 }
 
-function attachmentReference(
+function imageAttachmentReference(
   attachment: DraftComposerImageAttachment,
   contentHash: string,
 ): PersistedAttachmentReference {
@@ -193,13 +210,17 @@ export async function splitComposerDraftForPersistence(
   const attachmentContents = new Map<string, string>();
   const attachments: PersistedAttachmentReference[] = [];
   for (const attachment of draft.attachments) {
+    if (attachment.type === "file") {
+      attachments.push(attachment);
+      continue;
+    }
     const contentHash = await hashContent(attachment.dataUrl, attachment);
     const existing = attachmentContents.get(contentHash);
     if (existing !== undefined && existing !== attachment.dataUrl) {
       throw new Error(`Composer attachment hash collision for ${contentHash}.`);
     }
     attachmentContents.set(contentHash, attachment.dataUrl);
-    attachments.push(attachmentReference(attachment, contentHash));
+    attachments.push(imageAttachmentReference(attachment, contentHash));
   }
 
   const persistedDraft = composerDraftForPersistence(draftKey, draft);
@@ -222,7 +243,9 @@ export function composerDraftAttachmentReferenceCounts(
   const counts = new Map<string, number>();
   for (const record of records) {
     for (const attachment of record.draft.attachments) {
-      counts.set(attachment.contentHash, (counts.get(attachment.contentHash) ?? 0) + 1);
+      if (attachment.type === "image") {
+        counts.set(attachment.contentHash, (counts.get(attachment.contentHash) ?? 0) + 1);
+      }
     }
   }
   return counts;
@@ -400,7 +423,7 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
 type AttachmentHydrationState = "ok" | "corrupt" | "unavailable";
 
 type HydratedAttachment =
-  | { readonly state: "ok"; readonly attachment: DraftComposerImageAttachment }
+  | { readonly state: "ok"; readonly attachment: DraftComposerAttachment }
   | { readonly state: "corrupt" }
   | { readonly state: "unavailable" };
 
@@ -426,6 +449,9 @@ async function hydrateAttachment(
   attachment: PersistedAttachmentReference,
   attachmentDirectory: ExpoDirectory,
 ): Promise<HydratedAttachment> {
+  if (attachment.type === "file") {
+    return { state: "ok", attachment };
+  }
   const { File } = await loadExpoFileSystem();
   const fileName = attachmentFileName(attachment.contentHash);
   let file: InstanceType<typeof File>;

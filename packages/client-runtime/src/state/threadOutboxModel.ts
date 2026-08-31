@@ -18,13 +18,14 @@ import {
 import * as Schema from "effect/Schema";
 
 import { isTransportConnectionErrorMessage } from "../errors/index.ts";
+import { clampFileAttachmentUploadBytes, fileAttachmentTooLargeMessage } from "./attachments.ts";
 import {
-  PersistedDraftComposerImageAttachmentSchema,
-  type DraftComposerImageAttachment,
+  PersistedDraftComposerAttachmentSchema,
+  type DraftComposerAttachment,
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 6;
+const THREAD_OUTBOX_SCHEMA_VERSION = 7;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -57,14 +58,14 @@ export const ThreadOutboxDeliveryIntent = Schema.Literals(["queue", "steer"]);
 export type ThreadOutboxDeliveryIntent = typeof ThreadOutboxDeliveryIntent.Type;
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
-  attachments: Schema.Array(PersistedDraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(PersistedDraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
@@ -104,7 +105,7 @@ export interface QueuedThreadMessage {
   readonly commandId: CommandId;
   readonly text: string;
   readonly inputOrigin?: typeof MessageInputOrigin.Type | undefined;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType | undefined;
   readonly runtimeMode?: RuntimeModeType | undefined;
   readonly interactionMode?: ProviderInteractionModeType | undefined;
@@ -243,7 +244,7 @@ export function queuedThreadMessagePreview(
     return collapsed;
   }
   const count = message.attachments.length;
-  return count === 1 ? "1 image attachment" : `${count} image attachments`;
+  return count === 1 ? "1 attachment" : `${count} attachments`;
 }
 
 export interface ThreadSettingsSnapshot {
@@ -278,9 +279,13 @@ export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown
   return encodeStoredQueuedThreadMessage({
     schemaVersion: THREAD_OUTBOX_SCHEMA_VERSION,
     ...message,
-    attachments: message.attachments.map(
-      ({ previewUri: _previewUri, ...attachment }) => attachment,
-    ),
+    attachments: message.attachments.map((attachment) => {
+      if (attachment.type === "file") {
+        return attachment;
+      }
+      const { previewUri: _previewUri, ...persisted } = attachment;
+      return persisted;
+    }),
   });
 }
 
@@ -288,10 +293,14 @@ export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
   const { schemaVersion: _, ...message } = decodeStoredQueuedThreadMessage(value);
   return {
     ...message,
-    attachments: message.attachments.map((attachment) => ({
-      ...attachment,
-      previewUri: attachment.dataUrl,
-    })),
+    attachments: message.attachments.map((attachment) =>
+      attachment.type === "image"
+        ? {
+            ...attachment,
+            previewUri: attachment.dataUrl,
+          }
+        : attachment,
+    ),
   };
 }
 
@@ -406,6 +415,48 @@ export function resolveThreadOutboxDeliveryAction(input: {
   return input.deliveryIntent === "queue" && input.threadStatus === "running" ? "wait" : "send";
 }
 
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "remove" }
+  | { readonly step: "retry" }
+  | { readonly step: "restore"; readonly reason: string }
+  | { readonly step: "send" };
+
+/**
+ * Orders the resolved delivery action against the file-capability gate. The
+ * gate applies only to a message that will send: a message whose thread
+ * already exists (or is gone) must be removed even while the server config is
+ * still loading, and a missing config defers with a retry instead of parking
+ * the message forever.
+ */
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  /** Null while the environment's server config has not synced yet. */
+  readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction !== "send") {
+    return { step: input.deliveryAction };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
+  }
+  if (input.serverConfig === null) {
+    return { step: "retry" };
+  }
+  const maxBytes = input.serverConfig.maxFileUploadBytes;
+  if (maxBytes === undefined) {
+    return { step: "restore", reason: "This server does not support file attachments." };
+  }
+  const effectiveMaxBytes = clampFileAttachmentUploadBytes(maxBytes);
+  const oversized = input.fileAttachments.find(
+    (attachment) => attachment.sizeBytes > effectiveMaxBytes,
+  );
+  return oversized
+    ? { step: "restore", reason: fileAttachmentTooLargeMessage(oversized.name, effectiveMaxBytes) }
+    : { step: "send" };
+}
+
 export interface ThreadOutboxDispatchCandidate {
   readonly message: QueuedThreadMessage;
   readonly action: Exclude<ThreadOutboxDeliveryAction, "wait">;
@@ -504,7 +555,7 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
 }
 
 export type ThreadOutboxCommandStage = "settings-sync" | "start-turn";
-export type ThreadOutboxFailureAction = "retry" | "discard";
+export type ThreadOutboxFailureAction = "retry" | "restore";
 
 export function resolveThreadOutboxFailureAction(input: {
   readonly stage: ThreadOutboxCommandStage;
@@ -518,5 +569,5 @@ export function resolveThreadOutboxFailureAction(input: {
   ) {
     return "retry";
   }
-  return "discard";
+  return "restore";
 }

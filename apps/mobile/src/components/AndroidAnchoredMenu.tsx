@@ -43,6 +43,9 @@ export type AndroidAnchoredMenuProps = {
   readonly actionAccessibilityRole?: "checkbox" | "radio";
   readonly title?: string;
   readonly onPressAction?: MenuComponentProps["onPressAction"];
+  readonly onMenuInteractionStart?: MenuComponentProps["onMenuInteractionStart"];
+  readonly onOpenMenu?: MenuComponentProps["onOpenMenu"];
+  readonly onCloseMenu?: MenuComponentProps["onCloseMenu"];
   /** Applied to the anchor wrapper — call sites flex these to fill toolbars. */
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
@@ -90,13 +93,16 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     setPath([]);
     setOverlay(null);
     setRootHeight(null);
-  }, []);
+    props.onCloseMenu?.();
+  }, [props.onCloseMenu]);
 
   const open = useCallback(() => {
+    props.onMenuInteractionStart?.();
     anchorRef.current?.measureInWindow((x, y, width, height) => {
       setAnchor({ x, y, width, height });
+      props.onOpenMenu?.();
     });
-  }, []);
+  }, [props.onMenuInteractionStart, props.onOpenMenu]);
 
   const measureOverlay = useCallback(() => {
     overlayRef.current?.measureInWindow((x, y, width, height) => {

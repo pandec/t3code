@@ -3,8 +3,9 @@ import { Alert } from "react-native";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
-import { removeThreadOutboxMessage, updateThreadOutboxMessage } from "./thread-outbox";
+import { updateThreadOutboxMessage } from "./thread-outbox";
 import { queuedThreadMessageIntent, type QueuedThreadMessage } from "./thread-outbox-model";
+import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   appendComposerDraftContentDurably,
   appendedComposerDraftText,
@@ -171,6 +172,7 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
     // the message outright whenever the append does not land.
     const append = await appendComposerDraftContentDurably(threadKey, {
       text: message.text,
+      ...(message.inputOrigin !== undefined ? { inputOrigin: message.inputOrigin } : {}),
       attachments: message.attachments,
     });
     revertAppend = () => revertComposerDraftAppend(threadKey, append);

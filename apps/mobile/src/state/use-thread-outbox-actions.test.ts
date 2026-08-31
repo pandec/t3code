@@ -63,13 +63,16 @@ vi.mock("./use-thread-outbox-drain", async () => {
 });
 
 vi.mock("./thread-outbox", () => ({
-  removeThreadOutboxMessage: () => {
-    calls.push("remove");
-    return removeError ? Promise.reject(removeError) : Promise.resolve(true);
-  },
   updateThreadOutboxMessage: (updatedMessage: QueuedThreadMessage) => {
     updatedMessages.push(updatedMessage);
     return Promise.resolve(true);
+  },
+}));
+
+vi.mock("./thread-outbox-removal", () => ({
+  removeThreadOutboxMessage: () => {
+    calls.push("remove");
+    return removeError ? Promise.reject(removeError) : Promise.resolve(true);
   },
 }));
 

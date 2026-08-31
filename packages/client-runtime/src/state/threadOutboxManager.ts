@@ -47,16 +47,24 @@ export interface ThreadOutboxManagerOptions {
 export type ThreadOutboxManager = ReturnType<typeof createThreadOutboxManager>;
 
 export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
+  const atomLabel = options.atomLabel ?? "thread-outbox:queued-messages";
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
-  >({}).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-outbox:queued-messages"));
+  >({}).pipe(Atom.keepAlive, Atom.withLabel(atomLabel));
   const loadStateAtom = Atom.make<ThreadOutboxLoadState>({ status: "idle" }).pipe(
     Atom.keepAlive,
-    Atom.withLabel(`${options.atomLabel ?? "thread-outbox"}:load-state`),
+    Atom.withLabel(`${atomLabel}:load-state`),
   );
   const warn = options.warn ?? (() => undefined);
-  let loadPromise: Promise<void> | null = null;
+  let loadPromise: Promise<boolean> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
+  // Monotonic per-message write counter. Every accepted write (enqueue publish
+  // or update) bumps it, so a writer that captured a revision before slow work
+  // is rejected before its stale payload reaches disk.
+  const revisions = new Map<MessageId, number>();
+  const bumpRevision = (messageId: MessageId): void => {
+    revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
+  };
 
   const serialize = <A>(mutation: () => Promise<A>): Promise<A> => {
     const result = mutationQueue.then(mutation, mutation);
@@ -74,13 +82,17 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     options.registry.set(queuedMessagesByThreadKeyAtom, groupQueuedThreadMessages(messages));
   };
 
-  const load = (): Promise<void> => {
+  // Resolves true when hydration completed; false when the read failed and the
+  // next call should retry. Destructive attachment sweeps must not treat a
+  // failed hydration as an empty queue.
+  const load = (): Promise<boolean> => {
     if (loadPromise !== null) return loadPromise;
     options.registry.set(loadStateAtom, { status: "loading" });
     loadPromise = serialize(async () => {
       const persistedMessages = await options.storage.load();
       setMessages([...persistedMessages, ...currentMessages()]);
       options.registry.set(loadStateAtom, { status: "ready" });
+      return true;
     }).catch((cause) => {
       const error = new ThreadOutboxManagerError({
         operation: "load",
@@ -92,14 +104,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       loadPromise = null;
       options.registry.set(loadStateAtom, { status: "failed", error });
       warn("[thread-outbox] failed to load persisted messages", error);
+      return false;
     });
     return loadPromise;
   };
 
-  // Publish the queued row synchronously so composers can respond on the
-  // initiating frame. The durable write follows through the serialized queue;
-  // if it fails, roll back only this exact enqueue attempt.
+  // Publish synchronously so composers can respond on the initiating frame.
+  // The durable write follows through the serialized queue; if it fails, roll
+  // back only this exact enqueue attempt.
   const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    bumpRevision(message.messageId);
     setMessages([
       ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       message,
@@ -109,6 +123,15 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         await options.storage.write(message);
       } catch (cause) {
         setMessages(currentMessages().filter((candidate) => candidate !== message));
+        // A concurrent stale writer can have compensation-written this payload.
+        // Remove it when no same-id winner survives, or restart resurrects it.
+        if (!currentMessages().some((candidate) => candidate.messageId === message.messageId)) {
+          try {
+            await options.storage.remove(message);
+          } catch {
+            // Best effort: bootstrap reconciles the queue against storage.
+          }
+        }
         throw new ThreadOutboxManagerError({
           operation: "enqueue",
           environmentId: message.environmentId,
@@ -125,17 +148,17 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const confirmQueued = (message: QueuedThreadMessage): Promise<boolean> =>
     serialize(async () => currentMessages().some((candidate) => candidate === message));
 
-  // Rewrites an already-queued message. A no-op when the message has been
-  // removed in the meantime (e.g. deleted or delivered), so a trailing editor
-  // flush can never resurrect it. Returns whether the message was updated.
-  const update = (message: QueuedThreadMessage): Promise<boolean> =>
+  // Rewrites an already-queued message. `expectedRevision` makes this a
+  // compare-and-set around slow attachment work. A same-id enqueue can publish
+  // while the durable write is in flight, so the revision is checked again
+  // after the write and a stale persisted payload is repaired immediately.
+  const update = (message: QueuedThreadMessage, expectedRevision?: number): Promise<boolean> =>
     serialize(async () => {
-      const exists = currentMessages().some(
-        (candidate) => candidate.messageId === message.messageId,
-      );
-      if (!exists) {
-        return false;
-      }
+      const staleOrMissing = (): boolean =>
+        !currentMessages().some((candidate) => candidate.messageId === message.messageId) ||
+        (expectedRevision !== undefined &&
+          (revisions.get(message.messageId) ?? 0) !== expectedRevision);
+      if (staleOrMissing()) return false;
       try {
         await options.storage.write(message);
       } catch (cause) {
@@ -147,6 +170,20 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
+      if (staleOrMissing()) {
+        const winner = currentMessages().find(
+          (candidate) => candidate.messageId === message.messageId,
+        );
+        if (winner !== undefined) {
+          try {
+            await options.storage.write(winner);
+          } catch {
+            // The winner's serialized write owns failure handling.
+          }
+        }
+        return false;
+      }
+      bumpRevision(message.messageId);
       setMessages([
         ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
         message,
@@ -154,26 +191,28 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return true;
     });
 
-  /**
-   * Atomically claims and removes an extant row. The synchronous in-memory
-   * removal keeps a drain effect from selecting the row while durable removal
-   * is pending; failure restores it so user content is never lost.
-   */
-  const remove = (message: QueuedThreadMessage): Promise<boolean> =>
+  // `expectedRevision` protects against an accepted edit after the caller made
+  // its decision. `canRemove` adds a live ownership check for an open editor.
+  // The removed payload is returned so cleanup sees attachments added by a
+  // concurrent accepted update rather than only the caller's old snapshot.
+  const remove = (
+    message: QueuedThreadMessage,
+    expectedRevision?: number,
+    canRemove?: () => boolean,
+  ): Promise<QueuedThreadMessage | null> =>
     serialize(async () => {
-      const exists = currentMessages().some(
+      const removalCanceled = (): boolean =>
+        (expectedRevision !== undefined &&
+          (revisions.get(message.messageId) ?? 0) !== expectedRevision) ||
+        canRemove?.() === false;
+      if (removalCanceled()) return null;
+      const removed = currentMessages().find(
         (candidate) => candidate.messageId === message.messageId,
       );
-      if (!exists) {
-        return false;
-      }
-      setMessages(
-        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
-      );
+      if (removed === undefined) return null;
       try {
-        await options.storage.remove(message);
+        await options.storage.remove(removed);
       } catch (cause) {
-        setMessages([...currentMessages(), message]);
         throw new ThreadOutboxManagerError({
           operation: "remove",
           environmentId: message.environmentId,
@@ -182,11 +221,42 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
-      return true;
+      if (removalCanceled()) {
+        const winner = currentMessages().find(
+          (candidate) => candidate.messageId === message.messageId,
+        );
+        if (winner !== undefined) {
+          try {
+            await options.storage.write(winner);
+          } catch (cause) {
+            throw new ThreadOutboxManagerError({
+              operation: "remove",
+              environmentId: message.environmentId,
+              threadId: message.threadId,
+              messageId: message.messageId,
+              cause,
+            });
+          }
+        }
+        return null;
+      }
+      setMessages(
+        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+      );
+      // Tombstone rather than delete the revision to prevent ABA with a same-id
+      // retry that restarts at revision one.
+      bumpRevision(message.messageId);
+      return removed;
     });
 
-  const clearEnvironment = (environmentId: EnvironmentId): Promise<void> =>
-    serialize(async () => {
+  const clearEnvironment = (
+    environmentId: EnvironmentId,
+  ): Promise<ReadonlyArray<QueuedThreadMessage>> => {
+    // Enqueues publish before their serialized writes. Capture revisions now,
+    // then wait for earlier mutations before deciding which rows belong to this
+    // request; any message changed after the request must survive.
+    const revisionsAtRequest = new Map(revisions);
+    return serialize(async () => {
       const persisted = await options.storage.load().catch((cause) => {
         warn(
           "[thread-outbox] failed to load messages while clearing environment",
@@ -203,32 +273,84 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const allMessages = flattenQueuedThreadMessages(
         groupQueuedThreadMessages([...persisted, ...currentMessages()]),
       );
-      const removedMessageIds = new Set<MessageId>();
+      const candidates = allMessages.filter(
+        (message) =>
+          message.environmentId === environmentId &&
+          (revisions.get(message.messageId) ?? 0) ===
+            (revisionsAtRequest.get(message.messageId) ?? 0),
+      );
+      const candidateRevisions = new Map(
+        candidates.map(
+          (message) => [message.messageId, revisions.get(message.messageId) ?? 0] as const,
+        ),
+      );
+      const removedFromStorage = new Set<MessageId>();
 
       await Promise.all(
-        allMessages
-          .filter((message) => message.environmentId === environmentId)
-          .map(async (message) => {
-            try {
-              await options.storage.remove(message);
-              removedMessageIds.add(message.messageId);
-            } catch (cause) {
-              warn(
-                "[thread-outbox] failed to clear persisted message",
-                new ThreadOutboxManagerError({
-                  operation: "clear-environment-remove",
-                  environmentId: message.environmentId,
-                  threadId: message.threadId,
-                  messageId: message.messageId,
-                  cause,
-                }),
-              );
-            }
-          }),
+        candidates.map(async (message) => {
+          try {
+            await options.storage.remove(message);
+            removedFromStorage.add(message.messageId);
+          } catch (cause) {
+            warn(
+              "[thread-outbox] failed to clear persisted message",
+              new ThreadOutboxManagerError({
+                operation: "clear-environment-remove",
+                environmentId: message.environmentId,
+                threadId: message.threadId,
+                messageId: message.messageId,
+                cause,
+              }),
+            );
+          }
+        }),
       );
 
-      setMessages(allMessages.filter((message) => !removedMessageIds.has(message.messageId)));
+      // A same-id enqueue can publish while storage removal waits. Restore its
+      // payload before the later serialized enqueue write gets its turn.
+      await Promise.all(
+        candidates.map(async (message) => {
+          if (
+            !removedFromStorage.has(message.messageId) ||
+            (revisions.get(message.messageId) ?? 0) === candidateRevisions.get(message.messageId)
+          ) {
+            return;
+          }
+          const retained = currentMessages().find(
+            (candidate) => candidate.messageId === message.messageId,
+          );
+          if (retained === undefined) return;
+          try {
+            await options.storage.write(retained);
+          } catch (cause) {
+            warn(
+              "[thread-outbox] failed to restore message retained during environment clear",
+              new ThreadOutboxManagerError({
+                operation: "clear-environment-remove",
+                environmentId: retained.environmentId,
+                threadId: retained.threadId,
+                messageId: retained.messageId,
+                cause,
+              }),
+            );
+          }
+        }),
+      );
+
+      const removed = candidates.filter(
+        (message) =>
+          removedFromStorage.has(message.messageId) &&
+          (revisions.get(message.messageId) ?? 0) === candidateRevisions.get(message.messageId),
+      );
+      const removedMessageIds = new Set(removed.map((message) => message.messageId));
+      const reconciledMessages = flattenQueuedThreadMessages(
+        groupQueuedThreadMessages([...allMessages, ...currentMessages()]),
+      ).filter((message) => !removedMessageIds.has(message.messageId));
+      for (const message of removed) bumpRevision(message.messageId);
+      setMessages(reconciledMessages);
+      return removed;
     });
+  };
 
   return {
     queuedMessagesByThreadKeyAtom,
@@ -237,6 +359,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     load,
     enqueue,
     confirmQueued,
+    revisionOf: (messageId: MessageId): number => revisions.get(messageId) ?? 0,
     update,
     remove,
     clearEnvironment,

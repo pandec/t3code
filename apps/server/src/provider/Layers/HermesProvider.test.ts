@@ -157,9 +157,7 @@ describe("buildInitialHermesProviderSnapshot", () => {
   );
 
   // Hermes applies `session/set_model` to a live ACP session, so the model
-  // picker must stay usable mid-thread. (This is a Hermes product choice, not a
-  // universal rule: Grok reports `sessionModelSwitch: "in-session"` and still
-  // sets `requiresNewThreadForModelChange: true` on purpose.)
+  // picker must stay usable mid-thread.
   it.effect("allows mid-thread model changes", () =>
     Effect.gen(function* () {
       const snapshot = yield* buildInitialHermesProviderSnapshot(decodeHermesSettings({}));
