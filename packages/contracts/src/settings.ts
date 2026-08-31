@@ -431,6 +431,12 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   /** Web-only: obscure provider account emails in the usage meter. */
   maskProviderUsageEmails: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Web-only: show the OpenRouter credit balance in the usage meter popover.
+   * Needs an OpenRouter API key configured on the environment (Settings →
+   * Extras) for the balance to actually appear.
+   */
+  showOpenRouterCredits: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   threadAutoSettleEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
@@ -1386,6 +1392,7 @@ export const ClientSettingsPatch = Schema.Struct({
   providerUsageWarningPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   providerUsageCriticalPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   maskProviderUsageEmails: Schema.optionalKey(Schema.Boolean),
+  showOpenRouterCredits: Schema.optionalKey(Schema.Boolean),
   threadAutoSettleEnabled: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),

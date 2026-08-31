@@ -44,6 +44,7 @@ const clientSettings: ClientSettings = {
   fontSmoothing: true,
   glassOpacity: 80,
   maskProviderUsageEmails: false,
+  showOpenRouterCredits: false,
   planModeEnabled: false,
   showSkillsInSlashMenu: false,
   providerModelPreferences: {},

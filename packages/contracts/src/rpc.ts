@@ -80,6 +80,12 @@ import {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
 } from "./provider.ts";
+import {
+  OpenRouterCreditsConfigureInput,
+  OpenRouterCreditsConfigureResult,
+  OpenRouterCreditsReadInput,
+  OpenRouterCreditsResult,
+} from "./openRouterCredits.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ProviderUsageReadInput,
@@ -295,6 +301,8 @@ export const WS_METHODS = {
   providerUsageRead: "providerUsage.read",
   providerUsageRefresh: "providerUsage.refresh",
   providerUsageThreadAccount: "providerUsage.threadAccount",
+  openRouterCreditsRead: "openRouterCredits.read",
+  openRouterCreditsConfigure: "openRouterCredits.configure",
   serverListProviderSkills: "server.listProviderSkills",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -414,6 +422,18 @@ export const WsProviderUsageRefreshRpc = Rpc.make(WS_METHODS.providerUsageRefres
 export const WsProviderUsageThreadAccountRpc = Rpc.make(WS_METHODS.providerUsageThreadAccount, {
   payload: ProviderUsageThreadAccountInput,
   success: ProviderUsageThreadAccountResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsOpenRouterCreditsReadRpc = Rpc.make(WS_METHODS.openRouterCreditsRead, {
+  payload: OpenRouterCreditsReadInput,
+  success: OpenRouterCreditsResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsOpenRouterCreditsConfigureRpc = Rpc.make(WS_METHODS.openRouterCreditsConfigure, {
+  payload: OpenRouterCreditsConfigureInput,
+  success: OpenRouterCreditsConfigureResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1106,6 +1126,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderUsageReadRpc,
   WsProviderUsageRefreshRpc,
   WsProviderUsageThreadAccountRpc,
+  WsOpenRouterCreditsReadRpc,
+  WsOpenRouterCreditsConfigureRpc,
   WsServerListProviderSkillsRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
