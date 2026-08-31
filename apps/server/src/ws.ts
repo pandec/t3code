@@ -112,6 +112,8 @@ import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
+import { configureOpenRouterCredits, readOpenRouterCredits } from "./provider/openRouterCredits.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import type { ProviderInstance } from "./provider/ProviderDriver.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -533,6 +535,15 @@ const makeWsRpcLayer = (
         instanceRegistry: providerInstanceRegistry,
         httpClient: yield* HttpClient.HttpClient,
       });
+      const wsHttpClient = yield* HttpClient.HttpClient;
+      const serverSecretStore = yield* ServerSecretStore.ServerSecretStore;
+      const provideOpenRouterCreditsServices = <A, E>(
+        effect: Effect.Effect<A, E, HttpClient.HttpClient | ServerSecretStore.ServerSecretStore>,
+      ): Effect.Effect<A, E> =>
+        effect.pipe(
+          Effect.provideService(HttpClient.HttpClient, wsHttpClient),
+          Effect.provideService(ServerSecretStore.ServerSecretStore, serverSecretStore),
+        );
       const providerService = yield* ProviderService.ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
@@ -1480,6 +1491,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.providerUsageThreadAccount, readThreadGatewayAccount(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.openRouterCreditsRead]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.openRouterCreditsRead,
+            provideOpenRouterCreditsServices(readOpenRouterCredits),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.openRouterCreditsConfigure]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openRouterCreditsConfigure,
+            provideOpenRouterCreditsServices(
+              // A secret-store failure surfaces as the command's failure; the
+              // result schema only reports the configured state.
+              configureOpenRouterCredits(input.apiKey).pipe(Effect.orDie),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverListProviderSkills]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverListProviderSkills,

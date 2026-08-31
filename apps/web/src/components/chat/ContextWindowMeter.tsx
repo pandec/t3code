@@ -18,6 +18,7 @@ import {
   shouldRefreshProviderUsageOnOpen,
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
+import { formatUsd } from "@t3tools/shared/usageFormat";
 import { RefreshCwIcon } from "lucide-react";
 import { Fragment, useMemo, useRef } from "react";
 
@@ -144,6 +145,20 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
   );
 }
 
+/**
+ * OpenRouter account balance shown in the popover when the user enabled it in
+ * Settings → Extras. Account-wide (one OpenRouter account per environment), so
+ * it is independent of the provider accounts listed above it.
+ */
+export interface OpenRouterCreditsDisplay {
+  /** Whether the environment holds an API key at all. */
+  readonly configured: boolean;
+  /** Credits remaining in USD; null while unconfigured or failed. */
+  readonly balanceUsd: number | null;
+  readonly observedAt: number | null;
+  readonly error: string | null;
+}
+
 export interface ProviderUsageAccountRow {
   readonly instanceId: ProviderInstanceId;
   /**
@@ -203,6 +218,9 @@ export function ContextWindowMeter(props: {
   onCompact?: (() => void) | undefined;
   compactDisabled?: boolean | undefined;
   compactDisabledReason?: string | null | undefined;
+  openRouterCredits?: OpenRouterCreditsDisplay | null;
+  /** Called on popover open, at most once a minute; re-reads the balance. */
+  onRefreshOpenRouterCredits?: () => void;
 }) {
   const { usage, modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -232,6 +250,9 @@ export function ContextWindowMeter(props: {
   // When this popover last asked for a read, so an account that never reports
   // can't turn every open into another probe of the whole pool.
   const lastRefreshAskedAtRef = useRef(0);
+  // Same idea for the OpenRouter balance: OpenRouter caches the endpoint for
+  // about a minute, so a hover-triggered popover must not re-ask faster.
+  const lastOpenRouterRefreshAskedAtRef = useRef(0);
 
   const usedPercentage = usage ? formatProviderUsagePercent(usage.usedPercentage) : null;
   const normalizedPercentage = Math.max(0, Math.min(100, usage?.usedPercentage ?? 0));
@@ -306,6 +327,18 @@ export function ContextWindowMeter(props: {
         ) {
           lastRefreshAskedAtRef.current = nowMs;
           void props.onRefreshProviderUsage();
+        }
+        // Read the clock here, not at render: a popover opened right after a
+        // long-backgrounded tab resumes would otherwise compare two equally
+        // old timestamps and skip the refresh the user came for.
+        const openedAtMs = Date.now();
+        if (
+          open &&
+          props.onRefreshOpenRouterCredits !== undefined &&
+          openedAtMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
+        ) {
+          lastOpenRouterRefreshAskedAtRef.current = openedAtMs;
+          props.onRefreshOpenRouterCredits();
         }
       }}
     >
@@ -505,7 +538,46 @@ export function ContextWindowMeter(props: {
               </div>
             ) : null}
 
-            {(providerUsage || providerUsageAccounts.length > 0) && usage ? (
+            {props.openRouterCredits ? (
+              <>
+                {providerUsage || providerUsageAccounts.length > 0 ? (
+                  <div className="h-px w-full shrink-0 bg-border/60" />
+                ) : null}
+                <div className="flex shrink-0 flex-col gap-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-medium text-muted-foreground text-xs">
+                      OpenRouter credits
+                    </span>
+                    {props.openRouterCredits.balanceUsd !== null ? (
+                      <span
+                        className={cn(
+                          "text-[11px] font-medium tabular-nums text-muted-foreground/90",
+                          isProviderUsageSnapshotStale(props.openRouterCredits.observedAt, nowMs) &&
+                            "opacity-55",
+                        )}
+                      >
+                        {formatUsd(props.openRouterCredits.balanceUsd)} left
+                      </span>
+                    ) : null}
+                  </div>
+                  {/* An error outranks the add-a-key hint: an unreadable
+                      secret store also reports unconfigured, and "add your
+                      key" would be the wrong remedy for it. */}
+                  {props.openRouterCredits.error !== null ? (
+                    <div className="text-[11px] text-destructive/90">
+                      {props.openRouterCredits.error}
+                    </div>
+                  ) : !props.openRouterCredits.configured ? (
+                    <div className="text-[11px] text-muted-foreground/60">
+                      Add your OpenRouter management key in Settings → Extras.
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+
+            {(providerUsage || providerUsageAccounts.length > 0 || props.openRouterCredits) &&
+            usage ? (
               <div className="h-px w-full shrink-0 bg-border/60" />
             ) : null}
 

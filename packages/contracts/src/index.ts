@@ -13,6 +13,7 @@ export * from "./providerCatalog.ts";
 export * from "./providerInstance.ts";
 export * from "./providerRuntime.ts";
 export * from "./providerUsage.ts";
+export * from "./openRouterCredits.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";
 export * from "./server.ts";
