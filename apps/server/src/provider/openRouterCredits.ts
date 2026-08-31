@@ -172,11 +172,18 @@ export const readOpenRouterCredits: Effect.Effect<
   return yield* fetchGate.withPermits(1)(
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
+      // Negative ages (the wall clock moved backwards — NTP correction, VM
+      // restore) expire an entry rather than pinning it fresh until wall
+      // time catches back up.
+      const withinTtl = (recordedAtMs: number, ttlMs: number) => {
+        const age = now - recordedAtMs;
+        return age >= 0 && age < ttlMs;
+      };
       const cached = creditsCache;
       if (
         cached !== null &&
         cached.apiKey === apiKey &&
-        now - cached.snapshot.observedAt < CACHE_TTL_MS
+        withinTtl(cached.snapshot.observedAt, CACHE_TTL_MS)
       ) {
         return { configured: true, snapshot: cached.snapshot };
       }
@@ -187,7 +194,7 @@ export const readOpenRouterCredits: Effect.Effect<
       if (
         failure !== null &&
         failure.apiKey === apiKey &&
-        now - failure.atMs < FAILURE_CACHE_TTL_MS
+        withinTtl(failure.atMs, FAILURE_CACHE_TTL_MS)
       ) {
         return { configured: true, snapshot: staleSnapshot, error: failure.reason };
       }

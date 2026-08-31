@@ -151,6 +151,9 @@ describe("openRouterCredits", () => {
       ),
     );
     const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
+    const workingClient = HttpClient.make((request) =>
+      Effect.sync(() => jsonResponse(request, { data: { total_credits: 25, total_usage: 10 } })),
+    );
     return Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(provideServices(readOpenRouterCredits, client, store));
       yield* TestClock.adjust("11 seconds");
@@ -160,6 +163,33 @@ describe("openRouterCredits", () => {
         snapshot: null,
         error: "The OpenRouter request timed out.",
       });
+      // The timed-out read must have released the single-flight gate: once
+      // its failure entry ages out, a later read completes normally instead
+      // of hanging behind a still-held permit.
+      yield* TestClock.adjust("11 seconds");
+      const recovered = yield* provideServices(readOpenRouterCredits, workingClient, store);
+      expect(recovered.snapshot).not.toBeNull();
+    });
+  });
+
+  it.effect("collapses concurrent readers into one upstream request", () => {
+    let requestCount = 0;
+    const client = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        requestCount += 1;
+        yield* Effect.sleep("1 second");
+        return jsonResponse(request, { data: { total_credits: 25, total_usage: 10 } });
+      }),
+    );
+    const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
+    return Effect.gen(function* () {
+      const first = yield* Effect.forkChild(provideServices(readOpenRouterCredits, client, store));
+      const second = yield* Effect.forkChild(provideServices(readOpenRouterCredits, client, store));
+      yield* TestClock.adjust("2 seconds");
+      const firstResult = yield* Fiber.join(first);
+      const secondResult = yield* Fiber.join(second);
+      expect(requestCount).toBe(1);
+      expect(secondResult.snapshot).toEqual(firstResult.snapshot);
     });
   });
 
@@ -185,8 +215,8 @@ describe("openRouterCredits", () => {
     const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
     return Effect.gen(function* () {
       const first = yield* provideServices(readOpenRouterCredits, client, store);
-      // Queued behind the failed fetch: gets the recorded failure without
-      // spending its own request.
+      // A read arriving inside the failure window gets the recorded failure
+      // without spending its own request.
       const second = yield* provideServices(readOpenRouterCredits, client, store);
       expect(requestCount).toBe(1);
       expect(second).toEqual(first);
