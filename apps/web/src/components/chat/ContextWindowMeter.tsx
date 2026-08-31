@@ -157,6 +157,13 @@ export interface OpenRouterCreditsDisplay {
   readonly balanceUsd: number | null;
   readonly observedAt: number | null;
   readonly error: string | null;
+  /**
+   * The read RPC itself failed (environment offline, older server), as
+   * opposed to a server-side fetch failure reported inside the result. The
+   * shown balance, if any, is the previous read's — say so rather than
+   * presenting it as current.
+   */
+  readonly unavailable: boolean;
 }
 
 export interface ProviderUsageAccountRow {
@@ -332,8 +339,12 @@ export function ContextWindowMeter(props: {
         // long-backgrounded tab resumes would otherwise compare two equally
         // old timestamps and skip the refresh the user came for.
         const openedAtMs = Date.now();
+        // Gated on the display too: with the feature off the callback is
+        // bound to the shared empty-query sentinel, which must not be
+        // refreshed on behalf of a block that is not even rendered.
         if (
           open &&
+          props.openRouterCredits &&
           props.onRefreshOpenRouterCredits !== undefined &&
           openedAtMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
         ) {
@@ -552,7 +563,11 @@ export function ContextWindowMeter(props: {
                       <span
                         className={cn(
                           "text-[11px] font-medium tabular-nums text-muted-foreground/90",
-                          isProviderUsageSnapshotStale(props.openRouterCredits.observedAt, nowMs) &&
+                          (props.openRouterCredits.unavailable ||
+                            isProviderUsageSnapshotStale(
+                              props.openRouterCredits.observedAt,
+                              nowMs,
+                            )) &&
                             "opacity-55",
                         )}
                       >
@@ -563,7 +578,11 @@ export function ContextWindowMeter(props: {
                   {/* An error outranks the add-a-key hint: an unreadable
                       secret store also reports unconfigured, and "add your
                       key" would be the wrong remedy for it. */}
-                  {props.openRouterCredits.error !== null ? (
+                  {props.openRouterCredits.unavailable ? (
+                    <div className="text-[11px] text-muted-foreground/60">
+                      Couldn't load the latest balance.
+                    </div>
+                  ) : props.openRouterCredits.error !== null ? (
                     <div className="text-[11px] text-destructive/90">
                       {props.openRouterCredits.error}
                     </div>

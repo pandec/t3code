@@ -1668,8 +1668,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         data.snapshot === null ? null : data.snapshot.totalCreditsUsd - data.snapshot.totalUsageUsd,
       observedAt: data.snapshot?.observedAt ?? null,
       error: data.error ?? null,
+      // `data` keeps the previous success when a refresh fails (environment
+      // offline, RPC error), so the transport error must travel with it or
+      // the meter would present yesterday's balance as current.
+      unavailable: openRouterCreditsQuery.error !== null,
     };
-  }, [showOpenRouterCredits, openRouterCreditsQuery.data]);
+  }, [showOpenRouterCredits, openRouterCreditsQuery.data, openRouterCreditsQuery.error]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),

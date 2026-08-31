@@ -1,4 +1,4 @@
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useRef, useState, type CSSProperties } from "react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -397,7 +397,13 @@ function OpenRouterCreditsEnvironmentStatus({
     serverEnvironment.openRouterCredits({ environmentId, input: {} }),
   );
   let status: string;
-  if (query.data !== null) {
+  // The transport error outranks `data`: the query keeps the previous
+  // success on failure, so a disconnected environment would otherwise show
+  // its last balance as current forever. This also covers a server build
+  // that predates the credits RPC.
+  if (query.error !== null) {
+    status = "Unavailable";
+  } else if (query.data !== null) {
     const { configured, snapshot, error } = query.data;
     if (!configured) {
       // An unreadable secret store also reports unconfigured; its error
@@ -413,9 +419,7 @@ function OpenRouterCreditsEnvironmentStatus({
       status = error ?? "No data";
     }
   } else {
-    // A failed read covers both a disconnected environment and a server
-    // build that predates the credits RPC.
-    status = query.error !== null ? "Unavailable" : "Checking…";
+    status = "Checking…";
   }
   return (
     <div className="flex items-baseline justify-between gap-3">
@@ -434,7 +438,7 @@ function ProviderUsageExtrasSection() {
   // The balance is account-wide and the meter reads it from whichever
   // environment the active thread runs on, so a save applies the key to
   // every known environment rather than making the user pick one.
-  const applyOpenRouterApiKey = useCallback(
+  const runOpenRouterApiKeyApply = useCallback(
     async (apiKey: string) => {
       if (environments.length === 0) {
         toastManager.add({
@@ -475,6 +479,20 @@ function ProviderUsageExtrasSection() {
       });
     },
     [configureOpenRouterCredits, environments],
+  );
+
+  // Applies run strictly in click order. The configure command's
+  // single-flight lanes are keyed by payload, so without this chain a reset
+  // clicked during a still-running save would race it — and could lose,
+  // leaving the key configured after the user removed it.
+  const pendingApplyRef = useRef<Promise<void>>(Promise.resolve());
+  const applyOpenRouterApiKey = useCallback(
+    (apiKey: string) => {
+      const chained = pendingApplyRef.current.then(() => runOpenRouterApiKeyApply(apiKey));
+      pendingApplyRef.current = chained;
+      return chained;
+    },
+    [runOpenRouterApiKeyApply],
   );
 
   return (
