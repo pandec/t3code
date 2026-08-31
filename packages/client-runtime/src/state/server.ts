@@ -861,7 +861,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.openRouterCreditsConfigure,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId }) => environmentId,
+        // Keyed by the payload too: a save racing a remove (or a different
+        // key) must not join the earlier call and report a write that never
+        // happened.
+        key: ({ environmentId, input }) => `${environmentId}:${input.apiKey}`,
       },
       // The read query is only revalidated on mount, so without this the
       // settings rows (and an open meter popover) would keep reporting the

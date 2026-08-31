@@ -21,7 +21,6 @@ import {
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
 import { isElectron } from "../../env";
@@ -400,11 +399,19 @@ function OpenRouterCreditsEnvironmentStatus({
   let status: string;
   if (query.data !== null) {
     const { configured, snapshot, error } = query.data;
-    status = !configured
-      ? "No API key"
-      : snapshot !== null
-        ? `${formatUsd(snapshot.totalCreditsUsd - snapshot.totalUsageUsd)} remaining`
-        : (error ?? "No data");
+    if (!configured) {
+      // An unreadable secret store also reports unconfigured; its error
+      // must win over "No management key", which suggests the wrong remedy.
+      status = error ?? "No management key";
+    } else if (snapshot !== null) {
+      // A retained stale balance still says the last read failed, so a
+      // revoked key can't hide behind yesterday's number.
+      status = `${formatUsd(snapshot.totalCreditsUsd - snapshot.totalUsageUsd)} remaining${
+        error !== undefined ? " · last read failed" : ""
+      }`;
+    } else {
+      status = error ?? "No data";
+    }
   } else {
     // A failed read covers both a disconnected environment and a server
     // build that predates the credits RPC.
@@ -433,7 +440,7 @@ function ProviderUsageExtrasSection() {
         toastManager.add({
           type: "warning",
           title: "No environments connected",
-          description: "Connect an environment before saving the OpenRouter API key.",
+          description: "Connect an environment before saving the OpenRouter management key.",
         });
         return;
       }
@@ -446,8 +453,10 @@ function ProviderUsageExtrasSection() {
           }),
         })),
       );
+      // Interrupted counts as failed: the write did not verifiably land on
+      // that environment, and a success toast would claim it did.
       const failed = results
-        .filter(({ result }) => result._tag === "Failure" && !isAtomCommandInterrupted(result))
+        .filter(({ result }) => result._tag === "Failure")
         .map(({ label }) => label);
       const removed = apiKey.trim().length === 0;
       if (failed.length === 0) {
@@ -526,11 +535,11 @@ function ProviderUsageExtrasSection() {
       {settings.showOpenRouterCredits ? (
         <>
           <SettingsRow
-            title="OpenRouter API key"
-            description="Stored in each environment's secret store and only used server-side to read the balance. Saving applies to every connected environment."
+            title="OpenRouter management key"
+            description="A management key from openrouter.ai/settings/management-keys — the credits endpoint rejects regular inference keys. Stored in each environment's secret store, only used server-side to read the balance, and applied to every connected environment on save."
             resetAction={
               <SettingResetButton
-                label="OpenRouter API key"
+                label="OpenRouter management key"
                 onClick={() => void applyOpenRouterApiKey("")}
               />
             }
@@ -544,9 +553,9 @@ function ProviderUsageExtrasSection() {
                 }}
                 type="password"
                 autoComplete="off"
-                placeholder="sk-or-v1-…"
+                placeholder="Management key"
                 spellCheck={false}
-                aria-label="OpenRouter API key"
+                aria-label="OpenRouter management key"
               />
             }
           />

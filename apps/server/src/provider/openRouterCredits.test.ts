@@ -168,10 +168,83 @@ describe("openRouterCredits", () => {
     const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-wrong" });
     return Effect.gen(function* () {
       const result = yield* provideServices(readOpenRouterCredits, client, store);
+      expect(result.configured).toBe(true);
+      expect(result.snapshot).toBeNull();
+      expect(result.error).toContain("management key");
+    });
+  });
+
+  it.effect("answers reads behind a fresh failure from the failure cache", () => {
+    let requestCount = 0;
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requestCount += 1;
+        return jsonResponse(request, {}, 500);
+      }),
+    );
+    const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
+    return Effect.gen(function* () {
+      const first = yield* provideServices(readOpenRouterCredits, client, store);
+      // Queued behind the failed fetch: gets the recorded failure without
+      // spending its own request.
+      const second = yield* provideServices(readOpenRouterCredits, client, store);
+      expect(requestCount).toBe(1);
+      expect(second).toEqual(first);
+      // Once the failure entry ages out, the next read tries again.
+      yield* TestClock.adjust("11 seconds");
+      yield* provideServices(readOpenRouterCredits, client, store);
+      expect(requestCount).toBe(2);
+    });
+  });
+
+  it.effect("reports an unreadable secret store instead of claiming no key", () => {
+    const requests: string[] = [];
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requests.push(request.url);
+        return jsonResponse(request, {});
+      }),
+    );
+    const { store } = makeSecretStore();
+    const failingStore = {
+      ...store,
+      get: () =>
+        Effect.fail(
+          new ServerSecretStore.SecretStoreReadError({
+            resource: "secret openrouter-credits-api-key",
+            cause: new Error("EACCES"),
+          }),
+        ),
+    };
+    return Effect.gen(function* () {
+      const result = yield* provideServices(readOpenRouterCredits, client, failingStore);
+      expect(result).toEqual({
+        configured: false,
+        snapshot: null,
+        error: "Could not read the stored OpenRouter API key.",
+      });
+      expect(requests).toEqual([]);
+    });
+  });
+
+  it.effect("rejects a payload with non-finite totals", () => {
+    const client = HttpClient.make((request) =>
+      Effect.sync(() =>
+        HttpClientResponse.fromWeb(
+          request,
+          // Valid JSON, but the literal decodes to Infinity; an
+          // Infinity-minus-Infinity balance would render as NaN.
+          new Response('{"data":{"total_credits":1e400,"total_usage":0}}', { status: 200 }),
+        ),
+      ),
+    );
+    const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
+    return Effect.gen(function* () {
+      const result = yield* provideServices(readOpenRouterCredits, client, store);
       expect(result).toEqual({
         configured: true,
         snapshot: null,
-        error: "OpenRouter rejected the API key.",
+        error: "OpenRouter answered with an unexpected payload.",
       });
     });
   });

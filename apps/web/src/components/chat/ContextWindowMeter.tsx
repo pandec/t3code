@@ -328,12 +328,16 @@ export function ContextWindowMeter(props: {
           lastRefreshAskedAtRef.current = nowMs;
           void props.onRefreshProviderUsage();
         }
+        // Read the clock here, not at render: a popover opened right after a
+        // long-backgrounded tab resumes would otherwise compare two equally
+        // old timestamps and skip the refresh the user came for.
+        const openedAtMs = Date.now();
         if (
           open &&
           props.onRefreshOpenRouterCredits !== undefined &&
-          nowMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
+          openedAtMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
         ) {
-          lastOpenRouterRefreshAskedAtRef.current = nowMs;
+          lastOpenRouterRefreshAskedAtRef.current = openedAtMs;
           props.onRefreshOpenRouterCredits();
         }
       }}
@@ -556,13 +560,16 @@ export function ContextWindowMeter(props: {
                       </span>
                     ) : null}
                   </div>
-                  {!props.openRouterCredits.configured ? (
-                    <div className="text-[11px] text-muted-foreground/60">
-                      Add your OpenRouter API key in Settings → Extras.
-                    </div>
-                  ) : props.openRouterCredits.error !== null ? (
+                  {/* An error outranks the add-a-key hint: an unreadable
+                      secret store also reports unconfigured, and "add your
+                      key" would be the wrong remedy for it. */}
+                  {props.openRouterCredits.error !== null ? (
                     <div className="text-[11px] text-destructive/90">
                       {props.openRouterCredits.error}
+                    </div>
+                  ) : !props.openRouterCredits.configured ? (
+                    <div className="text-[11px] text-muted-foreground/60">
+                      Add your OpenRouter management key in Settings → Extras.
                     </div>
                   ) : null}
                 </div>

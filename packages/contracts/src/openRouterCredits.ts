@@ -11,9 +11,9 @@ import { NonNegativeInt } from "./baseSchemas.ts";
  */
 export const OpenRouterCreditsSnapshot = Schema.Struct({
   /** Lifetime credits purchased, in USD. */
-  totalCreditsUsd: Schema.Number,
+  totalCreditsUsd: Schema.Number.check(Schema.isFinite()),
   /** Lifetime credits spent, in USD. The balance is the difference. */
-  totalUsageUsd: Schema.Number,
+  totalUsageUsd: Schema.Number.check(Schema.isFinite()),
   /** Unix milliseconds when the server fetched this from OpenRouter. */
   observedAt: NonNegativeInt,
 });
