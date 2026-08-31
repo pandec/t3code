@@ -278,6 +278,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/extras",
   },
   {
+    id: "openrouter-credits",
+    title: "OpenRouter credits",
+    to: "/settings/extras",
+  },
+  {
     id: "extras-sidebar",
     title: "Sidebar",
     to: "/settings/extras",

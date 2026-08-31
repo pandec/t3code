@@ -802,6 +802,13 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerUsageRead,
       staleTimeMs: 30_000,
     }),
+    // OpenRouter caches its credits endpoint for about a minute and the
+    // server mirrors that, so a tighter staleness would only re-read cache.
+    openRouterCredits: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:openrouter-credits",
+      tag: WS_METHODS.openRouterCreditsRead,
+      staleTimeMs: 60_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -846,6 +853,14 @@ export function createServerEnvironmentAtoms<R, E>(
         // joiner would read a result that never probed what it asked for.
         key: ({ environmentId, input }) =>
           `${environmentId}:${[...(input.instanceIds ?? [])].sort().join(",")}`,
+      },
+    }),
+    configureOpenRouterCredits: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:configure-openrouter-credits",
+      tag: WS_METHODS.openRouterCreditsConfigure,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
       },
     }),
     readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {

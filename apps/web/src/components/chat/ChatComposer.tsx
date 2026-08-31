@@ -164,7 +164,11 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import { ContextWindowMeter, type ProviderUsageAccountRow } from "./ContextWindowMeter";
+import {
+  ContextWindowMeter,
+  type OpenRouterCreditsDisplay,
+  type ProviderUsageAccountRow,
+} from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
@@ -520,6 +524,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   providerUsageUnavailable: boolean;
   maskProviderUsageEmails: boolean;
   providerUsageLabel: string | null;
+  openRouterCredits: OpenRouterCreditsDisplay | null;
+  onRefreshOpenRouterCredits: () => void;
   onRefreshProviderUsage: () => Promise<void>;
   onProbeThreadAccount: (options?: { readonly force?: boolean }) => void;
   activeThreadModelDisplayName: string | null;
@@ -563,6 +569,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           providerUsageUnavailable={props.providerUsageUnavailable}
           maskProviderUsageEmails={props.maskProviderUsageEmails}
           providerUsageLabel={props.providerUsageLabel}
+          openRouterCredits={props.openRouterCredits}
+          onRefreshOpenRouterCredits={props.onRefreshOpenRouterCredits}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
           onProbeThreadAccount={props.onProbeThreadAccount}
           modelDisplayName={props.activeThreadModelDisplayName}
@@ -1641,6 +1649,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setIsRefreshingProviderUsage(false);
     }
   }, [environmentId, providerUsageQuery, refreshProviderUsageCommand, usageProviders]);
+  // The OpenRouter balance is opt-in (Settings → Extras); while the toggle is
+  // off no query subscribes, so nothing is fetched. A server that predates the
+  // RPC answers with an error, which renders as no block at all.
+  const showOpenRouterCredits = providerUsageSettingsHydrated && settings.showOpenRouterCredits;
+  const openRouterCreditsQuery = useEnvironmentQuery(
+    showOpenRouterCredits
+      ? serverEnvironment.openRouterCredits({ environmentId, input: {} })
+      : null,
+  );
+  const openRouterCredits = useMemo<OpenRouterCreditsDisplay | null>(() => {
+    if (!showOpenRouterCredits) return null;
+    const data = openRouterCreditsQuery.data;
+    if (data === null) return null;
+    return {
+      configured: data.configured,
+      balanceUsd:
+        data.snapshot === null ? null : data.snapshot.totalCreditsUsd - data.snapshot.totalUsageUsd,
+      observedAt: data.snapshot?.observedAt ?? null,
+      error: data.error ?? null,
+    };
+  }, [showOpenRouterCredits, openRouterCreditsQuery.data]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
@@ -4858,6 +4887,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       !providerUsageSettingsHydrated || settings.maskProviderUsageEmails
                     }
                     providerUsageLabel={effectiveProviderUsageLabel}
+                    openRouterCredits={openRouterCredits}
+                    onRefreshOpenRouterCredits={openRouterCreditsQuery.refresh}
                     onRefreshProviderUsage={refreshProviderUsage}
                     onProbeThreadAccount={probeThreadGatewayAccount}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}

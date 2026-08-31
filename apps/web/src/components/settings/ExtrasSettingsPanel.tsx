@@ -20,8 +20,15 @@ import {
   MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
+import { formatUsd } from "@t3tools/shared/usageFormat";
 
 import { isElectron } from "../../env";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   usePrimarySettings,
   useLegacySidebarEnabled,
@@ -379,9 +386,87 @@ function NotificationsExtrasSection() {
   );
 }
 
+/** One environment's stored-key state and balance under the key field. */
+function OpenRouterCreditsEnvironmentStatus({
+  environmentId,
+  label,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}) {
+  const query = useEnvironmentQuery(
+    serverEnvironment.openRouterCredits({ environmentId, input: {} }),
+  );
+  let status: string;
+  if (query.data !== null) {
+    const { configured, snapshot, error } = query.data;
+    status = !configured
+      ? "No API key"
+      : snapshot !== null
+        ? `${formatUsd(snapshot.totalCreditsUsd - snapshot.totalUsageUsd)} remaining`
+        : (error ?? "No data");
+  } else {
+    // A failed read covers both a disconnected environment and a server
+    // build that predates the credits RPC.
+    status = query.error !== null ? "Unavailable" : "Checking…";
+  }
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="tabular-nums text-muted-foreground/80">{status}</span>
+    </div>
+  );
+}
+
 function ProviderUsageExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const { environments } = useEnvironments();
+  const configureOpenRouterCredits = useAtomCommand(serverEnvironment.configureOpenRouterCredits);
+
+  // The balance is account-wide and the meter reads it from whichever
+  // environment the active thread runs on, so a save applies the key to
+  // every known environment rather than making the user pick one.
+  const applyOpenRouterApiKey = useCallback(
+    async (apiKey: string) => {
+      if (environments.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "No environments connected",
+          description: "Connect an environment before saving the OpenRouter API key.",
+        });
+        return;
+      }
+      const results = await Promise.all(
+        environments.map(async (environment) => ({
+          label: environment.label,
+          result: await configureOpenRouterCredits({
+            environmentId: environment.environmentId,
+            input: { apiKey },
+          }),
+        })),
+      );
+      const failed = results
+        .filter(({ result }) => result._tag === "Failure" && !isAtomCommandInterrupted(result))
+        .map(({ label }) => label);
+      const removed = apiKey.trim().length === 0;
+      if (failed.length === 0) {
+        toastManager.add({
+          type: "success",
+          title: removed ? "OpenRouter API key removed" : "OpenRouter API key saved",
+        });
+        return;
+      }
+      toastManager.add({
+        type: "warning",
+        title: removed
+          ? "Could not remove the key everywhere"
+          : "Could not save the key everywhere",
+        description: `Failed for: ${failed.join(", ")}.`,
+      });
+    },
+    [configureOpenRouterCredits, environments],
+  );
 
   return (
     <SettingsSection {...searchableSetting("extras-provider-usage")}>
@@ -410,6 +495,72 @@ function ProviderUsageExtrasSection() {
           />
         }
       />
+
+      <SettingsRow
+        {...searchableSetting("openrouter-credits")}
+        title="OpenRouter credits"
+        description="Show your OpenRouter credit balance in the usage meter popover."
+        resetAction={
+          settings.showOpenRouterCredits !== DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits ? (
+            <SettingResetButton
+              label="OpenRouter credits"
+              onClick={() =>
+                updateSettings({
+                  showOpenRouterCredits: DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.showOpenRouterCredits}
+            onCheckedChange={(checked) =>
+              updateSettings({ showOpenRouterCredits: Boolean(checked) })
+            }
+            aria-label="Show OpenRouter credits in the usage meter"
+          />
+        }
+      />
+
+      {settings.showOpenRouterCredits ? (
+        <>
+          <SettingsRow
+            title="OpenRouter API key"
+            description="Stored in each environment's secret store and only used server-side to read the balance. Saving applies to every connected environment."
+            resetAction={
+              <SettingResetButton
+                label="OpenRouter API key"
+                onClick={() => void applyOpenRouterApiKey("")}
+              />
+            }
+            control={
+              <DraftInput
+                className="w-full sm:w-72"
+                value=""
+                onCommit={(next) => {
+                  const trimmed = next.trim();
+                  if (trimmed.length > 0) void applyOpenRouterApiKey(trimmed);
+                }}
+                type="password"
+                autoComplete="off"
+                placeholder="sk-or-v1-…"
+                spellCheck={false}
+                aria-label="OpenRouter API key"
+              />
+            }
+          />
+          <div className="flex max-w-xl flex-col gap-1 px-3 text-[13px] leading-[1.45] sm:px-4">
+            {environments.map((environment) => (
+              <OpenRouterCreditsEnvironmentStatus
+                key={environment.environmentId}
+                environmentId={environment.environmentId}
+                label={environment.label}
+              />
+            ))}
+          </div>
+        </>
+      ) : null}
     </SettingsSection>
   );
 }
