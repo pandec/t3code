@@ -64,24 +64,11 @@ const fetchSnapshot = (
 ): Effect.Effect<OpenRouterCreditsSnapshot, CreditsFetchError, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    const response = yield* client
-      .execute(
-        HttpClientRequest.get(OPENROUTER_CREDITS_URL).pipe(
-          HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-        ),
-      )
-      .pipe(
-        Effect.timeout(REQUEST_TIMEOUT),
-        Effect.catchCause((cause) =>
-          Effect.fail(
-            new CreditsFetchError(
-              Cause.isTimeoutError(Cause.squash(cause))
-                ? "The OpenRouter request timed out."
-                : "Could not reach OpenRouter.",
-            ),
-          ),
-        ),
-      );
+    const response = yield* client.execute(
+      HttpClientRequest.get(OPENROUTER_CREDITS_URL).pipe(
+        HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+      ),
+    );
     if (response.status === 401 || response.status === 403) {
       return yield* Effect.fail(new CreditsFetchError("OpenRouter rejected the API key."));
     }
@@ -102,7 +89,25 @@ const fetchSnapshot = (
       totalUsageUsd: body.data.total_usage,
       observedAt,
     };
-  });
+  }).pipe(
+    // The timeout covers the whole exchange, body read included: a response
+    // that hangs after its headers would otherwise hold the single-flight
+    // gate forever and wedge every later read in this process.
+    Effect.timeout(REQUEST_TIMEOUT),
+    Effect.catchCause((cause) => {
+      const squashed = Cause.squash(cause);
+      if (squashed instanceof CreditsFetchError) {
+        return Effect.fail(squashed);
+      }
+      return Effect.fail(
+        new CreditsFetchError(
+          Cause.isTimeoutError(squashed)
+            ? "The OpenRouter request timed out."
+            : "Could not reach OpenRouter.",
+        ),
+      );
+    }),
+  );
 
 /**
  * Read the environment's OpenRouter credits. Never fails: a missing key,

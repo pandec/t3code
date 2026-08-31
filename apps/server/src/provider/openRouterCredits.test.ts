@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -137,6 +138,28 @@ describe("openRouterCredits", () => {
       expect(second.configured).toBe(true);
       expect(second.snapshot).toEqual(first.snapshot);
       expect(second.error).toBe("OpenRouter answered with status 500.");
+    });
+  });
+
+  it.effect("times out a response that hangs after its headers", () => {
+    // The single-flight gate is held for the duration of a fetch, so a body
+    // that never arrives must hit the timeout instead of wedging every later
+    // read in the process.
+    const client = HttpClient.make((request) =>
+      Effect.sync(() =>
+        HttpClientResponse.fromWeb(request, new Response(new ReadableStream(), { status: 200 })),
+      ),
+    );
+    const { store } = makeSecretStore({ [OPENROUTER_API_KEY_SECRET_NAME]: "sk-or-v1-test" });
+    return Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(provideServices(readOpenRouterCredits, client, store));
+      yield* TestClock.adjust("11 seconds");
+      const result = yield* Fiber.join(fiber);
+      expect(result).toEqual({
+        configured: true,
+        snapshot: null,
+        error: "The OpenRouter request timed out.",
+      });
     });
   });
 

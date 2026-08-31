@@ -774,6 +774,13 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
+  // OpenRouter caches its credits endpoint for about a minute and the
+  // server mirrors that, so a tighter staleness would only re-read cache.
+  const openRouterCredits = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:openrouter-credits",
+    tag: WS_METHODS.openRouterCreditsRead,
+    staleTimeMs: 60_000,
+  });
 
   return {
     configValueAtom,
@@ -802,13 +809,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerUsageRead,
       staleTimeMs: 30_000,
     }),
-    // OpenRouter caches its credits endpoint for about a minute and the
-    // server mirrors that, so a tighter staleness would only re-read cache.
-    openRouterCredits: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:openrouter-credits",
-      tag: WS_METHODS.openRouterCreditsRead,
-      staleTimeMs: 60_000,
-    }),
+    openRouterCredits,
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -862,6 +863,11 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,
       },
+      // The read query is only revalidated on mount, so without this the
+      // settings rows (and an open meter popover) would keep reporting the
+      // pre-configure state until something remounted them.
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => registry.refresh(openRouterCredits({ environmentId, input: {} }))),
     }),
     readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:read-provider-usage-thread-account",
