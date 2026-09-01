@@ -273,6 +273,38 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     ).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists and broadcasts thread settlement settings", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const changes = yield* serverSettings.subscribeChanges;
+
+        const next = yield* serverSettings.updateSettings({
+          threadAutoSettleEnabled: false,
+          sidebarAutoSettleAfterDays: null,
+          sidebarAutoSettleOnMerge: false,
+        });
+        const change = Option.getOrUndefined(yield* Stream.runHead(changes));
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        // Inspect raw persisted JSON before schema decoding can apply defaults.
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        const persisted = JSON.parse(raw) as Record<string, unknown>;
+
+        assert.isFalse(next.threadAutoSettleEnabled);
+        assert.strictEqual(next.sidebarAutoSettleAfterDays, null);
+        assert.isFalse(next.sidebarAutoSettleOnMerge);
+        assert.isFalse(change?.threadAutoSettleEnabled);
+        assert.strictEqual(change?.sidebarAutoSettleAfterDays, null);
+        assert.isFalse(change?.sidebarAutoSettleOnMerge);
+        assert.isFalse(persisted.threadAutoSettleEnabled);
+        assert.strictEqual(persisted.sidebarAutoSettleAfterDays, null);
+        assert.isFalse(persisted.sidebarAutoSettleOnMerge);
+      }),
+    ).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves model when switching providers via textGenerationModelSelection", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

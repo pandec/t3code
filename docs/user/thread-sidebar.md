@@ -15,17 +15,39 @@ open keeps its row even while the section is folded, and while the Attention fil
 are searching, the fold steps aside entirely — both have already narrowed the list to what you
 asked to see, and a pinned match should never sit behind a fold.
 
-Pinned threads still move to **Settled** when they become inactive. They also move when their pull
-request merges if **Auto-settle merged threads** is enabled. The pin stays with them underneath, so
-un-settling one puts it back in its own place in the pinned section rather than in the active list.
+Pinned threads still move to **Settled** when they become inactive or their pull request closes or
+merges. Settling and pinning are mutually exclusive, so un-settling returns the thread to the active
+list rather than restoring its old pinned position.
 
-When you un-settle an unpinned thread, it returns to the top of the active list so you can find it
-right away. The conversation itself is untouched, and its messages and turns keep their own times.
-Other threads keep their positions.
+Each environment owns its automatic settlement settings. Its server checks them even when no web,
+desktop, or mobile client is connected. **Settings → Extras → Sidebar → Auto-settle threads** is the
+master switch for that environment. **Settings → General** controls settlement after inactivity and
+pull request merges. Turning the master switch off keeps manual settlement available.
+
+By default, the server settles threads after three days without activity and when their pull request
+merges. An eligible idle thread also settles when its pull request closes. An open pull request blocks
+inactivity settlement. Active work, pending input, and live background work keep the thread active.
+A closed or merged pull request settles a thread only when its timestamp is not older than the user's
+latest activity. If that timestamp is unavailable, the inactivity rule still applies. Changing the
+settings affects future settlement and does not reopen a settled thread.
+
+When you un-settle a thread, it returns to the top of the active list. Its conversation and timestamps
+do not change, and other threads keep their positions.
 
 Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
 in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
 threads** is enabled. Right-click the same link and choose **Unlink from thread** to remove it.
+
+## Snoozing and moving active threads
+
+Choose **Snooze** from a thread's menu to hide it until a preset time. On environments that support
+indefinite snooze, **Until I wake it** hides the thread without a timer. Snoozed threads stay in their
+own section. They return when the timer expires, when you wake them manually, or when the thread
+raises its hand for attention.
+
+Choose **Move to top** for an active, unpinned thread to place it above the other active work. This
+changes its sidebar position without changing its conversation timestamps. The action is hidden for
+pinned, snoozed, or settled threads and on environments that need a server update.
 
 On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
 and choose **Move up** or **Move down**. The order is stored by the server and appears on your

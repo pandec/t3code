@@ -73,11 +73,6 @@ export function useSortActiveByLatestUserMessage(): boolean {
  * Whether threads settle on their own. Off means inactivity and merged pull
  * requests both stop filing threads away; explicit settling still works.
  */
-export function useThreadAutoSettleEnabled(): boolean {
-  const { preferences } = useMobilePreferences();
-  return preferences.threadAutoSettleEnabled !== false;
-}
-
 export interface OlderSectionSettings {
   readonly enabled: boolean;
   readonly afterDays: SidebarOlderSectionAfterDays;

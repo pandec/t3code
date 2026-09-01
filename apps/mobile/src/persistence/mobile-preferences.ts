@@ -34,13 +34,6 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
-   * Device-local mirror of the web fork's `threadAutoSettleEnabled` master
-   * gate. With it off nothing settles on its own — neither inactivity nor a
-   * merged pull request — and settling stays a manual action.
-   */
-  readonly threadAutoSettleEnabled?: boolean;
-  readonly autoSettleOnMerge?: boolean;
-  /**
    * Device-local mirrors of the web fork's Older section settings. The
    * section is a display grouping for quiet-but-active threads, so nothing
    * about it is persisted per thread; `sidebarOlderSectionCollapsedByDefault`
@@ -145,8 +138,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    threadAutoSettleEnabled?: boolean;
-    autoSettleOnMerge?: boolean;
     sidebarOlderSectionEnabled?: boolean;
     sidebarOlderSectionAfterDays?: number;
     sidebarOlderSectionCollapsedByDefault?: boolean;
@@ -226,12 +217,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.projectGroupingMode === "separate"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
-  }
-  if (typeof parsed.threadAutoSettleEnabled === "boolean") {
-    preferences.threadAutoSettleEnabled = parsed.threadAutoSettleEnabled;
-  }
-  if (typeof parsed.autoSettleOnMerge === "boolean") {
-    preferences.autoSettleOnMerge = parsed.autoSettleOnMerge;
   }
   if (typeof parsed.sidebarOlderSectionEnabled === "boolean") {
     preferences.sidebarOlderSectionEnabled = parsed.sidebarOlderSectionEnabled;

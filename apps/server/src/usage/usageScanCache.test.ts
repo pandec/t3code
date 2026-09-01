@@ -5,6 +5,7 @@ import {
   dedupeWithinFile,
   encodeScanCache,
   pruneScanCache,
+  type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
@@ -28,17 +29,36 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   };
 }
 
+function position(overrides: Partial<CachedFile["position"]> = {}): CachedFile["position"] {
+  return {
+    resumeOffset: 120,
+    guardLength: 64,
+    guardHash: 0xdeadbeef,
+    codexState: null,
+    ...overrides,
+  };
+}
+
 function cacheWith(
-  entries: readonly [string, number, readonly UsageRecord[], number?][],
+  entries: readonly [
+    path: string,
+    mtimeMs: number,
+    records: readonly UsageRecord[],
+    malformedRecords?: number,
+    tailMalformedRecords?: number,
+  ][],
 ): ScanCache {
   const cache: ScanCache = new Map();
-  for (const [path, mtimeMs, records, malformedRecords] of entries) {
+  for (const [path, mtimeMs, records, malformedRecords, tailMalformedRecords] of entries) {
     cache.set(path, {
       size: records.length * 10,
       mtimeMs,
       provider: "claude",
       records,
       malformedRecords: malformedRecords ?? 0,
+      tailRecords: [],
+      tailMalformedRecords: tailMalformedRecords ?? 0,
+      position: position(),
     });
   }
   return cache;
@@ -58,14 +78,71 @@ describe("scan cache round trip", () => {
         record({ provider: "grok", model: "grok-4.5-build", dedupeKey: "s:p:grok-4.5-build" }),
       ],
       malformedRecords: 0,
+      tailRecords: [record({ provider: "grok", model: "grok-4.5-build", dedupeKey: null })],
+      tailMalformedRecords: 0,
+      position: position({ resumeOffset: 30, guardLength: 30, guardHash: 123 }),
+    });
+    original.set("/codex.jsonl", {
+      size: 80,
+      mtimeMs: 400,
+      provider: "codex",
+      records: [record({ provider: "codex", model: "gpt-5.2-codex", dedupeKey: null })],
+      malformedRecords: 2,
+      tailRecords: [],
+      tailMalformedRecords: 1,
+      position: position({
+        codexState: {
+          model: "gpt-5.2-codex",
+          sessionId: "session-c",
+          lastUsageSignature: '{"input_tokens":1}',
+          sawSessionMeta: true,
+          suppressingForkCopies: false,
+          forkCopyAnchorMs: 0,
+          deliberateSkips: 4,
+        },
+      }),
     });
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));
 
-    expect(restored.size).toBe(3);
+    expect(restored.size).toBe(4);
     expect(restored.get("/a.jsonl")).toEqual(original.get("/a.jsonl"));
     expect(restored.get("/b.jsonl")).toEqual(original.get("/b.jsonl"));
     expect(restored.get("/grok.jsonl")).toEqual(original.get("/grok.jsonl"));
+    expect(restored.get("/codex.jsonl")).toEqual(original.get("/codex.jsonl"));
+  });
+
+  it("drops an entry whose persisted parse state is corrupt", () => {
+    // Resuming with a bad reducer state would attach appended usage to the
+    // wrong model or replay fork-copied history; that entry must cold parse.
+    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
+    const poisoned = {
+      ...encoded,
+      files: {
+        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, cs: { model: 42 } },
+      },
+    };
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
+  });
+
+  it("drops an entry whose guard length is outside the supported range", () => {
+    // The guard length sizes a Buffer in the reader; a bogus value would make
+    // every parse of that file fail and silently drop its usage.
+    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
+    const poisoned = {
+      ...encoded,
+      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, gl: 1e20 } },
+    };
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
+  });
+
+  it("rejects a document from the previous cache version", () => {
+    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
+    const previous = { ...encoded, version: 3 };
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(previous))).size).toBe(0);
   });
 
   it("interns repeated model and session strings", () => {
@@ -125,14 +202,15 @@ describe("scan cache round trip", () => {
     expect(restored.has("/a.jsonl")).toBe(false);
   });
 
-  it("carries the malformed record count across a round trip", () => {
-    // A warm hit reports the file's damage from the cache, so the count has to
-    // survive serialisation or every cached file would look clean.
-    const original = cacheWith([["/a.jsonl", 100, [record()], 3]]);
+  it("carries completed and tail malformed counts across a round trip", () => {
+    // The tail is re-read on resume, so its count must stay separate from
+    // completed lines rather than being accumulated again on every scan.
+    const original = cacheWith([["/a.jsonl", 100, [record()], 3, 2]]);
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));
 
     expect(restored.get("/a.jsonl")?.malformedRecords).toBe(3);
+    expect(restored.get("/a.jsonl")?.tailMalformedRecords).toBe(2);
   });
 
   it("rejects a cache written before entries carried a malformed count", () => {
@@ -144,15 +222,16 @@ describe("scan cache round trip", () => {
     expect(decodeScanCache(JSON.parse(JSON.stringify(previousVersion))).size).toBe(0);
   });
 
-  it("drops an entry whose malformed count is missing or nonsensical", () => {
+  it("drops an entry whose malformed counts are missing or nonsensical", () => {
     const encoded = encodeScanCache(cacheWith([["/good.jsonl", 100, [record()], 1]]));
     const good = encoded.files["/good.jsonl"]!;
     const withBadCounts = {
       ...encoded,
       files: {
         ...encoded.files,
-        "/missing.jsonl": { s: good.s, m: good.m, p: good.p, r: good.r },
+        "/missing.jsonl": { ...good, x: undefined },
         "/negative.jsonl": { ...good, x: -1 },
+        "/negative-tail.jsonl": { ...good, tx: -1 },
       },
     };
 

@@ -107,6 +107,12 @@ it("includes snooze timestamps in thread summaries", () => {
   assert.equal(summary.snoozedAt, "2026-07-25T09:00:00.000Z");
 });
 
+it("reports server settlement state in thread summaries", () => {
+  assert.isTrue(threadSummary(threadWith({ settledOverride: "settled" })).settled);
+  assert.isFalse(threadSummary(threadWith({ settledOverride: "active" })).settled);
+  assert.isFalse(threadSummary(threadWith({})).settled);
+});
+
 it("normalizes missing legacy snooze timestamps to null", () => {
   const summary = threadSummary(threadWith({}));
 

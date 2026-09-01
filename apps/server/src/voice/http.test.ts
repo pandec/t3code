@@ -151,6 +151,7 @@ it.effect("shares request dispatch locking with persistent clients", () =>
     const releaseLegacy = yield* Deferred.make<void>();
     const repository: ProjectionThreadMessageRepositoryShape = {
       upsert: () => Effect.void,
+      appendStreaming: () => Effect.void,
       getByMessageId: () => Ref.get(projected).pipe(Effect.map(Option.some)),
       getSpeechByMessageId: () => Effect.succeed(Option.none()),
       listPendingSpeechRequests: Effect.succeed([]),

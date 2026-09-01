@@ -51,9 +51,6 @@ const clientSettings: ClientSettings = {
   providerModelPreferences: {},
   providerUsageWarningPercent: 80,
   providerUsageCriticalPercent: 95,
-  threadAutoSettleEnabled: true,
-  sidebarAutoSettleAfterDays: 3,
-  sidebarAutoSettleOnMerge: true,
   sidebarProjectAccentColors: {
     "environment-1:/tmp/project-a": "#123456",
   },

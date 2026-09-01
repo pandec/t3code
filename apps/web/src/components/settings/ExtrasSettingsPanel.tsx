@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, type CSSProperties } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -26,7 +27,7 @@ import { formatUsd } from "@t3tools/shared/usageFormat";
 import { isElectron } from "../../env";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
+import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   usePrimarySettings,
@@ -603,33 +604,39 @@ function SidebarExtrasSection() {
     settings.sidebarOlderSectionAfterDays,
   );
 
+  const supportsAutoSettlement =
+    useAtomValue(primaryServerConfigAtom)?.environment.capabilities.threadAutoSettlement === true;
+
   return (
     <SettingsSection {...searchableSetting("extras-sidebar")}>
-      <SettingsRow
-        {...searchableSetting("auto-settle-threads")}
-        description="Automatically settle threads after inactivity or when their pull request is merged or closed. Manual settling remains available when disabled."
-        resetAction={
-          settings.threadAutoSettleEnabled !== DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled ? (
-            <SettingResetButton
-              label="automatic thread settling"
-              onClick={() =>
-                updateSettings({
-                  threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
-                })
+      {supportsAutoSettlement ? (
+        <SettingsRow
+          {...searchableSetting("auto-settle-threads")}
+          description="Automatically settle threads after inactivity or when their pull request is merged or closed. Manual settling remains available when disabled."
+          resetAction={
+            settings.threadAutoSettleEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled ? (
+              <SettingResetButton
+                label="automatic thread settling"
+                onClick={() =>
+                  updateSettings({
+                    threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.threadAutoSettleEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ threadAutoSettleEnabled: Boolean(checked) })
               }
+              aria-label="Automatically settle threads"
             />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.threadAutoSettleEnabled}
-            onCheckedChange={(checked) =>
-              updateSettings({ threadAutoSettleEnabled: Boolean(checked) })
-            }
-            aria-label="Automatically settle threads"
-          />
-        }
-      />
+          }
+        />
+      ) : null}
 
       <SettingsRow
         title="Thread provider icon"

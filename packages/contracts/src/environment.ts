@@ -72,6 +72,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   sessionImport: Schema.optionalKey(Schema.Boolean),
   /** Server exposes authenticated provider catalog metadata. */
   providerCatalog: Schema.optionalKey(Schema.Boolean),
+  /** Server evaluates merge and inactivity settlement without a client. */
+  threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),

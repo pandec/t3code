@@ -19,27 +19,33 @@ import * as NodePath from "node:path";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import type { UsageRecord } from "./usageTranscripts.ts";
+import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
+import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 
-/**
- * Bumped to 2 when entries gained `malformedRecords`: a v1 entry cannot say how
- * many of its lines failed to parse, and reporting those files as clean would
- * be worse than re-parsing them once.
- *
- * Bumped to 3 because upstream independently shipped its own v2, for Codex
- * fork-copy suppression: it changed what a file parses to, so an entry written
- * by either v2 would keep serving records this build no longer agrees with.
- * Only a version neither side has used invalidates both.
- */
-export const USAGE_SCAN_CACHE_VERSION = 3 as const;
+// v2: Codex fork-copy suppression changed what a file parses to, so v1
+// entries would keep serving double-counted records forever.
+// v3 was independently used by the fork for malformed-record counts and by
+// upstream for incremental parse positions, so neither v3 shape is compatible.
+// v4 carries both incremental state and completed/tail malformed counts.
+export const USAGE_SCAN_CACHE_VERSION = 4 as const;
 
 export interface CachedFile {
   readonly size: number;
   readonly mtimeMs: number;
   readonly provider: UsageProviderKind;
+  /** Records from newline-terminated lines, up to `position.resumeOffset`. */
   readonly records: readonly UsageRecord[];
-  /** Lines that advertised usage but did not parse, at the time of the scan. */
+  /** Malformed usage-bearing newline-terminated lines up to the resume offset. */
   readonly malformedRecords: number;
+  /**
+   * Records from a trailing segment the writer had not newline-terminated at
+   * parse time. Kept apart from `records` because an incremental parse
+   * re-reads that segment and would otherwise double count it.
+   */
+  readonly tailRecords: readonly UsageRecord[];
+  /** Malformed usage-bearing content in the unconsumed trailing segment. */
+  readonly tailMalformedRecords: number;
+  readonly position: TranscriptParsePosition;
 }
 
 export type ScanCache = Map<string, CachedFile>;
@@ -67,7 +73,17 @@ interface SerializedFile {
   readonly m: number;
   readonly p: UsageProviderKind;
   readonly r: readonly SerializedRecord[];
+  /** Completed and trailing malformed usage-bearing line counts. */
   readonly x: number;
+  readonly tx: number;
+  /** Tail records; see `CachedFile.tailRecords`. */
+  readonly t: readonly SerializedRecord[];
+  /** Parse position: resume offset, guard length, guard hash. */
+  readonly o: number;
+  readonly gl: number;
+  readonly gh: number;
+  /** Codex reducer state at `o`; `null` for stateless providers. */
+  readonly cs: CodexScanState | null;
 }
 
 interface SerializedCache {
@@ -93,25 +109,33 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
     return next;
   };
 
+  const serializeRecord = (record: UsageRecord): SerializedRecord => [
+    record.timestampMs,
+    intern(models, modelIndex, record.model),
+    intern(sessions, sessionIndex, record.sessionId),
+    record.totals.uncachedInputTokens,
+    record.totals.cachedInputTokens,
+    record.totals.cacheCreationTokens,
+    record.totals.outputTokens,
+    record.totals.reasoningTokens,
+    record.dedupeKey,
+    record.reportedCostUsd,
+  ];
+
   const files: Record<string, SerializedFile> = {};
   for (const [path, entry] of cache) {
     files[path] = {
       s: entry.size,
       m: entry.mtimeMs,
       p: entry.provider,
+      r: entry.records.map(serializeRecord),
       x: entry.malformedRecords,
-      r: entry.records.map((record) => [
-        record.timestampMs,
-        intern(models, modelIndex, record.model),
-        intern(sessions, sessionIndex, record.sessionId),
-        record.totals.uncachedInputTokens,
-        record.totals.cachedInputTokens,
-        record.totals.cacheCreationTokens,
-        record.totals.outputTokens,
-        record.totals.reasoningTokens,
-        record.dedupeKey,
-        record.reportedCostUsd,
-      ]),
+      t: entry.tailRecords.map(serializeRecord),
+      tx: entry.tailMalformedRecords,
+      o: entry.position.resumeOffset,
+      gl: entry.position.guardLength,
+      gh: entry.position.guardHash,
+      cs: entry.position.codexState,
     };
   }
 
@@ -145,27 +169,16 @@ export function decodeScanCache(document: unknown): ScanCache {
   const models = root.models as readonly string[];
   const sessions = root.sessions as readonly string[];
 
-  for (const [path, raw] of Object.entries(root.files)) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const entry = raw as Partial<SerializedFile>;
-    if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
-    if (!isRecordArray(entry.r)) continue;
-    // A missing or nonsensical malformed count would understate the file's
-    // damage on every warm hit, so reject the entry and re-parse it instead.
-    if (typeof entry.x !== "number" || !Number.isFinite(entry.x) || entry.x < 0) continue;
-
-    const provider: UsageProviderKind = entry.p;
+  // Any corrupt row disqualifies the whole entry. Keeping the survivors
+  // under the original (size, mtime) would read as a valid warm hit and the
+  // file would never be re-parsed, silently losing the dropped rows' usage.
+  const decodeRecords = (
+    rows: readonly unknown[],
+    provider: UsageProviderKind,
+  ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
-    // Any corrupt row disqualifies the whole entry. Keeping the survivors
-    // under the original (size, mtime) would read as a valid warm hit and the
-    // file would never be re-parsed, silently losing the dropped rows' usage.
-    let corrupt = false;
-    for (const row of entry.r) {
-      if (!isRecordArray(row) || row.length < 10) {
-        corrupt = true;
-        break;
-      }
+    for (const row of rows) {
+      if (!isRecordArray(row) || row.length < 10) return null;
       const [
         timestampMs,
         modelIndex,
@@ -190,8 +203,7 @@ export function decodeScanCache(document: unknown): ScanCache {
         !Number.isFinite(output) ||
         !Number.isFinite(reasoning)
       ) {
-        corrupt = true;
-        break;
+        return null;
       }
 
       records.push({
@@ -210,18 +222,103 @@ export function decodeScanCache(document: unknown): ScanCache {
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
       });
     }
+    return records;
+  };
 
-    if (corrupt) continue;
+  for (const [path, raw] of Object.entries(root.files)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const entry = raw as Partial<SerializedFile>;
+    if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
+    if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
+    if (
+      typeof entry.x !== "number" ||
+      !Number.isSafeInteger(entry.x) ||
+      entry.x < 0 ||
+      typeof entry.tx !== "number" ||
+      !Number.isSafeInteger(entry.tx) ||
+      entry.tx < 0
+    ) {
+      continue;
+    }
+    // Position fields feed byte offsets and a Buffer allocation in the reader,
+    // so anything outside their real ranges must reject the entry: a bogus
+    // guard length would otherwise fail every parse of the file, silently
+    // dropping its usage instead of costing the documented cold re-parse.
+    if (
+      typeof entry.o !== "number" ||
+      !Number.isSafeInteger(entry.o) ||
+      entry.o < 0 ||
+      typeof entry.gl !== "number" ||
+      !Number.isSafeInteger(entry.gl) ||
+      entry.gl < 0 ||
+      entry.gl > GUARD_LENGTH ||
+      entry.gl > entry.o ||
+      typeof entry.gh !== "number" ||
+      !Number.isFinite(entry.gh)
+    ) {
+      continue;
+    }
+    const codexState = decodeCodexState(entry.cs);
+    if (codexState === undefined) continue;
+
+    const provider: UsageProviderKind = entry.p;
+    const records = decodeRecords(entry.r, provider);
+    const tailRecords = decodeRecords(entry.t, provider);
+    if (records === null || tailRecords === null) continue;
+
     cache.set(path, {
       size: entry.s,
       mtimeMs: entry.m,
       provider,
       records,
       malformedRecords: entry.x,
+      tailRecords,
+      tailMalformedRecords: entry.tx,
+      position: {
+        resumeOffset: entry.o,
+        guardLength: entry.gl,
+        guardHash: entry.gh,
+        codexState,
+      },
     });
   }
 
   return cache;
+}
+
+/**
+ * Validates a persisted Codex reducer state. Returns `undefined` for a corrupt
+ * value, which disqualifies the entry: resuming with a bad state would attach
+ * appended usage to the wrong model or replay fork-copied history.
+ */
+function decodeCodexState(value: unknown): CodexScanState | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const state = value as Partial<CodexScanState>;
+  if (
+    typeof state.model !== "string" ||
+    typeof state.sessionId !== "string" ||
+    (state.lastUsageSignature !== null && typeof state.lastUsageSignature !== "string") ||
+    typeof state.sawSessionMeta !== "boolean" ||
+    typeof state.suppressingForkCopies !== "boolean" ||
+    typeof state.forkCopyAnchorMs !== "number" ||
+    !Number.isFinite(state.forkCopyAnchorMs) ||
+    typeof state.deliberateSkips !== "number" ||
+    !Number.isSafeInteger(state.deliberateSkips) ||
+    state.deliberateSkips < 0
+  ) {
+    return undefined;
+  }
+  return {
+    model: state.model,
+    sessionId: state.sessionId,
+    lastUsageSignature: state.lastUsageSignature ?? null,
+    sawSessionMeta: state.sawSessionMeta,
+    suppressingForkCopies: state.suppressingForkCopies,
+    forkCopyAnchorMs: state.forkCopyAnchorMs,
+    deliberateSkips: state.deliberateSkips,
+  };
 }
 
 export interface PruneOptions {
@@ -272,9 +369,17 @@ export function pruneScanCache(cache: ScanCache, options: PruneOptions): number 
   return removed;
 }
 
-/** Within-file de-duplication, applied before an entry is cached. */
-export function dedupeWithinFile(records: readonly UsageRecord[]): readonly UsageRecord[] {
-  const seen = new Set<string>();
+/**
+ * Within-file de-duplication, applied before an entry is cached.
+ *
+ * Callers stitching an incremental parse together pass one `seen` set across
+ * the line and tail record batches so the whole file stays deduplicated as a
+ * unit; the set is mutated in place.
+ */
+export function dedupeWithinFile(
+  records: readonly UsageRecord[],
+  seen: Set<string> = new Set(),
+): readonly UsageRecord[] {
   const kept: UsageRecord[] = [];
   for (const record of records) {
     if (record.dedupeKey !== null) {

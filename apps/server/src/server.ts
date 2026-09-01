@@ -77,6 +77,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { MessageSpeechReactorLive } from "./orchestration/Layers/MessageSpeechReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -303,6 +304,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(MessageSpeechReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
+  Layer.provideMerge(ThreadSettlementReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
   Layer.provideMerge(ProviderUsageRefreshLive),
@@ -338,6 +340,14 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
   ),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
+);
+
+const PullRequestServiceLive = PullRequestService.layer.pipe(
+  Layer.provide(PullRequestProviderRegistry.layer),
+  Layer.provide(SourceControlProviderRegistryLayerLive),
+  Layer.provide(SourceControlRateLimit.layer),
+  Layer.provide(VcsProcess.layer),
+  Layer.provide(RepositoryIdentityResolver.layer),
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
@@ -461,7 +471,11 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
   // The deletion reactor sits below the bootstrap service so its
   // thread.create fence and the reactor pipeline share one cleanup worker.
   Layer.provideMerge(
-    Layer.mergeAll(ThreadDeletionReactorLive, SourceControlProviderRegistryLayerLive),
+    Layer.mergeAll(
+      ThreadDeletionReactorLive,
+      SourceControlProviderRegistryLayerLive,
+      PullRequestServiceLive,
+    ),
   ),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
@@ -531,15 +545,6 @@ const commandReadinessLayer = HttpRouter.middleware(
       startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
     ),
   { global: true },
-);
-
-const PullRequestServiceLive = PullRequestService.layer.pipe(
-  // One registry entry per supported host; the service only knows the registry.
-  Layer.provide(PullRequestProviderRegistry.layer),
-  Layer.provide(SourceControlProviderRegistryLayerLive),
-  Layer.provide(SourceControlRateLimit.layer),
-  Layer.provide(VcsProcess.layer),
-  Layer.provide(RepositoryIdentityResolver.layer),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(

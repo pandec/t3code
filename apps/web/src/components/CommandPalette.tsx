@@ -23,7 +23,6 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSettle, effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import {
   type DesktopWslState,
@@ -35,7 +34,7 @@ import {
   type ThreadId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArchiveIcon,
@@ -89,7 +88,6 @@ import {
   useClientSettings,
   useLegacySidebarEnabled,
 } from "../hooks/useSettings";
-import { useNowMinute } from "../hooks/useNowMinute";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
@@ -97,7 +95,6 @@ import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
-import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -130,6 +127,7 @@ import {
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";
 import {
   applyWslEnvironmentConfiguration,
   parseWslUncPath,
@@ -174,16 +172,13 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
+import { searchSettings, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import {
   COMMAND_PALETTE_META_ICON_CLASS,
   CommandPaletteMetaDot,
   ThreadCommandSubtitle,
 } from "./ThreadCommandSubtitle";
-import {
-  resolveThreadPr,
-  ThreadRowLeadingStatus,
-  ThreadRowTrailingStatus,
-} from "./ThreadStatusIndicators";
+import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import {
   deriveProviderInstanceEntries,
@@ -664,6 +659,7 @@ function OpenCommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -688,6 +684,7 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
   const {
@@ -1813,35 +1810,6 @@ function OpenCommandPaletteDialog(props: {
             thread.archivedAt === null,
         ) ?? null);
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
-  // Settled classification needs the same inputs the sidebar partition and
-  // the chat header use, or the palette would offer a verb that contradicts
-  // what the user sees. Subscription atoms are keyed by their serialized
-  // arguments, and this resolves the same environment and cwd ChatView
-  // already subscribes to for the open thread, so the palette joins that
-  // stream rather than opening a second one.
-  const openThreadGitCwd =
-    openUnarchivedThread === null
-      ? null
-      : (openUnarchivedThread.worktreePath ??
-        projects.find(
-          (project) =>
-            project.environmentId === openUnarchivedThread.environmentId &&
-            project.id === openUnarchivedThread.projectId,
-        )?.workspaceRoot ??
-        null);
-  const openThreadGitStatus = useEnvironmentQuery(
-    openUnarchivedThread === null || openThreadGitCwd === null
-      ? null
-      : vcsEnvironment.status({
-          environmentId: openUnarchivedThread.environmentId,
-          input: { cwd: openThreadGitCwd },
-        }),
-  );
-  // Minute-quantized like every other settled-state consumer, so the palette
-  // can never disagree with them within the same minute — and so clock-derived
-  // state (the queued-turn settle blocker) refreshes while the palette is open.
-  const nowMinute = useNowMinute();
-  const quantizedNow = `${nowMinute}:00.000Z`;
   const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
     threadRef:
       defaultSidebarEnabled &&
@@ -1878,19 +1846,9 @@ function OpenCommandPaletteDialog(props: {
       isPinned: openUnarchivedThread?.pinnedAt != null,
       isSettled:
         openThreadCapabilities?.threadSettlement === true &&
-        openUnarchivedThread !== null &&
-        effectiveSettled(openUnarchivedThread, {
-          now: quantizedNow,
-          autoSettleEnabled: clientSettings.threadAutoSettleEnabled,
-          autoSettleAfterDays: clientSettings.sidebarAutoSettleAfterDays,
-          autoSettleOnMerge: clientSettings.sidebarAutoSettleOnMerge,
-          changeRequest: resolveThreadPr({
-            threadBranch: openUnarchivedThread.branch ?? null,
-            gitStatus: openThreadGitStatus.data ?? null,
-          }),
-        }),
-      canSettleNow:
-        openUnarchivedThread !== null && canSettle(openUnarchivedThread, { now: quantizedNow }),
+        openUnarchivedThread?.settledOverride === "settled",
+      // The server owns settle eligibility and returns the authoritative error.
+      canSettleNow: true,
       canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
@@ -2131,7 +2089,19 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:project-settings",
-      searchTerms: ["project", "settings", "scripts", "model", "grouping", "checkout"],
+      searchTerms: [
+        "project",
+        "settings",
+        "name",
+        "icon",
+        "scripts",
+        "model",
+        "workspace",
+        "grouping",
+        "checkout",
+        "remove",
+        "t3.json",
+      ],
       title: "Project settings",
       description: contextualProjectGroup.displayName,
       icon: <FolderIcon className={ITEM_ICON_CLASS} />,
@@ -2145,6 +2115,25 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
+  const settingsSearchItems: CommandPaletteActionItem[] = searchSettings(
+    deferredQuery,
+    availableSettingsSearchItems,
+  ).map((item) => ({
+    kind: "action",
+    value: `setting:${item.id}`,
+    searchTerms: [item.title, SETTINGS_SECTION_LABELS[item.to], ...(item.searchTerms ?? [])],
+    title: item.title,
+    description: `Settings · ${SETTINGS_SECTION_LABELS[item.to]}`,
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({
+        to: item.to,
+        hash: item.targetId ?? item.id,
+        replace: pathname === item.to,
+        hashScrollIntoView: false,
+      });
+    },
+  }));
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -2162,6 +2151,7 @@ function OpenCommandPaletteDialog(props: {
     query: deferredQuery,
     isInSubmenu: currentView !== null,
     projectSearchItems: projectSearchItems,
+    settingsSearchItems,
     threadSearchItems: allThreadItems,
   });
 

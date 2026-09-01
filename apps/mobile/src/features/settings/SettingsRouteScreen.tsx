@@ -47,6 +47,7 @@ import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/pu
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
   didEnvironmentPrewarmRunsAdvance,
@@ -54,6 +55,7 @@ import {
   type ThreadPrewarmSummary,
   useThreadPrewarmSummary,
 } from "../../state/prewarm";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useAlwaysShowPinnedInAttention,
@@ -61,7 +63,6 @@ import {
   useOlderSectionSettings,
   useSortActiveByLatestUserMessage,
   useSteerGraceWindowMs,
-  useThreadAutoSettleEnabled,
 } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
@@ -575,31 +576,22 @@ function GeneralSettingsSection() {
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const threadListV2Enabled = useThreadListV2Enabled();
-  const autoSettleEnabled = useThreadAutoSettleEnabled();
   const olderSection = useOlderSectionSettings();
-  const autoSettleOnMerge =
-    !AsyncResult.isSuccess(preferencesResult) ||
-    preferencesResult.value.autoSettleOnMerge !== false;
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  const connections = Object.values(savedConnectionsById).sort((left, right) =>
+    left.environmentLabel.localeCompare(right.environmentLabel),
+  );
 
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
-      <SettingsSwitchRow
-        disabled={!hydrated}
-        icon="checkmark.circle"
-        label="Settle threads automatically"
-        subtitle="Settle threads after inactivity or when their pull request is merged or closed. Settling by hand still works when this is off."
-        value={autoSettleEnabled}
-        onValueChange={(value) => savePreferences({ threadAutoSettleEnabled: value })}
-      />
-      {autoSettleEnabled ? (
-        <SettingsSwitchRow
-          icon="arrow.triangle.branch"
-          label="Auto-settle merged threads"
-          value={autoSettleOnMerge}
-          onValueChange={(value) => savePreferences({ autoSettleOnMerge: value })}
+      {connections.map((connection) => (
+        <EnvironmentAutoSettleSettings
+          key={connection.environmentId}
+          environmentId={connection.environmentId}
+          environmentLabel={connection.environmentLabel}
         />
-      ) : null}
+      ))}
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
       <SettingsSliderRow
         description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
@@ -794,6 +786,50 @@ function ThreadSyncRow() {
         </View>
       </View>
     </Pressable>
+  );
+}
+
+function EnvironmentAutoSettleSettings(props: {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
+}) {
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "auto-settle settings update",
+    reportFailure: true,
+  });
+  if (config?.environment.capabilities.threadAutoSettlement !== true || settings === null) {
+    return null;
+  }
+  return (
+    <>
+      <SettingsSwitchRow
+        icon="checkmark.circle"
+        label={`Settle threads automatically · ${props.environmentLabel}`}
+        subtitle="Settle threads after inactivity or when their pull request is merged or closed. Settling by hand still works when this is off."
+        value={settings.threadAutoSettleEnabled}
+        onValueChange={(value) => {
+          void updateSettings({
+            environmentId: props.environmentId,
+            input: { patch: { threadAutoSettleEnabled: value } },
+          });
+        }}
+      />
+      {settings.threadAutoSettleEnabled ? (
+        <SettingsSwitchRow
+          icon="arrow.triangle.branch"
+          label={`Auto-settle merged threads · ${props.environmentLabel}`}
+          value={settings.sidebarAutoSettleOnMerge}
+          onValueChange={(value) => {
+            void updateSettings({
+              environmentId: props.environmentId,
+              input: { patch: { sidebarAutoSettleOnMerge: value } },
+            });
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

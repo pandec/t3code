@@ -50,6 +50,7 @@ const repository = (
   projected: Option.Option<ProjectionThreadMessage>,
 ): ProjectionThreadMessageRepositoryShape => ({
   upsert: () => Effect.void,
+  appendStreaming: () => Effect.void,
   getByMessageId: () => Effect.succeed(projected),
   getSpeechByMessageId: () => Effect.succeed(Option.none()),
   listPendingSpeechRequests: Effect.succeed([]),

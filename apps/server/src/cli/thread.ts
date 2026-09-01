@@ -497,6 +497,7 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   backgroundLiveness: thread.backgroundLiveness ?? null,
   snoozedUntil: thread.snoozedUntil ?? null,
   snoozedAt: thread.snoozedAt ?? null,
+  settled: thread.settledOverride === "settled",
   hasPendingApprovals: thread.hasPendingApprovals,
   hasPendingUserInput: thread.hasPendingUserInput,
   latestUserMessageAt: thread.latestUserMessageAt,

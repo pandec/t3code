@@ -92,6 +92,7 @@ const repositoryService = (
 ): ProjectionThreadMessageRepositoryShape => ({
   upsert: (message) =>
     Ref.update(messages, (current) => new Map(current).set(message.messageId, message)),
+  appendStreaming: () => Effect.void,
   getByMessageId: ({ messageId }) =>
     Ref.get(messages).pipe(
       Effect.map((current) => {

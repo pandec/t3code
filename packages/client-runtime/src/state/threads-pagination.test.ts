@@ -197,6 +197,7 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
   const makeSession = (paginationCapability: boolean): RpcSession.RpcSession => ({
     client,
     initialConfig: Effect.succeed({ threadSnapshotPagination: paginationCapability } as never),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,

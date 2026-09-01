@@ -5,13 +5,8 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  canSnooze,
-  effectiveSettled,
-  effectiveSnoozed,
-  type ChangeRequestSettleSource,
-} from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
@@ -63,11 +58,9 @@ export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
   /** Fallback for "Copy path" when the thread has no worktree. */
   readonly projectCwd: string | null;
-  /** PR feeding auto-settle classification, as resolved by the caller. */
-  readonly changeRequest: ChangeRequestSettleSource | null;
   readonly onStartRename: () => void;
 }) {
-  const { threadRef, projectCwd, changeRequest, onStartRename } = input;
+  const { threadRef, projectCwd, onStartRename } = input;
   const {
     settleThread,
     unsettleThread,
@@ -75,7 +68,6 @@ export function useThreadActionMenu(input: {
     unsnoozeThread,
     pinThread,
     confirmAndUnpinThread,
-    archiveThread,
     deleteThread,
     attemptArchiveThread,
     attemptMoveThreadToTop,
@@ -86,9 +78,6 @@ export function useThreadActionMenu(input: {
   });
   const handleNewThread = useNewThreadHandler();
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
-  const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
-  const autoSettleEnabled = useClientSettings((s) => s.threadAutoSettleEnabled);
-  const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const legacySidebarEnabled = useLegacySidebarEnabled();
@@ -137,18 +126,9 @@ export function useThreadActionMenu(input: {
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
           isPinned: thread.pinnedAt != null,
-          isSettled:
-            supports.settlement &&
-            effectiveSettled(thread, {
-              // Minute-quantized like useNowMinute, so this classification
-              // can never disagree with the sidebar partition or ChatView's
-              // parked-thread banner within the same minute.
-              now: `${now.toISOString().slice(0, 16)}:00.000Z`,
-              autoSettleEnabled,
-              autoSettleAfterDays,
-              autoSettleOnMerge,
-              changeRequest,
-            }),
+
+          isSettled: supports.settlement && thread.settledOverride === "settled",
+
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
@@ -321,10 +301,6 @@ export function useThreadActionMenu(input: {
     [
       attemptArchiveThread,
       attemptMoveThreadToTop,
-      autoSettleAfterDays,
-      autoSettleEnabled,
-      autoSettleOnMerge,
-      changeRequest,
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,

@@ -140,7 +140,9 @@ The project argument accepts either a project id or an exact workspace-root path
 commands intentionally require a thread id so automation cannot act on an ambiguous title. Thread
 list and status summaries also include `backgroundLiveness`: `"working"` for native subagents or
 workflows, `"monitoring"` when only watch loops remain, and `null` when no native background work is
-known.
+known. Summaries also carry `settled` — `true` when the server has settled the thread, whether a
+person settled it or the server's automatic settlement (inactivity, merged or closed pull request)
+did. Settling is an inbox overlay like snooze and does not change the thread's turn `state`.
 
 ### Reading messages
 
