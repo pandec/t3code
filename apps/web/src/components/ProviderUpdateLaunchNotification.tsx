@@ -5,15 +5,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEnvironments } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";
-import { ProviderUpdateEnvironmentRows } from "./ProviderUpdateEnvironmentRows";
+import {
+  createProviderUpdateResultDelivery,
+  ProviderUpdateEnvironmentRows,
+} from "./ProviderUpdateEnvironmentRows";
 import { useLocalEnvironmentUpdateGroups } from "./ProviderUpdateLaunchNotification.environments";
 import {
   collectProviderUpdateCandidates,
   environmentGroupsWithUpdates,
   getProviderUpdateInitialToastView,
   localEnvironmentUpdateNotificationKey,
+  type ProviderUpdateToastView,
 } from "./ProviderUpdateLaunchNotification.logic";
-import { ProviderUpdatePrimaryNotification } from "./ProviderUpdatePrimaryNotification";
+import {
+  addProviderUpdateToast,
+  ProviderUpdatePrimaryNotification,
+} from "./ProviderUpdatePrimaryNotification";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 /**
@@ -55,7 +62,7 @@ type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 // suppress the primary's updates indefinitely.
 const SETTLING_GRACE_MS = 30_000;
 
-function ProviderUpdateEnvironmentsNotification() {
+export function ProviderUpdateEnvironmentsNotification() {
   const navigate = useNavigate();
   const { groups, isAnySettling } = useLocalEnvironmentUpdateGroups();
   const { dismissedNotificationKeys, dismissNotificationKey } =
@@ -107,14 +114,39 @@ function ProviderUpdateEnvironmentsNotification() {
   }, [isAnySettling]);
   const isGated = isAnySettling && !settleGraceElapsed;
 
-  const openProviderSettings = useCallback(() => {
-    const active = activeToastRef.current;
-    if (active !== null) {
-      toastManager.close(active.toastId);
-      activeToastRef.current = null;
-    }
-    void navigate({ to: "/settings/providers" });
-  }, [navigate]);
+  const openProviderSettings = useCallback(
+    (toastId?: ProviderUpdateToastId) => {
+      if (toastId !== undefined) {
+        toastManager.close(toastId);
+      } else {
+        const active = activeToastRef.current;
+        if (active !== null) {
+          toastManager.close(active.toastId);
+          activeToastRef.current = null;
+        }
+      }
+      void navigate({ to: "/settings/providers" });
+    },
+    [navigate],
+  );
+  const reportUpdateResult = useCallback(
+    (view: ProviderUpdateToastView) =>
+      addProviderUpdateToast({ view, openSettings: openProviderSettings }),
+    [openProviderSettings],
+  );
+  const reportUpdateResultRef = useRef(reportUpdateResult);
+  reportUpdateResultRef.current = reportUpdateResult;
+  const [resultDelivery] = useState(() =>
+    createProviderUpdateResultDelivery({
+      isPopoverOpen: () => activeToastRef.current !== null,
+      onResult: (view) => reportUpdateResultRef.current(view),
+    }),
+  );
+
+  useEffect(() => resultDelivery.dispose, [resultDelivery]);
+  useEffect(() => {
+    resultDelivery.observeGroups(groups);
+  }, [groups, resultDelivery]);
 
   useEffect(() => {
     // Whether a fresh prompt can actually be shown for the current update set.
@@ -169,12 +201,14 @@ function ProviderUpdateEnvironmentsNotification() {
             onInteract={() => {
               hasInteractedRef.current = true;
             }}
+            onUpdateFinished={resultDelivery.finishUpdate}
+            onUpdateStarted={resultDelivery.startUpdate}
           />
         ),
         timeout: 0,
         actionProps: {
           children: "Settings",
-          onClick: openProviderSettings,
+          onClick: () => openProviderSettings(),
         },
         actionVariant: "outline",
         data: {
@@ -192,6 +226,7 @@ function ProviderUpdateEnvironmentsNotification() {
     dismissedNotificationKeys,
     dismissNotificationKey,
     openProviderSettings,
+    resultDelivery,
   ]);
 
   return null;

@@ -56,7 +56,7 @@ function ProviderUpdateToastIcon({ provider }: { provider: ProviderDriverKind })
   );
 }
 
-function addProviderUpdateToast(input: {
+export function addProviderUpdateToast(input: {
   readonly view: ProviderUpdateToastView;
   readonly openSettings: (toastId: ProviderUpdateToastId) => void;
 }) {
