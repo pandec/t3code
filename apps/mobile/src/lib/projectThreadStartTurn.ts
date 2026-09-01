@@ -2,17 +2,15 @@ import {
   CommandId,
   MessageId,
   ThreadId,
-  type ChatFileAttachment,
   type MessageInputOrigin,
   type ModelSelection,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 
-import type { DraftComposerAttachment } from "./composer-image-schema";
-import { toUploadChatImageAttachments } from "./composerImages";
+import type { UploadedMobileAttachment } from "./attachmentUpload";
+import { toUploadChatImageAttachments, type DraftComposerAttachment } from "./composerImages";
 
 export function deriveThreadTitleFromPrompt(value: string): string {
   const trimmed = value.trim();
@@ -34,7 +32,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly text: string;
   readonly inputOrigin?: MessageInputOrigin | undefined;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
-  readonly uploadedAttachments?: ReadonlyArray<UploadChatImageAttachment | ChatFileAttachment>;
+  readonly uploadedAttachments?: ReadonlyArray<UploadedMobileAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;

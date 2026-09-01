@@ -57,8 +57,24 @@ const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
-const isSafeInlineVideoMimeType = (mimeType: string): boolean =>
-  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && mimeType.toLowerCase().startsWith("video/");
+const isSafeMediaMimeType = (mimeType: string): boolean =>
+  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && /^(?:audio|video)\//i.test(mimeType);
+
+// Speech recordings are issued as bare attachment claims with no MIME (the
+// mobile listening player scrubs them with Range requests), so range
+// eligibility falls back to the on-disk extension when the claim carries none.
+const MEDIA_MIME_TYPE_BY_EXTENSION: Record<string, string> = {
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+};
+const mediaMimeTypeFromPath = (filePath: string): string | undefined => {
+  const match = /\.[a-z0-9]+$/.exec(filePath.toLowerCase());
+  return match ? MEDIA_MIME_TYPE_BY_EXTENSION[match[0]] : undefined;
+};
 
 /** RFC 6266 disposition with an ASCII fallback name plus a UTF-8 `filename*`. */
 export function downloadContentDisposition(fileName?: string): string {
@@ -88,7 +104,7 @@ export function assetResponseHeaders(
   },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
-  const inlineVideoMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
+  const inlineMediaMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
@@ -101,8 +117,8 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : inlineVideoMimeType !== undefined && isSafeInlineVideoMimeType(inlineVideoMimeType)
-        ? { "Content-Type": inlineVideoMimeType }
+      : inlineMediaMimeType !== undefined && isSafeMediaMimeType(inlineMediaMimeType)
+        ? { "Content-Type": inlineMediaMimeType }
         : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
           ? { "Content-Type": "text/html; charset=utf-8" }
           : {}),
@@ -111,6 +127,65 @@ export function assetResponseHeaders(
       : {}),
   };
 }
+
+/** A single byte range for native media readers; unsupported range syntax uses the full file. */
+function assetByteRange(header: string, size: bigint) {
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  const first = match[1] ? BigInt(match[1]) : null;
+  const last = match[2] ? BigInt(match[2]) : null;
+  if (first !== null && last !== null && last < first) return null;
+  if (size === 0n || (first !== null && first >= size) || (first === null && last === 0n)) {
+    return { _tag: "Unsatisfiable" as const };
+  }
+  const start = first ?? (last! >= size ? 0n : size - last!);
+  const end = first === null || last === null || last >= size ? size - 1n : last;
+  return {
+    _tag: "Range" as const,
+    offset: start,
+    bytesToRead: end - start + 1n,
+    contentRange: `bytes ${start}-${end}/${size}`,
+  };
+}
+
+export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
+  asset: {
+    readonly path: string;
+    readonly download?: boolean;
+    readonly fileName?: string;
+    readonly mimeType?: string;
+  },
+  rangeHeader?: string,
+  ifRangeHeader?: string,
+) {
+  const headers = assetResponseHeaders(asset.path, asset);
+  const mediaMimeType =
+    asset.mimeType?.split(";", 1)[0]?.trim() ?? mediaMimeTypeFromPath(asset.path);
+  if (mediaMimeType !== undefined && isSafeMediaMimeType(mediaMimeType)) {
+    headers["Accept-Ranges"] = "bytes";
+    // If-Range requires a matching validator. A full response is safe when we cannot validate it.
+    if (rangeHeader && !ifRangeHeader) {
+      const fs = yield* FileSystem.FileSystem;
+      const info = yield* fs.stat(asset.path);
+      const range = assetByteRange(rangeHeader, info.size);
+      if (range?._tag === "Unsatisfiable") {
+        return HttpServerResponse.empty({
+          status: 416,
+          headers: { ...headers, "Content-Range": `bytes */${info.size}` },
+        });
+      }
+      if (range?._tag === "Range") {
+        return yield* HttpServerResponse.file(asset.path, {
+          status: 206,
+          offset: range.offset,
+          bytesToRead: range.bytesToRead,
+          headers: { ...headers, "Content-Range": range.contentRange },
+        });
+      }
+    }
+  }
+  return yield* HttpServerResponse.file(asset.path, { status: 200, headers });
+});
 
 export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
   global: true,
@@ -155,56 +230,6 @@ export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
   redirectUrl.search = requestUrl.search;
   redirectUrl.hash = requestUrl.hash;
   return redirectUrl.toString();
-}
-
-export type ByteRange =
-  | { readonly _tag: "Range"; readonly start: number; readonly end: number }
-  | { readonly _tag: "Unsatisfiable" }
-  | { readonly _tag: "Invalid" };
-
-const parseRangeInteger = (value: string): number | undefined => {
-  if (!/^\d+$/.test(value)) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
-};
-
-export function parseSingleByteRange(header: string, fileSize: number): ByteRange {
-  const value = header.trim();
-  if (!value.toLowerCase().startsWith("bytes=")) return { _tag: "Invalid" };
-
-  const rangeValue = value.slice(6).trim();
-  if (rangeValue.length === 0 || rangeValue.includes(",")) return { _tag: "Invalid" };
-
-  const separatorIndex = rangeValue.indexOf("-");
-  if (separatorIndex === -1) return { _tag: "Invalid" };
-
-  const startPart = rangeValue.slice(0, separatorIndex).trim();
-  const endPart = rangeValue.slice(separatorIndex + 1).trim();
-  if (startPart === "" && endPart === "") return { _tag: "Invalid" };
-
-  if (startPart === "") {
-    const suffixLength = parseRangeInteger(endPart);
-    if (suffixLength === undefined) return { _tag: "Invalid" };
-    if (suffixLength === 0 || fileSize === 0) return { _tag: "Unsatisfiable" };
-    return {
-      _tag: "Range",
-      start: Math.max(fileSize - suffixLength, 0),
-      end: fileSize - 1,
-    };
-  }
-
-  const start = parseRangeInteger(startPart);
-  if (start === undefined) return { _tag: "Invalid" };
-  if (endPart === "") {
-    return start >= fileSize
-      ? { _tag: "Unsatisfiable" }
-      : { _tag: "Range", start, end: fileSize - 1 };
-  }
-
-  const end = parseRangeInteger(endPart);
-  if (end === undefined) return { _tag: "Invalid" };
-  if (start > end || start >= fileSize) return { _tag: "Unsatisfiable" };
-  return { _tag: "Range", start, end: Math.min(end, fileSize - 1) };
 }
 
 const authenticateRawRouteWithScope = (
@@ -327,55 +352,11 @@ export const assetRouteLayer = HttpRouter.add(
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
-
-    // Every branch below — 200, 206 and 416 — shares the asset headers, so a
-    // sandboxed SVG stays sandboxed when it is served as a range.
-    const headers = {
-      "Accept-Ranges": "bytes",
-      ...assetResponseHeaders(
-        asset.path,
-        asset.download || asset.mimeType !== undefined
-          ? {
-              ...(asset.download ? { download: true } : {}),
-              ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
-              ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
-            }
-          : undefined,
-      ),
-    };
-    const rangeHeader = request.headers["range"];
-    if (rangeHeader !== undefined) {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const fileInfo = yield* fileSystem.stat(asset.path).pipe(Effect.orElseSucceed(() => null));
-      if (fileInfo === null) {
-        return HttpServerResponse.text("Internal Server Error", { status: 500 });
-      }
-      const fileSize = Number(fileInfo.size);
-      const range = parseSingleByteRange(rangeHeader, fileSize);
-      if (range._tag === "Unsatisfiable") {
-        return HttpServerResponse.empty({
-          status: 416,
-          headers: { ...headers, "Content-Range": `bytes */${fileSize}` },
-        });
-      }
-      if (range._tag === "Range") {
-        return yield* HttpServerResponse.file(asset.path, {
-          status: 206,
-          offset: range.start,
-          bytesToRead: range.end - range.start + 1,
-          headers: {
-            ...headers,
-            "Content-Range": `bytes ${range.start}-${range.end}/${fileSize}`,
-          },
-        }).pipe(
-          Effect.orElseSucceed(() =>
-            HttpServerResponse.text("Internal Server Error", { status: 500 }),
-          ),
-        );
-      }
-    }
-
-    return yield* HttpServerResponse.file(asset.path, { status: 200, headers }).pipe(
+    return yield* assetFileResponse(
+      asset,
+      request.method === "GET" ? request.headers.range : undefined,
+      request.headers["if-range"],
+    ).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),

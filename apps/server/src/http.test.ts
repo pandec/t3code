@@ -1,13 +1,182 @@
 import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
+import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { HttpServerResponse } from "effect/unstable/http";
 
 import {
   assetResponseHeaders,
+  assetFileResponse,
   downloadContentDisposition,
   isLoopbackHostname,
-  parseSingleByteRange,
   resolveDevRedirectUrl,
 } from "./http.ts";
+
+const fileResponseLayer = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+
+describe("video asset byte ranges", () => {
+  it.effect("streams exactly the requested bytes and leaves full downloads intact", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-video-range-" });
+      const file = path.join(directory, "clip.mp4");
+      yield* fs.writeFileString(file, "0123456789");
+      const asset = { path: file, mimeType: "video/mp4" };
+      for (const [header, expected, contentRange] of [
+        ["bytes=0-1", "01", "bytes 0-1/10"],
+        ["bytes=4-", "456789", "bytes 4-9/10"],
+        ["bytes=-3", "789", "bytes 7-9/10"],
+        ["bytes=-999999999999999999999999", "0123456789", "bytes 0-9/10"],
+        ["bytes=8-999999999999999999999999", "89", "bytes 8-9/10"],
+      ] as const) {
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, header));
+        expect(response.status).toBe(206);
+        expect(response.headers.get("accept-ranges")).toBe("bytes");
+        expect(response.headers.get("content-range")).toBe(contentRange);
+        expect(response.headers.get("content-length")).toBe(String(expected.length));
+        expect(yield* Effect.promise(() => response.text())).toBe(expected);
+      }
+      for (const header of [
+        undefined,
+        "items=0-1",
+        "bytes=0-1,4-5",
+        "bytes=8-2",
+        "bytes=-",
+        "bytes=bad",
+      ]) {
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, header));
+        expect(response.status).toBe(200);
+        expect(yield* Effect.promise(() => response.text())).toBe("0123456789");
+      }
+      const conditional = HttpServerResponse.toWeb(
+        yield* assetFileResponse(asset, "bytes=0-1", '"old-etag"'),
+      );
+      expect(conditional.status).toBe(200);
+      expect(yield* Effect.promise(() => conditional.text())).toBe("0123456789");
+      const uppercase = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ ...asset, mimeType: "Video/MP4" }, "bytes=0-1"),
+      );
+      expect(uppercase.status).toBe(206);
+      expect(yield* Effect.promise(() => uppercase.text())).toBe("01");
+      const image = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: file, mimeType: "image/png" }, "bytes=0-1"),
+      );
+      expect(image.status).toBe(200);
+      expect(image.headers.has("accept-ranges")).toBe(false);
+      expect(yield* Effect.promise(() => image.text())).toBe("0123456789");
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+
+  it.effect("rejects ranges outside the file, including empty files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-video-range-" });
+      const file = path.join(directory, "clip.mp4");
+      yield* fs.writeFileString(file, "0123456789");
+      for (const header of ["bytes=10-", "bytes=-0", "bytes=999999999999999999999999-"]) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ path: file, mimeType: "video/mp4" }, header),
+        );
+        expect(response.status).toBe(416);
+        expect(response.headers.get("content-range")).toBe("bytes */10");
+        expect(yield* Effect.promise(() => response.text())).toBe("");
+      }
+      yield* fs.writeFileString(file, "");
+      const empty = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: file, mimeType: "video/mp4" }, "bytes=0-1"),
+      );
+      expect(empty.status).toBe(416);
+      expect(empty.headers.get("content-range")).toBe("bytes */0");
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+});
+
+describe("audio asset byte ranges", () => {
+  it.effect("streams exactly the requested bytes and leaves full downloads intact", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-audio-range-" });
+      const file = path.join(directory, "speech.mp3");
+      yield* fs.writeFileString(file, "0123456789");
+      const asset = {
+        path: file,
+        download: true,
+        fileName: "speech.mp3",
+        mimeType: "audio/mpeg",
+      };
+      for (const [header, expected, contentRange] of [
+        ["bytes=0-1", "01", "bytes 0-1/10"],
+        ["bytes=4-", "456789", "bytes 4-9/10"],
+        ["bytes=-3", "789", "bytes 7-9/10"],
+      ] as const) {
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, header));
+        expect(response.status).toBe(206);
+        expect(response.headers.get("accept-ranges")).toBe("bytes");
+        expect(response.headers.get("content-range")).toBe(contentRange);
+        expect(response.headers.get("content-length")).toBe(String(expected.length));
+        expect(response.headers.get("content-disposition")).toBe(
+          'attachment; filename="speech.mp3"',
+        );
+        expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+        expect(yield* Effect.promise(() => response.text())).toBe(expected);
+      }
+
+      const full = HttpServerResponse.toWeb(yield* assetFileResponse(asset, "items=0-1"));
+      expect(full.status).toBe(200);
+      expect(full.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+      expect(yield* Effect.promise(() => full.text())).toBe("0123456789");
+
+      const unsatisfiable = HttpServerResponse.toWeb(yield* assetFileResponse(asset, "bytes=10-"));
+      expect(unsatisfiable.status).toBe(416);
+      expect(unsatisfiable.headers.get("content-range")).toBe("bytes */10");
+      expect(unsatisfiable.headers.get("content-security-policy")).toBe(
+        "default-src 'none'; sandbox",
+      );
+
+      const conditional = HttpServerResponse.toWeb(
+        yield* assetFileResponse(asset, "bytes=0-1", '"old-etag"'),
+      );
+      expect(conditional.status).toBe(200);
+      expect(yield* Effect.promise(() => conditional.text())).toBe("0123456789");
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+
+  it.effect("serves ranges for a MIME-less claim from the on-disk extension", () =>
+    // Speech recordings are issued as bare attachment claims (no MIME, no
+    // download flag) over speechId.mp3 files; the mobile listening player
+    // scrubs them with Range requests.
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-audio-range-" });
+      const file = path.join(directory, "speech.mp3");
+      yield* fs.writeFileString(file, "0123456789");
+      const response = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: file }, "bytes=4-"),
+      );
+      expect(response.status).toBe(206);
+      expect(response.headers.get("accept-ranges")).toBe("bytes");
+      expect(response.headers.get("content-range")).toBe("bytes 4-9/10");
+      expect(yield* Effect.promise(() => response.text())).toBe("456789");
+
+      const extensionless = path.join(directory, "image-attachment");
+      yield* fs.writeFileString(extensionless, "0123456789");
+      const full = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: extensionless }, "bytes=4-"),
+      );
+      expect(full.status).toBe(200);
+      expect(full.headers.has("accept-ranges")).toBe(false);
+      expect(yield* Effect.promise(() => full.text())).toBe("0123456789");
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+});
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -30,38 +199,6 @@ describe("http dev routing", () => {
     expect(resolveDevRedirectUrl(devUrl, requestUrl)).toBe(
       "http://127.0.0.1:5173/pair?token=test-token",
     );
-  });
-});
-
-describe("parseSingleByteRange", () => {
-  it("parses bounded, open-ended, and suffix ranges", () => {
-    expect(parseSingleByteRange("bytes=10-19", 100)).toEqual({
-      _tag: "Range",
-      start: 10,
-      end: 19,
-    });
-    expect(parseSingleByteRange("bytes=90-", 100)).toEqual({
-      _tag: "Range",
-      start: 90,
-      end: 99,
-    });
-    expect(parseSingleByteRange("bytes=-10", 100)).toEqual({
-      _tag: "Range",
-      start: 90,
-      end: 99,
-    });
-  });
-
-  it("clamps ranges and rejects unsupported or unsatisfiable requests", () => {
-    expect(parseSingleByteRange("bytes=90-199", 100)).toEqual({
-      _tag: "Range",
-      start: 90,
-      end: 99,
-    });
-    expect(parseSingleByteRange("bytes=100-", 100)).toEqual({ _tag: "Unsatisfiable" });
-    expect(parseSingleByteRange("bytes=20-10", 100)).toEqual({ _tag: "Unsatisfiable" });
-    expect(parseSingleByteRange("items=0-10", 100)).toEqual({ _tag: "Invalid" });
-    expect(parseSingleByteRange("bytes=0-1,4-5", 100)).toEqual({ _tag: "Invalid" });
   });
 });
 

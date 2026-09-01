@@ -1,11 +1,11 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { KeyboardAvoidingView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import ImageViewing from "react-native-image-viewing";
+import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
@@ -53,7 +53,8 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
     Record<string, ReadonlyArray<ReviewHighlightedToken>>
   >({});
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
-  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
+  const overlayOwnerRef = useRef<"attachment" | "preview" | null>(null);
 
   const selectedLines = useMemo(
     () => (target ? getSelectedReviewCommentLines(target) : []),
@@ -127,14 +128,31 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
   }, [selectedLines, selectedTheme, target]);
 
   async function handlePickImages(): Promise<void> {
-    const result = await pickComposerImages({ existingCount: attachments.length });
-    if (result.images.length > 0) {
-      setAttachments((current) => [...current, ...result.images]);
-    }
-    if (result.error) {
-      setPendingConnectionError(result.error);
+    if (overlayOwnerRef.current !== null) return;
+    overlayOwnerRef.current = "attachment";
+    try {
+      const result = await pickComposerImages({ existingCount: attachments.length });
+      if (result.images.length > 0) {
+        setAttachments((current) => [...current, ...result.images]);
+      }
+      if (result.error) {
+        setPendingConnectionError(result.error);
+      }
+    } finally {
+      if (overlayOwnerRef.current === "attachment") overlayOwnerRef.current = null;
     }
   }
+
+  const openPreview = useCallback((source: FilePreviewSource) => {
+    if (overlayOwnerRef.current !== null) return;
+    overlayOwnerRef.current = "preview";
+    setPreviewFile(source);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewFile(null);
+    if (overlayOwnerRef.current === "preview") overlayOwnerRef.current = null;
+  }, []);
 
   const handleSubmit = useCallback(() => {
     if (!target || !environmentId || !threadId || commentText.trim().length === 0) {
@@ -272,7 +290,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
                         attachments={attachments}
                         imageBorderRadius={16}
                         imageSize={60}
-                        onPressImage={setPreviewImageUri}
+                        onPressPreview={openPreview}
                         removeButtonPlacement="gutter"
                         onRemove={(imageId) => {
                           setAttachments((current) =>
@@ -332,14 +350,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
           </View>
         </KeyboardStickyView>
       ) : null}
-      <ImageViewing
-        images={previewImageUri ? [{ uri: previewImageUri }] : []}
-        imageIndex={0}
-        visible={previewImageUri !== null}
-        onRequestClose={() => setPreviewImageUri(null)}
-        swipeToCloseEnabled
-        doubleTapToZoomEnabled
-      />
+      <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
     </View>
   );
 }

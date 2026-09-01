@@ -14,6 +14,9 @@
  *
  * @module usageScanCache
  */
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodePath from "node:path";
+
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import type { UsageRecord } from "./usageTranscripts.ts";
@@ -237,22 +240,6 @@ export interface PruneOptions {
 }
 
 /**
- * True when `filePath` is the root itself or sits beneath it.
- *
- * A bare `startsWith` matches on a shared prefix, so a walked
- * `…/.claude/projects` would claim `…/.claude/projects-archive/a.jsonl` and
- * prune that sibling root's warm entries as if their files had been deleted.
- * Requiring a separator after the root keeps the match on real descendants.
- */
-function isUnderRoot(filePath: string, root: string): boolean {
-  const normalizedRoot = root.replace(/[/\\]+$/, "");
-  if (normalizedRoot.length === 0) return true;
-  if (!filePath.startsWith(normalizedRoot)) return false;
-  const rest = filePath.slice(normalizedRoot.length);
-  return rest.length === 0 || rest.startsWith("/") || rest.startsWith("\\");
-}
-
-/**
  * Drops aged-out entries, and entries for files that have disappeared.
  *
  * The walk only covers the requested window, so absence from `livePaths` only
@@ -266,7 +253,15 @@ export function pruneScanCache(cache: ScanCache, options: PruneOptions): number 
   let removed = 0;
   for (const [path, entry] of cache) {
     const agedOut = entry.mtimeMs < options.retentionCutoffMs;
-    const underWalkedRoot = options.walkedRoots.some((root) => isUnderRoot(path, root));
+    const underWalkedRoot = options.walkedRoots.some((root) => {
+      const relative = NodePath.relative(root, path);
+      return (
+        relative === "" ||
+        (relative !== ".." &&
+          !relative.startsWith(`..${NodePath.sep}`) &&
+          !NodePath.isAbsolute(relative))
+      );
+    });
     const deleted =
       underWalkedRoot && entry.mtimeMs >= options.windowStartMs && !options.livePaths.has(path);
     if (agedOut || deleted) {

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   EnvironmentId,
@@ -23,14 +24,17 @@ import {
 } from "react";
 import {
   ActivityIndicator,
-  Image,
   Platform,
   Pressable,
   View,
   type AccessibilityActionEvent,
   type ViewStyle,
 } from "react-native";
-import ImageViewing from "react-native-image-viewing";
+import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
+import {
+  composerAttachmentUploadBlockReason,
+  composerAttachmentUploadsAtom,
+} from "../../state/composer-attachment-uploads";
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -47,9 +51,12 @@ import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/re
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
 import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
 import { ComposerAttachmentButton } from "../../components/ComposerAttachmentButton";
-import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import {
+  ComposerAttachmentStrip,
+  ComposerAttachmentThumbnail,
+} from "../../components/ComposerAttachmentStrip";
+import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { GlassSurface } from "../../components/GlassSurface";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
@@ -60,7 +67,6 @@ import {
 } from "../../components/ComposerToolbar";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
-import type { DraftComposerAttachment } from "../../lib/composerImages";
 import {
   deriveLatestProviderUsageSnapshot,
   deriveProviderUsageAccountsFromServerSnapshot,
@@ -72,11 +78,15 @@ import {
   primaryProviderUsageWindow,
   providerUsageRingStatus,
   resolveProviderUsageFableRing,
+  resolveProviderUsageInstanceId,
   resolveProviderUsageModel,
   resolveProviderUsageUpstreamProvider,
-  resolveProviderUsageInstanceId,
 } from "@t3tools/client-runtime/state/provider-usage";
 import { cn } from "../../lib/cn";
+import type {
+  DraftComposerAttachment,
+  DraftComposerFileAttachment,
+} from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import {
   canStartProviderUsageRefresh,
@@ -390,12 +400,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
    * when the first is dismissed. A ref, not state: both taps can arrive before
    * React re-renders, so `isActive` would still read false for both.
    */
-  const overlaySheetOwnerRef = useRef<"settings" | "usage" | "attachment" | null>(null);
+  const overlaySheetOwnerRef = useRef<"settings" | "usage" | "attachment" | "preview" | null>(null);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
-  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const threadIsBusy =
     props.selectedThread.session?.status === "running" ||
@@ -460,7 +471,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     isFocused || settingsSheetPresentation.isActive || usageSheetPresentation.isActive;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
-  const canSend = hasContent && !voiceInput.blocksSubmission;
+  const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
+  const attachmentBlockReason = composerAttachmentUploadBlockReason({
+    environmentId: props.environmentId,
+    attachments: props.draftAttachments,
+    connected: props.connectionState === "connected",
+    serverConfig: props.serverConfig,
+    states: uploadStates,
+  });
+  const canSend = hasContent && !voiceInput.blocksSubmission && attachmentBlockReason === null;
   const canQueueForLater = threadIsBusy && canSend;
 
   // Keep the feed inset aligned with the card or compact dictation strip.
@@ -468,20 +487,40 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onExpandedChange?.(isExpanded);
   }, [isExpanded, onExpandedChange]);
 
-  const onPressImage = useCallback(
-    (uri: string) => {
+  const onPressPreview = useCallback(
+    (source: FilePreviewSource) => {
+      if (overlaySheetOwnerRef.current !== null) return;
+      overlaySheetOwnerRef.current = "preview";
       wasExpandedBeforePreviewRef.current = isFocused;
-      setPreviewImageUri(uri);
+      setPreviewVideo(null);
+      setPreviewFile(source);
     },
     [isFocused],
   );
 
   const closePreview = useCallback(() => {
-    setPreviewImageUri(null);
-    if (wasExpandedBeforePreviewRef.current) {
-      setTimeout(() => inputRef.current?.focus(), 100);
+    setPreviewFile(null);
+    setPreviewVideo(null);
+    if (overlaySheetOwnerRef.current === "preview") {
+      overlaySheetOwnerRef.current = null;
     }
-  }, [inputRef]);
+    if (wasExpandedBeforePreviewRef.current) {
+      setTimeout(() => {
+        if (navigation.isFocused()) inputRef.current?.focus();
+      }, 100);
+    }
+  }, [inputRef, navigation]);
+
+  const onPressVideo = useCallback(
+    (attachment: DraftComposerFileAttachment, sourceIdentifier: string) => {
+      if (overlaySheetOwnerRef.current !== null) return;
+      overlaySheetOwnerRef.current = "preview";
+      wasExpandedBeforePreviewRef.current = isFocused;
+      setPreviewFile(null);
+      setPreviewVideo({ type: "local", attachment, sourceIdentifier });
+    },
+    [isFocused],
+  );
 
   const onEditorFocusChange = props.onEditorFocusChange;
   const handleFocus = useCallback(() => {
@@ -914,7 +953,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const handleSend = useCallback(
     async (options?: SendMessageOptions) => {
-      if (voiceInput.blocksSubmission) return;
+      if (voiceInput.blocksSubmission || attachmentBlockReason !== null) return;
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
       if (inFlightThreadIdsRef.current.has(threadKey)) return;
       inFlightThreadIdsRef.current.add(threadKey);
@@ -935,6 +974,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }
     },
     [
+      attachmentBlockReason,
       onSendMessage,
       props.environmentId,
       props.environmentLabel,
@@ -1099,7 +1139,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // available the same choice is also exposed as an accessibility action.
   const sendActionButton = (
     <ComposerActionButton
-      accessibilityLabel={sendLabel}
+      accessibilityLabel={attachmentBlockReason ?? sendLabel}
       {...(canQueueForLater
         ? {
             accessibilityActions: [{ name: "queue", label: "Queue for later" }],
@@ -1208,9 +1248,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 exiting={FadeOut.duration(120)}
               >
                 <ComposerAttachmentStrip
+                  environmentId={props.environmentId}
                   attachments={props.draftAttachments}
                   onRemove={voiceInput.isBusy ? () => undefined : props.onRemoveDraftImage}
-                  onPressImage={voiceInput.isBusy ? undefined : onPressImage}
+                  onPressPreview={voiceInput.isBusy ? undefined : onPressPreview}
+                  onPressVideo={voiceInput.isBusy ? undefined : onPressVideo}
                 />
               </Animated.View>
             ) : null}
@@ -1256,27 +1298,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
             {!isExpanded && props.draftAttachments.length > 0 ? (
               <View className="flex-row gap-1 pl-1">
-                {props.draftAttachments.slice(0, 3).map((attachment) =>
-                  attachment.type === "image" ? (
-                    <Pressable
-                      key={attachment.id}
-                      onPress={() => onPressImage(attachment.previewUri)}
-                    >
-                      <Image
-                        source={{ uri: attachment.previewUri }}
-                        className="size-[30px] rounded-lg bg-subtle"
-                        resizeMode="cover"
-                      />
-                    </Pressable>
-                  ) : (
-                    <View
-                      key={attachment.id}
-                      className="size-[30px] items-center justify-center rounded-lg bg-subtle"
-                    >
-                      <SymbolView name="doc.text" size={15} tintColor="#a3a3a3" type="monochrome" />
-                    </View>
-                  ),
-                )}
+                {props.draftAttachments.slice(0, 3).map((attachment) => (
+                  <ComposerAttachmentThumbnail
+                    environmentId={props.environmentId}
+                    key={attachment.id}
+                    attachment={attachment}
+                    size={30}
+                    borderRadius={8}
+                    compact
+                    onPressPreview={onPressPreview}
+                    onPressVideo={onPressVideo}
+                  />
+                ))}
                 {props.draftAttachments.length > 3 ? (
                   <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
                     <Text className="text-foreground-muted text-2xs font-t3-bold">
@@ -1447,14 +1480,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </Animated.View>
         ) : null}
       </Animated.View>
-      <ImageViewing
-        images={previewImageUri ? [{ uri: previewImageUri }] : []}
-        imageIndex={0}
-        visible={previewImageUri !== null}
-        onRequestClose={closePreview}
-        swipeToCloseEnabled
-        doubleTapToZoomEnabled
-      />
+
+      <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />
+      <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
     </Animated.View>
   );
 });

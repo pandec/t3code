@@ -14,10 +14,12 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
-import type { PickMultipleFilesResult } from "expo-file-system";
+import type { DocumentPickerResult } from "expo-document-picker";
+import { videoMimeType } from "@t3tools/shared/video";
 import { estimateBase64ByteSize } from "./base64";
 import {
   COMPOSER_ATTACHMENT_DIRECTORY,
+  isComposerAttachmentFileRetained,
   resolveOwnedComposerAttachmentFileUri,
 } from "./composerAttachmentFiles";
 import { beginForegroundHandoff } from "./foreground-handoff";
@@ -125,7 +127,7 @@ export async function removePersistedComposerAttachmentFile(uri: string): Promis
   try {
     const { File, Paths } = await import("expo-file-system");
     const ownedUri = resolveOwnedComposerAttachmentFileUri(uri, Paths.document.uri);
-    if (ownedUri === null) {
+    if (ownedUri === null || isComposerAttachmentFileRetained(ownedUri)) {
       return;
     }
     const file = new File(ownedUri);
@@ -186,11 +188,18 @@ export async function pickComposerFiles(input: {
     };
   }
 
-  const { File } = await import("expo-file-system");
+  const { getDocumentAsync } = await import("expo-document-picker");
   const endHandoff = beginForegroundHandoff();
-  let result: PickMultipleFilesResult;
+  let result: DocumentPickerResult;
   try {
-    result = await File.pickFileAsync({ multipleFiles: true });
+    // File providers may expose a URI that FileSystem cannot read directly.
+    // Import a readable cache copy before persisting the draft's owned file.
+    result = await getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+  } catch (cause) {
+    return {
+      files: [],
+      error: cause instanceof Error ? cause.message : "Could not open the file picker.",
+    };
   } finally {
     endHandoff();
   }
@@ -204,7 +213,7 @@ export async function pickComposerFiles(input: {
   const attachments: DraftComposerFileAttachment[] = [];
   let error: string | null = null;
   let exceededAttachmentLimit = false;
-  for (const file of result.result) {
+  for (const file of result.assets) {
     if (attachments.length >= remainingSlots) {
       exceededAttachmentLimit = true;
       break;
@@ -214,11 +223,12 @@ export async function pickComposerFiles(input: {
     // reaches storage, errors, or the attachment itself.
     const name = file.name.trim().length > 0 ? file.name : "file";
     try {
+      const reportedMimeType = file.mimeType || "application/octet-stream";
       attachments.push(
         await createComposerFileAttachment({
           uri: file.uri,
           name,
-          mimeType: file.type || "application/octet-stream",
+          mimeType: videoMimeType({ name, mimeType: reportedMimeType }) ?? reportedMimeType,
           sizeBytes: file.size ?? null,
           maxBytes,
         }),
@@ -255,16 +265,16 @@ async function loadClipboard() {
 const REENCODE_JPEG_QUALITY = 0.9;
 
 /**
- * Re-encode an image as full-resolution JPEG. Screenshots come out of the
- * picker as multi-MB PNGs and the whole message travels in a single
- * WebSocket RPC frame, so payload size directly gates deliverability;
- * JPEG at 0.9 is visually lossless for screenshots while several times
- * smaller. The picker's own `quality` option can't do this: on iOS it
- * leaves PNG picks untouched, and on Android it re-encodes to JPEG while
- * keeping the original mime type on the asset. Sources that are already
- * JPEG are left alone (nothing to gain, avoids generation loss), and GIFs
- * are skipped because re-encoding would drop animation. Returns null when
- * re-encoding is skipped or unavailable (e.g. a binary that predates the
+ * Re-encode a pasted image as full-resolution JPEG. Pastes are almost always
+ * multi-MB PNG screenshots, and on servers without attachment uploads the
+ * whole message travels in a single WebSocket RPC frame, so payload size
+ * directly gates deliverability; JPEG at 0.9 is visually lossless for
+ * screenshots while several times smaller. Library picks don't come through
+ * here: the picker flow keeps supported originals and relies on iOS's native
+ * HEIC-to-JPEG conversion instead. Sources that are already JPEG are left
+ * alone (nothing to gain, avoids generation loss), and GIFs are skipped
+ * because re-encoding would drop animation. Returns null when re-encoding is
+ * skipped or unavailable (e.g. a binary that predates the
  * expo-image-manipulator dependency) — callers keep the original bytes.
  */
 async function reencodeImageAsJpeg(input: {
@@ -288,11 +298,6 @@ async function reencodeImageAsJpeg(input: {
   } catch {
     return null;
   }
-}
-
-function toJpegFileName(name: string): string {
-  const base = name.replace(/\.[a-z0-9]+$/i, "");
-  return `${base.length > 0 ? base : "image"}.jpg`;
 }
 
 // A second native launch while a picker is already presented orphans the visible
@@ -365,10 +370,10 @@ async function pickComposerMediaOnce(input: {
       allowsMultipleSelection: true,
       selectionLimit: remainingSlots,
       base64: true,
-      // Keep the picker itself lossless; downsizing happens in
-      // reencodeImageAsJpeg, which sets a matching mime type. Sub-1 quality
-      // here would re-encode to JPEG on Android while the asset keeps its
-      // original mime type, producing mislabeled data URLs.
+      // Keep the picker itself lossless: sub-1 quality would re-encode to JPEG
+      // on Android while the asset keeps its original mime type, producing
+      // mislabeled data URLs. iOS still hands back native JPEG conversions for
+      // HEIC-family picks, handled per asset below.
       quality: 1,
       shouldDownloadFromNetwork: true,
     });
@@ -408,11 +413,13 @@ async function pickComposerMediaOnce(input: {
       try {
         const { File } = await import("expo-file-system");
         const file = new File(asset.uri);
+        const name = asset.fileName?.trim() || file.name || "video";
+        const reportedMimeType = originalMimeType || file.type || "application/octet-stream";
         attachments.push(
           await createComposerFileAttachment({
             uri: asset.uri,
-            name: asset.fileName?.trim() || file.name || "video",
-            mimeType: originalMimeType || file.type || "application/octet-stream",
+            name,
+            mimeType: videoMimeType({ name, mimeType: reportedMimeType }) ?? reportedMimeType,
             sizeBytes: asset.fileSize ?? null,
             maxBytes: clampFileAttachmentUploadBytes(input.maxVideoBytes),
           }),
@@ -423,45 +430,64 @@ async function pickComposerMediaOnce(input: {
       }
       continue;
     }
-    if (!originalMimeType?.startsWith("image/")) {
+    let mimeType = originalMimeType;
+    if (asset.type !== "image" && !mimeType?.startsWith("image/")) {
       error = `Unsupported file type for '${asset.fileName ?? "image"}'.`;
       continue;
     }
-    const originalBase64 = asset.base64;
-    if (!originalBase64) {
+    let base64 = asset.base64;
+    if (!base64) {
       error = `Failed to read '${asset.fileName ?? "image"}'.`;
       continue;
     }
 
-    const reencoded = await reencodeImageAsJpeg({ uri: asset.uri, mimeType: originalMimeType });
-    const mimeType = reencoded ? "image/jpeg" : originalMimeType;
-    // Validate what we actually ship, not what the picker handed us: HEIC and
-    // friends are unsupported on the wire but re-encode to JPEG above, so
-    // checking the original type here would reject pictures we can send.
-    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
-      error = `'${asset.fileName ?? "image"}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
+    let name = asset.fileName?.trim() || "image";
+    // The iOS picker returns JPEG base64 even when its metadata describes HEIC,
+    // PNG, or GIF. Keep supported originals so transparency and animation
+    // survive; use the native JPEG conversion for formats providers cannot
+    // accept.
+    if (base64.startsWith("/9j/")) {
+      if (
+        mimeType &&
+        mimeType !== "image/jpeg" &&
+        isProviderSendTurnSupportedImageMimeType(mimeType)
+      ) {
+        try {
+          const { File } = await import("expo-file-system");
+          base64 = await new File(asset.uri).base64();
+        } catch {
+          error = `Failed to read '${name}'.`;
+          continue;
+        }
+      } else {
+        mimeType = "image/jpeg";
+        if (!/\.jpe?g$/i.test(name)) {
+          name = `${name.replace(/\.[^.]+$/, "")}.jpg`;
+        }
+      }
+    }
+    if (!mimeType || !isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      error = `'${name}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
       continue;
     }
-    const name = reencoded
-      ? toJpegFileName(asset.fileName ?? "image")
-      : (asset.fileName ?? "image");
-    const base64 = reencoded ? reencoded.base64 : originalBase64;
+
     // Size the payload we actually ship; asset.fileSize describes the
     // original library file.
-    const sizeBytes = reencoded ? reencoded.sizeBytes : estimateBase64ByteSize(originalBase64);
+    const sizeBytes = estimateBase64ByteSize(base64);
     if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
       error = `'${asset.fileName ?? "image"}' exceeds the 10 MB attachment limit.`;
       continue;
     }
 
+    const dataUrl = `data:${mimeType};base64,${base64}`;
     attachments.push({
       id: uuidv4(),
       type: "image",
       name,
       mimeType,
       sizeBytes,
-      dataUrl: `data:${mimeType};base64,${base64}`,
-      previewUri: asset.uri,
+      dataUrl,
+      previewUri: mimeType === asset.mimeType?.toLowerCase() ? asset.uri : dataUrl,
     });
   }
 

@@ -10,8 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { PreparedTurnAttachments } from "../lib/attachmentUpload";
 
-vi.mock("react-native", () => ({}));
-
 const harness = vi.hoisted(() => ({
   manager: null as unknown as ReturnType<
     typeof import("./thread-outbox-manager").createThreadOutboxManager
@@ -21,37 +19,79 @@ const harness = vi.hoisted(() => ({
   prepareTurnAttachments: vi.fn<typeof import("../lib/attachmentUpload").prepareTurnAttachments>(),
   setPendingConnectionError: vi.fn(),
   draftFile: (() => {
-    let document = "";
+    const files = new Map<string, string>();
     let writeError: Error | null = null;
+
+    class Directory {
+      readonly uri: string;
+
+      constructor(base: string | { readonly uri: string }, name: string) {
+        this.uri = `${typeof base === "string" ? base : base.uri}/${name}`;
+      }
+
+      create() {}
+
+      list(): ReadonlyArray<File> {
+        const prefix = `${this.uri}/`;
+        return [...files.keys()]
+          .filter((uri) => uri.startsWith(prefix) && !uri.slice(prefix.length).includes("/"))
+          .map((uri) => new File(this, uri.slice(prefix.length)));
+      }
+    }
+
+    class File {
+      uri: string;
+      parentDirectory = null;
+
+      constructor(directory: { readonly uri: string }, name: string) {
+        this.uri = `${directory.uri}/${name}`;
+      }
+
+      get exists(): boolean {
+        return files.has(this.uri);
+      }
+
+      get name(): string {
+        return this.uri.slice(this.uri.lastIndexOf("/") + 1);
+      }
+
+      create() {
+        files.set(this.uri, "");
+      }
+
+      delete() {
+        files.delete(this.uri);
+      }
+
+      moveSync(destination: { readonly uri: string }) {
+        const value = files.get(this.uri) ?? "";
+        files.delete(this.uri);
+        files.set(destination.uri, value);
+        this.uri = destination.uri;
+      }
+
+      async text() {
+        return files.get(this.uri) ?? "";
+      }
+
+      write(value: string) {
+        if (writeError) {
+          throw writeError;
+        }
+        files.set(this.uri, value);
+      }
+    }
+
     return {
       setDocument(value: unknown) {
-        document = JSON.stringify(value);
+        files.clear();
+        files.set("/documents/composer-drafts/drafts.json", JSON.stringify(value));
       },
       setWriteError(error: Error | null) {
         writeError = error;
       },
-      Directory: class {
-        create() {}
-      },
-      File: class {
-        exists = true;
-        parentDirectory = null;
-
-        create() {}
-
-        moveSync() {}
-
-        async text() {
-          return document;
-        }
-
-        write(value: string) {
-          if (writeError) {
-            throw writeError;
-          }
-          document = value;
-        }
-      },
+      Directory,
+      File,
     };
   })(),
 }));
@@ -206,8 +246,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  composerDrafts.resetComposerDraftPersistenceForTests();
+  composerDrafts.resetComposerDraftsLoadState();
   appAtomRegistry.set(harness.manager.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(composerDrafts.composerDraftsAtom, {});
+  appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
   harness.draftFile.setWriteError(null);
   harness.removePersistedFile.mockClear();
@@ -283,6 +326,43 @@ describe("thread outbox attachment preparation", () => {
     expect(releaseUploads).not.toHaveBeenCalled();
   });
 
+  it("reuses an uploaded image when image uploads are supported", async () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const image = {
+      id: "image-reused-upload",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      dataUrl: "data:image/png;base64,YWJj",
+      previewUri: "file:///documents/photo.png",
+      uploadedAttachmentId: "pending-image-upload",
+      uploadEnvironmentId: environmentId,
+    };
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "message-reused-image", text: "send this photo" }),
+      environmentId,
+      attachments: [image],
+    };
+    harness.prepareTurnAttachments.mockImplementationOnce(async (input) => {
+      expect(input.supportsImageUploads).toBe(true);
+      expect(input.attachments).toEqual([image]);
+      return {
+        status: "ready",
+        attachments: [],
+        draftAttachments: [image],
+        pendingAttachmentIds: ["pending-image-upload"],
+        releaseUploads: async () => undefined,
+      };
+    });
+    await harness.manager.enqueue(message);
+
+    await expect(prepareQueuedMessageAttachments(message, true)).resolves.toMatchObject({
+      status: "ready",
+      persistedMessage: message,
+    });
+  });
+
   it("uses the known next revision after persisting uploaded references", async () => {
     const message = queuedMessage({
       messageId: "message-new-upload-revision",
@@ -336,6 +416,72 @@ describe("thread outbox attachment preparation", () => {
 });
 
 describe("thread outbox drain delivery cleanup", () => {
+  it("removes an acknowledged outbox item even when the sign-out archive write fails", async () => {
+    const message = queuedMessage({ messageId: "archive-write-failure", text: "Delivered" });
+    await harness.manager.enqueue(message);
+    await composerDrafts.archiveCloudComposerDrafts("account-a", new Set([message.environmentId]));
+    harness.draftFile.setWriteError(new Error("Draft storage unavailable"));
+
+    await expect(
+      completeQueuedMessageDelivery(message, harness.manager.revisionOf(message.messageId)),
+    ).resolves.toBe("removed");
+    expect(remainingMessages()).toEqual([]);
+
+    harness.draftFile.setWriteError(null);
+    await composerDrafts.flushComposerDrafts();
+    appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
+    composerDrafts.resetComposerDraftsLoadState();
+    await composerDrafts.restoreCloudComposerDrafts("account-a");
+    expect(remainingMessages()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "does not restore a message delivered after the sign-out snapshot (outbox already cleared: %s)",
+    async (cleared) => {
+      const message = queuedMessage({
+        messageId: "delivered-during-sign-out",
+        text: "Already delivered",
+      });
+      await harness.manager.enqueue(message);
+      const deliveryRevision = harness.manager.revisionOf(message.messageId);
+      await composerDrafts.archiveCloudComposerDrafts(
+        "account-a",
+        new Set([message.environmentId]),
+      );
+      expect(
+        appAtomRegistry.get(composerDrafts.composerCloudDraftsAtom).signedOut["account-a"]
+          ?.queuedMessages,
+      ).toEqual([message]);
+
+      if (cleared) await harness.manager.clearEnvironment(message.environmentId);
+      await expect(completeQueuedMessageDelivery(message, deliveryRevision)).resolves.toBe(
+        cleared ? "edited" : "removed",
+      );
+
+      // Restart before signing back in: the archived copy must be removed on disk too.
+      appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, {
+        accountId: null,
+        signedOut: {},
+      });
+      composerDrafts.resetComposerDraftsLoadState();
+      await composerDrafts.restoreCloudComposerDrafts("account-a");
+      expect(remainingMessages()).toEqual([]);
+    },
+  );
+
+  it("preserves an archived edit when an older payload finishes delivery", async () => {
+    const message = queuedMessage({ messageId: "edited-during-sign-out", text: "Original" });
+    await harness.manager.enqueue(message);
+    const deliveryRevision = harness.manager.revisionOf(message.messageId);
+    const edited = { ...message, text: "Keep this edit" };
+    await harness.manager.update(edited);
+    await composerDrafts.archiveCloudComposerDrafts("account-a", new Set([message.environmentId]));
+    await harness.manager.clearEnvironment(message.environmentId);
+    await expect(completeQueuedMessageDelivery(message, deliveryRevision)).resolves.toBe("edited");
+    await composerDrafts.restoreCloudComposerDrafts("account-a");
+    expect(remainingMessages()).toEqual([edited]);
+  });
+
   it("skips acknowledged cleanup while an editor owns the row", async () => {
     const message = queuedMessage({ messageId: "message-acknowledged-held", text: "delivered" });
     await harness.manager.enqueue(message);

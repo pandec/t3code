@@ -735,6 +735,132 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("filters activity hydration without skipping other thread detail", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-activity-filter', 'Activity Filter', '/tmp/activity-filter',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-02-25T00:00:00.000Z', '2026-02-25T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count, pending_user_input_count,
+          has_actionable_proposed_plan, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-activity-filter', 'project-activity-filter', 'Activity Filter',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, 'turn-activity-filter', NULL, 0, 0, 0,
+          '2026-02-25T00:00:02.000Z', '2026-02-25T00:00:03.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+        ) VALUES (
+          'message-activity-filter', 'thread-activity-filter', 'turn-activity-filter',
+          'assistant', 'Filtered detail keeps messages', 0,
+          '2026-02-25T00:00:04.000Z', '2026-02-25T00:00:04.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_proposed_plans (
+          plan_id, thread_id, turn_id, plan_markdown, implemented_at,
+          implementation_thread_id, created_at, updated_at
+        ) VALUES (
+          'plan-activity-filter', 'thread-activity-filter', 'turn-activity-filter',
+          '# Keep detail', NULL, NULL,
+          '2026-02-25T00:00:05.000Z', '2026-02-25T00:00:05.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id, assistant_message_id, state,
+          requested_at, started_at, completed_at, checkpoint_turn_count,
+          checkpoint_ref, checkpoint_status, checkpoint_files_json
+        ) VALUES (
+          'thread-activity-filter', 'turn-activity-filter', NULL,
+          'message-activity-filter', 'completed',
+          '2026-02-25T00:00:06.000Z', '2026-02-25T00:00:06.000Z',
+          '2026-02-25T00:00:07.000Z', 1, 'checkpoint-activity-filter',
+          'ready', '[]'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+        ) VALUES
+          (
+            'activity-task-started', 'thread-activity-filter', 'turn-activity-filter',
+            'info', 'task.started', 'Ship the query filter',
+            '{"taskId":"task-1","detail":"Ship the query filter"}',
+            '2026-02-25T00:00:06.100Z'
+          ),
+          (
+            'activity-malformed-tool', 'thread-activity-filter', 'turn-activity-filter',
+            'info', 'tool.completed', 'Malformed tool output', 'not-json',
+            '2026-02-25T00:00:06.200Z'
+          )
+      `;
+
+      const detailWithoutActivities = yield* snapshotQuery.getThreadDetailById(
+        ThreadId.make("thread-activity-filter"),
+        { activityKinds: [] },
+      );
+      assert.equal(detailWithoutActivities._tag, "Some");
+      if (detailWithoutActivities._tag === "Some") {
+        assert.deepEqual(detailWithoutActivities.value.activities, []);
+        assert.equal(detailWithoutActivities.value.messages[0]?.id, "message-activity-filter");
+        assert.equal(detailWithoutActivities.value.proposedPlans[0]?.id, "plan-activity-filter");
+        assert.equal(
+          detailWithoutActivities.value.checkpoints[0]?.checkpointRef,
+          "checkpoint-activity-filter",
+        );
+      }
+
+      const detailWithTaskActivities = yield* snapshotQuery.getThreadDetailById(
+        ThreadId.make("thread-activity-filter"),
+        { activityKinds: ["task.started", "task.progress"] },
+      );
+      assert.equal(detailWithTaskActivities._tag, "Some");
+      if (detailWithTaskActivities._tag === "Some") {
+        assert.deepEqual(detailWithTaskActivities.value.activities, [
+          {
+            id: asEventId("activity-task-started"),
+            tone: "info",
+            kind: "task.started",
+            summary: "Ship the query filter",
+            payload: { taskId: "task-1", detail: "Ship the query filter" },
+            turnId: asTurnId("turn-activity-filter"),
+            createdAt: "2026-02-25T00:00:06.100Z",
+          },
+        ]);
+        assert.equal(detailWithTaskActivities.value.messages[0]?.id, "message-activity-filter");
+        assert.equal(detailWithTaskActivities.value.proposedPlans[0]?.id, "plan-activity-filter");
+        assert.equal(
+          detailWithTaskActivities.value.checkpoints[0]?.checkpointRef,
+          "checkpoint-activity-filter",
+        );
+      }
+    }),
+  );
+
   it.effect("keeps archived threads out of the main shell snapshot", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

@@ -37,6 +37,7 @@ import {
   listeningSpeedSpokenLabel,
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
+import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -50,6 +51,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useId,
   useSyncExternalStore,
   type ReactNode,
   type RefObject,
@@ -77,8 +79,9 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import { TouchableOpacity } from "react-native-gesture-handler";
-import ImageViewing from "react-native-image-viewing";
+import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
+import { isPdfFile } from "../../lib/filePreview";
+import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   FadeIn,
@@ -105,6 +108,8 @@ import {
 } from "../../native/SelectableMarkdownText";
 
 import { AppText as Text } from "../../components/AppText";
+import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
+import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
 import { CopyTextButton } from "../../components/CopyTextButton";
 import {
   parseReviewCommentMessageSegments,
@@ -294,36 +299,43 @@ function SteerPendingMarker({ tintColor }: { readonly tintColor: ColorValue }) {
 function MessageAttachmentImage(props: {
   readonly environmentId: EnvironmentId;
   readonly attachmentId: string;
+  readonly name: string;
   readonly className: string;
-  readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
+  const sourceIdentifier = useId();
   const uri = useAssetUrl(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.attachmentId,
   });
 
-  // A View — not the touchable — carries the frame (aspect ratio, radius,
-  // placeholder tint): gesture-handler's TouchableOpacity forwards only a fixed
-  // prop allow-list plus `style` to its inner view, so `className` on it never
-  // reaches a styled node. Both states fill that one frame, so the row measures
+  // A View inside the pressable carries the frame (aspect ratio, radius, and
+  // placeholder tint). Both states fill that frame, so the row measures
   // identically before and after the asset URL lands and the image never
   // contributes its intrinsic size.
   return (
-    <TouchableOpacity
-      activeOpacity={0.7}
-      disabled={uri === null}
-      onPress={uri === null ? undefined : () => props.onPressImage(uri)}
-    >
-      <View className={cn(props.className, "overflow-hidden")}>
-        {uri === null ? (
-          <View className="h-full w-full items-center justify-center">
-            <ActivityIndicator />
-          </View>
-        ) : (
-          <Image source={{ uri }} className="h-full w-full" resizeMode="cover" />
-        )}
-      </View>
-    </TouchableOpacity>
+    <PresentationSource identifier={sourceIdentifier}>
+      <Pressable
+        accessibilityRole="imagebutton"
+        accessibilityLabel={`Open ${props.name}`}
+        disabled={uri === null}
+        onPress={
+          uri === null
+            ? undefined
+            : () => props.onPressPreview({ kind: "image", uri, name: props.name, sourceIdentifier })
+        }
+      >
+        <View className={cn(props.className, "overflow-hidden")}>
+          {uri === null ? (
+            <View className="h-full w-full items-center justify-center">
+              <ActivityIndicator />
+            </View>
+          ) : (
+            <Image source={{ uri }} className="h-full w-full" resizeMode="cover" />
+          )}
+        </View>
+      </Pressable>
+    </PresentationSource>
   );
 }
 
@@ -341,12 +353,32 @@ function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAtt
 function MessageAttachmentFile(props: {
   readonly environmentId: EnvironmentId;
   readonly attachment: ChatFileAttachment;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
+  readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
 }) {
+  const sourceIdentifier = useId();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
   });
   const preparedConnection = usePreparedConnection(props.environmentId);
   const { attachment } = props;
+  const videoType = videoMimeType(attachment);
+  const isPdf = isPdfFile(attachment);
+  const fileTypeLabel = isPdf
+    ? "PDF"
+    : (attachment.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toUpperCase() ?? "File");
+  const sizeLabel = formatAttachmentSize(attachment.sizeBytes);
+  const thumbnailUrl = useAssetUrl(
+    props.environmentId,
+    videoType === null
+      ? null
+      : {
+          _tag: "attachment",
+          attachmentId: attachment.id,
+          fileName: attachment.name,
+          mimeType: videoType,
+        },
+  );
   const httpBaseUrl = Option.isSome(preparedConnection)
     ? preparedConnection.value.httpBaseUrl
     : null;
@@ -363,68 +395,127 @@ function MessageAttachmentFile(props: {
     }, [props.environmentId, attachment.id, httpBaseUrl]),
   );
 
+  const shareFile = (sourceIdentifier?: string) => {
+    if (httpBaseUrl === null || openingRef.current) return;
+    const controller = new AbortController();
+    openingRef.current = controller;
+    setOpening(true);
+    void (async () => {
+      try {
+        const result = await createAssetUrl({
+          environmentId: props.environmentId,
+          input: {
+            resource: {
+              _tag: "attachment",
+              attachmentId: attachment.id,
+              fileName: attachment.name,
+              mimeType: attachment.mimeType,
+            },
+          },
+        });
+        if (controller.signal.aborted) return;
+        if (result._tag === "Failure") {
+          throw squashAtomCommandFailure(result);
+        }
+        const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
+        if (url === null) {
+          throw new Error("The attachment could not be opened.");
+        }
+        await downloadAndShareAttachment({
+          url,
+          attachment,
+          signal: controller.signal,
+          sourceIdentifier,
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          Alert.alert(
+            "Could not open attachment",
+            error instanceof Error ? error.message : "The attachment is unavailable.",
+          );
+        }
+      } finally {
+        if (openingRef.current === controller) {
+          openingRef.current = null;
+          setOpening(false);
+        }
+      }
+    })();
+  };
+
+  if (videoType !== null) {
+    return (
+      <VideoAttachmentTile
+        name={attachment.name}
+        sourceIdentifier={`attachment:${props.environmentId}:${attachment.id}`}
+        thumbnailSource={thumbnailUrl}
+        disabled={opening || httpBaseUrl === null}
+        onPress={(sourceIdentifier) => props.onPressVideo(attachment, sourceIdentifier)}
+        onShare={() => shareFile(`attachment:${props.environmentId}:${attachment.id}`)}
+        className="my-1 rounded-2xl"
+        style={{ width: 224, maxWidth: "100%", aspectRatio: 16 / 9 }}
+      />
+    );
+  }
+
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${attachment.name}`}
-      accessibilityState={{ disabled: opening || httpBaseUrl === null, busy: opening }}
-      disabled={opening || httpBaseUrl === null}
-      className="flex-row items-center gap-2 py-1"
-      onPress={() => {
-        if (httpBaseUrl === null || openingRef.current) return;
-        const controller = new AbortController();
-        openingRef.current = controller;
-        setOpening(true);
-        void (async () => {
-          try {
-            const result = await createAssetUrl({
-              environmentId: props.environmentId,
-              input: {
+    <PresentationSource
+      identifier={sourceIdentifier}
+      className="my-1"
+      style={{ width: 280, maxWidth: "100%" }}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${attachment.name}`}
+        accessibilityValue={{ text: `${fileTypeLabel}, ${sizeLabel}` }}
+        accessibilityState={{ disabled: opening || httpBaseUrl === null, busy: opening }}
+        disabled={opening || httpBaseUrl === null}
+        className="min-w-0 flex-row items-center gap-3 rounded-xl border border-border bg-card p-3 active:bg-subtle"
+        onPress={() =>
+          isPdf
+            ? props.onPressPreview({
+                kind: "pdf",
+                name: attachment.name,
+                environmentId: props.environmentId,
                 resource: {
                   _tag: "attachment",
                   attachmentId: attachment.id,
                   fileName: attachment.name,
-                  mimeType: attachment.mimeType,
+                  mimeType: "application/pdf",
                 },
-              },
-            });
-            if (controller.signal.aborted) return;
-            if (result._tag === "Failure") {
-              throw squashAtomCommandFailure(result);
-            }
-            const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
-            if (url === null) {
-              throw new Error("The attachment could not be opened.");
-            }
-            await downloadAndShareAttachment({ url, attachment, signal: controller.signal });
-          } catch (error) {
-            if (!controller.signal.aborted) {
-              Alert.alert(
-                "Could not open attachment",
-                error instanceof Error ? error.message : "The attachment is unavailable.",
-              );
-            }
-          } finally {
-            if (openingRef.current === controller) {
-              openingRef.current = null;
-              setOpening(false);
-            }
-          }
-        })();
-      }}
-    >
-      {opening ? (
-        <ActivityIndicator size="small" />
-      ) : (
-        <SymbolView name="doc.text" size={16} tintColor="#a3a3a3" type="monochrome" />
-      )}
-      <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
-        {attachment.name}
-      </Text>
-      <Text className="text-xs text-foreground-muted">
-        {formatAttachmentSize(attachment.sizeBytes)}
-      </Text>
-    </Pressable>
+                sourceIdentifier,
+              })
+            : shareFile(sourceIdentifier)
+        }
+      >
+        <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
+          {opening ? (
+            <ActivityIndicator size="small" />
+          ) : (
+            <SymbolView
+              name="doc.text"
+              size={26}
+              tintColorClassName={isPdf ? "accent-red-500" : "accent-foreground-muted"}
+              type="monochrome"
+            />
+          )}
+        </View>
+        <View className="min-w-0 flex-1 gap-1">
+          <Text className="font-t3-medium text-sm text-foreground" numberOfLines={2}>
+            {attachment.name}
+          </Text>
+          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+            {fileTypeLabel} · {sizeLabel}
+          </Text>
+        </View>
+        <SymbolView
+          name="chevron.right"
+          size={12}
+          tintColorClassName="accent-foreground-muted"
+          type="monochrome"
+        />
+      </Pressable>
+    </PresentationSource>
   );
 }
 
@@ -448,8 +539,9 @@ function ThreadMarkdownImageView(props: {
   readonly sourceKey: string;
   readonly unavailable: boolean;
   readonly alt: string | null;
-  readonly onPressImage: (uri: string) => void;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
+  const sourceIdentifier = useId();
   const [availableWidth, setAvailableWidth] = useState(0);
   const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null);
   const [failedUri, setFailedUri] = useState<string | null>(null);
@@ -494,27 +586,35 @@ function ThreadMarkdownImageView(props: {
           )}
         </View>
       ) : (
-        <TouchableOpacity
-          accessibilityRole="imagebutton"
-          accessibilityLabel={props.alt ?? "Markdown image"}
-          activeOpacity={0.7}
-          onPress={() => props.onPressImage(props.uri!)}
-          style={{ alignSelf: "flex-start" }}
-        >
-          <View
-            className="items-center justify-center overflow-hidden rounded-[10px] bg-md-code-bg"
-            style={{
-              ...frameStyle,
-            }}
+        <PresentationSource identifier={sourceIdentifier} style={{ alignSelf: "flex-start" }}>
+          <Pressable
+            accessibilityRole="imagebutton"
+            accessibilityLabel={props.alt ?? "Markdown image"}
+            onPress={() =>
+              props.onPressPreview({
+                kind: "image",
+                uri: props.uri!,
+                name: props.alt ?? "Image",
+                sourceIdentifier,
+              })
+            }
+            style={{ alignSelf: "flex-start" }}
           >
-            <ThreadMarkdownImageRequest
-              key={props.uri}
-              uri={props.uri}
-              onLoad={setSourceSize}
-              onError={() => setFailedUri(props.uri)}
-            />
-          </View>
-        </TouchableOpacity>
+            <View
+              className="items-center justify-center overflow-hidden rounded-[10px] bg-md-code-bg"
+              style={{
+                ...frameStyle,
+              }}
+            >
+              <ThreadMarkdownImageRequest
+                key={props.uri}
+                uri={props.uri}
+                onLoad={setSourceSize}
+                onError={() => setFailedUri(props.uri)}
+              />
+            </View>
+          </Pressable>
+        </PresentationSource>
       )}
       {props.alt ? (
         <Text selectable className="text-xs text-foreground-muted">
@@ -563,7 +663,7 @@ function ThreadMarkdownImage(props: {
   readonly threadId: ThreadId;
   readonly path: string;
   readonly alt: string | null;
-  readonly onPressImage: (uri: string) => void;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const assetUrl = useAssetUrlState(props.environmentId, {
     _tag: "workspace-file",
@@ -577,7 +677,7 @@ function ThreadMarkdownImage(props: {
       sourceKey={props.path}
       unavailable={assetUrl._tag === "Failure"}
       alt={props.alt}
-      onPressImage={props.onPressImage}
+      onPressPreview={props.onPressPreview}
     />
   );
 }
@@ -589,7 +689,7 @@ function ThreadMarkdownImageUnavailable(props: { readonly alt: string | null }) 
       sourceKey="unavailable"
       unavailable
       alt={props.alt}
-      onPressImage={() => undefined}
+      onPressPreview={() => undefined}
     />
   );
 }
@@ -1333,7 +1433,8 @@ function renderFeedEntry(
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
-    readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
+    readonly onPressPreview: (source: FilePreviewSource) => void;
+    readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -1446,14 +1547,17 @@ function renderFeedEntry(
                   key={attachment.id}
                   environmentId={props.environmentId}
                   attachmentId={attachment.id}
+                  name={attachment.name}
                   className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
-                  onPressImage={props.onPressImage}
+                  onPressPreview={props.onPressPreview}
                 />
               ) : isFileAttachment(attachment) ? (
                 <MessageAttachmentFile
                   key={attachment.id}
                   environmentId={props.environmentId}
                   attachment={attachment}
+                  onPressPreview={props.onPressPreview}
+                  onPressVideo={props.onPressVideo}
                 />
               ) : (
                 <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
@@ -1540,14 +1644,17 @@ function renderFeedEntry(
               key={attachment.id}
               environmentId={props.environmentId}
               attachmentId={attachment.id}
+              name={attachment.name}
               className="mt-1.5 aspect-[1.3] w-full rounded-[18px] bg-adaptive-neutral-200-800"
-              onPressImage={props.onPressImage}
+              onPressPreview={props.onPressPreview}
             />
           ) : isFileAttachment(attachment) ? (
             <MessageAttachmentFile
               key={attachment.id}
               environmentId={props.environmentId}
               attachment={attachment}
+              onPressPreview={props.onPressPreview}
+              onPressVideo={props.onPressVideo}
             />
           ) : (
             <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
@@ -2517,10 +2624,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     expandedTurnIds: new Set(),
   });
   const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
-  const [expandedImage, setExpandedImage] = useState<{
-    uri: string;
-    headers?: Record<string, string>;
-  } | null>(null);
+  const [expandedFile, setExpandedFile] = useState<FilePreviewSource | null>(null);
+  const [expandedVideo, setExpandedVideo] = useState<VideoPreviewSource | null>(null);
+  useEffect(() => {
+    setExpandedVideo(null);
+    setExpandedFile(null);
+  }, [props.environmentId, props.threadId, props.contentPresentation.kind]);
   const horizontalPadding = props.layoutVariant === "split" ? 20 : 16;
   const contentHorizontalPadding = deriveCenteredContentHorizontalPadding({
     viewportWidth,
@@ -2565,6 +2674,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         );
         if (relativePath) {
           void Haptics.selectionAsync();
+          if (isPdfFile({ name: relativePath })) {
+            setExpandedFile(
+              (current) =>
+                current ?? {
+                  kind: "pdf",
+                  name: relativePath.split("/").at(-1),
+                  environmentId: props.environmentId,
+                  resource: {
+                    _tag: "workspace-file",
+                    threadId: props.threadId,
+                    path: relativePath,
+                  },
+                },
+            );
+            return;
+          }
           navigation.navigate("ThreadFile", {
             environmentId: String(props.environmentId),
             threadId: String(props.threadId),
@@ -2576,6 +2701,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       }
 
       if (presentation.href) {
+        if (/^https?:\/\//i.test(presentation.href) && isPdfFile({ name: presentation.href })) {
+          setExpandedFile(
+            (current) => current ?? { kind: "pdf", uri: presentation.href!, name: "Document.pdf" },
+          );
+          return;
+        }
         void tryOpenExternalUrl(presentation.href, "markdown-link");
       }
     },
@@ -2591,7 +2722,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             sourceKey={imageSource.uri}
             unavailable={false}
             alt={image.alt}
-            onPressImage={(uri) => setExpandedImage({ uri })}
+            onPressPreview={(source) => setExpandedFile((current) => current ?? source)}
           />
         );
       }
@@ -2604,7 +2735,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           threadId={props.threadId}
           path={imageSource.path}
           alt={image.alt}
-          onPressImage={(uri) => setExpandedImage({ uri })}
+          onPressPreview={(source) => setExpandedFile((current) => current ?? source)}
         />
       );
     },
@@ -3185,9 +3316,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
-  const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
-    setExpandedImage({ uri, headers });
+  const onPressPreview = useCallback((source: FilePreviewSource) => {
+    setExpandedFile((current) => current ?? source);
   }, []);
+  const onPressVideo = useCallback(
+    (attachment: ChatFileAttachment, sourceIdentifier: string) => {
+      setExpandedVideo(
+        (current) =>
+          current ?? {
+            type: "remote",
+            environmentId: props.environmentId,
+            attachment,
+            sourceIdentifier,
+          },
+      );
+    },
+    [props.environmentId],
+  );
 
   // Rows whose height is known before they ever render. Without this, every
   // row above the viewport is assumed to be estimatedItemSize tall, and
@@ -3243,7 +3388,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           onToggleWorkGroup,
           onToggleWorkRow,
           onToggleTurnFold,
-          onPressImage,
+          onPressPreview,
+          onPressVideo,
           onMarkdownLinkPress,
           renderMarkdownImage,
           iconSubtleColor,
@@ -3273,7 +3419,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       getThreadTitle,
       onCopyWorkRow,
       onMarkdownLinkPress,
-      onPressImage,
+      onPressPreview,
+      onPressVideo,
       onToggleTurnFold,
       onToggleWorkGroup,
       onToggleWorkRow,
@@ -3473,23 +3620,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         ) : null}
       </View>
 
-      <ImageViewing
-        images={
-          expandedImage
-            ? [
-                {
-                  uri: expandedImage.uri,
-                  headers: expandedImage.headers,
-                },
-              ]
-            : []
-        }
-        imageIndex={0}
-        visible={expandedImage !== null}
-        onRequestClose={() => setExpandedImage(null)}
-        swipeToCloseEnabled
-        doubleTapToZoomEnabled
-      />
+      <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />
+      <FilePreviewModal source={expandedFile} onRequestClose={() => setExpandedFile(null)} />
     </>
   );
 });

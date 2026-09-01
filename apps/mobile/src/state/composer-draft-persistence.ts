@@ -13,6 +13,11 @@ import type { DraftComposerAttachment, DraftComposerImageAttachment } from "../l
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import type { ModelSelection } from "@t3tools/contracts";
 
+import {
+  decodeQueuedThreadMessage,
+  encodeQueuedThreadMessage,
+  type QueuedThreadMessage,
+} from "./thread-outbox-model";
 import type { ComposerDraft } from "./use-composer-drafts";
 
 const LEGACY_SCHEMA_VERSION = 1;
@@ -21,6 +26,8 @@ const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
 const COMPOSER_DRAFT_RECORDS_DIRECTORY = "drafts";
 const COMPOSER_DRAFT_ATTACHMENTS_DIRECTORY = "attachments";
 const LEGACY_COMPOSER_DRAFTS_FILE = "drafts.json";
+const CLOUD_DRAFTS_FILE = "cloud-drafts.json";
+const CLOUD_DRAFTS_SCHEMA_VERSION = 1;
 const DRAFT_RECORD_SUFFIX = ".json";
 const ATTACHMENT_FILE_SUFFIX = ".attachment";
 const TEMP_FILE_SUFFIX = ".tmp";
@@ -100,6 +107,8 @@ const PersistedImageAttachmentReferenceSchema = Schema.Struct({
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   contentHash: Schema.String,
+  uploadedAttachmentId: Schema.optional(Schema.String),
+  uploadEnvironmentId: Schema.optional(EnvironmentId),
 });
 
 const PersistedFileAttachmentReferenceSchema = Schema.Struct({
@@ -135,13 +144,38 @@ const PersistedComposerDraftRecordSchema = Schema.Struct({
   draft: PersistedComposerDraftSchema,
 });
 
+const PersistedComposerCloudDraftStateSchema = Schema.Struct({
+  schemaVersion: Schema.Literal(CLOUD_DRAFTS_SCHEMA_VERSION),
+  accountId: Schema.NullOr(Schema.String),
+  signedOut: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      drafts: Schema.Array(PersistedComposerDraftRecordSchema),
+      queuedMessages: Schema.Array(Schema.Unknown),
+    }),
+  ),
+});
+
 const decodeLegacyComposerDraftsDocument = Schema.decodeUnknownSync(LegacyComposerDraftsSchema);
 const decodeComposerDraftRecordDocument = Schema.decodeUnknownSync(
   PersistedComposerDraftRecordSchema,
 );
+const decodeComposerCloudDraftStateDocument = Schema.decodeUnknownSync(
+  PersistedComposerCloudDraftStateSchema,
+);
 
 type PersistedComposerDraftRecord = Schema.Schema.Type<typeof PersistedComposerDraftRecordSchema>;
 type PersistedAttachmentReference = Schema.Schema.Type<typeof PersistedAttachmentReferenceSchema>;
+
+export interface SignedOutComposerDrafts {
+  readonly drafts: Record<string, ComposerDraft>;
+  readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
+}
+
+export interface PersistedComposerCloudDraftState {
+  readonly accountId: string | null;
+  readonly signedOut: Record<string, SignedOutComposerDrafts>;
+}
 
 export interface SplitComposerDraftRecord {
   readonly record: PersistedComposerDraftRecord;
@@ -199,6 +233,12 @@ function imageAttachmentReference(
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
     contentHash,
+    ...(attachment.uploadedAttachmentId !== undefined
+      ? { uploadedAttachmentId: attachment.uploadedAttachmentId }
+      : {}),
+    ...(attachment.uploadEnvironmentId !== undefined
+      ? { uploadEnvironmentId: attachment.uploadEnvironmentId }
+      : {}),
   };
 }
 
@@ -516,6 +556,12 @@ async function hydrateAttachment(
       sizeBytes: attachment.sizeBytes,
       dataUrl,
       previewUri: dataUrl,
+      ...(attachment.uploadedAttachmentId !== undefined
+        ? { uploadedAttachmentId: attachment.uploadedAttachmentId }
+        : {}),
+      ...(attachment.uploadEnvironmentId !== undefined
+        ? { uploadEnvironmentId: attachment.uploadEnvironmentId }
+        : {}),
     },
   };
 }
@@ -719,6 +765,130 @@ async function removeDraftRecord(draftKey: string): Promise<void> {
   }
 }
 
+async function loadComposerCloudDraftDocument(): Promise<Schema.Schema.Type<
+  typeof PersistedComposerCloudDraftStateSchema
+> | null> {
+  const { File } = await loadExpoFileSystem();
+  const { root } = await getStorageDirectories();
+  const file = new File(root, CLOUD_DRAFTS_FILE);
+  if (!file.exists) {
+    return null;
+  }
+  try {
+    return decodeComposerCloudDraftStateDocument(JSON.parse(await file.text()) as unknown);
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "decode",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: CLOUD_DRAFTS_FILE,
+      cause,
+    });
+  }
+}
+
+export async function loadPersistedComposerCloudDraftState(): Promise<PersistedComposerCloudDraftState> {
+  const document = await loadComposerCloudDraftDocument();
+  if (document === null) {
+    return { accountId: null, signedOut: {} };
+  }
+  const { attachments } = await getStorageDirectories();
+  const signedOut: Record<string, SignedOutComposerDrafts> = {};
+  for (const [accountId, saved] of Object.entries(document.signedOut)) {
+    const drafts: Record<string, ComposerDraft> = {};
+    for (const record of saved.drafts) {
+      const hydrated = await hydrateRecord(record, attachments);
+      if (hydrated.state === "unavailable") {
+        throw new ComposerDraftPersistenceError({
+          operation: "hydrate",
+          directory: COMPOSER_DRAFTS_DIRECTORY,
+          fileName: CLOUD_DRAFTS_FILE,
+          cause: new Error(`Archived composer draft ${record.draftKey} is unavailable.`),
+        });
+      }
+      if (!isDiscardableDraft(hydrated.draft)) {
+        drafts[record.draftKey] = hydrated.draft;
+      }
+    }
+    signedOut[accountId] = {
+      drafts,
+      queuedMessages: saved.queuedMessages.map(decodeQueuedThreadMessage),
+    };
+  }
+  return { accountId: document.accountId, signedOut };
+}
+
+export async function savePersistedComposerCloudDraftState(
+  state: PersistedComposerCloudDraftState,
+  options?: { readonly verify?: boolean },
+): Promise<void> {
+  const attachmentContents = new Map<string, string>();
+  const signedOut: Record<
+    string,
+    {
+      readonly drafts: ReadonlyArray<PersistedComposerDraftRecord>;
+      readonly queuedMessages: ReadonlyArray<unknown>;
+    }
+  > = {};
+  for (const [accountId, saved] of Object.entries(state.signedOut)) {
+    const drafts: PersistedComposerDraftRecord[] = [];
+    for (const [draftKey, draft] of Object.entries(saved.drafts)) {
+      if (isDiscardableDraft(draft)) {
+        continue;
+      }
+      const split = await splitComposerDraftForPersistence(
+        draftKey,
+        draft,
+        cachedAttachmentContentHash,
+      );
+      for (const [contentHash, content] of split.attachmentContents) {
+        const existing = attachmentContents.get(contentHash);
+        if (existing !== undefined && existing !== content) {
+          throw new Error(`Composer attachment hash collision for ${contentHash}.`);
+        }
+        attachmentContents.set(contentHash, content);
+      }
+      drafts.push(split.record);
+    }
+    signedOut[accountId] = {
+      drafts,
+      queuedMessages: saved.queuedMessages.map(encodeQueuedThreadMessage),
+    };
+  }
+
+  try {
+    const { File } = await loadExpoFileSystem();
+    const { root } = await getStorageDirectories();
+    await writeAttachmentContents(attachmentContents, options?.verify === true);
+    const encoded = JSON.stringify({
+      schemaVersion: CLOUD_DRAFTS_SCHEMA_VERSION,
+      accountId: state.accountId,
+      signedOut,
+    });
+    await writeFileAtomically(root, CLOUD_DRAFTS_FILE, encoded);
+    if (options?.verify === true) {
+      const persisted = await new File(root, CLOUD_DRAFTS_FILE).text();
+      if (persisted !== encoded) {
+        throw new ComposerDraftPersistenceError({
+          operation: "verify",
+          directory: COMPOSER_DRAFTS_DIRECTORY,
+          fileName: CLOUD_DRAFTS_FILE,
+          cause: new Error("Persisted cloud composer drafts did not match the requested write."),
+        });
+      }
+    }
+  } catch (cause) {
+    if (cause instanceof ComposerDraftPersistenceError) {
+      throw cause;
+    }
+    throw new ComposerDraftPersistenceError({
+      operation: "write",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: CLOUD_DRAFTS_FILE,
+      cause,
+    });
+  }
+}
+
 export async function sweepOrphanComposerDraftAttachments(): Promise<void> {
   let operation: ComposerDraftPersistenceError["operation"] = "sweep";
   try {
@@ -729,10 +899,14 @@ export async function sweepOrphanComposerDraftAttachments(): Promise<void> {
       .list()
       .filter((entry): entry is InstanceType<typeof File> => entry instanceof File);
     const records = await loadRecordDocuments();
+    const cloudDocument = await loadComposerCloudDraftDocument();
+    const archivedRecords = cloudDocument
+      ? Object.values(cloudDocument.signedOut).flatMap((saved) => saved.drafts)
+      : [];
     const orphanNames = new Set(
       orphanComposerDraftAttachmentFileNames(
         files.map((file) => file.name),
-        records,
+        [...records, ...archivedRecords],
       ),
     );
     operation = "remove";

@@ -17,6 +17,8 @@ const DraftComposerImageAttachmentFields = {
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   dataUrl: Schema.String,
+  uploadedAttachmentId: Schema.optional(Schema.String),
+  uploadEnvironmentId: Schema.optional(EnvironmentId),
 };
 
 export const DraftComposerImageAttachmentSchema = Schema.Struct({
@@ -55,6 +57,8 @@ export const PersistedDraftComposerAttachmentSchema = Schema.Union([
 export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
   readonly id: string;
   readonly previewUri: string;
+  readonly uploadedAttachmentId?: string | undefined;
+  readonly uploadEnvironmentId?: EnvironmentIdType | undefined;
 }
 
 export interface DraftComposerFileAttachment {

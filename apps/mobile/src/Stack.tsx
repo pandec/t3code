@@ -81,6 +81,7 @@ import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useForegroundThreadEventPriority } from "./state/thread-event-priority";
 import { useThreadLifecycleOutboxDrain } from "./state/use-thread-lifecycle-outbox-drain";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
+import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -362,6 +363,7 @@ function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThrea
 // each enqueue, shell change, or reconnect.
 function ThreadOutboxDrainWorker() {
   useThreadOutboxDrain();
+  useComposerAttachmentUploadWorker();
   return null;
 }
 
