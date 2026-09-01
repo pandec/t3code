@@ -13,6 +13,7 @@ import {
   EnvironmentMetadataHttpApi,
   EnvironmentOrchestrationHttpApi,
   type ExecutionEnvironmentDescriptor,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -23,6 +24,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { FetchHttpClient, HttpServer } from "effect/unstable/http";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -180,17 +182,18 @@ const withLiveProjectCliServer = <A, E, R>(
   run: (origin: string) => Effect.Effect<A, E, R>,
   options?: {
     readonly conditionalProjectScriptUpdates?: boolean;
+    readonly dispatchTurnStart?: TurnStartBootstrap.TurnStartBootstrap["Service"]["dispatchTurnStart"];
   },
 ) =>
   Effect.gen(function* () {
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
       Layer.provide(Layer.merge(orchestrationHttpApiLayer, serverEnvironmentHttpApiLayer)),
-      // Project CLI tests never dispatch bootstrap turn starts; the HTTP
-      // dispatch route only needs the service to exist.
       Layer.provide(
         Layer.mock(TurnStartBootstrap.TurnStartBootstrap)({
-          dispatchTurnStart: () => Effect.die("turn-start bootstrap is not used in this test"),
+          dispatchTurnStart:
+            options?.dispatchTurnStart ??
+            (() => Effect.die("turn-start bootstrap is not used in this test")),
         }),
       ),
       Layer.provide(environmentAuthenticatedAuthLayer),
@@ -687,6 +690,101 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           assert.isTrue(addedProject !== undefined);
           assert.equal(addedProject?.title, "Live Project");
         }),
+      );
+    }),
+  );
+
+  it.effect("stamps CLI origin on HTTP dispatch events and bootstrap commands", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-origin-live-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-origin-live-workspace-"),
+      );
+      const bootstrapDispatchOptions: Array<
+        Parameters<TurnStartBootstrap.TurnStartBootstrap["Service"]["dispatchTurnStart"]>[1]
+      > = [];
+
+      yield* withLiveProjectCliServer(
+        baseDir,
+        (origin) =>
+          Effect.gen(function* () {
+            yield* runCliWithRuntime([
+              "project",
+              "add",
+              workspaceRoot,
+              "--title",
+              "CLI Origin Project",
+              "--base-dir",
+              baseDir,
+            ]);
+
+            const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+            const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+            const project = snapshot.projects.find(
+              (candidate) => candidate.workspaceRoot === workspaceRoot,
+            );
+            assert.isTrue(project !== undefined);
+
+            const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+            const events = yield* Stream.runCollect(orchestrationEngine.readEvents(0)).pipe(
+              Effect.map((chunk) => Array.from(chunk)),
+            );
+            const projectCreated = events.find(
+              (event) =>
+                event.type === "project.created" && event.payload.workspaceRoot === workspaceRoot,
+            );
+            assert.deepEqual(projectCreated?.metadata.origin, { surface: "cli" });
+
+            const modelSelection = {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            } as const;
+            const createdAt = "2026-09-01T00:00:00.000Z";
+            const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+            yield* withCliOrchestrationSession(
+              environmentAuth,
+              "CLI bootstrap origin test",
+              (token) =>
+                dispatchLiveOrchestrationCommand(origin, token, {
+                  type: "thread.turn.start",
+                  commandId: CommandId.make("cmd-cli-bootstrap-origin"),
+                  threadId: ThreadId.make("thread-cli-bootstrap-origin"),
+                  message: {
+                    messageId: MessageId.make("message-cli-bootstrap-origin"),
+                    role: "user",
+                    text: "Start working",
+                    attachments: [],
+                  },
+                  modelSelection,
+                  titleSeed: "Start working",
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  bootstrap: {
+                    createThread: {
+                      projectId: project!.id,
+                      title: "Start working",
+                      modelSelection,
+                      runtimeMode: "full-access",
+                      interactionMode: "default",
+                      branch: null,
+                      worktreePath: null,
+                      createdAt,
+                    },
+                  },
+                  createdAt,
+                }),
+            ).pipe(Effect.provide(FetchHttpClient.layer));
+
+            assert.deepEqual(bootstrapDispatchOptions, [{ origin: { surface: "cli" } }]);
+          }),
+        {
+          dispatchTurnStart: (_command, options) =>
+            Effect.sync(() => bootstrapDispatchOptions.push(options)).pipe(
+              Effect.as({ sequence: 999 }),
+            ),
+        },
       );
     }),
   );
