@@ -174,12 +174,12 @@ describe("TurnStartBootstrap", () => {
     }),
   );
 
-  it.effect("passes client origin through setup activity and cleanup dispatches", () =>
+  it.effect("passes CLI origin through setup activity and cleanup dispatches", () =>
     Effect.gen(function* () {
       const dispatched: Array<OrchestrationCommand> = [];
       const dispatchOptions: Array<DispatchOptions> = [];
       const clientOptions = {
-        origin: { surface: "desktop", appVersion: "2.0.0" },
+        origin: { surface: "cli" },
       } as const;
 
       const result = yield* Effect.gen(function* () {

@@ -28,6 +28,7 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { TurnStartBootstrap } from "./Services/TurnStartBootstrap.ts";
 
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
+const cliDispatchOptions = { origin: { surface: "cli" } } as const;
 
 /**
  * Handler body for GET /api/orchestration/threads/:threadId/messages,
@@ -151,27 +152,30 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          // Route bootstrap turn starts through the shared bootstrap program so
-          // HTTP clients (the CLI) get worktree preparation, setup script
-          // launch, and thread cleanup — identical to the WebSocket path.
+          // This mutation route is the CLI transport; web, desktop, and mobile
+          // dispatch over WebSocket with their connection metadata instead.
+          // Forward the CLI origin through the shared bootstrap program so every
+          // generated command carries the attribution too.
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
-            return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
-              Effect.tapError(() =>
-                cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-              ),
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+            return yield* turnStartBootstrap
+              .dispatchTurnStart(normalizedCommand, cliDispatchOptions)
+              .pipe(
+                Effect.tapError(() =>
+                  cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+                ),
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                ),
+              );
           }
           const dispatchEffect =
             normalizedCommand.type === "thread.message.speech.request"
               ? validateAndDispatchMessageSpeechRequest(
                   projectionThreadMessageRepository,
                   normalizedCommand,
-                  orchestrationEngine.dispatch(normalizedCommand),
+                  orchestrationEngine.dispatch(normalizedCommand, cliDispatchOptions),
                 )
-              : orchestrationEngine.dispatch(normalizedCommand);
+              : orchestrationEngine.dispatch(normalizedCommand, cliDispatchOptions);
           return yield* dispatchEffect.pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
