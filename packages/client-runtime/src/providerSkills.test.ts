@@ -111,6 +111,30 @@ describe("getProviderSkillsForSlashMenu", () => {
   });
 });
 
+describe("getProviderSkillsForSlashMenu", () => {
+  it("drops a skill the provider reserves for the agent", () => {
+    const skills = [
+      {
+        name: "legacy-system-context",
+        path: "/Users/matt/.claude/skills/legacy-system-context/SKILL.md",
+        enabled: true,
+        userInvocable: false,
+      },
+      {
+        name: "deploy",
+        path: "/Users/matt/.claude/skills/deploy/SKILL.md",
+        enabled: true,
+        // Reserved for the user, not the agent: still a valid pick.
+        userInvocationOnly: true,
+      },
+    ];
+
+    expect(getProviderSkillsForSlashMenu(skills, true).map((skill) => skill.name)).toEqual([
+      "deploy",
+    ]);
+  });
+});
+
 describe("getProviderSlashCommandsForSlashMenu", () => {
   const commands = [
     { name: "ask-matt", description: "Ask which skill fits your situation." },
@@ -219,10 +243,12 @@ describe("resolveEffectiveProviderSkills", () => {
     expect(resolveEffectiveProviderSkills(undefined, [snapshotSkill])).toEqual([snapshotSkill]);
   });
 
-  it("keeps snapshot skills when the workspace lookup answered with nothing", () => {
-    // An empty array is what a failed lookup looks like on the wire, so it
-    // must not blank a picker that had skills a moment ago.
-    expect(resolveEffectiveProviderSkills([], [snapshotSkill])).toEqual([snapshotSkill]);
+  it("honours an authoritative empty workspace answer over snapshot skills", () => {
+    // The server already substitutes snapshot skills when a lookup fails, so
+    // an empty array on the wire means this workspace really has no skills.
+    // Keeping another workspace's snapshot skills here would offer skills the
+    // provider cannot dispatch in this cwd.
+    expect(resolveEffectiveProviderSkills([], [snapshotSkill])).toEqual([]);
   });
 
   it("returns an empty list when neither source has skills", () => {

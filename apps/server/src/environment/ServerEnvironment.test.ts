@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -222,6 +223,55 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         const disabled = yield* serverEnvironment.getDescriptor;
         expect(disabled.capabilities.agentActivityPublishing).toBe(false);
       }).pipe(Effect.provide(testLayer));
+    }),
+  );
+
+  it.effect("advertises desktopAppUpdate only with desktop mode and the control fd", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-desktop-update-test-",
+      });
+      const serverConfig = yield* makeServerConfig(baseDir);
+      yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
+
+      const describeWith = (
+        overrides: Partial<ServerConfig.ServerConfig["Service"]>,
+        hostEnvironment: NodeJS.ProcessEnv = {},
+      ) =>
+        Effect.gen(function* () {
+          const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* serverEnvironment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSecretStore.layer),
+              Layer.provide(ServerConfig.layer({ ...serverConfig, ...overrides })),
+            ),
+          ),
+          Effect.provideService(HostProcessEnvironment, hostEnvironment),
+        );
+
+      const withFd = yield* describeWith({ mode: "desktop", desktopTelemetryControlFd: 5 });
+      expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
+      expect(withFd.capabilities.desktopAppUpdate).toBe(true);
+      expect(withFd.capabilities.serverSelfUpdateProgress).toBe(true);
+
+      const withoutFd = yield* describeWith({ mode: "desktop" });
+      expect(withoutFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
+      expect(withoutFd.capabilities.desktopAppUpdate).toBeUndefined();
+      expect(withoutFd.capabilities.serverSelfUpdateProgress).toBeUndefined();
+
+      const developmentIdentity = yield* describeWith(
+        { mode: "desktop", desktopTelemetryControlFd: 5 },
+        { T3CODE_DESKTOP_APP_UPDATE_DISABLED: "1" },
+      );
+      expect(developmentIdentity.capabilities.serverSelfUpdate).toBeUndefined();
+      expect(developmentIdentity.capabilities.desktopAppUpdate).toBeUndefined();
+      expect(developmentIdentity.capabilities.serverSelfUpdateProgress).toBeUndefined();
+
+      const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
+      expect(web.capabilities.desktopAppUpdate).toBeUndefined();
     }),
   );
 

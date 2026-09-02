@@ -22,7 +22,7 @@ const clientSettings: ClientSettings = {
   browserDefaultAppearance: "dark",
   browserRecordingFrameRate: 60,
   browserAutoShowFloatingPreview: false,
-  confirmQuit: true,
+  confirmQuit: "double-click",
   confirmTerminalClose: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,

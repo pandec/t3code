@@ -157,6 +157,8 @@ const engineService = (
   dispatch: (command) =>
     Ref.update(commands, (current) => [...current, command]).pipe(Effect.as({ sequence: 1 })),
   streamDomainEvents: Stream.fromQueue(events),
+  subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+  getEventReplayStats: () => Effect.succeed({ eventCount: 0, payloadBytes: 0 }),
   latestSequence: Effect.succeed(0),
 });
 

@@ -101,19 +101,6 @@ export interface MessageSummaryGenerationResult {
   summary: string;
 }
 
-export interface TextGenerationService {
-  generateCommitMessage(
-    input: CommitMessageGenerationInput,
-  ): Promise<CommitMessageGenerationResult>;
-  generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
-  generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
-  generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
-  generateSpeechScript(input: SpeechScriptGenerationInput): Promise<SpeechScriptGenerationResult>;
-  generateMessageSummary(
-    input: MessageSummaryGenerationInput,
-  ): Promise<MessageSummaryGenerationResult>;
-}
-
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -156,7 +143,7 @@ export class TextGeneration extends Context.Service<
   }
 >()("t3/textGeneration/TextGeneration") {}
 
-/** @deprecated Use `TextGeneration["Service"]`. */
+/** Compatibility alias retained while integration harnesses migrate to the service tag. */
 export type TextGenerationShape = TextGeneration["Service"];
 
 type TextGenerationOp =

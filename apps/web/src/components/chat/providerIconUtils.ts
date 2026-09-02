@@ -58,6 +58,7 @@ export type ModelEsque = {
   name: string;
   shortName?: string | undefined;
   subProvider?: string | undefined;
+  badge?: "new" | undefined;
   isLegacy?: boolean | undefined;
   /** Per-model icon override (a driver-kind id); see {@link getModelIconComponent}. */
   icon?: string | undefined;

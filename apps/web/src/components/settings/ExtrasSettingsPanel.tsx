@@ -611,6 +611,7 @@ function SidebarExtrasSection() {
     <SettingsSection {...searchableSetting("extras-sidebar")}>
       {supportsAutoSettlement ? (
         <SettingsRow
+          serverScoped
           {...searchableSetting("auto-settle-threads")}
           description="Automatically settle threads after inactivity or when their pull request is merged or closed. Manual settling remains available when disabled."
           resetAction={
@@ -1073,6 +1074,7 @@ function VoiceExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-voice-listening")}>
       <SettingsRow
+        serverScoped
         title="Text-to-speech model"
         description="ElevenLabs model used to read assistant messages aloud. Leave empty to use the server's configured default."
         resetAction={
@@ -1100,6 +1102,7 @@ function VoiceExtrasSection() {
       />
 
       <SettingsRow
+        serverScoped
         title="Text-to-speech voice"
         description="ElevenLabs voice id used for playback. Leave empty to use the server's configured default."
         resetAction={
@@ -1127,6 +1130,7 @@ function VoiceExtrasSection() {
       />
 
       <SettingsRow
+        serverScoped
         {...searchableSetting("agent-voice-replies")}
         title="Agent voice replies"
         description="Give agents a voice_reply tool that answers with a spoken recording shown as the main message. Applies to sessions started from now on."

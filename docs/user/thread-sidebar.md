@@ -19,10 +19,18 @@ Pinned threads still move to **Settled** when they become inactive or their pull
 merges. Settling and pinning are mutually exclusive, so un-settling returns the thread to the active
 list rather than restoring its old pinned position.
 
-Each environment owns its automatic settlement settings. Its server checks them even when no web,
-desktop, or mobile client is connected. **Settings → Extras → Sidebar → Auto-settle threads** is the
-master switch for that environment. **Settings → General** controls settlement after inactivity and
-pull request merges. Turning the master switch off keeps manual settlement available.
+Each server stores its own copy of the automatic settlement settings and checks them even when no
+web, desktop, or mobile client is connected. **Settings → Extras → Sidebar → Auto-settle threads**
+is the master switch. **Settings → General** controls settlement after inactivity and pull request
+merges. Turning the master switch off keeps manual settlement available.
+
+Changing any of these settings writes the change to every environment you are connected to at that
+moment. An environment that is offline keeps its old value. When a connected environment holds a
+different value, **Settings > General** shows a warning that names it. Choose **Apply to all** to
+write your current values to every connected environment. The same applies to the new-thread
+workspace mode and the source control writing style.
+
+Settings saved by older clients on one device no longer control this behavior.
 
 By default, the server settles threads after three days without activity and when their pull request
 merges. An eligible idle thread also settles when its pull request closes. An open pull request blocks

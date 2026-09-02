@@ -25,6 +25,7 @@ import {
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -40,6 +41,7 @@ import {
   type ProviderRuntimeTurnStatus,
   type ProviderSendTurnInput,
   type ProviderSession,
+  type ServerProviderSkill,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   type RuntimeContentStreamKind,
@@ -84,6 +86,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment, resolveClaudeConfigDirPath } from "../Drivers/ClaudeHome.ts";
 import {
   findClaudeSessionCwd,
@@ -95,25 +98,31 @@ import {
   type ClaudeSessionForkInput,
   forkClaudePersistedSession,
 } from "../Drivers/ClaudeSessionFork.ts";
-import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
+import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import {
   applyClaudeSkillReferencePointers,
   collectClaudeSkillReferenceNames,
 } from "../Drivers/ClaudeSkillReferences.ts";
 import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+  getClaudeCatalogModelCapabilities,
+  isClaudeCatalogUltracodeEffort,
+  isCustomClaudeCatalogModel,
+  normalizeClaudeCatalogEffort,
+  resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogContextWindowTokens,
+  resolveClaudeCatalogEffort,
+  resolveClaudeModelSlug,
+  scopeClaudeModelCatalog,
+} from "../ClaudeModelCatalog.ts";
+import {
   buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS,
-  getClaudeModelCapabilities,
   gateClaudeSkillsByUserInvocation,
-  isClaudeUltracodeEffort,
-  isCustomClaudeModel,
   mergeClaudeSkills,
-  normalizeClaudeCliEffort,
   parseClaudeSkills,
-  resolveClaudeApiModelId,
-  resolveClaudeContextWindow,
-  resolveClaudeEffort,
 } from "./ClaudeProvider.ts";
 import {
   ProviderAdapterProcessError,
@@ -397,6 +406,7 @@ export interface ClaudeAdapterLiveOptions {
   readonly forkSession?: (input: ClaudeSessionForkInput) => Promise<{ readonly sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
 }
 
 export function hasPendingClaudeWork(input: {
@@ -454,10 +464,11 @@ function normalizeClaudeStreamMessages(
 }
 
 function getEffectiveClaudeAgentEffort(
+  catalog: ClaudeModelCatalog,
   effort: string | null | undefined,
   model: string | null | undefined,
 ): ClaudeSdkEffort | null {
-  const normalized = normalizeClaudeCliEffort(effort, model);
+  const normalized = normalizeClaudeCatalogEffort(catalog, effort, model);
   return normalized ? (normalized as ClaudeSdkEffort) : null;
 }
 
@@ -550,23 +561,10 @@ function maxClaudeContextWindowFromModelUsage(
 }
 
 function selectedClaudeContextWindow(
+  catalog: ClaudeModelCatalog,
   modelSelection: ModelSelection | undefined,
 ): number | undefined {
-  switch (modelSelection?.model) {
-    case "claude-opus-4-8":
-    case "claude-opus-4-7":
-      // Always 1M at the API; these models expose no contextWindow option.
-      return 1_000_000;
-  }
-
-  switch (resolveClaudeContextWindow(modelSelection)) {
-    case "1m":
-      return 1_000_000;
-    case "200k":
-      return 200_000;
-    default:
-      return undefined;
-  }
+  return resolveClaudeCatalogContextWindowTokens(catalog, modelSelection);
 }
 
 function finiteNonNegativeInteger(value: unknown): number | undefined {
@@ -798,8 +796,27 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
   };
 }
 
-function classifyToolItemType(toolName: string): CanonicalItemType {
+function readToolImagePath(toolName: string, input: Record<string, unknown>): string | undefined {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized !== "read" && normalized !== "read file") {
+    return undefined;
+  }
+  const pathValue = input.file_path ?? input.path;
+  if (typeof pathValue !== "string") {
+    return undefined;
+  }
+  const path = pathValue.trim();
+  return path.length > 0 && isWorkspaceImagePreviewPath(path) ? path : undefined;
+}
+
+function classifyToolItemType(
+  toolName: string,
+  input: Record<string, unknown> = {},
+): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  if (readToolImagePath(toolName, input)) {
+    return "image_view";
+  }
   if (normalized.includes("agent")) {
     return "collab_agent_tool_call";
   }
@@ -1251,6 +1268,11 @@ function workflowAgentStatus(entry: ClaudeWorkflowAgentEntry): RuntimeTaskStatus
 }
 
 function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
+  const imagePath = readToolImagePath(toolName, input);
+  if (imagePath) {
+    return imagePath;
+  }
+
   const commandValue = input.command ?? input.cmd;
   const command = typeof commandValue === "string" ? commandValue : undefined;
   if (command && command.trim().length > 0) {
@@ -1330,10 +1352,8 @@ const STRANDED_PRIOR_TURN_NOTICE = [
 function buildPromptText(
   input: ProviderSendTurnInput,
   boundInstanceId: ProviderInstanceId,
-  /**
-   * Resolves `$skill` references to SKILL.md paths. Applied before the effort
-   * prefix so the prefix stays anchored at the start of the message.
-   */
+  catalog: ClaudeModelCatalog,
+  /** Resolves user-invocation-only `$skill` references to SKILL.md paths. */
   skillReferencePaths?: ReadonlyMap<string, string>,
 ): string {
   const rawEffort =
@@ -1342,7 +1362,7 @@ function buildPromptText(
       : null;
   const claudeModel =
     input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
-  const caps = getClaudeModelCapabilities(claudeModel);
+  const caps = getClaudeCatalogModelCapabilities(catalog, claudeModel);
 
   const promptEffort = resolvePromptInjectedEffort(caps, rawEffort);
   const trimmedInput = input.input?.trim() ?? "";
@@ -1389,12 +1409,16 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly boundInstanceId: ProviderInstanceId;
+    readonly modelCatalog: ClaudeModelCatalog;
+    /** Names of the merged SDK and filesystem skills available for this cwd. */
+    readonly skillNames: ReadonlySet<string>;
     readonly skillReferencePaths?: ReadonlyMap<string, string>;
   },
 ) {
   const text = buildPromptText(
     input,
     dependencies.boundInstanceId,
+    dependencies.modelCatalog,
     dependencies.skillReferencePaths,
   );
   const sdkContent: Array<Record<string, unknown>> = [];
@@ -1403,7 +1427,15 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     sdkContent.push({ type: "text", text: STRANDED_PRIOR_TURN_NOTICE });
   }
 
-  if (text.length > 0) {
+  // Claude Code expands a skill only from the last text block, and only when
+  // `/name` is its first character. Split a native `$skill` dispatch so the
+  // command remains last while surrounding prose and attachments survive.
+  const dispatch = planClaudeSkillDispatch(text, dependencies.skillNames);
+  if (dispatch) {
+    if (dispatch.leadingText !== undefined) {
+      sdkContent.push({ type: "text", text: dispatch.leadingText });
+    }
+  } else if (text.length > 0) {
     sdkContent.push({ type: "text", text });
   }
 
@@ -1452,6 +1484,12 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
         bytes,
       }),
     );
+  }
+
+  // Images go before the command block: a text block after them still
+  // expands, a command block followed by an image does not.
+  if (dispatch) {
+    sdkContent.push({ type: "text", text: dispatch.commandText });
   }
 
   return buildUserMessage({ sdkContent });
@@ -1799,6 +1837,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   options?: ClaudeAdapterLiveOptions,
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
+  const modelCatalogEffect = (
+    options?.modelCatalog ?? Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)
+  ).pipe(Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)));
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
@@ -1835,38 +1876,84 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
-  /**
-   * Map the `$skill` references in one outgoing message to SKILL.md paths, but
-   * only for skills the model cannot invoke itself — the rest already work
-   * through Claude's skill tool.
-   *
-   * The scan is gated on the message actually containing a reference, so an
-   * ordinary turn never touches the filesystem and there is nothing to cache
-   * or invalidate: an edited skill is picked up on the very next message.
-   */
-  const resolveSkillReferencePaths = Effect.fn("resolveClaudeSkillReferencePaths")(
-    function* (input: { readonly text: string | undefined; readonly cwd: string | undefined }) {
-      const referencedNames = collectClaudeSkillReferenceNames(input.text ?? "");
-      if (referencedNames.size === 0) {
-        return undefined;
-      }
+  /** Resolve user-invocation-only `$skill` references from the merged skill list. */
+  const resolveSkillReferencePaths = (input: {
+    readonly text: string | undefined;
+    readonly skills: ReadonlyArray<ServerProviderSkill>;
+  }): ReadonlyMap<string, string> | undefined => {
+    const referencedNames = collectClaudeSkillReferenceNames(input.text ?? "");
+    if (referencedNames.size === 0) return undefined;
 
-      const skills = yield* discoverClaudeSkills(claudeSettings, input.cwd, claudeEnvironment).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-      );
-
-      const skillPathsByName = new Map<string, string>();
-      for (const skill of skills) {
-        const key = skill.name.toLowerCase();
-        if (skill.modelInvocable !== false || !skill.path || !referencedNames.has(key)) {
-          continue;
-        }
-        skillPathsByName.set(key, skill.path);
+    const skillPathsByName = new Map<string, string>();
+    for (const skill of input.skills) {
+      const key = skill.name.toLowerCase();
+      if (
+        !skill.enabled ||
+        skill.userInvocable === false ||
+        skill.modelInvocable !== false ||
+        !skill.path ||
+        !referencedNames.has(key)
+      ) {
+        continue;
       }
-      return skillPathsByName.size > 0 ? skillPathsByName : undefined;
-    },
-  );
+      skillPathsByName.set(key, skill.path);
+    }
+    return skillPathsByName.size > 0 ? skillPathsByName : undefined;
+  };
+
+  const loadSessionSkills = Effect.fn("ClaudeAdapter.loadSessionSkills")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const [discoveredSkills, nativeSkills] = yield* Effect.all(
+      [
+        discoverClaudeSkills(claudeSettings, context.session.cwd, claudeEnvironment).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+        Effect.tryPromise({
+          try: async () => {
+            const initialization = await context.query.initializationResult();
+            const commandNames = new Set(
+              (Array.isArray(initialization.commands) ? initialization.commands : [])
+                .map((command) => command.name.trim().toLowerCase())
+                .filter((name) => name.length > 0),
+            );
+            const userInvocableSkillNames = commandNames.size > 0 ? commandNames : undefined;
+            try {
+              const result = await context.query.reloadSkills();
+              return {
+                skills: parseClaudeSkills(result.skills),
+                userInvocableSkillNames,
+              };
+            } catch {
+              return { skills: undefined, userInvocableSkillNames };
+            }
+          },
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "claude/loadSessionSkills",
+              detail: "Claude skill initialization query failed.",
+              cause,
+            }),
+        }).pipe(Effect.option),
+      ],
+      { concurrency: "unbounded" },
+    );
+    if (Option.isSome(nativeSkills)) {
+      const { skills, userInvocableSkillNames } = nativeSkills.value;
+      return skills
+        ? mergeClaudeSkills(skills, discoveredSkills, userInvocableSkillNames)
+        : gateClaudeSkillsByUserInvocation(discoveredSkills, userInvocableSkillNames);
+    }
+    yield* Effect.logWarning(
+      "Claude skill initialization failed; serving filesystem-scanned skills.",
+      {
+        cwd: context.session.cwd,
+      },
+    );
+    return discoveredSkills;
+  });
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -2861,9 +2948,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
         const partialInputJson = tool.partialInputJson + event.delta.partial_json;
         const parsedInput = tryParseJsonRecord(partialInputJson);
+        const itemType = parsedInput
+          ? classifyToolItemType(tool.toolName, parsedInput)
+          : tool.itemType;
         const detail = parsedInput ? summarizeToolRequest(tool.toolName, parsedInput) : tool.detail;
         let nextTool: ToolInFlight = {
           ...tool,
+          itemType,
+          title: titleForTool(itemType),
           partialInputJson,
           ...(parsedInput ? { input: parsedInput } : {}),
           ...(detail ? { detail } : {}),
@@ -2968,11 +3060,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       const toolName = block.name;
-      const itemType = classifyToolItemType(toolName);
       const toolInput =
         typeof block.input === "object" && block.input !== null
           ? (block.input as Record<string, unknown>)
           : {};
+      const itemType = classifyToolItemType(toolName, toolInput);
       const itemId = block.id;
       const detail = summarizeToolRequest(toolName, toolInput);
       const inputFingerprint =
@@ -4190,6 +4282,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
     function* (input) {
+      const modelCatalog = yield* modelCatalogEffect;
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -4656,21 +4749,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
       const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
-      const modelSelection =
+      const selectedModel =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
-      if (isCustomClaudeModel(modelSelection?.model)) {
-        // The SDK appends extra args after its generated flags. Keep custom
-        // model selection on the resolved model-id path and never let a
-        // configured native effort override the parenthesized suffix.
+      const modelSelection = selectedModel
+        ? {
+            ...selectedModel,
+            model: resolveClaudeModelSlug(modelCatalog, selectedModel.model),
+          }
+        : undefined;
+      if (isCustomClaudeCatalogModel(modelCatalog, modelSelection?.model)) {
+        // Keep custom model selection on the resolved model-id path and never
+        // let configured native flags override its parenthesized effort suffix.
         delete extraArgs.model;
         delete extraArgs.effort;
       }
-      const caps = getClaudeModelCapabilities(modelSelection?.model);
+      const caps = getClaudeCatalogModelCapabilities(modelCatalog, modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
-      const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;
-      const initialContextWindow = selectedClaudeContextWindow(modelSelection);
+      const apiModelId = modelSelection
+        ? resolveClaudeCatalogApiModelId(modelCatalog, modelSelection)
+        : undefined;
+      const initialContextWindow = selectedClaudeContextWindow(modelCatalog, modelSelection);
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
-      const effort = resolveClaudeEffort(caps, rawEffort) ?? null;
+      const effort =
+        resolveClaudeCatalogEffort(modelCatalog, modelSelection?.model, rawEffort) ?? null;
       const fastModeSupported = descriptors.some(
         (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
       );
@@ -4683,8 +4784,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const thinking = thinkingSupported
         ? getModelSelectionBooleanOptionValue(modelSelection, "thinking")
         : undefined;
-      const ultracode = isClaudeUltracodeEffort(effort);
-      const effectiveEffort = getEffectiveClaudeAgentEffort(effort, modelSelection?.model);
+      const ultracode = isClaudeCatalogUltracodeEffort(effort);
+      const effectiveEffort = getEffectiveClaudeAgentEffort(
+        modelCatalog,
+        effort,
+        modelSelection?.model,
+      );
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
         auto: "auto",
@@ -5024,10 +5129,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
-    const modelSelection =
+    const modelCatalog = yield* modelCatalogEffect;
+    const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
         ? input.modelSelection
         : undefined;
+    const modelSelection = selectedModel
+      ? { ...selectedModel, model: resolveClaudeModelSlug(modelCatalog, selectedModel.model) }
+      : undefined;
 
     // A sendTurn while a real turn is running is a steer: the message is
     // queued into the live SDK agent loop and the work continues as the same
@@ -5041,7 +5150,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (modelSelection?.model) {
-      const apiModelId = resolveClaudeApiModelId(modelSelection);
+      const apiModelId = resolveClaudeCatalogApiModelId(modelCatalog, modelSelection);
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),
@@ -5053,13 +5162,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...context.session,
         model: modelSelection.model,
       };
-      const turnCaps = getClaudeModelCapabilities(modelSelection.model);
-      const turnEffort = resolveClaudeEffort(
-        turnCaps,
+      const turnEffort = resolveClaudeCatalogEffort(
+        modelCatalog,
+        modelSelection.model,
         getModelSelectionStringOptionValue(modelSelection, "effort"),
       );
       context.currentEffort =
-        getEffectiveClaudeAgentEffort(turnEffort ?? null, modelSelection.model) ?? undefined;
+        getEffectiveClaudeAgentEffort(modelCatalog, turnEffort ?? null, modelSelection.model) ??
+        undefined;
     }
 
     // Apply interaction mode by switching the SDK's permission mode.
@@ -5115,14 +5225,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
-    const skillReferencePaths = yield* resolveSkillReferencePaths({
-      text: input.input,
-      cwd: context.session.cwd,
-    });
+    const referencedSkillNames = collectClaudeSkillReferenceNames(input.input ?? "");
+    const skills = referencedSkillNames.size > 0 ? yield* loadSessionSkills(context) : [];
+    const skillReferencePaths = resolveSkillReferencePaths({ text: input.input, skills });
     const message = yield* buildUserMessageEffect(input, {
       fileSystem,
       attachmentsDir: serverConfig.attachmentsDir,
       boundInstanceId,
+      modelCatalog,
+      skillNames: new Set(
+        skills
+          .filter((skill) => skill.enabled && skill.userInvocable !== false)
+          .map((skill) => skill.name),
+      ),
       ...(skillReferencePaths ? { skillReferencePaths } : {}),
     });
 
@@ -5271,10 +5386,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       Effect.provideService(Path.Path, path),
     );
 
-  const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = Effect.fn(
-    "ClaudeAdapter.listSkills",
-  )(function* (input) {
-    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
+  const loadClaudeSkills = Effect.fn("ClaudeAdapter.loadSkills")(function* (
+    cwd: string | undefined,
+  ) {
+    const canonicalCwd = cwd ? yield* canonicalizeImportCwd(cwd, "listSkills") : undefined;
 
     const nativeSkillsEffect = Effect.tryPromise({
       try: async (signal) => {
@@ -5395,6 +5510,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       detail: reloadFailure,
     });
     return gatedSkills;
+  });
+
+  const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = Effect.fn(
+    "ClaudeAdapter.listSkills",
+  )(function* (input) {
+    return yield* loadClaudeSkills(input.cwd);
   });
 
   const listImportableSessions: NonNullable<ClaudeAdapterShape["listImportableSessions"]> =

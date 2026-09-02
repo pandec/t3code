@@ -21,8 +21,12 @@ import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
-import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type {
+  OrchestrationEventStoreError,
+  ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
 import type { OrchestrationEventStreamFilter } from "../../persistence/Services/OrchestrationEventStore.ts";
+import type { ProjectionEventReplayStats } from "./ProjectionSnapshotQuery.ts";
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -71,13 +75,23 @@ export interface OrchestrationEngineShape {
   /**
    * Acquire a hot domain-event subscription before returning its stream. Use at
    * subscribe-then-read boundaries where an event published during the read
-   * must not be lost.
+   * must not be lost. The subscription closes with the scope.
    */
-  readonly subscribeDomainEvents?: Effect.Effect<
+  readonly subscribeDomainEvents: Effect.Effect<
     Stream.Stream<OrchestrationEvent>,
     never,
     Scope.Scope
   >;
+
+  /**
+   * Measure a persisted event range without decoding payload bodies. The
+   * optional aggregate filter is applied in SQL before counting bytes.
+   */
+  readonly getEventReplayStats: (input: {
+    readonly fromSequenceExclusive: number;
+    readonly toSequenceInclusive: number;
+    readonly filter?: OrchestrationEventStreamFilter;
+  }) => Effect.Effect<ProjectionEventReplayStats, ProjectionRepositoryError>;
 
   /**
    * The latest sequence reflected in the engine's authoritative command read

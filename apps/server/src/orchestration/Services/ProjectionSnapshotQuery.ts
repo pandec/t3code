@@ -10,6 +10,7 @@ import type {
   CheckpointRef,
   MessageId,
   OrchestrationCheckpointSummary,
+  OrchestrationEvent,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -39,6 +40,11 @@ export interface ProjectionSnapshotCounts {
 
 export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
+}
+
+export interface ProjectionEventReplayStats {
+  readonly eventCount: number;
+  readonly payloadBytes: number;
 }
 
 export interface ProjectionThreadCheckpointContext {
@@ -135,6 +141,18 @@ export interface ProjectionSnapshotQueryShape {
    * Read aggregate projection counts without hydrating the full read model.
    */
   readonly getCounts: () => Effect.Effect<ProjectionSnapshotCounts, ProjectionRepositoryError>;
+
+  /**
+   * Measure a persisted event range without decoding its payload bodies.
+   * With an aggregate filter, only that aggregate's events count toward the
+   * range (per-thread replay budgeting); without one, the range is global.
+   */
+  readonly getEventReplayStats: (input: {
+    readonly fromSequenceExclusive: number;
+    readonly toSequenceInclusive: number;
+    readonly aggregateKind?: OrchestrationEvent["aggregateKind"];
+    readonly aggregateId?: string;
+  }) => Effect.Effect<ProjectionEventReplayStats, ProjectionRepositoryError>;
 
   /**
    * Read the active project for an exact workspace root match.

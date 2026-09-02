@@ -95,6 +95,7 @@ const ISOLATED_TEST_FILES = [
   "src/clientPersistenceStorage.test.ts",
   "src/cloud/linkEnvironment.test.ts",
   "src/cloud/managedAuth.test.ts",
+  "src/components/chat/AssistantCitationSource.test.ts",
   "src/components/chat/ComposerPrimaryActions.test.tsx",
   "src/components/chat/ContextWindowMeter.test.tsx",
   "src/components/chat/ExpandedImagePreview.test.ts",
@@ -104,6 +105,8 @@ const ISOLATED_TEST_FILES = [
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/ChatView.logic.test.ts",
   "src/components/CommandPalette.logic.test.ts",
+  "src/components/ComposerPromptEditor.test.ts",
+  "src/components/desktopUpdate.toast.test.tsx",
   "src/components/diffs/AnnotatableCodeView.test.tsx",
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/files/fileSaveCoordinator.test.ts",
@@ -120,12 +123,14 @@ const ISOLATED_TEST_FILES = [
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/Sidebar.logic.test.ts",
+  "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
   "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
   "src/hooks/useEnvironmentThemeSync.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/attachmentUploadQueue.test.ts",
   "src/lib/imageCompression.test.ts",
+  "src/lib/selectionActions.test.ts",
   "src/lib/syntaxHighlighting.test.ts",
   "src/lib/terminalCloseConfirm.test.ts",
   "src/localApi.test.ts",
@@ -228,7 +233,10 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
-      tanstackRouter(),
+      // Route components load as split chunks so settings, pull-request, and
+      // usage code stay out of the cold-start payload; the router prefetches
+      // them on navigation intent (see getRouter's defaultPreload).
+      tanstackRouter({ autoCodeSplitting: true }),
       react(),
       babel({
         // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0

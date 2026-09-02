@@ -89,7 +89,10 @@ import { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
 // Re-exported for tests that import it from here (upstream's original home).
 // The predicate itself must stay in threadDetailEvents.ts: the replay filter
 // and the threadSequence watermark SQL have to read one shared list.
-export { isThreadDetailEvent } from "./orchestration/threadDetailEvents.ts";
+export {
+  THREAD_DETAIL_EVENT_TYPES,
+  isThreadDetailEvent,
+} from "./orchestration/threadDetailEvents.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -318,6 +321,10 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 // hundreds of thousands of events behind have OOM-killed servers on large
 // databases. Past this gap the client is reset with a fresh thread snapshot.
 const THREAD_RESUME_MAX_GAP = 1_000;
+// Row count alone does not bound replay memory: a few events with large tool
+// payloads can decode to gigabytes. Before replaying, sum the serialized
+// payload bytes of the range in SQL and reset with a snapshot past this budget.
+const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -539,6 +546,47 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const turnStartBootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+      const canReplayPersistedRange = Effect.fnUntraced(function* (
+        afterSequence: number,
+        headSequence: number,
+        maxGap: number,
+        filter?: Parameters<
+          OrchestrationEngine.OrchestrationEngineShape["getEventReplayStats"]
+        >[0]["filter"],
+      ) {
+        const replayGap = headSequence - afterSequence;
+        if (replayGap < 0 || replayGap > maxGap) {
+          return false;
+        }
+        const stats = yield* orchestrationEngine
+          .getEventReplayStats({
+            fromSequenceExclusive: afterSequence,
+            toSequenceInclusive: headSequence,
+            ...(filter !== undefined ? { filter } : {}),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationGetSnapshotError({
+                  message: "Failed to measure orchestration replay range",
+                  cause,
+                }),
+            ),
+          );
+        if (stats.payloadBytes > ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) {
+          yield* Effect.logDebug("orchestration replay replaced by snapshot", {
+            afterSequence,
+            headSequence,
+            replayGap,
+            eventCount: stats.eventCount,
+            payloadBytes: stats.payloadBytes,
+            payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
+            ...(filter !== undefined ? { aggregateKind: filter.aggregateKind } : {}),
+          });
+          return false;
+        }
+        return true;
+      });
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -1189,9 +1237,12 @@ const makeWsRpcLayer = (
                 // event exists to correct it. Send the snapshot followed by the
                 // buffered live tail, exactly as the no-afterSequence path does.
                 if (
-                  replayGap < 0 ||
-                  replayGap > SHELL_RESUME_MAX_GAP ||
-                  afterSequence < shellSequenceAtProcessStart
+                  afterSequence < shellSequenceAtProcessStart ||
+                  !(yield* canReplayPersistedRange(
+                    afterSequence,
+                    headSequence,
+                    SHELL_RESUME_MAX_GAP,
+                  ))
                 ) {
                   const snapshot = yield* loadSnapshot;
                   return Stream.concat(
@@ -1313,7 +1364,17 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 const headSequence = yield* orchestrationEngine.latestSequence;
                 const replayGap = headSequence - afterSequence;
-                if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+                if (
+                  yield* canReplayPersistedRange(
+                    afterSequence,
+                    headSequence,
+                    THREAD_RESUME_MAX_GAP,
+                    {
+                      aggregateKind: "thread",
+                      aggregateId: input.threadId,
+                    },
+                  )
+                ) {
                   const catchUpStream = orchestrationEngine
                     .readEvents(afterSequence, replayGap, {
                       aggregateKind: "thread",
@@ -1510,6 +1571,12 @@ const makeWsRpcLayer = (
                   Effect.forkScoped,
                 ),
             ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCommitDesktopUpdate,
+            serverSelfUpdate.commitDesktopUpdate(input.requestId),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>

@@ -1,21 +1,9 @@
 /**
  * ProviderAdapterRegistry - Lookup boundary for provider adapter implementations.
  *
- * Maps a `ProviderInstanceId` (the new per-instance routing key) or a
- * `ProviderDriverKind` (legacy single-instance-per-driver key) to the concrete
- * adapter service (Codex, Claude, etc). It does not own session lifecycle
- * or routing rules; `ProviderService` uses this registry together with
- * `ProviderSessionDirectory`.
- *
- * During the driver/instance migration this tag exposes both flavours:
- *
- *   - `getByInstance` / `listInstances` — new per-instance routing. Callers
- *     that already know an `instanceId` (threads, sessions, events)
- *     should prefer these.
- *     (`defaultInstanceIdForDriver(kind) === kind`), matching the pre-Slice-D
- *     behaviour. New code should not grow additional callers of the kind-keyed
- *     methods; they exist so the settings UI, WS refresh RPC, and a handful
- *     of legacy persisted rows can still be routed during the rollout.
+ * Maps a `ProviderInstanceId` to its provider adapter. `ProviderService` uses
+ * this registry with `ProviderSessionDirectory`. The registry does not own
+ * session lifecycle or routing rules.
  *
  * @module ProviderAdapterRegistry
  */
@@ -66,24 +54,11 @@ export interface ProviderAdapterRegistryShape {
    */
   readonly listInstances: () => Effect.Effect<ReadonlyArray<ProviderInstanceId>>;
 
-  /**
-   * Legacy: list provider kinds whose default instance is currently
-   * registered.
-   *
-   * @deprecated Prefer `listInstances`. Retained for migration-era call
-   * sites that iterate providers to build UI/metrics.
-   */
-  readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderDriverKind>>;
+  /** @deprecated Prefer `listInstances`; retained for migration-era callers. */
+  readonly listProviders?: () => Effect.Effect<ReadonlyArray<ProviderDriverKind>>;
 
-  /**
-   * Change notification stream mirroring `ProviderInstanceRegistry.streamChanges`.
-   * Emits one `void` tick whenever the set of live instances changes
-   * (instance added, removed, or rebuilt after a settings edit). Consumers
-   * that fan out `adapter.streamEvents` per instance — e.g. `ProviderService`'s
-   * runtime event bus — re-pull `listInstances` on each tick and fork new
-   * subscriptions for instances they haven't seen yet.
-   */
-  readonly streamChanges: Stream.Stream<void>;
+  /** Change notifications mirroring the provider instance registry. */
+  readonly streamChanges?: Stream.Stream<void>;
 
   /**
    * Acquire a change subscription synchronously in the caller's current fiber.
