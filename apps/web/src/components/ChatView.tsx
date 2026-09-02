@@ -472,6 +472,7 @@ import {
   resolveServerSelfUpdateCapability,
   serverUpdateGuidance,
   supportsDesktopAppUpdate,
+  supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
@@ -2362,6 +2363,7 @@ function ChatViewContent(props: ChatViewProps) {
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
   const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
   const versionMismatchDesktopAppUpdate = supportsDesktopAppUpdate(serverConfig);
+  const versionMismatchThreadContinuation = supportsServerUpdateThreadContinuation(serverConfig);
   const serverUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
   );
@@ -2497,6 +2499,7 @@ function ChatViewContent(props: ChatViewProps) {
               serverLabel={versionMismatchServerLabel}
               selfUpdate={versionMismatchSelfUpdate}
               desktopAppUpdate={versionMismatchDesktopAppUpdate}
+              threadContinuation={versionMismatchThreadContinuation}
               targetVersion={versionMismatch.clientVersion}
               label={updateFailed ? "Retry" : "Update"}
               variant="ghost"
@@ -2532,6 +2535,7 @@ function ChatViewContent(props: ChatViewProps) {
     serverUpdateEnvironmentId,
     versionMismatchSelfUpdate,
     versionMismatchDesktopAppUpdate,
+    versionMismatchThreadContinuation,
     versionMismatchServerLabel,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;

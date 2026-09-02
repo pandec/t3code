@@ -11,15 +11,11 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
-import type { ServerProviderSkill } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { expandHomePath } from "../../pathExpansion.ts";
 import { codexAppServerArgs } from "../Layers/codexLaunchArgs.ts";
-import {
-  buildCodexInitializeParams,
-  parseCodexSkillsListResponse,
-} from "../Layers/CodexProvider.ts";
+import { buildCodexInitializeParams } from "../Layers/CodexProvider.ts";
 
 export class CodexImportReaderError extends Schema.TaggedErrorClass<CodexImportReaderError>()(
   "CodexImportReaderError",
@@ -168,21 +164,6 @@ export const listCodexImportableSessions = Effect.fn("listCodexImportableSession
       );
       return summaries;
     }),
-  );
-});
-
-export const listCodexSkills = Effect.fn("listCodexSkills")(function* (
-  options: CodexImportReaderOptions,
-): Effect.fn.Return<
-  ReadonlyArray<ServerProviderSkill>,
-  CodexImportReaderError,
-  ChildProcessSpawner.ChildProcessSpawner
-> {
-  return yield* withCodexAppServerClient(options, (client) =>
-    client.request("skills/list", { cwds: [options.cwd] }).pipe(
-      Effect.map((response) => parseCodexSkillsListResponse(response, options.cwd)),
-      Effect.mapError(toReaderError("Codex skills/list request failed.")),
-    ),
   );
 });
 

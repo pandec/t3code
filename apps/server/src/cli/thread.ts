@@ -819,7 +819,7 @@ const threadNewCommand = Command.make("new", {
         const modelSelection =
           explicitModelSelection ??
           projectShell.defaultModelSelection ??
-          ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
+          ServerRuntimeStartup.getAutoBootstrapThreadModelSelection();
         const threadId = ThreadId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);
         const messageId = MessageId.make(yield* randomUuid);

@@ -282,8 +282,11 @@ export function ProviderModelsSection({
                   {model.name}
                 </span>
                 {hasDetails ? (
-                  <Tooltip>
-                    <TooltipTrigger
+                  <Popover>
+                    <PopoverTrigger
+                      openOnHover
+                      delay={250}
+                      closeDelay={100}
                       render={
                         <Button
                           size="icon-micro"
@@ -294,8 +297,8 @@ export function ProviderModelsSection({
                       }
                     >
                       <InfoIcon className="size-3" />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top" className="max-w-56">
+                    </PopoverTrigger>
+                    <PopoverPopup side="top" tooltipStyle className="max-w-56">
                       <div className="space-y-1">
                         <code className="block text-[11px] text-foreground">{model.slug}</code>
                         {capLabels.length > 0 ? (
@@ -308,8 +311,8 @@ export function ProviderModelsSection({
                           </div>
                         ) : null}
                       </div>
-                    </TooltipPopup>
-                  </Tooltip>
+                    </PopoverPopup>
+                  </Popover>
                 ) : null}
                 {isHidden ? (
                   <span className="text-[10px] text-muted-foreground">hidden</span>

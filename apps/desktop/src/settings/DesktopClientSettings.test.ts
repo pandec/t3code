@@ -27,6 +27,8 @@ const clientSettings: ClientSettings = {
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   confirmThreadUnpin: false,
+  continueThreadsAfterServerUpdate: true,
+  contextWindowMeterEnabled: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   enableTurnCompletionToasts: true,

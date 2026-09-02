@@ -72,6 +72,8 @@ import Migration0051 from "./Migrations/051_ProjectionThreadLinkedPullRequest.ts
 // Upstream shipped this as 043; renumbered after the fork's migration history.
 import Migration0052 from "./Migrations/052_ProjectionThreadsUnsettledAt.ts";
 import Migration0053 from "./Migrations/053_ProjectionMessageSpeechRequest.ts";
+// Upstream shipped this as 044; renumbered after the fork's migration history.
+import Migration0054 from "./Migrations/054_ClearAutomaticProjectModelDefaults.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -137,6 +139,7 @@ export const migrationEntries = [
   [51, "ProjectionThreadLinkedPullRequest", Migration0051],
   [52, "ProjectionThreadsUnsettledAt", Migration0052],
   [53, "ProjectionMessageSpeechRequest", Migration0053],
+  [54, "ClearAutomaticProjectModelDefaults", Migration0054],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

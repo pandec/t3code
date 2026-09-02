@@ -556,7 +556,7 @@ it.effect("passes resolved launch args to the import reader app server", () => {
 
   return Effect.gen(function* () {
     const adapter = yield* CodexAdapter;
-    yield* adapter.listSkills!({ cwd: process.cwd() }).pipe(Effect.exit);
+    yield* adapter.listImportableSessions!({ cwd: process.cwd() }).pipe(Effect.exit);
 
     NodeAssert.deepStrictEqual(spawned?.args, [
       "app-server",

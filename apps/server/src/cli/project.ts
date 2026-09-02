@@ -23,7 +23,6 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
 import * as ServerConfig from "../config.ts";
-import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { withCliJsonErrorOutput } from "./errorOutput.ts";
@@ -207,7 +206,6 @@ export const addProjectToOrchestration = Effect.fn("addProjectToOrchestration")(
     projectId,
     title,
     workspaceRoot,
-    defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
     createdAt: DateTime.formatIso(yield* DateTime.now),
   });
   return { projectId, title, workspaceRoot };

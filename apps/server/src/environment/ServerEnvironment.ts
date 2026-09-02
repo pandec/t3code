@@ -249,7 +249,10 @@ export const make = Effect.gen(function* () {
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),
       ...(advertisedServerSelfUpdate === "boot-service" || desktopAppUpdate
-        ? { serverSelfUpdateProgress: true }
+        ? {
+            serverSelfUpdateProgress: true,
+            serverUpdateThreadContinuation: true,
+          }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },

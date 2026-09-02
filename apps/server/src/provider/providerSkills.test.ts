@@ -45,8 +45,10 @@ const snapshot: ServerProvider = {
 function makeInstance(
   listSkills: ProviderInstance["adapter"]["listSkills"],
   listSkillsTimeoutMillis?: number,
+  snapshotForCwd?: ProviderInstance["snapshotForCwd"],
 ): ProviderInstance {
   return {
+    ...(snapshotForCwd === undefined ? {} : { snapshotForCwd }),
     instanceId,
     driverKind: ProviderDriverKind.make("codex"),
     continuationIdentity: {
@@ -72,6 +74,10 @@ function makeInstance(
   };
 }
 
+const inertProviderRegistry = {
+  refreshWorkspaceSnapshot: () => Effect.succeed<ReadonlyArray<ServerProvider>>([]),
+};
+
 describe("listProviderSkillsForCwd", () => {
   it.effect("passes the active workspace cwd to the provider adapter", () =>
     Effect.gen(function* () {
@@ -82,7 +88,7 @@ describe("listProviderSkillsForCwd", () => {
         getInstance: () => Effect.succeed(makeInstance(listSkills)),
       };
 
-      const result = yield* listProviderSkillsForCwd(registry, {
+      const result = yield* listProviderSkillsForCwd(registry, inertProviderRegistry, {
         instanceId,
         cwd: "/workspace",
       });
@@ -109,10 +115,70 @@ describe("listProviderSkillsForCwd", () => {
           ),
       };
 
-      const result = yield* listProviderSkillsForCwd(registry, {
+      const result = yield* listProviderSkillsForCwd(registry, inertProviderRegistry, {
         instanceId,
         cwd: "/workspace",
       });
+
+      assert.deepEqual(result.skills, [snapshotSkill]);
+    }),
+  );
+
+  it.effect("answers from the registry's workspace snapshot when the provider supports it", () =>
+    Effect.gen(function* () {
+      const listSkills = vi.fn(() => Effect.succeed([snapshotSkill]));
+      const refreshWorkspaceSnapshot = vi.fn(() =>
+        Effect.succeed<ReadonlyArray<ServerProvider>>([
+          {
+            ...snapshot,
+            workspaceSnapshots: [
+              {
+                cwd: "/workspace",
+                checkedAt: "2026-07-20T00:00:00.000Z",
+                slashCommands: [],
+                skills: [projectSkill],
+              },
+            ],
+          },
+        ]),
+      );
+      const registry = {
+        getInstance: () =>
+          Effect.succeed(
+            makeInstance(listSkills, undefined, () => Effect.die("probed outside the registry")),
+          ),
+      };
+
+      const result = yield* listProviderSkillsForCwd(
+        registry,
+        { refreshWorkspaceSnapshot },
+        { instanceId, cwd: "/workspace" },
+      );
+
+      // The registry cache is the authority for this cwd — including when the
+      // cached answer is empty — and the adapter probe must not run.
+      assert.deepEqual(result.skills, [projectSkill]);
+      assert.deepEqual(refreshWorkspaceSnapshot.mock.calls, [[{ instanceId, cwd: "/workspace" }]]);
+      assert.equal(listSkills.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("falls back to machine skills when no workspace snapshot is available", () =>
+    Effect.gen(function* () {
+      const registry = {
+        getInstance: () =>
+          Effect.succeed(
+            makeInstance(undefined, undefined, () => Effect.die("probed outside the registry")),
+          ),
+      };
+
+      const result = yield* listProviderSkillsForCwd(
+        registry,
+        {
+          refreshWorkspaceSnapshot: () => Effect.succeed<ReadonlyArray<ServerProvider>>([snapshot]),
+        },
+        { instanceId, cwd: "/workspace" },
+      );
 
       assert.deepEqual(result.skills, [snapshotSkill]);
     }),
@@ -127,7 +193,7 @@ describe("listProviderSkillsForCwd", () => {
           ),
       };
 
-      const fiber = yield* listProviderSkillsForCwd(registry, {
+      const fiber = yield* listProviderSkillsForCwd(registry, inertProviderRegistry, {
         instanceId,
         cwd: "/workspace",
       }).pipe(Effect.forkChild);

@@ -68,7 +68,6 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   listCodexImportableSessions,
-  listCodexSkills,
   readCodexImportableThread,
 } from "../Drivers/CodexImportReader.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
@@ -2185,7 +2184,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const canonicalizeImportCwd = Effect.fn("CodexAdapter.canonicalizeImportCwd")(function* (
     cwd: string,
-    operation: "listImportableSessions" | "listSkills" | "readImportableSession",
+    operation: "listImportableSessions" | "readImportableSession",
   ) {
     return yield* fileSystem.realPath(cwd).pipe(
       Effect.mapError(
@@ -2218,16 +2217,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }),
       ),
     );
-
-  const listSkills: NonNullable<CodexAdapterShape["listSkills"]> = Effect.fn(
-    "CodexAdapter.listSkills",
-  )(function* (input) {
-    const canonicalCwd = yield* canonicalizeImportCwd(input.cwd, "listSkills");
-    return yield* importReaderContext(
-      listCodexSkills(importReaderOptions(canonicalCwd)),
-      "skills/list",
-    );
-  });
 
   const listImportableSessions: NonNullable<CodexAdapterShape["listImportableSessions"]> =
     Effect.fn("CodexAdapter.listImportableSessions")(function* (input) {
@@ -2287,11 +2276,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      promptlessTurnContinuation: true,
     },
     readAccountUsage,
     startSession,
     forkSession,
-    listSkills,
     listImportableSessions,
     readImportableSession,
     sendTurn,

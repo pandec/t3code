@@ -298,6 +298,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     provider,
     capabilities: {
       sessionModelSwitch: "in-session",
+      ...(provider === CODEX_DRIVER ? { promptlessTurnContinuation: true } : {}),
     },
     startSession,
     ...(provider === CODEX_DRIVER || provider === CLAUDE_AGENT_DRIVER ? { forkSession } : {}),
@@ -1162,6 +1163,56 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.match(error.message, /while its provider session is running/);
       assert.equal(routing.codex.forkSession.mock.calls.length, forkCallsBefore);
       yield* provider.stopSession({ threadId: sourceThreadId });
+    }),
+  );
+
+  it.effect("allows promptless continuation only for capable providers", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const codexThreadId = asThreadId("thread-promptless-continuation");
+      yield* provider.startSession(codexThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: codexThreadId,
+        runtimeMode: "full-access",
+      });
+
+      yield* provider.sendTurn({ threadId: codexThreadId, continuation: true });
+      assert.deepEqual(routing.codex.sendTurn.mock.calls.at(-1)?.[0], {
+        threadId: codexThreadId,
+        continuation: true,
+      });
+
+      const claudeThreadId = asThreadId("thread-promptless-continuation-unsupported");
+      yield* provider.startSession(claudeThreadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: claudeThreadId,
+        runtimeMode: "full-access",
+      });
+      const failure = yield* Effect.flip(
+        provider.sendTurn({ threadId: claudeThreadId, continuation: true }),
+      );
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "requires an explicit continuation prompt");
+      assert.equal(routing.claude.sendTurn.mock.calls.length, 0);
+
+      yield* provider.stopSession({ threadId: claudeThreadId });
+      routing.claude.startSession.mockClear();
+      const stoppedFailure = yield* Effect.flip(
+        provider.sendTurn({ threadId: claudeThreadId, continuation: true }),
+      );
+      assert.instanceOf(stoppedFailure, ProviderValidationError);
+      assert.include(stoppedFailure.issue, "requires an explicit continuation prompt");
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+
+      yield* provider.stopSession({ threadId: codexThreadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+      routing.codex.stopSession.mockClear();
+      routing.claude.startSession.mockClear();
+      routing.claude.sendTurn.mockClear();
+      routing.claude.stopSession.mockClear();
     }),
   );
 
@@ -3752,6 +3803,7 @@ const historicalSessionThreadId = asThreadId("thread-historical-session");
 const listThreadIds = vi.fn(() =>
   Effect.succeed([activeSessionThreadId, historicalSessionThreadId]),
 );
+const listBindings = vi.fn(() => Effect.succeed([]));
 const getBinding = vi.fn((threadId: ThreadId) =>
   Effect.succeed(
     Option.some({
@@ -3770,7 +3822,10 @@ const boundedListing = makeProviderServiceLayer({
     getProvider: () => Effect.die("ProviderService.listSessions does not use getProvider"),
     getBinding,
     listThreadIds,
-    listBindings: () => Effect.die("ProviderService.listSessions does not use listBindings"),
+    // Layer construction runs the continuation-key upgrade pass over
+    // listBindings; an empty answer keeps it inert. The listing test below
+    // still pins that listSessions itself never scans bindings.
+    listBindings,
     refreshIfUnchanged: () => Effect.die("ProviderService.listSessions does not refresh bindings"),
   },
 });
@@ -3788,11 +3843,13 @@ boundedListing.layer("ProviderServiceLive session listing", (it) => {
       });
       listThreadIds.mockClear();
       getBinding.mockClear();
+      listBindings.mockClear();
 
       const sessions = yield* provider.listSessions();
 
       assert.equal(sessions.length, 1);
       assert.equal(listThreadIds.mock.calls.length, 0);
+      assert.equal(listBindings.mock.calls.length, 0);
       assert.deepEqual(getBinding.mock.calls, [[activeSessionThreadId]]);
     }),
   );

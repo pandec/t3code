@@ -374,12 +374,21 @@ export const make = Effect.gen(function* () {
               cwd: bootstrap.prepareWorktree.projectCwd,
               remoteName: "origin",
             });
-            const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+            // A local-only base branch has nothing to resolve on the remote;
+            // fall back to the local ref instead of failing the bootstrap.
+            const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
               cwd: bootstrap.prepareWorktree.projectCwd,
               refName: baseBranch,
-              fallbackRemoteName: "origin",
+              remoteName: "origin",
             });
-            worktreeBaseRef = resolvedRemoteBase.commitSha;
+            if (remoteBaseExists) {
+              const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                refName: baseBranch,
+                fallbackRemoteName: "origin",
+              });
+              worktreeBaseRef = resolvedRemoteBase.commitSha;
+            }
           }
           const worktree = yield* gitWorkflow.createWorktree({
             cwd: bootstrap.prepareWorktree.projectCwd,

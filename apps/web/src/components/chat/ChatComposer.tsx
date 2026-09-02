@@ -388,6 +388,8 @@ import {
   formatProviderSkillDisplayName,
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
+  resolveProviderSkillsForCwd,
+  resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
 import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import { searchProviderSkills } from "../../providerSkillSearch";
@@ -1244,9 +1246,64 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Best-effort marker: a failed probe just leaves the badge off.
     { reportFailure: false },
   );
+  const selectedProviderSkills = selectedProviderStatus
+    ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
+    : [];
+  const selectedProviderSlashCommands = selectedProviderStatus
+    ? resolveProviderSlashCommandsForCwd(selectedProviderStatus, gitCwd)
+    : [];
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  const workspaceRefreshKeyRef = useRef<string | null>(null);
+  const hadWorkspaceSnapshotRef = useRef(false);
+  useEffect(() => {
+    const hasWorkspaceSnapshot = Boolean(
+      gitCwd &&
+      selectedProviderStatus?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd),
+    );
+    if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
+      workspaceRefreshKeyRef.current = null;
+    }
+    hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
+  }, [gitCwd, selectedProviderStatus]);
+  useEffect(() => {
+    if (!gitCwd || !selectedProviderEntry) return;
+    const key = `${environmentId}:${selectedProviderEntry.instanceId}:${gitCwd}`;
+    const hasWorkspaceSnapshot = selectedProviderStatus?.workspaceSnapshots?.some(
+      (snapshot) => snapshot.cwd === gitCwd,
+    );
+    if (workspaceRefreshKeyRef.current === key) return;
+    if (hasWorkspaceSnapshot) {
+      workspaceRefreshKeyRef.current = key;
+      return;
+    }
+    workspaceRefreshKeyRef.current = key;
+    void refreshProviders({
+      environmentId,
+      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd },
+    }).then(
+      (result) => {
+        const hasWorkspaceSnapshot =
+          result._tag === "Success" &&
+          result.value.providers
+            .find((provider) => provider.instanceId === selectedProviderEntry.instanceId)
+            ?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd);
+        if (!hasWorkspaceSnapshot && workspaceRefreshKeyRef.current === key) {
+          workspaceRefreshKeyRef.current = null;
+        }
+      },
+      () => {
+        if (workspaceRefreshKeyRef.current === key) workspaceRefreshKeyRef.current = null;
+      },
+    );
+  }, [environmentId, gitCwd, refreshProviders, selectedProviderEntry]);
+  // The RPC answer is authoritative for the thread's cwd; before it lands,
+  // upstream's status-side workspace snapshot (falling back to machine
+  // skills) is the closest per-cwd answer available.
   const effectiveProviderSkills = resolveEffectiveProviderSkills(
     providerSkillsQuery.data?.skills,
-    selectedProviderStatus?.skills,
+    selectedProviderSkills,
   );
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
@@ -1936,7 +1993,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         settings.showSkillsInSlashMenu,
       );
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderStatus?.slashCommands ?? [],
+        selectedProviderSlashCommands,
         slashMenuSkills,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,
@@ -1985,6 +2042,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     planModeUiEnabled,
     savedPrompts,
     selectedProvider,
+    selectedProviderSkills,
+    selectedProviderSlashCommands,
     selectedProviderStatus,
     settings.showSkillsInSlashMenu,
     workspaceEntries.entries,
@@ -5073,7 +5132,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
-                    activeContextWindow={activeContextWindow}
+                    activeContextWindow={
+                      settings.contextWindowMeterEnabled ? activeContextWindow : null
+                    }
                     activeProviderUsage={activeProviderUsage}
                     fableUsage={fableUsage}
                     fableAccountName={fableAccountName}
