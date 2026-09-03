@@ -4903,6 +4903,7 @@ describe("ClaudeAdapterLive", () => {
         .at(-1);
       assert.equal(latest?.type, "thread.token-usage.updated");
       if (latest?.type === "thread.token-usage.updated") {
+        // #8453 expected 4,200 before #8617 made the per-request 3,000 authoritative.
         assert.equal(latest.payload.usage.usedTokens, 3_000);
         assert.equal(latest.payload.usage.totalProcessedTokens, 900_000);
       }
@@ -4988,17 +4989,27 @@ describe("ClaudeAdapterLive", () => {
       const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         Effect.sync(() => runtimeEvents.push(event)),
       ).pipe(Effect.forkChild);
-      const initialModel = `${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded]`;
+      const initialSelection = createModelSelection(
+        ProviderInstanceId.make("claudeAgent"),
+        SYNTHETIC_CLAUDE_STANDARD_MODEL,
+        [{ id: "contextWindow", value: "standard" }],
+      );
+      const switchedSelection = createModelSelection(
+        ProviderInstanceId.make("claudeAgent"),
+        SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+      );
+      const switchedModel = `${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded]`;
 
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: initialSelection,
         runtimeMode: "full-access",
       });
       harness.query.emit({
         type: "system",
         subtype: "init",
-        model: initialModel,
+        model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
         session_id: "sdk-session-switch",
         uuid: "switch-init",
       } as unknown as SDKMessage);
@@ -5007,13 +5018,31 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.sendTurn({
         threadId: THREAD_ID,
         input: "switch",
-        modelSelection: createModelSelection(
-          ProviderInstanceId.make("claudeAgent"),
-          SYNTHETIC_CLAUDE_STANDARD_MODEL,
-          [{ id: "contextWindow", value: "standard" }],
-        ),
+        modelSelection: switchedSelection,
         attachments: [],
       });
+      harness.query.emit({
+        type: "stream_event",
+        event: {
+          type: "message_delta",
+          delta: { stop_reason: null, stop_sequence: null },
+          usage: { input_tokens: 300_000, output_tokens: 0 },
+        },
+        parent_tool_use_id: null,
+        session_id: "sdk-session-switch",
+        uuid: "switch-delta",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+
+      const usageBeforeResult = runtimeEvents.findLast(
+        (event) => event.type === "thread.token-usage.updated",
+      );
+      assert.equal(usageBeforeResult?.type, "thread.token-usage.updated");
+      if (usageBeforeResult?.type === "thread.token-usage.updated") {
+        assert.equal(usageBeforeResult.payload.usage.maxTokens, 1_000_000);
+        assert.equal(usageBeforeResult.payload.usage.usedTokens, 300_000);
+      }
+
       harness.query.emit({
         type: "result",
         subtype: "success",
@@ -5026,8 +5055,8 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-switch",
         usage: { input_tokens: 20_000, output_tokens: 500 },
         modelUsage: {
-          [initialModel]: { contextWindow: 1_000_000 },
           [SYNTHETIC_CLAUDE_STANDARD_MODEL]: { contextWindow: 200_000 },
+          [switchedModel]: { contextWindow: 1_000_000 },
         },
       } as unknown as SDKMessage);
       harness.query.finish();
@@ -5039,7 +5068,7 @@ describe("ClaudeAdapterLive", () => {
         .at(-1);
       assert.equal(latest?.type, "thread.token-usage.updated");
       if (latest?.type === "thread.token-usage.updated") {
-        assert.equal(latest.payload.usage.maxTokens, 200_000);
+        assert.equal(latest.payload.usage.maxTokens, 1_000_000);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
